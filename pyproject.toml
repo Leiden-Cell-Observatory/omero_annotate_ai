@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omero-annotate-ai"
+version = "0.1.0"
+description = "OMERO integration for AI-powered image annotation and segmentation workflows"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research", 
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["omero", "microscopy", "segmentation", "ai", "annotation", "sam", "micro-sam"]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.21.0",
+    "pandas>=1.3.0",
+    "imageio>=2.9.0",
+    "zarr>=2.10.0",
+    "dask>=2021.6.0",
+    "pyyaml>=6.0",
+    "ipywidgets>=7.6.0",
+    "ezomero[tables]>=3.1.0",
+    "opencv-python>=4.5.0",
+    "keyring>=23.0.0",
+]
+
+[project.optional-dependencies]
+napari = [
+    "napari>=0.4.15",
+]
+microsam = [
+    # Note: micro-sam is conda-only, install separately: conda install -c conda-forge micro-sam
+]
+
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+    "black>=22.0",
+    "isort>=5.0",
+    "flake8>=4.0",
+]
+all = [
+    "ezomero==3.1.1",
+    "napari>=0.4.15",
+    "cellpose>=2.0",
+    "stardist>=0.8.0",
+    "tensorflow>=2.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
+Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
+Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
+
+[project.scripts]
+omero-annotate-ai = "omero_annotate_ai.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omero_annotate_ai = ["config/*.yaml"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=omero_annotate_ai --cov-report=html --cov-report=term-missing"
