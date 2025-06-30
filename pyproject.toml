@@ -70,8 +70,9 @@ Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
 [project.scripts]
 omero-annotate-ai = "omero_annotate_ai.cli.main:main"
 
-[tool.setuptools.packages]
-find{}
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["omero_annotate_ai*"]
 
 [tool.setuptools.package-data]
 omero_annotate_ai = ["config/*.yaml"]
