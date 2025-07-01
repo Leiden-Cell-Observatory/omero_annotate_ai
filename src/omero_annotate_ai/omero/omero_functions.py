@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 from typing import List, Tuple, Optional
 
-from .omero_utils import delete_table
+from .omero_utils import (
+    delete_table, 
+    get_table_by_name,
+    get_dask_image_multiple,
+    get_dask_image_single
+)
 
 try:
     import ezomero
@@ -120,68 +125,6 @@ def initialize_tracking_table(conn, table_title: str, processing_units: List[Tup
     return table_id
 
 
-def get_table_by_name(conn, table_name: str, container_type: str = None, container_id: int = None):
-    """Get OMERO table by name.
-    
-    Args:
-        conn: OMERO connection
-        table_name: Name of table to find
-        container_type: Optional container type to search within
-        container_id: Optional container ID to search within
-        
-    Returns:
-        Table object if found, None otherwise
-    """
-    if ezomero is None:
-        print(f"🔍 Would search for table: {table_name}")
-        return None
-    
-    print(f"🔍 Searching for table: {table_name}")
-    
-    try:
-        # Search strategy: Look through file annotations for tables
-        # OMERO tables are stored as file annotations with specific content type
-        
-        if container_type and container_id:
-            # Search within specific container
-            try:
-                # Get file annotations for the container
-                annotations = ezomero.get_file_annotation_ids(conn, container_type.capitalize(), container_id)
-                
-                for ann_id in annotations:
-                    try:
-                        # Get annotation details
-                        file_ann = conn.getObject("FileAnnotation", ann_id)
-                        if file_ann and hasattr(file_ann, 'getFile'):
-                            original_file = file_ann.getFile()
-                            if original_file and hasattr(original_file, 'getName'):
-                                file_name = original_file.getName()
-                                
-                                # Check if this is a table file and matches our name
-                                if file_name and table_name in file_name:
-                                    # Try to get the table
-                                    try:
-                                        table = conn.getSharedResources().openTable(original_file)
-                                        if table:
-                                            print(f"✅ Found table: {file_name} (ID: {ann_id})")
-                                            return table
-                                    except Exception:
-                                        continue
-                    except Exception:
-                        continue
-                        
-            except Exception as e:
-                print(f"⚠️ Error searching in container {container_type} {container_id}: {e}")
-        
-        # Fallback: Search in user's space (this is more complex and may be slow)
-        # For now, we'll return None to trigger new table creation
-        print(f"🔍 Table '{table_name}' not found, will create new table")
-        return None
-        
-    except Exception as e:
-        print(f"❌ Error searching for table {table_name}: {e}")
-        return None
-
 
 def get_annotation_configurations(conn):
     """Get stored annotation configurations."""
@@ -251,7 +194,8 @@ def get_unprocessed_units(conn, table_id: int) -> List[Tuple]:
 
 
 def update_tracking_table_rows(conn, table_id: int, row_indices: List[int], 
-                              status: str, annotation_file: str) -> Optional[int]:
+                              status: str, annotation_file: str, 
+                              container_type: str, container_id: int) -> Optional[int]:
     """Update tracking table rows with processing status.
     
     This implementation updates the table by replacing it with a new one.
@@ -262,6 +206,8 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
         row_indices: List of row indices to update
         status: Status to set ('completed', 'failed', etc.)
         annotation_file: Path to annotation file (currently unused)
+        container_type: Type of OMERO container (e.g. 'dataset', 'project')
+        container_id: ID of the container
         
     Returns:
         New table ID if successful, else original table_id.
@@ -276,35 +222,9 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
             print(f"❌ Could not retrieve table {table_id}")
             return table_id
 
-        # Get original table info (title, container)
-        file_ann = conn.getObject("FileAnnotation", table_id)
-        if not file_ann:
-            print(f"❌ Could not find FileAnnotation for table {table_id}")
-            return table_id
-        
-        table_title = file_ann.getFile().getName()
-        
-        container_type = None
-        container_id = None
-
-        # Find container by searching parents of images in the table
-        if not df.empty and 'image_id' in df.columns:
-            # Get unique image IDs to check
-            image_ids = df['image_id'].unique()
-            for img_id in image_ids:
-                img = conn.getObject("Image", int(img_id))
-                if img:
-                    parents = list(img.listParents())
-                    if parents:
-                        parent = parents[0]
-                        container_type = parent.__class__.__name__
-                        container_id = parent.getId()
-                        # Found a container, break loop
-                        break
-        
-        if container_id is None:
-            print("❌ Could not determine container for table. Cannot update.")
-            return table_id
+        # Generate new table title to avoid conflicts
+        table_title = f"microsam_training_{container_type}_{container_id}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+        print(f"Using table title: {table_title}")
 
         # Update the rows in our DataFrame
         for idx in row_indices:
@@ -331,11 +251,8 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
         # Try to delete the existing table
         if not delete_table(conn, table_id):
             print(f"Warning: Could not delete existing table: {table_id}")
-            # If we can't delete the table, try with a new title to avoid conflicts
-            table_title = f"{table_title}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-            print(f"Using alternative table title: {table_title}")
 
-        # Create a new table with the updated data
+        # Create a new table with the updated data using the provided container info
         new_table_id = ezomero.post_table(
             conn,
             object_type=container_type.capitalize(),
@@ -463,244 +380,3 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         return None, None
 
 
-def get_dask_dimensions(conn, image_list: List):
-    """Get dimensions for dask array creation."""
-    # Stub implementation
-    if image_list:
-        img = image_list[0]
-        return {
-            'sizeT': img.getSizeT(),
-            'sizeZ': img.getSizeZ(), 
-            'sizeY': img.getSizeY(),
-            'sizeX': img.getSizeX(),
-            'sizeC': img.getSizeC()
-        }
-    return {}
-
-
-def get_dask_image_multiple(conn, image_list: List, timepoints: List[int], 
-                           channels: List[int], z_slices: List[int]):
-    """Load image data using dask for memory efficiency.
-    
-    This function creates dask arrays for lazy loading and only materializes
-    them to numpy arrays when needed by micro-SAM.
-    
-    Args:
-        conn: OMERO connection
-        image_list: List of OMERO image objects
-        timepoints: List of timepoint indices
-        channels: List of channel indices  
-        z_slices: List of z-slice indices
-        
-    Returns:
-        List of numpy arrays containing image data (materialized from dask)
-    """
-    try:
-        import dask.array as da
-        from dask import delayed
-    except ImportError:
-        print("⚠️ dask not available, falling back to direct loading")
-        return _load_images_direct(conn, image_list, timepoints, channels, z_slices)
-    
-    if not image_list:
-        return []
-    
-    print(f"📊 Loading {len(image_list)} images using dask...")
-    
-    # Create dask arrays for each image
-    dask_arrays = []
-    for i, image in enumerate(image_list):
-        if not image:
-            continue
-            
-        try:
-            # Create lazy-loaded dask array for this image
-            dask_array = _create_dask_array_for_image(conn, image, timepoints, channels, z_slices)
-            dask_arrays.append(dask_array)
-            
-        except Exception as e:
-            print(f"⚠️ Could not create dask array for image {image.getId()}: {e}")
-            # Fallback: create zeros array
-            height = image.getSizeY()
-            width = image.getSizeX()
-            fallback_array = np.zeros((height, width), dtype=np.uint16)
-            dask_arrays.append(fallback_array)
-    
-    # Materialize dask arrays to numpy arrays in chunks for memory efficiency
-    print("💾 Materializing dask arrays to numpy (required for micro-SAM)...")
-    materialized_images = []
-    
-    # Process in smaller chunks to avoid memory issues
-    chunk_size = min(3, len(dask_arrays))  # Process max 3 images at a time
-    
-    for chunk_start in range(0, len(dask_arrays), chunk_size):
-        chunk_end = min(chunk_start + chunk_size, len(dask_arrays))
-        chunk_arrays = dask_arrays[chunk_start:chunk_end]
-        
-        print(f"   Processing chunk {chunk_start//chunk_size + 1}/{(len(dask_arrays)-1)//chunk_size + 1}")
-        
-        # Compute this chunk
-        for dask_array in chunk_arrays:
-            if hasattr(dask_array, 'compute'):
-                # It's a dask array, compute it
-                numpy_array = dask_array.compute()
-            else:
-                # It's already a numpy array (fallback case)
-                numpy_array = dask_array
-            
-            materialized_images.append(numpy_array)
-    
-    print(f"✅ Successfully loaded {len(materialized_images)} images")
-    return materialized_images
-
-
-def _create_dask_array_for_image(conn, image, timepoints: List[int], 
-                                channels: List[int], z_slices: List[int]):
-    """Create a dask array for a single OMERO image with lazy loading.
-    
-    Args:
-        conn: OMERO connection
-        image: OMERO image object
-        timepoints: List of timepoint indices
-        channels: List of channel indices
-        z_slices: List of z-slice indices
-          Returns:
-        Dask array for the image
-    """
-    try:
-        import dask.array as da
-        from dask import delayed
-    except ImportError:
-        # Fallback to direct loading
-        return _load_single_image_direct(conn, image, timepoints, channels, z_slices)
-    
-    # Use first of each dimension if multiple provided
-    t = timepoints[0] if timepoints else 0
-    c = channels[0] if channels else 0
-    z = z_slices[0] if z_slices else 0
-    
-    # Get image dimensions
-    height = image.getSizeY()
-    width = image.getSizeX()
-    
-    # Create delayed function for loading a single plane
-    @delayed
-    def load_plane(image_id, z_idx, c_idx, t_idx):
-        """Delayed function to load a single plane from OMERO."""
-        try:
-            # Re-get the image object (connections may not be thread-safe)
-            img = conn.getObject("Image", image_id)
-            if not img:
-                return np.zeros((height, width), dtype=np.uint16)
-            
-            pix = img.getPrimaryPixels()
-            plane_data = pix.getPlane(z_idx, c_idx, t_idx)
-            return plane_data
-            
-        except Exception as e:
-            print(f"⚠️ Error loading plane {z_idx},{c_idx},{t_idx} for image {image_id}: {e}")
-            return np.zeros((height, width), dtype=np.uint16)
-    
-    # Create delayed loading task
-    delayed_plane = load_plane(image.getId(), z, c, t)
-    
-    # Convert to dask array with proper chunking
-    # Use reasonable chunk size (e.g., 1024x1024 for large images)
-    chunk_size = min(1024, height, width)
-    chunks = (chunk_size, chunk_size)
-    
-    dask_array = da.from_delayed(
-        delayed_plane, 
-        shape=(height, width), 
-        dtype=np.uint16,
-        meta=np.array([], dtype=np.uint16)
-    )
-    
-    # Rechunk for better performance
-    dask_array = dask_array.rechunk(chunks)
-    
-    return dask_array
-
-
-def get_dask_image_single(conn, image, timepoints: List[int], 
-                         channels: List[int], z_slices: List[int]):
-    """Load a single image using dask for memory efficiency.
-    
-    Args:
-        conn: OMERO connection
-        image: Single OMERO image object
-        timepoints: List of timepoint indices
-        channels: List of channel indices
-        z_slices: List of z-slice indices
-        
-    Returns:
-        Numpy array containing image data
-    """
-    if not image:
-        return None
-    
-    try:
-        dask_array = _create_dask_array_for_image(conn, image, timepoints, channels, z_slices)
-        
-        if hasattr(dask_array, 'compute'):
-            return dask_array.compute()
-        else:
-            return dask_array
-            
-    except Exception as e:
-        print(f"⚠️ Error with dask loading for image {image.getId()}: {e}")
-        return _load_single_image_direct(conn, image, timepoints, channels, z_slices)
-
-
-def _load_single_image_direct(conn, image, timepoints: List[int], 
-                             channels: List[int], z_slices: List[int]):
-    """Direct loading fallback for a single image."""
-    if not image:
-        return None
-        
-    pixels = image.getPrimaryPixels()
-    
-    # Use first timepoint, channel, z-slice if multiple provided
-    t = timepoints[0] if timepoints else 0
-    c = channels[0] if channels else 0
-    z = z_slices[0] if z_slices else 0
-    
-    try:
-        plane_data = pixels.getPlane(z, c, t)
-        return plane_data
-    except Exception as e:
-        print(f"⚠️ Could not load plane for image {image.getId()}: {e}")
-        # Fallback to zeros array
-        height = image.getSizeY()
-        width = image.getSizeX()
-        return np.zeros((height, width), dtype=np.uint16)
-
-
-def _load_images_direct(conn, image_list: List, timepoints: List[int], 
-                       channels: List[int], z_slices: List[int]):
-    """Direct image loading fallback when dask is not available."""
-    import numpy as np
-    
-    images = []
-    for image in image_list:
-        if not image:
-            continue
-            
-        pixels = image.getPrimaryPixels()
-        
-        # Use first timepoint, channel, z-slice if multiple provided
-        t = timepoints[0] if timepoints else 0
-        c = channels[0] if channels else 0
-        z = z_slices[0] if z_slices else 0
-        
-        try:
-            plane_data = pixels.getPlane(z, c, t)
-            images.append(plane_data)
-        except Exception as e:
-            print(f"Warning: Could not load plane for image {image.getId()}: {e}")
-            # Fallback to zeros array
-            height = image.getSizeY()
-            width = image.getSizeX()
-            images.append(np.zeros((height, width), dtype=np.uint16))
-    
-    return images

@@ -144,6 +144,8 @@ class AnnotationConfig:
                 config_dict = yaml.safe_load(f)
         else:
             # It's a YAML string
+            if isinstance(yaml_content, Path):
+                yaml_content = yaml_content.read_text()
             config_dict = yaml.safe_load(yaml_content)
         
         return cls.from_dict(config_dict)
@@ -206,44 +208,6 @@ class AnnotationConfig:
         if errors:
             raise ValueError("Configuration validation failed:\n" + "\n".join(f"- {error}" for error in errors))
 
-    def get_legacy_params(self) -> Dict[str, Any]:
-        """Convert configuration to legacy function parameters for backward compatibility."""
-        return {
-            # Batch processing
-            'batch_size': self.batch_processing.batch_size,
-            'output_folder': self.batch_processing.output_folder,
-            
-            # OMERO
-            'container_type': self.omero.container_type,
-            'container_id': self.omero.container_id,
-            'source_desc': self.omero.source_desc,
-            'channel': self.omero.channel,
-            
-            # Micro-SAM Model
-            'model_type': self.microsam.model_type,
-            'timepoints': self.microsam.timepoints,
-            'timepoint_mode': self.microsam.timepoint_mode,
-            'z_slices': self.microsam.z_slices,
-            'z_slice_mode': self.microsam.z_slice_mode,
-            'three_d': self.microsam.three_d,
-            
-            # Patches
-            'use_patches': self.patches.use_patches,
-            'patch_size': self.patches.patch_size,
-            'patches_per_image': self.patches.patches_per_image,
-            'random_patches': self.patches.random_patches,
-            
-            # Training
-            'segment_all': self.training.segment_all,
-            'train_n': self.training.train_n,
-            'validate_n': self.training.validate_n,
-            'trainingset_name': self.training.trainingset_name,
-            
-            # Workflow
-            'resume_from_table': self.workflow.resume_from_table,
-            'read_only_mode': self.workflow.read_only_mode,
-            'local_output_dir': self.workflow.local_output_dir,
-        }
 
     def get_microsam_params(self) -> Dict[str, Any]:
         """Get micro-SAM specific parameters."""

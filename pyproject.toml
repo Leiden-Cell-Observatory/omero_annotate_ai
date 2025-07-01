@@ -34,7 +34,7 @@ dependencies = [
     "dask>=2021.6.0",
     "pyyaml>=6.0",
     "ipywidgets>=7.6.0",
-    "ezomero[tables]>=3.1.0",
+    "ezomero[tables]==3.1.1",
     "opencv-python>=4.5.0",
     "keyring>=23.0.0",
 ]
@@ -54,12 +54,24 @@ dev = [
     "isort>=5.0",
     "flake8>=4.0",
 ]
+omero = [
+    # OMERO functionality is already included in main dependencies
+]
+test = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+    "pytest-mock>=3.0",
+]
+docs = [
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+    "sphinxcontrib-napoleon>=0.7",
+    "myst-parser>=0.18",
+]
 all = [
-    "ezomero==3.1.1",
     "napari>=0.4.15",
-    "cellpose>=2.0",
-    "stardist>=0.8.0",
-    "tensorflow>=2.9.0",
+    # Note: micro-sam must be installed via conda
+    # conda install -c conda-forge micro-sam
 ]
 
 [project.urls]
@@ -71,7 +83,7 @@ Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
 omero-annotate-ai = "omero_annotate_ai.cli.main:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["omero_annotate_ai*"]
 
 [tool.setuptools.package-data]

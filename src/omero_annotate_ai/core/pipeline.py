@@ -67,10 +67,8 @@ class AnnotationPipeline:
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
         """Initialize or resume tracking table for the annotation process."""
         try:
-            from ..omero.omero_functions import (
-                initialize_tracking_table, 
-                get_table_by_name
-            )
+            from ..omero.omero_functions import initialize_tracking_table
+            from ..omero.omero_utils import get_table_by_name
         except ImportError:
             raise ImportError("ezomero and OMERO functions are required. Install with: pip install -e .[omero]")
         
@@ -299,7 +297,7 @@ class AnnotationPipeline:
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
         """Load image data from OMERO based on metadata."""
         try:
-            from ..omero.omero_functions import get_dask_image_multiple
+            from ..omero.omero_utils import get_dask_image_multiple
         except ImportError:
             raise ImportError("OMERO functions are required. Install with: pip install -e .[omero]")
         
@@ -399,7 +397,9 @@ class AnnotationPipeline:
                 table_id=table_id,
                 row_indices=completed_row_indices,
                 status="completed",
-                annotation_file=""  # Multiple files, so leave empty
+                annotation_file="",  # Multiple files, so leave empty
+                container_type=self.config.omero.container_type,
+                container_id=self.config.omero.container_id
             )
         
         # Create and upload embeddings
