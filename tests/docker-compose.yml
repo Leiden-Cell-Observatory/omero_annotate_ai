@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  database:
+    image: "postgres:11"
+    environment:
+      POSTGRES_USER: omero
+      POSTGRES_DB: omero
+      POSTGRES_PASSWORD: omero
+    networks:
+      - omero
+    volumes:
+      - "database:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omero"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  omero:
+    image: "openmicroscopy/omero-server:latest"
+    environment:
+      CONFIG_omero_db_host: database
+      CONFIG_omero_db_user: omero
+      CONFIG_omero_db_pass: omero
+      CONFIG_omero_db_name: omero
+      CONFIG_omero_policy_binary__access: +read,+write,+image,+plate
+      CONFIG_omero_glacier2_IceSSL_Ciphers: "HIGH:!DH"
+      ROOTPASS: omero
+    networks:
+      - omero
+    ports:
+      - "6063:4063"
+      - "6064:4064"
+    volumes:
+      - "omero:/OMERO"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "omero admin status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  omeroweb:
+    image: "openmicroscopy/omero-web-standalone:latest"
+    environment:
+      OMEROHOST: omero
+    networks:
+      - omero
+    ports:
+      - "5080:4080"
+    depends_on:
+      omero:
+        condition: service_healthy
+
+networks:
+  omero:
+
+volumes:
+  database:
+  omero:

@@ -3,7 +3,10 @@
 import os
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from omero.gateway import BlitzGateway
 from pathlib import Path
 
 try:
@@ -223,7 +226,7 @@ class SimpleOMEROConnection:
         return config
     
     def connect(self, host: str, username: str, password: str, 
-               group: Optional[str] = None, secure: bool = True) -> Optional[BlitzGateway]:
+               group: Optional[str] = None, secure: bool = True) -> Optional['BlitzGateway']:
         """Create OMERO connection.
         
         Args:
@@ -296,7 +299,7 @@ class SimpleOMEROConnection:
         except Exception as e:
             return False, f"Connection error: {str(e)}"
     
-    def create_connection_from_config(self, widget_config: Dict[str, Any]) -> Optional[BlitzGateway]:
+    def create_connection_from_config(self, widget_config: Dict[str, Any]) -> Optional['BlitzGateway']:
         """Create connection from widget configuration.
         
         Args:
@@ -331,7 +334,7 @@ class SimpleOMEROConnection:
         
         return connection
     
-    def get_last_connection(self) -> Optional[BlitzGateway]:
+    def get_last_connection(self) -> Optional['BlitzGateway']:
         """Get the last successful connection.
         
         Returns:

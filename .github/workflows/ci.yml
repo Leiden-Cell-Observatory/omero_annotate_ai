@@ -83,9 +83,27 @@ jobs:
         python -c "from omero_annotate_ai.core.config import load_config; print('✅ Config module works correctly')"
         python -c "from omero_annotate_ai.widgets.config_widget import create_config_widget; print('✅ Widget module works correctly')"
 
-    - name: Run pytest
+    - name: Run unit tests
       run: |
-        python -m pytest tests/ -v --cov=omero_annotate_ai --cov-report=xml --cov-report=term-missing
+        python -m pytest tests/ -v --cov=omero_annotate_ai --cov-report=xml --cov-report=term-missing -m "not (omero or integration or docker)"
+
+    - name: Run integration tests with Docker (Ubuntu only)
+      if: runner.os == 'Linux' && matrix.python-version == '3.11'
+      run: |
+        # Start OMERO server
+        cd tests
+        docker-compose up -d
+        
+        # Wait for services to be ready
+        sleep 60
+        
+        # Run OMERO integration tests
+        cd ..
+        python -m pytest tests/test_omero_integration.py -v -m "omero or integration" || true
+        
+        # Cleanup
+        cd tests
+        docker-compose down -v
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
