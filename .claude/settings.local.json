@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "WebFetch(domain:omero-py.readthedocs.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:omero-guides.readthedocs.io)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(pip install:*)",
+      "Bash(rg:*)"
+    ],
+    "deny": []
+  }
+}
