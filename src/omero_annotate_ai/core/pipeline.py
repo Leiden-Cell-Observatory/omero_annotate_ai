@@ -11,15 +11,17 @@ from .config import AnnotationConfig
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
     
-    def __init__(self, config: AnnotationConfig, conn=None):
+    def __init__(self, config: AnnotationConfig, conn=None, project_config: dict = None):
         """Initialize the pipeline with configuration and OMERO connection.
         
         Args:
             config: AnnotationConfig object containing all parameters
             conn: OMERO connection object (BlitzGateway)
+            project_config: Optional project configuration from ProjectAnnotationWidget
         """
         self.config = config
         self.conn = conn
+        self.project_config = project_config or {}
         self._validate_setup()
     
     def _validate_setup(self):
@@ -59,6 +61,11 @@ class AnnotationPipeline:
     
     def _get_table_title(self) -> str:
         """Generate table title based on configuration."""
+        # Check if we have a project configuration with table name
+        if self.project_config.get('table_name'):
+            return self.project_config['table_name']
+        
+        # Fallback to legacy naming
         if self.config.training.trainingset_name:
             return f"microsam_training_{self.config.training.trainingset_name}"
         else:
@@ -67,15 +74,41 @@ class AnnotationPipeline:
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
         """Initialize or resume tracking table for the annotation process."""
         try:
-            from ..omero.omero_functions import initialize_tracking_table
+            from ..omero.omero_functions import (
+                initialize_tracking_table,
+                generate_unique_table_name,
+                create_roi_namespace_for_table
+            )
             from ..omero.omero_utils import get_table_by_name
         except ImportError:
             raise ImportError("ezomero and OMERO functions are required. Install with: pip install -e .[omero]")
         
+        # Handle project-based workflow
+        if self.project_config.get('action') == 'continue' and self.project_config.get('table_id'):
+            # Continue existing table
+            table_id = self.project_config['table_id']
+            table_name = self.project_config.get('table_name', 'Unknown')
+            print(f"📋 Continuing existing table: {table_name} (ID: {table_id})")
+            return table_id
+        
+        # Generate table name for new table
         table_title = self._get_table_title()
         
-        if self.config.workflow.resume_from_table:
-            # Try to find existing table
+        # If we have a project_id and no explicit table name, generate unique name
+        if (self.project_config.get('project_id') and 
+            self.project_config.get('action') == 'new' and 
+            not self.project_config.get('table_name')):
+            
+            table_title = generate_unique_table_name(
+                self.conn, 
+                self.project_config['project_id'],
+                self.config.training.trainingset_name
+            )
+            print(f"📋 Generated unique table name: {table_title}")
+        
+        # Check for legacy resume functionality
+        if self.config.workflow.resume_from_table and not self.project_config:
+            # Try to find existing table (legacy behavior)
             existing_table = get_table_by_name(self.conn, table_title)
             if existing_table:
                 print(f"📋 Resuming from existing table: {table_title}")
@@ -83,6 +116,10 @@ class AnnotationPipeline:
         
         # Create new table
         print(f"📋 Creating new tracking table: {table_title}")
+        
+        # Store ROI namespace for consistent naming
+        roi_namespace = create_roi_namespace_for_table(table_title)
+        print(f"📋 ROI namespace: {roi_namespace}")
         
         # Prepare processing units for table initialization
         processing_units = self._prepare_processing_units(images_list)
@@ -545,14 +582,15 @@ class AnnotationPipeline:
         return self.run(images_list)
 
 
-def create_pipeline(config: AnnotationConfig, conn=None) -> AnnotationPipeline:
+def create_pipeline(config: AnnotationConfig, conn=None, project_config: dict = None) -> AnnotationPipeline:
     """Create a micro-SAM annotation pipeline with the given configuration.
     
     Args:
         config: AnnotationConfig object
         conn: OMERO connection object
+        project_config: Optional project configuration from ProjectAnnotationWidget
         
     Returns:
         AnnotationPipeline instance
     """
-    return AnnotationPipeline(config, conn)
+    return AnnotationPipeline(config, conn, project_config)

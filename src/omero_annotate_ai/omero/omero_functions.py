@@ -2,7 +2,7 @@
 
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 
 from .omero_utils import (
     delete_table, 
@@ -378,5 +378,245 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         else:
             print(f"❌ Error uploading annotations to image {image_id}: {e}")
         return None, None
+
+
+# =============================================================================
+# Annotation Table Management Functions
+# =============================================================================
+
+def list_annotation_tables_for_project(conn, project_id: int) -> List[Dict[str, Any]]:
+    """Find all micro-SAM annotation tables for a project.
+    
+    Args:
+        conn: OMERO connection
+        project_id: Project ID to search in
+        
+    Returns:
+        List of dictionaries with table information including progress
+    """
+    if ezomero is None:
+        raise ImportError("ezomero is required. Install with: pip install -e .[omero]")
+    
+    from .omero_utils import list_user_tables
+    
+    # Get all tables in the project
+    all_tables = list_user_tables(conn, container_type="project", container_id=project_id)
+    
+    # Filter for micro-SAM annotation tables
+    annotation_tables = []
+    
+    for table_info in all_tables:
+        table_name = table_info.get('name', '')
+        
+        # Check if this is a micro-SAM annotation table
+        if (table_name.startswith('microsam_training_') or 
+            table_name.startswith('microsam_annotation_') or
+            'microsam' in table_name.lower()):
+            
+            # Add progress information
+            try:
+                progress_info = analyze_table_completion_status(conn, table_info['id'])
+                table_info.update(progress_info)
+            except Exception as e:
+                print(f"⚠️ Could not analyze table {table_name}: {e}")
+                table_info.update({
+                    'total_units': 0,
+                    'completed_units': 0,
+                    'progress_percent': 0,
+                    'is_complete': False,
+                    'status': 'error'
+                })
+            
+            annotation_tables.append(table_info)
+    
+    # Sort by creation date (newest first)
+    annotation_tables.sort(key=lambda x: x.get('created_date', ''), reverse=True)
+    
+    return annotation_tables
+
+
+def generate_unique_table_name(conn, project_id: int, base_name: str = None) -> str:
+    """Generate a unique table name for the project.
+    
+    Args:
+        conn: OMERO connection
+        project_id: Project ID
+        base_name: Optional base name for the table
+        
+    Returns:
+        Unique table name
+    """
+    import datetime
+    
+    # Get project name for better naming
+    try:
+        project = conn.getObject("Project", project_id)
+        project_name = project.getName() if project else f"project_{project_id}"
+        # Clean project name for use in table name
+        project_name = "".join(c for c in project_name if c.isalnum() or c in "_-").lower()
+    except:
+        project_name = f"project_{project_id}"
+    
+    # Create base name if not provided
+    if not base_name:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = f"microsam_{project_name}_{timestamp}"
+    
+    # Check if name already exists and make it unique
+    existing_tables = list_annotation_tables_for_project(conn, project_id)
+    existing_names = {table['name'] for table in existing_tables}
+    
+    unique_name = base_name
+    counter = 1
+    
+    while unique_name in existing_names:
+        unique_name = f"{base_name}_v{counter}"
+        counter += 1
+    
+    return unique_name
+
+
+def analyze_table_completion_status(conn, table_id: int) -> Dict[str, Any]:
+    """Analyze the completion status of an annotation table.
+    
+    Args:
+        conn: OMERO connection
+        table_id: Table ID to analyze
+        
+    Returns:
+        Dictionary with progress information
+    """
+    if ezomero is None:
+        raise ImportError("ezomero is required. Install with: pip install -e .[omero]")
+    
+    try:
+        # Get table data
+        table_data = ezomero.get_table(conn, table_id)
+        
+        if table_data is None or table_data.empty:
+            return {
+                'total_units': 0,
+                'completed_units': 0,
+                'progress_percent': 0,
+                'is_complete': False,
+                'status': 'empty',
+                'error': 'Table is empty or could not be read'
+            }
+        
+        # Analyze progress based on table structure
+        total_units = len(table_data)
+        
+        # Check for 'processed' column or similar completion indicators
+        completed_units = 0
+        completion_columns = ['processed', 'completed', 'finished', 'done']
+        
+        completion_column = None
+        for col in completion_columns:
+            if col in table_data.columns:
+                completion_column = col
+                break
+        
+        if completion_column:
+            # Count completed units
+            completed_units = table_data[completion_column].sum() if table_data[completion_column].dtype == bool else \
+                             (table_data[completion_column] == True).sum()
+        else:
+            # Check for roi_id or label_id columns as completion indicators
+            if 'roi_id' in table_data.columns:
+                completed_units = table_data['roi_id'].notna().sum()
+            elif 'label_id' in table_data.columns:
+                completed_units = table_data['label_id'].notna().sum()
+        
+        # Calculate progress
+        progress_percent = (completed_units / total_units * 100) if total_units > 0 else 0
+        is_complete = progress_percent >= 100
+        
+        # Determine status
+        if is_complete:
+            status = 'complete'
+        elif completed_units > 0:
+            status = 'in_progress'
+        else:
+            status = 'not_started'
+        
+        return {
+            'total_units': int(total_units),
+            'completed_units': int(completed_units),
+            'progress_percent': round(progress_percent, 1),
+            'is_complete': is_complete,
+            'status': status,
+            'table_size': len(table_data),
+            'columns': list(table_data.columns)
+        }
+        
+    except Exception as e:
+        return {
+            'total_units': 0,
+            'completed_units': 0,
+            'progress_percent': 0,
+            'is_complete': False,
+            'status': 'error',
+            'error': str(e)
+        }
+
+
+def get_table_progress_summary(conn, table_id: int) -> str:
+    """Get a human-readable progress summary for a table.
+    
+    Args:
+        conn: OMERO connection
+        table_id: Table ID
+        
+    Returns:
+        Progress summary string
+    """
+    progress = analyze_table_completion_status(conn, table_id)
+    
+    if progress['status'] == 'error':
+        return f"❌ Error: {progress.get('error', 'Unknown error')}"
+    
+    total = progress['total_units']
+    completed = progress['completed_units']
+    percent = progress['progress_percent']
+    
+    status_emoji = {
+        'complete': '✅',
+        'in_progress': '🔄',
+        'not_started': '⏳',
+        'empty': '📋'
+    }
+    
+    emoji = status_emoji.get(progress['status'], '❓')
+    
+    return f"{emoji} {completed}/{total} units ({percent:.1f}% complete)"
+
+
+def create_roi_namespace_for_table(table_name: str) -> str:
+    """Create a consistent ROI namespace for a table.
+    
+    Args:
+        table_name: Name of the annotation table
+        
+    Returns:
+        ROI namespace string
+    """
+    return f"omero_annotate_ai.table.{table_name}"
+
+
+def get_tables_by_roi_namespace(conn, project_id: int, namespace: str) -> List[int]:
+    """Find tables that have ROIs with a specific namespace.
+    
+    Args:
+        conn: OMERO connection
+        project_id: Project ID to search in
+        namespace: ROI namespace to look for
+        
+    Returns:
+        List of table IDs
+    """
+    # This would require scanning ROIs across the project
+    # Implementation depends on OMERO's ROI search capabilities
+    # For now, return empty list - can be enhanced later
+    return []
 
 
