@@ -34,6 +34,8 @@ class ProjectAnnotationWidget:
         self.annotation_tables = []
         self._create_widgets()
         self._setup_observers()
+        if connection is not None:
+            self.set_connection(connection)
         
     def _create_widgets(self):
         """Create all widget components."""
@@ -133,9 +135,13 @@ class ProjectAnnotationWidget:
             connection: OMERO connection object
         """
         self.connection = connection
-        
+    
         if connection and connection.isConnected():
-            self.connection_status.value = f"✅ Connected to {connection.getHost()}"
+            # Get user information which is more reliable
+            user = connection.getUser()
+            user_name = user.getName() if user else "Unknown User"
+            
+            self.connection_status.value = f"✅ Connected as {user_name}"
             self.project_dropdown.disabled = False
             self.refresh_projects_button.disabled = False
             self._load_projects()
