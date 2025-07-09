@@ -394,13 +394,27 @@ def list_annotation_tables_for_project(conn, project_id: int) -> List[Dict[str, 
     Returns:
         List of dictionaries with table information including progress
     """
+    return list_annotation_tables_for_container(conn, 'project', project_id)
+
+
+def list_annotation_tables_for_container(conn, container_type: str, container_id: int) -> List[Dict[str, Any]]:
+    """Find all micro-SAM annotation tables for a container.
+    
+    Args:
+        conn: OMERO connection
+        container_type: Type of container ('project', 'dataset', 'plate', 'screen')
+        container_id: Container ID to search in
+        
+    Returns:
+        List of dictionaries with table information including progress
+    """
     if ezomero is None:
         raise ImportError("ezomero is required. Install with: pip install -e .[omero]")
     
     from .omero_utils import list_user_tables
     
-    # Get all tables in the project
-    all_tables = list_user_tables(conn, container_type="project", container_id=project_id)
+    # Get all tables in the container
+    all_tables = list_user_tables(conn, container_type=container_type, container_id=container_id)
     
     # Filter for micro-SAM annotation tables
     annotation_tables = []
@@ -446,24 +460,39 @@ def generate_unique_table_name(conn, project_id: int, base_name: str = None) -> 
     Returns:
         Unique table name
     """
+    return generate_unique_table_name_for_container(conn, 'project', project_id, base_name)
+
+
+def generate_unique_table_name_for_container(conn, container_type: str, container_id: int, base_name: str = None) -> str:
+    """Generate a unique table name for a container.
+    
+    Args:
+        conn: OMERO connection
+        container_type: Type of container ('project', 'dataset', 'plate', 'screen')
+        container_id: Container ID
+        base_name: Optional base name for the table
+        
+    Returns:
+        Unique table name
+    """
     import datetime
     
-    # Get project name for better naming
+    # Get container name for better naming
     try:
-        project = conn.getObject("Project", project_id)
-        project_name = project.getName() if project else f"project_{project_id}"
-        # Clean project name for use in table name
-        project_name = "".join(c for c in project_name if c.isalnum() or c in "_-").lower()
+        container = conn.getObject(container_type.capitalize(), container_id)
+        container_name = container.getName() if container else f"{container_type}_{container_id}"
+        # Clean container name for use in table name
+        container_name = "".join(c for c in container_name if c.isalnum() or c in "_-").lower()
     except:
-        project_name = f"project_{project_id}"
+        container_name = f"{container_type}_{container_id}"
     
     # Create base name if not provided
     if not base_name:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"microsam_{project_name}_{timestamp}"
+        base_name = f"microsam_{container_name}_{timestamp}"
     
     # Check if name already exists and make it unique
-    existing_tables = list_annotation_tables_for_project(conn, project_id)
+    existing_tables = list_annotation_tables_for_container(conn, container_type, container_id)
     existing_names = {table['name'] for table in existing_tables}
     
     unique_name = base_name

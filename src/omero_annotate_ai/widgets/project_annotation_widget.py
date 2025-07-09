@@ -1,4 +1,4 @@
-"""Interactive widget for project-level annotation management."""
+"""Interactive widget for container-level annotation management."""
 
 import ipywidgets as widgets
 from IPython.display import display, clear_output
@@ -13,23 +13,27 @@ except ImportError:
 
 from ..omero.omero_functions import (
     list_annotation_tables_for_project,
+    list_annotation_tables_for_container,
     generate_unique_table_name,
+    generate_unique_table_name_for_container,
     get_table_progress_summary,
     create_roi_namespace_for_table
 )
+from ..core.config import create_default_config
 
 
 class ProjectAnnotationWidget:
-    """Interactive widget for managing annotation projects and tables."""
+    """Interactive widget for managing annotation containers and tables."""
     
     def __init__(self, connection=None):
-        """Initialize the project annotation widget.
+        """Initialize the container annotation widget.
         
         Args:
             connection: OMERO connection object
         """
         self.connection = connection
-        self.selected_project_id = None
+        self.selected_container_type = 'project'
+        self.selected_container_id = None
         self.selected_table_id = None
         self.annotation_tables = []
         self._create_widgets()
@@ -42,7 +46,7 @@ class ProjectAnnotationWidget:
         
         # Header
         self.header = widgets.HTML(
-            value="<h3>📊 Project Annotation Management</h3>",
+            value="<h3>📊 Container Annotation Management</h3>",
             layout=widgets.Layout(margin='0 0 20px 0')
         )
         
@@ -52,19 +56,29 @@ class ProjectAnnotationWidget:
             layout=widgets.Layout(margin='0 0 10px 0')
         )
         
-        # Project selection
-        self.project_dropdown = widgets.Dropdown(
-            options=[('Select a project...', None)],
+        # Container type selection
+        self.container_type_dropdown = widgets.Dropdown(
+            options=[('Project', 'project'), ('Dataset', 'dataset'), ('Plate', 'plate'), ('Screen', 'screen')],
+            value='project',
+            description='Container Type:',
+            style={'description_width': 'initial'},
+            layout=widgets.Layout(width='200px'),
+            disabled=True
+        )
+        
+        # Container selection
+        self.container_dropdown = widgets.Dropdown(
+            options=[('Select a container...', None)],
             value=None,
-            description='Project:',
+            description='Container:',
             style={'description_width': 'initial'},
             layout=widgets.Layout(width='400px'),
             disabled=True
         )
         
-        # Refresh projects button
-        self.refresh_projects_button = widgets.Button(
-            description='Refresh Projects',
+        # Refresh containers button
+        self.refresh_containers_button = widgets.Button(
+            description='Refresh Containers',
             button_style='info',
             icon='refresh',
             layout=widgets.Layout(width='150px'),
@@ -116,17 +130,28 @@ class ProjectAnnotationWidget:
             layout=widgets.Layout(width='400px', margin='10px 0 0 0')
         )
         
+        # Export config button
+        self.export_config_button = widgets.Button(
+            description='Export Config YAML',
+            button_style='info',
+            icon='download',
+            layout=widgets.Layout(width='150px', margin='10px 0 0 0'),
+            disabled=True
+        )
+        
         # Output area for messages
         self.message_output = widgets.Output()
         
     def _setup_observers(self):
         """Set up widget event observers."""
-        self.refresh_projects_button.on_click(self._on_refresh_projects)
-        self.project_dropdown.observe(self._on_project_changed, names='value')
+        self.container_type_dropdown.observe(self._on_container_type_changed, names='value')
+        self.refresh_containers_button.on_click(self._on_refresh_containers)
+        self.container_dropdown.observe(self._on_container_changed, names='value')
         self.scan_tables_button.on_click(self._on_scan_tables)
         self.table_selection_widget.observe(self._on_table_selection_changed, names='value')
         self.continue_button.on_click(self._on_continue_existing)
         self.new_table_button.on_click(self._on_create_new_table)
+        self.export_config_button.on_click(self._on_export_config)
         
     def set_connection(self, connection):
         """Set the OMERO connection.
@@ -142,55 +167,92 @@ class ProjectAnnotationWidget:
             user_name = user.getName() if user else "Unknown User"
             
             self.connection_status.value = f"✅ Connected as {user_name}"
-            self.project_dropdown.disabled = False
-            self.refresh_projects_button.disabled = False
-            self._load_projects()
+            self.container_type_dropdown.disabled = False
+            self.container_dropdown.disabled = False
+            self.refresh_containers_button.disabled = False
+            self._load_containers()
         else:
             self.connection_status.value = "❌ No OMERO connection"
-            self.project_dropdown.disabled = True
-            self.refresh_projects_button.disabled = True
+            self.container_type_dropdown.disabled = True
+            self.container_dropdown.disabled = True
+            self.refresh_containers_button.disabled = True
             
-    def _load_projects(self):
-        """Load user's projects from OMERO."""
+    def _load_containers(self):
+        """Load user's containers from OMERO based on selected type."""
         if not self.connection or not EZOMERO_AVAILABLE:
             return
             
+        container_type = self.selected_container_type
+        
         try:
-            # Get user's projects
-            projects = list(self.connection.getObjects("Project"))
+            if container_type == 'project':
+                containers = list(self.connection.getObjects("Project"))
+                type_name = "project"
+            elif container_type == 'dataset':
+                containers = list(self.connection.getObjects("Dataset"))
+                type_name = "dataset"
+            elif container_type == 'plate':
+                containers = list(self.connection.getObjects("Plate"))
+                type_name = "plate"
+            elif container_type == 'screen':
+                containers = list(self.connection.getObjects("Screen"))
+                type_name = "screen"
+            else:
+                containers = []
+                type_name = container_type
             
-            if projects:
-                project_options = [('Select a project...', None)]
-                for project in projects:
-                    project_options.append((f"{project.getName()} (ID: {project.getId()})", project.getId()))
+            if containers:
+                container_options = [(f'Select a {type_name}...', None)]
+                for container in containers:
+                    container_options.append((f"{container.getName()} (ID: {container.getId()})", container.getId()))
                 
-                self.project_dropdown.options = project_options
+                self.container_dropdown.options = container_options
                 
             else:
-                self.project_dropdown.options = [('No projects found', None)]
+                self.container_dropdown.options = [(f'No {type_name}s found', None)]
                 
         except Exception as e:
             with self.message_output:
                 clear_output(wait=True)
-                print(f"❌ Error loading projects: {e}")
+                print(f"❌ Error loading {type_name}s: {e}")
     
-    def _on_refresh_projects(self, button):
-        """Handle refresh projects button click."""
+    def _on_container_type_changed(self, change):
+        """Handle container type selection change."""
+        self.selected_container_type = change['new']
+        
+        # Reset container selection
+        self.selected_container_id = None
+        self.container_dropdown.value = None
+        
+        # Clear previous table data
+        self.annotation_tables = []
+        self.table_selection_widget.options = []
+        self._update_action_buttons()
+        
+        # Load containers of the new type
+        self._load_containers()
+        
+        with self.tables_output:
+            clear_output(wait=True)
+            print(f"📂 Container type changed to {self.selected_container_type}. Select a container and scan for tables.")
+    
+    def _on_refresh_containers(self, button):
+        """Handle refresh containers button click."""
         with self.message_output:
             clear_output(wait=True)
-            print("🔄 Refreshing projects...")
+            print(f"🔄 Refreshing {self.selected_container_type}s...")
         
-        self._load_projects()
+        self._load_containers()
         
         with self.message_output:
             clear_output(wait=True)
-            print("✅ Projects refreshed")
+            print(f"✅ {self.selected_container_type.capitalize()}s refreshed")
     
-    def _on_project_changed(self, change):
-        """Handle project selection change."""
-        self.selected_project_id = change['new']
+    def _on_container_changed(self, change):
+        """Handle container selection change."""
+        self.selected_container_id = change['new']
         
-        if self.selected_project_id:
+        if self.selected_container_id:
             self.scan_tables_button.disabled = False
             # Clear previous table data
             self.annotation_tables = []
@@ -199,14 +261,14 @@ class ProjectAnnotationWidget:
             
             with self.tables_output:
                 clear_output(wait=True)
-                print("📂 Project selected. Click 'Scan for Tables' to find existing annotation tables.")
+                print(f"📂 {self.selected_container_type.capitalize()} selected. Click 'Scan for Tables' to find existing annotation tables.")
         else:
             self.scan_tables_button.disabled = True
             self._update_action_buttons()
     
     def _on_scan_tables(self, button):
         """Handle scan tables button click."""
-        if not self.selected_project_id:
+        if not self.selected_container_id:
             return
             
         with self.message_output:
@@ -214,9 +276,9 @@ class ProjectAnnotationWidget:
             print("🔍 Scanning for annotation tables...")
         
         try:
-            # Get annotation tables for the project
-            self.annotation_tables = list_annotation_tables_for_project(
-                self.connection, self.selected_project_id
+            # Get annotation tables for the container
+            self.annotation_tables = list_annotation_tables_for_container(
+                self.connection, self.selected_container_type, self.selected_container_id
             )
             
             with self.tables_output:
@@ -238,7 +300,7 @@ class ProjectAnnotationWidget:
     def _display_tables(self):
         """Display the found annotation tables."""
         if not self.annotation_tables:
-            print("📋 No annotation tables found in this project.")
+            print(f"📋 No annotation tables found in this {self.selected_container_type}.")
             print("Use 'Create New Table' to start a new annotation workflow.")
             self.table_selection_widget.options = []
             self._update_action_buttons()
@@ -286,10 +348,11 @@ class ProjectAnnotationWidget:
         # Enable/disable buttons based on current state
         has_tables = len(self.annotation_tables) > 0
         has_selection = self.selected_table_id is not None
-        has_project = self.selected_project_id is not None
+        has_container = self.selected_container_id is not None
         
         self.continue_button.disabled = not (has_tables and has_selection)
-        self.new_table_button.disabled = not has_project
+        self.new_table_button.disabled = not has_container
+        self.export_config_button.disabled = not has_container
     
     def _on_continue_existing(self, button):
         """Handle continue existing table button click."""
@@ -308,12 +371,12 @@ class ProjectAnnotationWidget:
                 clear_output(wait=True)
                 print(f"✅ Selected table: {selected_table.get('name', 'Unknown')}")
                 print(f"   Table ID: {self.selected_table_id}")
-                print(f"   Project ID: {self.selected_project_id}")
+                print(f"   {self.selected_container_type.capitalize()} ID: {self.selected_container_id}")
                 print("   Ready to continue annotation workflow.")
     
     def _on_create_new_table(self, button):
         """Handle create new table button click."""
-        if not self.selected_project_id:
+        if not self.selected_container_id:
             return
             
         try:
@@ -322,14 +385,15 @@ class ProjectAnnotationWidget:
             if not base_name:
                 base_name = None  # Let the function auto-generate
                 
-            unique_name = generate_unique_table_name(
-                self.connection, self.selected_project_id, base_name
+            # Generate unique table name for the container
+            unique_name = generate_unique_table_name_for_container(
+                self.connection, self.selected_container_type, self.selected_container_id, base_name
             )
             
             with self.message_output:
                 clear_output(wait=True)
                 print(f"✅ Generated unique table name: {unique_name}")
-                print(f"   Project ID: {self.selected_project_id}")
+                print(f"   {self.selected_container_type.capitalize()} ID: {self.selected_container_id}")
                 print(f"   ROI Namespace: {create_roi_namespace_for_table(unique_name)}")
                 print("   Ready to create new annotation workflow.")
                 
@@ -341,14 +405,86 @@ class ProjectAnnotationWidget:
                 clear_output(wait=True)
                 print(f"❌ Error generating table name: {e}")
     
+    def _on_export_config(self, button):
+        """Handle export config YAML button click."""
+        if not self.selected_container_id:
+            return
+            
+        try:
+            # Generate configuration YAML
+            config_yaml = self.generate_config_yaml()
+            
+            with self.message_output:
+                clear_output(wait=True)
+                print("✅ Generated Configuration YAML:")
+                print("=" * 50)
+                print(config_yaml)
+                print("=" * 50)
+                print("\n📌 Instructions:")
+                print("1. Copy the YAML above")
+                print("2. Use it with the Config Widget:")
+                print("   config = create_config_widget()")
+                print("   # Or load from YAML file")
+                print("   # config = load_config_from_yaml('config.yaml')")
+                print("3. Continue with your annotation workflow")
+                
+        except Exception as e:
+            with self.message_output:
+                clear_output(wait=True)
+                print(f"❌ Error generating config YAML: {e}")
+    
+    def generate_config_yaml(self) -> str:
+        """Generate a complete configuration YAML for the config widget.
+        
+        Returns:
+            YAML string compatible with AnnotationConfig
+        """
+        # Create default configuration
+        config = create_default_config()
+        
+        # Update OMERO settings with current selection
+        config.omero.container_type = self.selected_container_type
+        config.omero.container_id = self.selected_container_id
+        
+        # Update workflow settings based on current state
+        if self.selected_table_id:
+            # Continuing existing table
+            config.workflow.resume_from_table = True
+            for table in self.annotation_tables:
+                if table.get('id') == self.selected_table_id:
+                    table_name = table.get('name')
+                    if table_name:
+                        # Note: table_name is not a direct config field, but we can use it in training
+                        config.training.trainingset_name = table_name
+                    break
+        elif self.new_table_name_widget.value.strip():
+            # Creating new table
+            config.workflow.resume_from_table = False
+            config.training.trainingset_name = self.new_table_name_widget.value.strip()
+        
+        # Add container-specific description
+        container_name = ""
+        if self.selected_container_id:
+            try:
+                container_obj = self.connection.getObject(self.selected_container_type.capitalize(), self.selected_container_id)
+                if container_obj:
+                    container_name = container_obj.getName()
+            except:
+                pass
+        
+        config.omero.source_desc = f"Auto-generated from {self.selected_container_type} {container_name} (ID: {self.selected_container_id})"
+        
+        return config.to_yaml()
+    
     def get_configuration(self) -> Dict[str, Any]:
         """Get the current widget configuration.
         
         Returns:
-            Dictionary with project and table configuration
+            Dictionary with container and table configuration
         """
         config = {
-            'project_id': self.selected_project_id,
+            'container_type': self.selected_container_type,
+            'container_id': self.selected_container_id,
             'table_id': self.selected_table_id,
             'action': None,
             'table_name': None,
@@ -373,9 +509,13 @@ class ProjectAnnotationWidget:
     
     def display(self):
         """Display the complete widget."""
-        project_box = widgets.HBox([
-            self.project_dropdown,
-            self.refresh_projects_button
+        container_type_box = widgets.HBox([
+            self.container_type_dropdown
+        ])
+        
+        container_box = widgets.HBox([
+            self.container_dropdown,
+            self.refresh_containers_button
         ])
         
         scan_box = widgets.HBox([
@@ -387,21 +527,27 @@ class ProjectAnnotationWidget:
             self.new_table_button
         ])
         
+        export_box = widgets.HBox([
+            self.export_config_button
+        ])
+        
         return widgets.VBox([
             self.header,
             self.connection_status,
-            project_box,
+            container_type_box,
+            container_box,
             scan_box,
             self.tables_output,
             self.table_selection_widget,
             action_box,
             self.new_table_name_widget,
+            export_box,
             self.message_output
         ])
 
 
 def create_project_annotation_widget(connection=None):
-    """Create a project annotation management widget.
+    """Create a container annotation management widget.
     
     Args:
         connection: Optional OMERO connection
