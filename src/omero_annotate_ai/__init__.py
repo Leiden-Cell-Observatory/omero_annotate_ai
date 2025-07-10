@@ -4,7 +4,7 @@ from .core.config import AnnotationConfig, load_config, create_default_config
 from .core.pipeline import create_pipeline, AnnotationPipeline
 from .widgets.config_widget import create_config_widget
 from .widgets.omero_connection_widget import create_omero_connection_widget
-from .widgets.project_annotation_widget import create_project_annotation_widget
+from .widgets.container_annotation_widget import create_container_annotation_widget
 
 # OMERO utilities (optional import)
 try:
@@ -25,7 +25,7 @@ __all__ = [
     "AnnotationPipeline",
     "create_config_widget",
     "create_omero_connection_widget",
-    "create_project_annotation_widget",
+    "create_container_annotation_widget",
 ]
 
 # Add OMERO utils to exports if available

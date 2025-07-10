@@ -384,20 +384,7 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
 # Annotation Table Management Functions
 # =============================================================================
 
-def list_annotation_tables_for_project(conn, project_id: int) -> List[Dict[str, Any]]:
-    """Find all micro-SAM annotation tables for a project.
-    
-    Args:
-        conn: OMERO connection
-        project_id: Project ID to search in
-        
-    Returns:
-        List of dictionaries with table information including progress
-    """
-    return list_annotation_tables_for_container(conn, 'project', project_id)
-
-
-def list_annotation_tables_for_container(conn, container_type: str, container_id: int) -> List[Dict[str, Any]]:
+def list_annotation_tables(conn, container_type: str, container_id: int) -> List[Dict[str, Any]]:
     """Find all micro-SAM annotation tables for a container.
     
     Args:
@@ -449,21 +436,7 @@ def list_annotation_tables_for_container(conn, container_type: str, container_id
     return annotation_tables
 
 
-def generate_unique_table_name(conn, project_id: int, base_name: str = None) -> str:
-    """Generate a unique table name for the project.
-    
-    Args:
-        conn: OMERO connection
-        project_id: Project ID
-        base_name: Optional base name for the table
-        
-    Returns:
-        Unique table name
-    """
-    return generate_unique_table_name_for_container(conn, 'project', project_id, base_name)
-
-
-def generate_unique_table_name_for_container(conn, container_type: str, container_id: int, base_name: str = None) -> str:
+def generate_unique_table_name(conn, container_type: str, container_id: int, base_name: str = None) -> str:
     """Generate a unique table name for a container.
     
     Args:
@@ -492,7 +465,7 @@ def generate_unique_table_name_for_container(conn, container_type: str, containe
         base_name = f"microsam_{container_name}_{timestamp}"
     
     # Check if name already exists and make it unique
-    existing_tables = list_annotation_tables_for_container(conn, container_type, container_id)
+    existing_tables = list_annotation_tables(conn, container_type, container_id)
     existing_names = {table['name'] for table in existing_tables}
     
     unique_name = base_name

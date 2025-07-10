@@ -12,17 +12,15 @@ except ImportError:
     EZOMERO_AVAILABLE = False
 
 from ..omero.omero_functions import (
-    list_annotation_tables_for_project,
-    list_annotation_tables_for_container,
+    list_annotation_tables,
     generate_unique_table_name,
-    generate_unique_table_name_for_container,
     get_table_progress_summary,
     create_roi_namespace_for_table
 )
 from ..core.config import create_default_config
 
 
-class ProjectAnnotationWidget:
+class ContainerAnnotationWidget:
     """Interactive widget for managing annotation containers and tables."""
     
     def __init__(self, connection=None):
@@ -277,7 +275,7 @@ class ProjectAnnotationWidget:
         
         try:
             # Get annotation tables for the container
-            self.annotation_tables = list_annotation_tables_for_container(
+            self.annotation_tables = list_annotation_tables(
                 self.connection, self.selected_container_type, self.selected_container_id
             )
             
@@ -386,7 +384,7 @@ class ProjectAnnotationWidget:
                 base_name = None  # Let the function auto-generate
                 
             # Generate unique table name for the container
-            unique_name = generate_unique_table_name_for_container(
+            unique_name = generate_unique_table_name(
                 self.connection, self.selected_container_type, self.selected_container_id, base_name
             )
             
@@ -546,14 +544,14 @@ class ProjectAnnotationWidget:
         ])
 
 
-def create_project_annotation_widget(connection=None):
+def create_container_annotation_widget(connection=None):
     """Create a container annotation management widget.
     
     Args:
         connection: Optional OMERO connection
         
     Returns:
-        ProjectAnnotationWidget instance
+        ContainerAnnotationWidget instance
     """
-    widget = ProjectAnnotationWidget(connection)
+    widget = ContainerAnnotationWidget(connection)
     return widget
