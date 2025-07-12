@@ -307,99 +307,69 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
     if ezomero is None:
         raise ImportError("ezomero is required for OMERO operations. Install with: pip install -e .[omero]")
     
-    try:
-        # Get image object
-        image = conn.getObject("Image", image_id)
-        if not image:
-            print(f"❌ Image {image_id} not found")
-            return None, None
-        
-        # Load label image
-        try:
-            label_img = imageio.imread(annotation_file)
-            print(f"📋 Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
-            unique_labels = np.unique(label_img)
-            print(f"🏷️ Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")  # Show first 10 labels
-        except Exception as e:
-            print(f"❌ Could not read label image {annotation_file}: {e}")
-            return None, None
-        
-        # Get metadata from image for ROI creation
-        z_slice = 0  # Default to first z-slice
-        channel = 0  # Default to first channel  
-        timepoint = 0  # Default to first timepoint
-        model_type = "vit_b_lm"  # Default model type
-        
-        # Create ROI shapes from label image
-        try:
-            print(f"🔧 Converting labels to ROI shapes...")
-            if not CV2_AVAILABLE or not EZOMERO_ROIS_AVAILABLE:
-                print(f"⚠️ Missing dependencies - skipping ROI shape creation")
-                shapes = []
-            else:
-                shapes = label_to_rois(
-                    label_img=label_img,
-                    z_slice=z_slice,
-                    channel=channel,
-                    timepoint=timepoint,
-                    model_type=model_type,
-                    is_volumetric=False,  # Assume 2D for now
-                    patch_offset=patch_offset
-                )
-                print(f"✅ Created {len(shapes)} ROI shapes from labels")
-        except Exception as e:
-            print(f"❌ Error creating ROI shapes: {e}")
-            import traceback
-            traceback.print_exc()
-            shapes = []
-        
-        # Upload label file as attachment
-        label_desc = f"Micro-SAM segmentation ({model_type})"
-        if patch_offset:
-            label_desc += f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
-            
-        file_ann_id = ezomero.post_file_annotation(
-            conn, 
-            file_path=annotation_file, 
-            description=label_desc,
-            ns="openmicroscopy.org/omero/microsam",
-            object_type="Image",
-            object_id=image_id
+    # Load label image  
+    print(f"🔍 Step 1: Loading label image from {annotation_file}")
+    label_img = imageio.imread(annotation_file)
+    print(f"📋 Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
+    unique_labels = np.unique(label_img)
+    print(f"🏷️ Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")  # Show first 10 labels
+    
+    # Get metadata from image for ROI creation
+    z_slice = 0  # Default to first z-slice
+    channel = 0  # Default to first channel  
+    timepoint = 0  # Default to first timepoint
+    model_type = "vit_b_lm"  # Default model type
+    
+    # Create ROI shapes from label image
+    print(f"🔍 Step 2: Converting labels to ROI shapes...")
+    if not CV2_AVAILABLE or not EZOMERO_ROIS_AVAILABLE:
+        print(f"⚠️ Missing dependencies - skipping ROI shape creation")
+        shapes = []
+    else:
+        shapes = label_to_rois(
+            label_img=label_img,
+            z_slice=z_slice,
+            channel=channel,
+            timepoint=timepoint,
+            model_type=model_type,
+            is_volumetric=False,  # Assume 2D for now
+            patch_offset=patch_offset
         )
+        print(f"✅ Created {len(shapes)} ROI shapes from labels")
+    
+    # Upload label file as attachment
+    print(f"🔍 Step 3: Uploading label file as attachment")
+    label_desc = f"Micro-SAM segmentation ({model_type})"
+    if patch_offset:
+        label_desc += f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
         
-        # File annotation is automatically linked when created with post_file_annotation
-        # No separate linking step needed in ezomero
-        
-        # Upload ROI shapes if any were created
-        roi_id = None
-        if shapes:
-            try:
-                roi_id = ezomero.post_roi(conn, image_id, shapes)
-                print(f"☁️ Created {len(shapes)} ROI shapes for image {image_id}")
-            except Exception as e:
-                print(f"⚠️ Could not upload ROI shapes: {e}")
-                print("   Label file uploaded successfully")
-        else:
-            print(f"⚠️ No ROI shapes created from {annotation_file}")
-        print(f"☁️ Uploaded annotations from {annotation_file} to image {image_id}")
-        if patch_offset:
-            print(f"   Patch offset: {patch_offset}")
-        print(f"   File annotation ID: {file_ann_id}")
-        if roi_id:
-            print(f"   ROI ID: {roi_id}")
-        
-        return file_ann_id, roi_id
-        
-    except Exception as e:
-        # Check for specific OMERO API errors
-        error_msg = str(e)
-        if "findByQuery" in error_msg and "has returned more than one Object" in error_msg:
-            print("❌ OMERO API Query Error: Multiple objects found when expecting single result")
-            print("   This usually indicates missing object_type/object_id parameters in ezomero calls")
-            print(f"   Error details: {error_msg}")
-        else:
-            print(f"❌ Error uploading annotations to image {image_id}: {e}")
-        return None, None
+    file_ann_id = ezomero.post_file_annotation(
+        conn, 
+        file_path=annotation_file, 
+        description=label_desc,
+        ns="openmicroscopy.org/omero/microsam",
+        object_type="Image",
+        object_id=image_id
+    )
+    print(f"✅ File annotation uploaded with ID: {file_ann_id}")
+    
+    # Upload ROI shapes if any were created
+    print(f"🔍 Step 4: Uploading ROI shapes")
+    roi_id = None
+    if shapes:
+        roi_id = ezomero.post_roi(conn, image_id, shapes)
+        print(f"✅ Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}")
+    else:
+        print(f"⚠️ No ROI shapes created from {annotation_file}")
+    
+    print(f"☁️ Uploaded annotations from {annotation_file} to image {image_id}")
+    if patch_offset:
+        print(f"   Patch offset: {patch_offset}")
+    print(f"   File annotation ID: {file_ann_id}")
+    if roi_id:
+        print(f"   ROI ID: {roi_id}")
+    
+    return file_ann_id, roi_id
 
 
 # =============================================================================

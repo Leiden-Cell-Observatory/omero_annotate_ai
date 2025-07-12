@@ -301,7 +301,10 @@ class AnnotationPipeline:
             # Load image data from OMERO
             image_data = self._load_image_data(image_obj, meta)
             images.append(image_data)
-            metadata.append((sequence_val, meta, row_idx))
+            # Include image_id in metadata for later ROI upload
+            meta_with_image_id = meta.copy()
+            meta_with_image_id["image_id"] = image_obj.getId()
+            metadata.append((sequence_val, meta_with_image_id, row_idx))
         
         # Set up output paths
         output_path = Path(self.config.batch_processing.output_folder)
