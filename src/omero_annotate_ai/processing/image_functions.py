@@ -146,7 +146,7 @@ def mask_to_contour(mask):
         list: list of ROI coordinates
     """
     if not CV2_AVAILABLE:
-        raise ImportError("OpenCV is required for ROI creation. Install with: pip install opencv-python")
+        raise ImportError("OpenCV is required for ROI creation. Reinstall package: pip install -e .")
     
     contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     return contours

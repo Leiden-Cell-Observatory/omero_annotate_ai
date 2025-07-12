@@ -14,7 +14,7 @@ class BatchProcessingConfig:
                 0 means process all images in one batch (default: 0)
     """
     batch_size: int = 0  # 0 = all images in one batch
-    output_folder: str = "./output"
+    output_folder: str = "./omero_annotations"
 
 
 @dataclass
@@ -60,7 +60,6 @@ class WorkflowConfig:
     """Configuration for workflow behavior."""
     resume_from_table: bool = False
     read_only_mode: bool = False
-    local_output_dir: str = "./omero_annotations"
 
 
 @dataclass
@@ -79,7 +78,12 @@ class AnnotationConfig:
 
     def to_yaml(self) -> str:
         """Convert configuration to YAML string."""
-        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+        config_dict = self.to_dict()
+        # Convert patch_size tuple to list for YAML compatibility
+        if 'patches' in config_dict and 'patch_size' in config_dict['patches']:
+            if isinstance(config_dict['patches']['patch_size'], tuple):
+                config_dict['patches']['patch_size'] = list(config_dict['patches']['patch_size'])
+        return yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'AnnotationConfig':
@@ -131,7 +135,15 @@ class AnnotationConfig:
             config.training = TrainingConfig(**config_dict['training'])
         
         if 'workflow' in config_dict:
-            config.workflow = WorkflowConfig(**config_dict['workflow'])
+            # Handle backward compatibility for local_output_dir
+            workflow_data = config_dict['workflow'].copy()
+            if 'local_output_dir' in workflow_data:
+                # If local_output_dir exists, use it as output_folder if not already set
+                if 'batch_processing' not in config_dict:
+                    config.batch_processing.output_folder = workflow_data['local_output_dir']
+                # Remove local_output_dir from workflow data
+                del workflow_data['local_output_dir']
+            config.workflow = WorkflowConfig(**workflow_data)
         
         return config
 
@@ -217,6 +229,138 @@ class AnnotationConfig:
             'is_volumetric': self.microsam.three_d
         }
 
+    def get_omero_settings(self) -> Dict[str, Any]:
+        """Get OMERO-specific settings for user display."""
+        return {
+            'container_type': self.omero.container_type,
+            'container_id': self.omero.container_id,
+            'training_set_name': self.training.trainingset_name,
+            'source_description': self.omero.source_desc,
+            'channel': self.omero.channel
+        }
+
+    def get_annotation_settings(self) -> Dict[str, Any]:
+        """Get annotation-specific settings for user display."""
+        return {
+            'segment_all': self.training.segment_all,
+            'training_images': self.training.train_n,
+            'validation_images': self.training.validate_n,
+            'channel': self.omero.channel,
+            'timepoint_mode': self.microsam.timepoint_mode,
+            'timepoints': self.microsam.timepoints,
+            'z_slice_mode': self.microsam.z_slice_mode,
+            'z_slices': self.microsam.z_slices,
+            'three_d': self.microsam.three_d,
+            'use_patches': self.patches.use_patches,
+            'patches_per_image': self.patches.patches_per_image,
+            'patch_size': self.patches.patch_size,
+            'random_patches': self.patches.random_patches
+        }
+
+    def get_technical_settings(self) -> Dict[str, Any]:
+        """Get technical settings for user display."""
+        return {
+            'batch_size': self.batch_processing.batch_size,
+            'sam_model': self.microsam.model_type,
+            'output_folder': self.batch_processing.output_folder,
+            'resume_from_table': self.workflow.resume_from_table,
+            'read_only_mode': self.workflow.read_only_mode
+        }
+
+    def update_from_widget_values(self, widget_values: Dict[str, Any]) -> None:
+        """Update configuration from widget values."""
+        # Update OMERO settings
+        if 'container_type' in widget_values:
+            self.omero.container_type = widget_values['container_type']
+        if 'container_id' in widget_values:
+            self.omero.container_id = widget_values['container_id']
+        if 'channel' in widget_values:
+            self.omero.channel = widget_values['channel']
+        if 'source_desc' in widget_values:
+            self.omero.source_desc = widget_values['source_desc']
+
+        # Update training settings
+        if 'training_set_name' in widget_values:
+            self.training.trainingset_name = widget_values['training_set_name']
+        if 'segment_all' in widget_values:
+            self.training.segment_all = widget_values['segment_all']
+        if 'train_n' in widget_values:
+            self.training.train_n = widget_values['train_n']
+        if 'validate_n' in widget_values:
+            self.training.validate_n = widget_values['validate_n']
+
+        # Update micro-SAM settings
+        if 'model_type' in widget_values:
+            self.microsam.model_type = widget_values['model_type']
+        if 'timepoint_mode' in widget_values:
+            self.microsam.timepoint_mode = widget_values['timepoint_mode']
+        if 'timepoints' in widget_values:
+            self.microsam.timepoints = widget_values['timepoints']
+        if 'z_slice_mode' in widget_values:
+            self.microsam.z_slice_mode = widget_values['z_slice_mode']
+        if 'z_slices' in widget_values:
+            self.microsam.z_slices = widget_values['z_slices']
+        if 'three_d' in widget_values:
+            self.microsam.three_d = widget_values['three_d']
+
+        # Update patch settings
+        if 'use_patches' in widget_values:
+            self.patches.use_patches = widget_values['use_patches']
+        if 'patch_size' in widget_values:
+            self.patches.patch_size = widget_values['patch_size']
+        if 'patches_per_image' in widget_values:
+            self.patches.patches_per_image = widget_values['patches_per_image']
+        if 'random_patches' in widget_values:
+            self.patches.random_patches = widget_values['random_patches']
+
+        # Update batch processing settings
+        if 'batch_size' in widget_values:
+            self.batch_processing.batch_size = widget_values['batch_size']
+        if 'output_folder' in widget_values:
+            self.batch_processing.output_folder = widget_values['output_folder']
+
+        # Update workflow settings
+        if 'resume_from_table' in widget_values:
+            self.workflow.resume_from_table = widget_values['resume_from_table']
+        if 'read_only_mode' in widget_values:
+            self.workflow.read_only_mode = widget_values['read_only_mode']
+
+    def get_workflow_summary(self) -> str:
+        """Get a human-readable summary of the current workflow configuration."""
+        summary = []
+        
+        # OMERO connection info
+        summary.append(f"📡 OMERO: {self.omero.container_type} ID {self.omero.container_id}")
+        summary.append(f"🎯 Training Set: {self.training.trainingset_name}")
+        
+        # Annotation scope
+        if self.training.segment_all:
+            summary.append("📊 Scope: All images")
+        else:
+            summary.append(f"📊 Scope: {self.training.train_n} training, {self.training.validate_n} validation")
+        
+        # Channel and dimensions
+        summary.append(f"📺 Channel: {self.omero.channel}")
+        if self.microsam.three_d:
+            summary.append("🧊 3D processing enabled")
+        
+        # Patches
+        if self.patches.use_patches:
+            summary.append(f"🧩 Patches: {self.patches.patches_per_image} per image ({self.patches.patch_size[0]}×{self.patches.patch_size[1]})")
+        
+        # Technical details
+        summary.append(f"🔬 Model: {self.microsam.model_type}")
+        if self.batch_processing.batch_size > 0:
+            summary.append(f"⚙️ Batch size: {self.batch_processing.batch_size}")
+        
+        # Workflow mode
+        if self.workflow.resume_from_table:
+            summary.append("🔄 Resuming from existing table")
+        else:
+            summary.append("✨ Creating new table")
+        
+        return '\n'.join(summary)
+
 
 def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationConfig:
     """Load configuration from various sources."""
@@ -243,7 +387,7 @@ def get_config_template() -> str:
 
 batch_processing:
   batch_size: 0                    # Number of images to process at once (0 = all in one batch)
-  output_folder: "./output"        # Directory for temporary files
+  output_folder: "./omero_annotations"  # Single output directory for all files
 
 omero:
   container_type: "dataset"        # Type: dataset, plate, project, screen, image
@@ -274,6 +418,5 @@ training:
 workflow:
   resume_from_table: false        # Resume from existing tracking table
   read_only_mode: false           # Save locally instead of uploading
-  local_output_dir: "./omero_annotations"  # Local output directory
 """
     return template

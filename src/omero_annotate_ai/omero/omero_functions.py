@@ -286,12 +286,23 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
     """
     try:
-        from ..processing.image_functions import label_to_rois
+        from ..processing.image_functions import label_to_rois, CV2_AVAILABLE, EZOMERO_ROIS_AVAILABLE
         import imageio.v3 as imageio
+        import numpy as np
     except ImportError as e:
         print(f"❌ Missing dependencies for ROI creation: {e}")
-        print("💡 Install with: pip install opencv-python imageio")
+        print("💡 Reinstall package: pip install -e .")
         return None, None
+    
+    # Validate dependencies for ROI creation
+    if not CV2_AVAILABLE:
+        print(f"❌ OpenCV not available - this should not happen with proper installation")
+        print("📁 File annotation will still be uploaded")
+    
+    if not EZOMERO_ROIS_AVAILABLE:
+        print(f"❌ ezomero.rois not available - ROI shapes cannot be created")
+        print("💡 Update ezomero: pip install ezomero>=3.1.0")
+        print("📁 File annotation will still be uploaded")
     
     if ezomero is None:
         raise ImportError("ezomero is required for OMERO operations. Install with: pip install -e .[omero]")
@@ -306,6 +317,9 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         # Load label image
         try:
             label_img = imageio.imread(annotation_file)
+            print(f"📋 Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
+            unique_labels = np.unique(label_img)
+            print(f"🏷️ Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")  # Show first 10 labels
         except Exception as e:
             print(f"❌ Could not read label image {annotation_file}: {e}")
             return None, None
@@ -318,17 +332,25 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         
         # Create ROI shapes from label image
         try:
-            shapes = label_to_rois(
-                label_img=label_img,
-                z_slice=z_slice,
-                channel=channel,
-                timepoint=timepoint,
-                model_type=model_type,
-                is_volumetric=False,  # Assume 2D for now
-                patch_offset=patch_offset
-            )
+            print(f"🔧 Converting labels to ROI shapes...")
+            if not CV2_AVAILABLE or not EZOMERO_ROIS_AVAILABLE:
+                print(f"⚠️ Missing dependencies - skipping ROI shape creation")
+                shapes = []
+            else:
+                shapes = label_to_rois(
+                    label_img=label_img,
+                    z_slice=z_slice,
+                    channel=channel,
+                    timepoint=timepoint,
+                    model_type=model_type,
+                    is_volumetric=False,  # Assume 2D for now
+                    patch_offset=patch_offset
+                )
+                print(f"✅ Created {len(shapes)} ROI shapes from labels")
         except Exception as e:
             print(f"❌ Error creating ROI shapes: {e}")
+            import traceback
+            traceback.print_exc()
             shapes = []
         
         # Upload label file as attachment
@@ -385,7 +407,7 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
 # =============================================================================
 
 def list_annotation_tables(conn, container_type: str, container_id: int) -> List[Dict[str, Any]]:
-    """Find all micro-SAM annotation tables for a container.
+    """Find all tables attached to a container.
     
     Args:
         conn: OMERO connection
@@ -403,32 +425,28 @@ def list_annotation_tables(conn, container_type: str, container_id: int) -> List
     # Get all tables in the container
     all_tables = list_user_tables(conn, container_type=container_type, container_id=container_id)
     
-    # Filter for micro-SAM annotation tables
+    # Include all tables attached to the container
     annotation_tables = []
     
     for table_info in all_tables:
         table_name = table_info.get('name', '')
         
-        # Check if this is a micro-SAM annotation table
-        if (table_name.startswith('microsam_training_') or 
-            table_name.startswith('microsam_annotation_') or
-            'microsam' in table_name.lower()):
-            
-            # Add progress information
-            try:
-                progress_info = analyze_table_completion_status(conn, table_info['id'])
-                table_info.update(progress_info)
-            except Exception as e:
-                print(f"⚠️ Could not analyze table {table_name}: {e}")
-                table_info.update({
-                    'total_units': 0,
-                    'completed_units': 0,
-                    'progress_percent': 0,
-                    'is_complete': False,
-                    'status': 'error'
-                })
-            
-            annotation_tables.append(table_info)
+        # Include ALL tables attached to this container (no name filtering)
+        # Add progress information
+        try:
+            progress_info = analyze_table_completion_status(conn, table_info['id'])
+            table_info.update(progress_info)
+        except Exception as e:
+            print(f"⚠️ Could not analyze table {table_name}: {e}")
+            table_info.update({
+                'total_units': 0,
+                'completed_units': 0,
+                'progress_percent': 0,
+                'is_complete': False,
+                'status': 'error'
+            })
+        
+        annotation_tables.append(table_info)
     
     # Sort by creation date (newest first)
     annotation_tables.sort(key=lambda x: x.get('created_date', ''), reverse=True)

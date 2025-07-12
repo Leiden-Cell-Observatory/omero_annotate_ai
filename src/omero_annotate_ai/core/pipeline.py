@@ -36,12 +36,12 @@ class AnnotationPipeline:
         """Create necessary output directories."""
         output_path = Path(self.config.batch_processing.output_folder)
         
-        # Create main directories
+        # Create main directories - everything under the single output folder
         dirs = [
             output_path,
             output_path / "embed",
             output_path / "zarr",
-            Path(self.config.workflow.local_output_dir)
+            output_path / "annotations"  # Final annotations go here
         ]
         
         for dir_path in dirs:
@@ -420,7 +420,7 @@ class AnnotationPipeline:
                     )
                 else:
                     # Save locally
-                    local_dir = Path(self.config.workflow.local_output_dir)
+                    local_dir = Path(self.config.batch_processing.output_folder)
                     local_file = local_dir / f"annotation_{sequence_val}.tiff"
                     shutil.copy(tiff_path, local_file)
                 
