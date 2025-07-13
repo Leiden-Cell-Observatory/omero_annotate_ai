@@ -391,11 +391,11 @@ class AnnotationPipeline:
         embedding_path = annotation_results["embedding_path"]
         annotations_path = annotation_results["annotations_path"]
         
-        # Construct TIFF file paths based on standard naming convention
-        # image_series_annotator saves files as annotation_0.tiff, annotation_1.tiff, etc.
+        # Construct TIFF file paths based on micro-SAM naming convention
+        # image_series_annotator saves files as seg_00000.tif, seg_00001.tif, etc.
         tiff_files = []
         for i in range(len(metadata)):
-            tiff_file = annotations_path / f"annotation_{i}.tiff"
+            tiff_file = annotations_path / f"seg_{i:05d}.tif"
             if tiff_file.exists():
                 tiff_files.append(str(tiff_file))
             else:
