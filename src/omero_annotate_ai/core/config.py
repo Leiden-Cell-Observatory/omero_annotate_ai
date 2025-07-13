@@ -153,14 +153,43 @@ class AnnotationConfig:
         if isinstance(yaml_content, (str, Path)) and Path(yaml_content).exists():
             # It's a file path
             with open(yaml_content, 'r') as f:
-                config_dict = yaml.safe_load(f)
+                try:
+                    config_dict = yaml.safe_load(f)
+                except yaml.constructor.ConstructorError as e:
+                    if 'python/tuple' in str(e):
+                        # Try loading with unsafe load for tuples, then convert
+                        f.seek(0)
+                        config_dict = yaml.unsafe_load(f)
+                        # Convert tuples to lists for safe handling
+                        config_dict = cls._convert_tuples_to_lists(config_dict)
+                    else:
+                        raise
         else:
             # It's a YAML string
             if isinstance(yaml_content, Path):
                 yaml_content = yaml_content.read_text()
-            config_dict = yaml.safe_load(yaml_content)
+            try:
+                config_dict = yaml.safe_load(yaml_content)
+            except yaml.constructor.ConstructorError as e:
+                if 'python/tuple' in str(e):
+                    config_dict = yaml.unsafe_load(yaml_content)
+                    config_dict = cls._convert_tuples_to_lists(config_dict)
+                else:
+                    raise
         
         return cls.from_dict(config_dict)
+
+    @staticmethod
+    def _convert_tuples_to_lists(obj):
+        """Recursively convert tuples to lists in a nested data structure."""
+        if isinstance(obj, tuple):
+            return list(obj)
+        elif isinstance(obj, list):
+            return [AnnotationConfig._convert_tuples_to_lists(item) for item in obj]
+        elif isinstance(obj, dict):
+            return {key: AnnotationConfig._convert_tuples_to_lists(value) for key, value in obj.items()}
+        else:
+            return obj
 
     def save_yaml(self, file_path: Union[str, Path]) -> None:
         """Save configuration to YAML file."""
