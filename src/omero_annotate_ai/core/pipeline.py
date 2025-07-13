@@ -309,7 +309,8 @@ class AnnotationPipeline:
         # Set up output paths
         output_path = Path(self.config.batch_processing.output_folder)
         embedding_path = output_path / "embed"
-        zarr_path = output_path / "zarr" / f"batch_{len(metadata)}.zarr"
+        annotations_path = output_path / "annotations"
+        annotations_path.mkdir(exist_ok=True)
         
         # Run micro-SAM annotation
         model_type = self.config.microsam.model_type
@@ -318,10 +319,10 @@ class AnnotationPipeline:
         napari_settings = napari.settings.get_settings()
         napari_settings.application.save_window_geometry = False
         
-        # Run image series annotator
+        # Run image series annotator (saves files to annotations folder)
         segmentation_results = image_series_annotator(
             images=images,
-            output_folder=str(output_path),
+            output_folder=str(annotations_path),
             model_type=model_type,
             embedding_path=str(embedding_path),
             is_volumetric=self.config.microsam.three_d
@@ -330,8 +331,8 @@ class AnnotationPipeline:
         return {
             "results": segmentation_results,
             "metadata": metadata,
-            "zarr_path": zarr_path,
-            "embedding_path": embedding_path
+            "embedding_path": embedding_path,
+            "annotations_path": annotations_path
         }
     
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
@@ -376,8 +377,6 @@ class AnnotationPipeline:
         """
         try:
             from ..processing.file_io_functions import (
-                store_annotations_in_zarr,
-                zarr_to_tiff,
                 zip_directory,
                 cleanup_local_embeddings
             )
@@ -388,16 +387,25 @@ class AnnotationPipeline:
         except ImportError:
             raise ImportError("File I/O and OMERO functions are required. Install with: pip install -e .[omero]")
         
-        results = annotation_results["results"]
         metadata = annotation_results["metadata"]
-        zarr_path = annotation_results["zarr_path"]
         embedding_path = annotation_results["embedding_path"]
+        annotations_path = annotation_results["annotations_path"]
         
-        # Store annotations in zarr format
-        store_annotations_in_zarr(results, zarr_path)
+        # Construct TIFF file paths based on standard naming convention
+        # image_series_annotator saves files as annotation_0.tiff, annotation_1.tiff, etc.
+        tiff_files = []
+        for i in range(len(metadata)):
+            tiff_file = annotations_path / f"annotation_{i}.tiff"
+            if tiff_file.exists():
+                tiff_files.append(str(tiff_file))
+            else:
+                # File doesn't exist - annotation failed for this image
+                print(f"⚠️ Warning: Expected annotation file not found: {tiff_file}")
         
-        # Convert zarr to TIFF for OMERO compatibility
-        tiff_files = zarr_to_tiff(zarr_path)
+        if not tiff_files:
+            raise RuntimeError("No annotation files were created by image_series_annotator")
+        
+        print(f"📁 Found {len(tiff_files)} annotation files in {annotations_path}")
         
         # Collect all row indices for batch update
         completed_row_indices = []
@@ -432,15 +440,19 @@ class AnnotationPipeline:
         
         # Update tracking table once for all completed rows in this batch
         if completed_row_indices:
-            table_id = update_tracking_table_rows(
-                conn=self.conn,
-                table_id=table_id,
-                row_indices=completed_row_indices,
-                status="completed",
-                annotation_file="",  # Multiple files, so leave empty
-                container_type=self.config.omero.container_type,
-                container_id=self.config.omero.container_id
-            )
+            if not self.config.workflow.read_only_mode:
+                table_id = update_tracking_table_rows(
+                    conn=self.conn,
+                    table_id=table_id,
+                    row_indices=completed_row_indices,
+                    status="completed",
+                    annotation_file="",  # Multiple files, so leave empty
+                    container_type=self.config.omero.container_type,
+                    container_id=self.config.omero.container_id
+                )
+            else:
+                # In read-only mode, save progress locally
+                self._save_local_progress(completed_row_indices, metadata)
         
         # Create and upload embeddings
         if embedding_path.exists():
@@ -453,12 +465,9 @@ class AnnotationPipeline:
             # Cleanup embeddings
             cleanup_local_embeddings(embedding_path)
         
-        # Cleanup temporary files
-        if zarr_path.exists():
-            shutil.rmtree(zarr_path)
-        for tiff_file in tiff_files:
-            if Path(tiff_file).exists():
-                Path(tiff_file).unlink()
+        # Cleanup temporary TIFF files (keep annotations folder)
+        # Note: We keep the annotations folder and files for debugging/review
+        # Users can manually delete if needed
         
         return table_id
     
@@ -478,15 +487,22 @@ class AnnotationPipeline:
         output_path = self._setup_directories()
         self._cleanup_embeddings(output_path)
         
-        # Initialize tracking table
-        table_id = self._initialize_tracking_table(images_list)
-        
-        # Get unprocessed units from table
-        try:
-            from ..omero.omero_functions import get_unprocessed_units
-            processing_units = get_unprocessed_units(self.conn, table_id)
-        except ImportError:
-            # Fallback: create processing units directly
+        # Initialize tracking table (skip in read-only mode)
+        if not self.config.workflow.read_only_mode:
+            table_id = self._initialize_tracking_table(images_list)
+            
+            # Get unprocessed units from table
+            try:
+                from ..omero.omero_functions import get_unprocessed_units
+                processing_units = get_unprocessed_units(self.conn, table_id)
+            except ImportError:
+                # Fallback: create processing units directly
+                processing_units = self._prepare_processing_units(images_list)
+                processing_units = [(img_id, seq, meta, i) for i, (img_id, seq, meta) in enumerate(processing_units)]
+        else:
+            print("📋 Read-only mode: Skipping OMERO table creation")
+            table_id = -1  # Mock table ID for read-only mode
+            # Create processing units directly from images
             processing_units = self._prepare_processing_units(images_list)
             processing_units = [(img_id, seq, meta, i) for i, (img_id, seq, meta) in enumerate(processing_units)]
         
@@ -528,10 +544,16 @@ class AnnotationPipeline:
                 
             except Exception as e:
                 print(f"❌ Error processing batch {batch_num}: {e}")
-                # Continue with next batch
+                import traceback
+                traceback.print_exc()
+                # Continue with next batch - don't let one batch failure stop the pipeline
                 continue
         
-        print(f"🎉 Pipeline completed! Processed {processed_count} units")
+        if processed_count > 0:
+            print(f"🎉 Pipeline completed successfully! Processed {processed_count} units")
+        else:
+            print(f"❌ Pipeline failed - no units were processed")
+            
         return table_id, images_list
     
     def run_annotation(self, images_list: List[Any]) -> Tuple[int, List[Any]]:
@@ -575,6 +597,55 @@ class AnnotationPipeline:
         
         print(f"📊 Found {len(images)} images")
         return images
+    
+    def _save_local_progress(self, completed_row_indices: List[int], metadata: List[Tuple]) -> None:
+        """Save progress locally in read-only mode by creating/updating a CSV table.
+        
+        Args:
+            completed_row_indices: List of completed row indices
+            metadata: List of metadata tuples (sequence_val, meta_dict, row_idx)
+        """
+        import pandas as pd
+        from datetime import datetime
+        
+        output_path = Path(self.config.batch_processing.output_folder)
+        table_file = output_path / "tracking_table.csv"
+        
+        # Create table if it doesn't exist, or load existing
+        if table_file.exists():
+            df = pd.read_csv(table_file)
+        else:
+            # Create new DataFrame with all metadata
+            rows = []
+            for sequence_val, meta, row_idx in metadata:
+                image_id = meta.get("image_id", -1)
+                rows.append({
+                    "row_index": row_idx,
+                    "image_id": image_id,
+                    "sequence_val": sequence_val,
+                    "timepoint": meta.get("timepoint", -1),
+                    "z_slice": meta.get("z_slice", -1), 
+                    "channel": meta.get("channel", -1),
+                    "model_type": meta.get("model_type", "vit_b_lm"),
+                    "processed": False,
+                    "completed_timestamp": ""
+                })
+            df = pd.DataFrame(rows)
+        
+        # Mark completed rows
+        timestamp = datetime.now().isoformat()
+        for row_idx in completed_row_indices:
+            mask = df['row_index'] == row_idx
+            df.loc[mask, 'processed'] = True
+            df.loc[mask, 'completed_timestamp'] = timestamp
+        
+        # Save updated table
+        df.to_csv(table_file, index=False)
+        completed_count = df['processed'].sum()
+        total_count = len(df)
+        
+        print(f"📋 Local progress saved: {completed_count}/{total_count} units completed")
+        print(f"   Progress file: {table_file}")
     
     def run_full_workflow(self) -> Tuple[int, List[Any]]:
         """Run the complete workflow: get images from container and process them."""
