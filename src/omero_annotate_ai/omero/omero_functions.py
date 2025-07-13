@@ -39,9 +39,9 @@ def initialize_tracking_table(conn, table_title: str, processing_units: List[Tup
     # Create DataFrame from processing units
     df = pd.DataFrame(columns=[
         "image_id", "image_name", "train", "validate", 
-        "channel", "z_slice", "timepoint", "sam_model", "embed_id", "label_id", "roi_id", 
+        "channel", "z_slice", "timepoint", "sam_model", "label_id", "roi_id", 
         "is_volumetric", "processed", "is_patch", "patch_x", "patch_y", "patch_width", "patch_height",
-        "schema_attachment_id"
+        "annotation_type", "annotation_creation_time", "schema_attachment_id"
     ])
     
     for img_id, seq_val, metadata in processing_units:
@@ -79,7 +79,6 @@ def initialize_tracking_table(conn, table_title: str, processing_units: List[Tup
             "z_slice": metadata.get("z_slice", -1),
             "timepoint": metadata.get("timepoint", -1),
             "sam_model": model_type,
-            "embed_id": -1,
             "label_id": -1,
             "roi_id": -1,
             "is_volumetric": metadata.get("three_d", False),
@@ -89,6 +88,8 @@ def initialize_tracking_table(conn, table_title: str, processing_units: List[Tup
             "patch_y": int(patch_y),
             "patch_width": int(patch_width),
             "patch_height": int(patch_height),
+            "annotation_type": "segmentation_mask",
+            "annotation_creation_time": None,
             "schema_attachment_id": -1
         }])
         df = pd.concat([df, new_row], ignore_index=True)
@@ -104,8 +105,20 @@ def initialize_tracking_table(conn, table_title: str, processing_units: List[Tup
         if col in df.columns:
             df[col] = df[col].fillna(False).infer_objects(copy=False).astype(bool)
             
-    id_columns = ['embed_id', 'label_id', 'roi_id', 'schema_attachment_id']
+    id_columns = ['label_id', 'roi_id', 'schema_attachment_id']
     for col in id_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna('None').infer_objects(copy=False).astype(str)
+    
+    # Handle string columns
+    string_columns = ['annotation_type']
+    for col in string_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna('segmentation_mask').infer_objects(copy=False).astype(str)
+    
+    # Handle datetime columns
+    datetime_columns = ['annotation_creation_time']
+    for col in datetime_columns:
         if col in df.columns:
             df[col] = df[col].fillna('None').infer_objects(copy=False).astype(str)
     
@@ -194,9 +207,10 @@ def get_unprocessed_units(conn, table_id: int) -> List[Tuple]:
 
 
 def update_tracking_table_rows(conn, table_id: int, row_indices: List[int], 
-                              status: str, annotation_file: str, 
-                              container_type: str, container_id: int) -> Optional[int]:
-    """Update tracking table rows with processing status.
+                              status: str, label_id: Optional[int] = None, roi_id: Optional[int] = None,
+                              annotation_type: str = "segmentation_mask",
+                              container_type: str = "", container_id: int = 0) -> Optional[int]:
+    """Update tracking table rows with processing status and annotation IDs.
     
     This implementation updates the table by replacing it with a new one.
     
@@ -205,7 +219,9 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
         table_id: ID of tracking table
         row_indices: List of row indices to update
         status: Status to set ('completed', 'failed', etc.)
-        annotation_file: Path to annotation file (currently unused)
+        label_id: ID of uploaded label file annotation (optional)
+        roi_id: ID of uploaded ROI collection (optional)
+        annotation_type: Type of annotation (default: 'segmentation_mask')
         container_type: Type of OMERO container (e.g. 'dataset', 'project')
         container_id: ID of the container
         
@@ -227,9 +243,20 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
         print(f"Using table title: {table_title}")
 
         # Update the rows in our DataFrame
+        from datetime import datetime
+        current_time = datetime.now().isoformat()
+        
         for idx in row_indices:
             if idx < len(df):
                 df.loc[idx, 'processed'] = (status == 'completed')
+                if status == 'completed':
+                    # Only update these fields when successfully completed
+                    if label_id is not None:
+                        df.loc[idx, 'label_id'] = str(label_id)
+                    if roi_id is not None:
+                        df.loc[idx, 'roi_id'] = str(roi_id)
+                    df.loc[idx, 'annotation_type'] = annotation_type
+                    df.loc[idx, 'annotation_creation_time'] = current_time
 
         # Prepare DataFrame for OMERO: Handle all columns properly
         df_for_omero = df.copy()
@@ -243,8 +270,20 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
             if col in df_for_omero.columns:
                 df_for_omero[col] = df_for_omero[col].fillna(False).astype(bool)
         
-        id_columns = ['embed_id', 'label_id', 'roi_id', 'schema_attachment_id']
+        id_columns = ['label_id', 'roi_id', 'schema_attachment_id']
         for col in id_columns:
+            if col in df_for_omero.columns:
+                df_for_omero[col] = df_for_omero[col].fillna('None').astype(str)
+        
+        # Handle string columns
+        string_columns = ['annotation_type']
+        for col in string_columns:
+            if col in df_for_omero.columns:
+                df_for_omero[col] = df_for_omero[col].fillna('segmentation_mask').astype(str)
+        
+        # Handle datetime columns
+        datetime_columns = ['annotation_creation_time']
+        for col in datetime_columns:
             if col in df_for_omero.columns:
                 df_for_omero[col] = df_for_omero[col].fillna('None').astype(str)
 
@@ -273,7 +312,9 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
 
 
 def upload_rois_and_labels(conn, image_id: int, annotation_file: str, 
-                          patch_offset: Optional[Tuple[int, int]] = None):
+                          patch_offset: Optional[Tuple[int, int]] = None,
+                          trainingset_name: Optional[str] = None,
+                          trainingset_description: Optional[str] = None):
     """Upload ROIs and labels to OMERO image.
     
     Args:
@@ -281,6 +322,8 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         image_id: ID of OMERO image
         annotation_file: Path to annotation file (TIFF with labels)
         patch_offset: Optional (x,y) offset for patch placement
+        trainingset_name: Optional training set name for custom annotation naming
+        trainingset_description: Optional training set description for custom annotation description
         
     Returns:
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
@@ -339,10 +382,16 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
     
     # Upload label file as attachment
     print(f"🔍 Step 3: Uploading label file as attachment")
-    label_desc = f"Micro-SAM segmentation ({model_type})"
-    if patch_offset:
-        label_desc += f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
-        
+    
+    # Use custom description if provided
+    if trainingset_name and trainingset_description:
+        label_desc = trainingset_description
+    else:
+        # Default description
+        label_desc = f"Micro-SAM segmentation ({model_type})"
+        if patch_offset:
+            label_desc += f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
+    
     file_ann_id = ezomero.post_file_annotation(
         conn, 
         file_path=annotation_file, 
@@ -357,7 +406,17 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
     print(f"🔍 Step 4: Uploading ROI shapes")
     roi_id = None
     if shapes:
-        roi_id = ezomero.post_roi(conn, image_id, shapes)
+        # Use custom name and description for ROI if provided
+        if trainingset_name and trainingset_description:
+            roi_name = f"{trainingset_name}_ROIs"
+            roi_description = trainingset_description
+        else:
+            roi_name = f"Micro-SAM ROIs ({model_type})"
+            roi_description = f"ROI collection for Micro-SAM segmentation ({model_type})"
+            if patch_offset:
+                roi_description += f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
+        
+        roi_id = ezomero.post_roi(conn, image_id, shapes, name=roi_name, description=roi_description)
         print(f"✅ Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}")
     else:
         print(f"⚠️ No ROI shapes created from {annotation_file}")
@@ -370,6 +429,107 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
         print(f"   ROI ID: {roi_id}")
     
     return file_ann_id, roi_id
+
+
+# =============================================================================
+# Workflow Status Tracking Functions
+# =============================================================================
+
+def update_workflow_status_map(conn, container_type: str, container_id: int, table_id: int) -> Optional[int]:
+    """Update workflow status map annotation after batch completion.
+    
+    Args:
+        conn: OMERO connection
+        container_type: Type of OMERO container 
+        container_id: ID of container
+        table_id: ID of tracking table
+        
+    Returns:
+        Map annotation ID if successful, None otherwise
+    """
+    if ezomero is None:
+        raise ImportError("ezomero is required. Install with: pip install -e .[omero]")
+    
+    try:
+        # Get current table progress
+        df = ezomero.get_table(conn, table_id)
+        total_units = len(df)
+        completed_units = df['processed'].sum() if 'processed' in df.columns else 0
+        
+        # Calculate status
+        if completed_units == total_units:
+            status = "complete"
+        elif completed_units > 0:
+            status = "incomplete"
+        else:
+            status = "pending"
+            
+        # Create status map
+        from datetime import datetime
+        status_map = {
+            "workflow_status": status,
+            "table_id": str(table_id),
+            "completed_units": str(completed_units),
+            "total_units": str(total_units),
+            "progress_percent": str(round(100 * completed_units / total_units, 1)) if total_units > 0 else "0.0",
+            "last_updated": datetime.now().isoformat()
+        }
+        
+        # Remove any existing workflow status annotation
+        try:
+            existing_annotations = ezomero.get_map_annotation(conn, container_type.capitalize(), container_id)
+            for ann_id, ann_data in existing_annotations.items():
+                if isinstance(ann_data, dict) and ann_data.get("workflow_status"):
+                    ezomero.delete_annotation(conn, ann_id)
+                    break
+        except:
+            pass  # No existing annotation to remove
+        
+        # Create new status map annotation
+        status_ann_id = ezomero.post_map_annotation(
+            conn,
+            object_type=container_type.capitalize(),
+            object_id=container_id,
+            kv_dict=status_map,
+            ns="openmicroscopy.org/omero/microsam/workflow_status"
+        )
+        
+        print(f"📊 Workflow status updated: {completed_units}/{total_units} ({status_map['progress_percent']}%) - {status}")
+        return status_ann_id
+        
+    except Exception as e:
+        print(f"⚠️ Could not update workflow status: {e}")
+        return None
+
+
+def get_workflow_status_map(conn, container_type: str, container_id: int) -> Optional[Dict[str, str]]:
+    """Get current workflow status from map annotation.
+    
+    Args:
+        conn: OMERO connection
+        container_type: Type of OMERO container
+        container_id: ID of container
+        
+    Returns:
+        Status map dictionary if found, None otherwise
+    """
+    if ezomero is None:
+        return None
+    
+    try:
+        # Get map annotations for container
+        annotations = ezomero.get_map_annotation(conn, container_type.capitalize(), container_id)
+        
+        # Find workflow status annotation
+        for ann_id, ann_data in annotations.items():
+            if isinstance(ann_data, dict) and ann_data.get("workflow_status"):
+                return ann_data
+                
+        return None
+        
+    except Exception as e:
+        print(f"⚠️ Could not get workflow status: {e}")
+        return None
 
 
 # =============================================================================

@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import Tuple, List, Any
+from typing import Tuple, List, Any, Optional, Dict
 import numpy as np
 
 from .config import AnnotationConfig
@@ -111,8 +111,29 @@ class AnnotationPipeline:
             # Try to find existing table (legacy behavior)
             existing_table = get_table_by_name(self.conn, table_title)
             if existing_table:
-                print(f"📋 Resuming from existing table: {table_title}")
-                return existing_table.getId()
+                table_id = existing_table.getId()
+                
+                # Check workflow status before resuming
+                status_map = self._get_workflow_status_map()
+                if status_map:
+                    status = status_map.get("workflow_status", "unknown")
+                    completed = status_map.get("completed_units", "0")
+                    total = status_map.get("total_units", "0")
+                    
+                    if status == "complete":
+                        print(f"✅ Workflow already complete: {completed}/{total} units processed")
+                        print(f"📋 Table: {table_title} (ID: {table_id})")
+                        return table_id
+                    elif status == "incomplete":
+                        print(f"🔄 Resuming incomplete workflow: {completed}/{total} units completed")
+                        print(f"📋 Table: {table_title} (ID: {table_id})")
+                        return table_id
+                    else:
+                        print(f"📋 Resuming from existing table: {table_title}")
+                        return table_id
+                else:
+                    print(f"📋 Resuming from existing table: {table_title}")
+                    return table_id
         
         # Create new table
         print(f"📋 Creating new tracking table: {table_title}")
@@ -168,6 +189,9 @@ class AnnotationPipeline:
         except Exception as e:
             print(f"Warning: Could not store configuration annotation: {e}")
             # Continue without storing annotation
+        
+        # Initialize workflow status map for new table
+        self._update_workflow_status_map(table_id)
         
         return table_id
     
@@ -407,8 +431,9 @@ class AnnotationPipeline:
         
         print(f"📁 Found {len(tiff_files)} annotation files in {annotations_path}")
         
-        # Collect all row indices for batch update
+        # Collect all row indices and annotation IDs for batch update
         completed_row_indices = []
+        annotation_ids = []  # Store (label_id, roi_id) pairs
         
         # Process each annotation result
         for i, (sequence_val, meta, row_idx) in enumerate(metadata):
@@ -423,33 +448,44 @@ class AnnotationPipeline:
                     if self.config.patches.use_patches:
                         patch_offset = (meta["patch_x"], meta["patch_y"])
                     
-                    upload_rois_and_labels(
+                    label_id, roi_id = upload_rois_and_labels(
                         conn=self.conn,
                         image_id=image_id,
                         annotation_file=tiff_path,
-                        patch_offset=patch_offset
+                        patch_offset=patch_offset,
+                        trainingset_name=self.config.training.trainingset_name,
+                        trainingset_description=f"Training set: {self.config.training.trainingset_name}"
                     )
+                    
+                    # Store the annotation IDs
+                    annotation_ids.append((label_id, roi_id))
                 else:
                     # Save locally
                     local_dir = Path(self.config.batch_processing.output_folder)
                     local_file = local_dir / f"annotation_{sequence_val}.tiff"
                     shutil.copy(tiff_path, local_file)
+                    annotation_ids.append((None, None))
                 
                 # Add to list of completed rows
                 completed_row_indices.append(row_idx)
         
-        # Update tracking table once for all completed rows in this batch
+        # Update tracking table with annotation IDs for each completed row
         if completed_row_indices:
             if not self.config.workflow.read_only_mode:
-                table_id = update_tracking_table_rows(
-                    conn=self.conn,
-                    table_id=table_id,
-                    row_indices=completed_row_indices,
-                    status="completed",
-                    annotation_file="",  # Multiple files, so leave empty
-                    container_type=self.config.omero.container_type,
-                    container_id=self.config.omero.container_id
-                )
+                # Update rows individually since each has different annotation IDs
+                for i, row_idx in enumerate(completed_row_indices):
+                    label_id, roi_id = annotation_ids[i] if i < len(annotation_ids) else (None, None)
+                    table_id = update_tracking_table_rows(
+                        conn=self.conn,
+                        table_id=table_id,
+                        row_indices=[row_idx],  # Update one row at a time
+                        status="completed",
+                        label_id=label_id,
+                        roi_id=roi_id,
+                        annotation_type="segmentation_mask",
+                        container_type=self.config.omero.container_type,
+                        container_id=self.config.omero.container_id
+                    )
             else:
                 # In read-only mode, save progress locally
                 self._save_local_progress(completed_row_indices, metadata)
@@ -539,6 +575,10 @@ class AnnotationPipeline:
                 # Process results
                 table_id = self._process_annotation_results(annotation_results, table_id)
                 
+                # Update workflow status map after batch completion
+                if not self.config.workflow.read_only_mode:
+                    self._update_workflow_status_map(table_id)
+                
                 processed_count += len(batch)
                 print(f"✅ Completed batch {batch_num} ({processed_count}/{len(processing_units)} total)")
                 
@@ -555,6 +595,36 @@ class AnnotationPipeline:
             print(f"❌ Pipeline failed - no units were processed")
             
         return table_id, images_list
+    
+    def _update_workflow_status_map(self, table_id: int) -> None:
+        """Update workflow status map annotation after batch completion."""
+        try:
+            from ..omero.omero_functions import update_workflow_status_map
+            update_workflow_status_map(
+                conn=self.conn,
+                container_type=self.config.omero.container_type,
+                container_id=self.config.omero.container_id,
+                table_id=table_id
+            )
+        except ImportError:
+            print("⚠️ Could not update workflow status - OMERO functions not available")
+        except Exception as e:
+            print(f"⚠️ Could not update workflow status: {e}")
+    
+    def _get_workflow_status_map(self) -> Optional[Dict[str, str]]:
+        """Get current workflow status map annotation."""
+        try:
+            from ..omero.omero_functions import get_workflow_status_map
+            return get_workflow_status_map(
+                conn=self.conn,
+                container_type=self.config.omero.container_type,
+                container_id=self.config.omero.container_id
+            )
+        except ImportError:
+            return None
+        except Exception as e:
+            print(f"⚠️ Could not get workflow status: {e}")
+            return None
     
     def run_annotation(self, images_list: List[Any]) -> Tuple[int, List[Any]]:
         """Run annotation workflow (alias for run)."""
