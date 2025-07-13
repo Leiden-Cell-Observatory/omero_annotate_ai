@@ -376,6 +376,31 @@ def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationCo
         raise ValueError("config_source must be a dict, file path, or YAML string")
 
 
+def load_config_from_yaml(yaml_path: str) -> AnnotationConfig:
+    """Load AnnotationConfig from a YAML file.
+    
+    This is a simple drop-in replacement for workflow_widget.get_config()
+    to enable easy testing of the pipeline with YAML configuration files.
+    
+    Args:
+        yaml_path: Path to YAML configuration file
+        
+    Returns:
+        AnnotationConfig object
+        
+    Example:
+        # Instead of: config = workflow_widget.get_config()
+        config = load_config_from_yaml('test_config.yaml')
+    """
+    from pathlib import Path
+    
+    config_path = Path(yaml_path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {yaml_path}")
+    
+    return AnnotationConfig.from_yaml(config_path)
+
+
 def create_default_config() -> AnnotationConfig:
     """Create a default configuration."""
     return AnnotationConfig()
