@@ -238,8 +238,13 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
             print(f"❌ Could not retrieve table {table_id}")
             return table_id
 
-        # Generate new table title to avoid conflicts
-        table_title = f"microsam_training_{container_type}_{container_id}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+        # Get the original table name to preserve it
+        file_ann = conn.getObject("FileAnnotation", table_id)
+        if file_ann and file_ann.getFile():
+            table_title = file_ann.getFile().getName()
+        else:
+            # Fallback to original naming with timestamp (should rarely happen)
+            table_title = f"microsam_training_{container_type}_{container_id}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
         print(f"Using table title: {table_title}")
 
         # Update the rows in our DataFrame
