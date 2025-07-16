@@ -775,3 +775,153 @@ def get_tables_by_roi_namespace(conn, project_id: int, namespace: str) -> List[i
     return []
 
 
+def cleanup_project_annotations(conn, project_id: int, trainingset_name: str = None) -> Dict[str, int]:
+    """Clean up all annotations created by omero-annotate-ai from a project.
+    
+    Removes annotation tables, ROIs, and map annotations from the project 
+    and all its underlying datasets and images.
+    
+    Args:
+        conn: OMERO connection
+        project_id: Project ID to clean up
+        trainingset_name: Optional - if provided, only clean up annotations 
+                         matching this training set name
+        
+    Returns:
+        Dictionary with counts of deleted items:
+        {
+            'tables': int,
+            'rois': int, 
+            'map_annotations': int,
+            'images_processed': int
+        }
+    """
+    if ezomero is None:
+        raise ImportError("ezomero is required for cleanup operations. Install with: pip install -e .[omero]")
+    
+    # Import required functions
+    from .omero_utils import delete_table, delete_annotations_by_namespace
+    
+    # Initialize counters
+    results = {
+        'tables': 0,
+        'rois': 0,
+        'map_annotations': 0,
+        'images_processed': 0
+    }
+    
+    print(f"🧹 Starting cleanup of project {project_id}")
+    if trainingset_name:
+        print(f"📋 Filtering by training set: {trainingset_name}")
+    
+    # Get project and all its datasets and images
+    project = conn.getObject("Project", project_id)
+    if not project:
+        print(f"❌ Project {project_id} not found")
+        return results
+    
+    # Collect all datasets and images in the project
+    all_datasets = []
+    all_images = []
+    
+    for dataset in project.listChildren():
+        all_datasets.append(dataset)
+        for image in dataset.listChildren():
+            all_images.append(image)
+    
+    print(f"📊 Found {len(all_datasets)} datasets and {len(all_images)} images in project")
+    
+    # 1. Clean up annotation tables
+    print("🗂️ Cleaning up annotation tables...")
+    for dataset in all_datasets:
+        try:
+            tables = list_annotation_tables(conn, "dataset", dataset.getId())
+            for table in tables:
+                table_id = table['id']
+                table_name = table['name']
+                
+                # Filter by training set name if specified
+                if trainingset_name and trainingset_name not in table_name:
+                    continue
+                
+                # Delete the table
+                if delete_table(conn, table_id):
+                    results['tables'] += 1
+                    print(f"✅ Deleted table: {table_name} (ID: {table_id})")
+                else:
+                    print(f"❌ Failed to delete table: {table_name} (ID: {table_id})")
+        except Exception as e:
+            print(f"❌ Error cleaning tables for dataset {dataset.getId()}: {str(e)}")
+    
+    # 2. Clean up ROIs by name patterns
+    print("🎯 Cleaning up ROIs...")
+    for image in all_images:
+        try:
+            image_id = image.getId()
+            rois_to_delete = []
+            
+            # Get all ROIs for this image
+            roi_service = conn.getRoiService()
+            result = roi_service.findByImage(image_id, None)
+            
+            for roi in result.rois:
+                roi_id = roi.getId().getValue()
+                roi_name = roi.getName().getValue() if roi.getName() else ""
+                roi_description = roi.getDescription().getValue() if roi.getDescription() else ""
+                
+                # Check if ROI matches our patterns
+                is_microsam_roi = False
+                
+                # Pattern 1: {trainingset_name}_ROIs
+                if trainingset_name and f"{trainingset_name}_ROIs" in roi_name:
+                    is_microsam_roi = True
+                
+                # Pattern 2: Generic Micro-SAM ROIs (only if no specific training set filter)
+                elif not trainingset_name and "Micro-SAM ROIs" in roi_name:
+                    is_microsam_roi = True
+                
+                # Pattern 3: Check description for Micro-SAM content
+                elif not trainingset_name and "Micro-SAM" in roi_description:
+                    is_microsam_roi = True
+                
+                if is_microsam_roi:
+                    rois_to_delete.append(roi_id)
+            
+            # Delete the ROIs
+            if rois_to_delete:
+                conn.deleteObjects("Roi", rois_to_delete, wait=True)
+                results['rois'] += len(rois_to_delete)
+                print(f"✅ Deleted {len(rois_to_delete)} ROIs from image {image_id}")
+            
+            results['images_processed'] += 1
+            
+        except Exception as e:
+            print(f"❌ Error cleaning ROIs for image {image.getId()}: {str(e)}")
+    
+    # 3. Clean up map annotations (workflow status)
+    print("🗺️ Cleaning up map annotations...")
+    workflow_namespace = "openmicroscopy.org/omero/microsam/workflow_status"
+    
+    try:
+        # Clean up from datasets
+        for dataset in all_datasets:
+            count = delete_annotations_by_namespace(conn, "Dataset", dataset.getId(), workflow_namespace)
+            results['map_annotations'] += count
+        
+        # Clean up from project
+        count = delete_annotations_by_namespace(conn, "Project", project_id, workflow_namespace)
+        results['map_annotations'] += count
+        
+    except Exception as e:
+        print(f"❌ Error cleaning map annotations: {str(e)}")
+    
+    # Print summary
+    print(f"\n📊 Cleanup completed:")
+    print(f"   Tables deleted: {results['tables']}")
+    print(f"   ROIs deleted: {results['rois']}")
+    print(f"   Map annotations deleted: {results['map_annotations']}")
+    print(f"   Images processed: {results['images_processed']}")
+    
+    return results
+
+

@@ -507,44 +507,73 @@ class AnnotationPipeline:
         
         return table_id
     
-    def run(self, images_list: List[Any]) -> Tuple[int, List[Any]]:
-        """Run the micro-SAM annotation pipeline.
+    def create_annotation_table(self, images_list: List[Any] = None) -> Tuple[int, List[Any]]:
+        """Create annotation table and initialize tracking for annotation workflow.
         
         Args:
-            images_list: List of OMERO image objects to process
+            images_list: List of OMERO image objects to process. If None, loads from container.
             
         Returns:
-            Tuple of (table_id, processed_images)
+            Tuple of (table_id, images_list)
         """
-        print(f"🚀 Starting micro-SAM annotation pipeline")
-        print(f"📊 Processing {len(images_list)} images with model: {self.config.microsam.model_type}")
+        print(f"🚀 Creating annotation table")
         
-        # Setup
+        # Load images if not provided
+        if images_list is None:
+            images_list = self.get_images_from_container()
+            if not images_list:
+                raise ValueError(f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}")
+        
+        print(f"📊 Creating table for {len(images_list)} images with model: {self.config.microsam.model_type}")
+        
+        # Setup directories
         output_path = self._setup_directories()
         self._cleanup_embeddings(output_path)
         
         # Initialize tracking table (skip in read-only mode)
         if not self.config.workflow.read_only_mode:
             table_id = self._initialize_tracking_table(images_list)
+            print(f"📋 Created annotation table with ID: {table_id}")
+        else:
+            print("📋 Read-only mode: Skipping OMERO table creation")
+            table_id = -1  # Mock table ID for read-only mode
+        
+        return table_id, images_list
+    
+    def run_annotation(self, table_id: int, images_list: List[Any] = None) -> Tuple[int, List[Any]]:
+        """Run annotation workflow using existing table.
+        
+        Args:
+            table_id: ID of existing annotation table
+            images_list: Optional list of images (for read-only mode)
             
-            # Get unprocessed units from table
+        Returns:
+            Tuple of (table_id, processed_images)
+        """
+        print(f"🚀 Starting annotation processing from table ID: {table_id}")
+        
+        # Setup directories
+        output_path = self._setup_directories()
+        self._cleanup_embeddings(output_path)
+        
+        # Get processing units from table
+        if not self.config.workflow.read_only_mode:
+            # Get unprocessed units from existing table
             try:
                 from ..omero.omero_functions import get_unprocessed_units
                 processing_units = get_unprocessed_units(self.conn, table_id)
             except ImportError:
-                # Fallback: create processing units directly
-                processing_units = self._prepare_processing_units(images_list)
-                processing_units = [(img_id, seq, meta, i) for i, (img_id, seq, meta) in enumerate(processing_units)]
+                raise ImportError("Cannot get unprocessed units without OMERO functions. Install with: pip install -e .[omero]")
         else:
-            print("📋 Read-only mode: Skipping OMERO table creation")
-            table_id = -1  # Mock table ID for read-only mode
+            if images_list is None:
+                raise ValueError("images_list is required for read-only mode")
             # Create processing units directly from images
             processing_units = self._prepare_processing_units(images_list)
             processing_units = [(img_id, seq, meta, i) for i, (img_id, seq, meta) in enumerate(processing_units)]
         
         if not processing_units:
             print("✅ All images already processed!")
-            return table_id, images_list
+            return table_id, images_list or []
         
         print(f"📋 Found {len(processing_units)} processing units")
         
@@ -590,11 +619,11 @@ class AnnotationPipeline:
                 continue
         
         if processed_count > 0:
-            print(f"🎉 Pipeline completed successfully! Processed {processed_count} units")
+            print(f"🎉 Annotation processing completed successfully! Processed {processed_count} units")
         else:
-            print(f"❌ Pipeline failed - no units were processed")
+            print(f"❌ Annotation processing failed - no units were processed")
             
-        return table_id, images_list
+        return table_id, images_list or []
     
     def _update_workflow_status_map(self, table_id: int) -> None:
         """Update workflow status map annotation after batch completion."""
@@ -626,9 +655,6 @@ class AnnotationPipeline:
             print(f"⚠️ Could not get workflow status: {e}")
             return None
     
-    def run_annotation(self, images_list: List[Any]) -> Tuple[int, List[Any]]:
-        """Run annotation workflow (alias for run)."""
-        return self.run(images_list)
     
     def get_images_from_container(self) -> List[Any]:
         """Get images from the configured OMERO container."""
@@ -718,12 +744,9 @@ class AnnotationPipeline:
         print(f"   Progress file: {table_file}")
     
     def run_full_workflow(self) -> Tuple[int, List[Any]]:
-        """Run the complete workflow: get images from container and process them."""
-        images_list = self.get_images_from_container()
-        if not images_list:
-            raise ValueError(f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}")
-        
-        return self.run(images_list)
+        """Run the complete workflow: create table and process annotations."""
+        table_id, images_list = self.create_annotation_table()
+        return self.run_annotation(table_id, images_list)
 
 
 def create_pipeline(config: AnnotationConfig, conn=None, project_config: dict = None) -> AnnotationPipeline:
