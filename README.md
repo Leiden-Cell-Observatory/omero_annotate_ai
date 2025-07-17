@@ -1,4 +1,4 @@
-# omero_annotate_ai
+# OMERO Annotate AI tools
 
 This package provides a streamlined interface for annotating images in OMERO using AI models, specifically designed to work with the micro-SAM annotator plugin in napari. It simplifies the process of connecting to an OMERO server, configuring annotation workflows, and running AI models on image data using jupyter noteobook widgets. 
 
