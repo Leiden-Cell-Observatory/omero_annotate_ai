@@ -226,7 +226,7 @@ class SimpleOMEROConnection:
         return config
     
     def connect(self, host: str, username: str, password: str, 
-               group: Optional[str] = None, secure: bool = True) -> Optional['BlitzGateway']:
+               group: Optional[str] = None, secure: bool = True, verbose: bool = True) -> Optional['BlitzGateway']:
         """Create OMERO connection.
         
         Args:
@@ -235,16 +235,19 @@ class SimpleOMEROConnection:
             password: OMERO password
             group: OMERO group (optional)
             secure: Use secure connection (default True)
+            verbose: Print connection messages (default True)
             
         Returns:
             BlitzGateway connection object if successful, None otherwise
         """
         if not OMERO_AVAILABLE:
-            print("❌ OMERO not available. Install with: pip install -e .[omero]")
+            if verbose:
+                print("❌ OMERO not available. Install with: pip install -e .[omero]")
             return None
             
         try:
-            print(f"🔌 Connecting to OMERO server: {host}")
+            if verbose:
+                print(f"🔌 Connecting to OMERO server: {host}")
             
             # Create BlitzGateway connection
             conn = BlitzGateway(
@@ -257,9 +260,10 @@ class SimpleOMEROConnection:
             
             # Test connection
             if conn.connect():
-                print("✅ Connected to OMERO Server")
-                print(f"👤 User: {conn.getUser().getName()}")
-                print(f"🏢 Group: {conn.getGroupFromContext().getName()}")
+                if verbose:
+                    print("✅ Connected to OMERO Server")
+                    print(f"👤 User: {conn.getUser().getName()}")
+                    print(f"🏢 Group: {conn.getGroupFromContext().getName()}")
                 
                 # Enable keep-alive
                 conn.c.enableKeepAlive(60)
@@ -322,7 +326,7 @@ class SimpleOMEROConnection:
             return None
         
         # Create connection first to validate it works
-        connection = self.connect(host, username, password, group, secure)
+        connection = self.connect(host, username, password, group, secure, verbose=False)
         
         if connection:
             # Save password to keychain if requested
@@ -330,7 +334,7 @@ class SimpleOMEROConnection:
                 self.save_password(host, username, password, expire_hours)
             
             # Always save connection details for successful connections
-            self.save_connection_details(host, username, group)
+            self.save_connection_details(host, username, group, verbose=False)
         
         return connection
     
@@ -360,7 +364,7 @@ class SimpleOMEROConnection:
         """
         return self._get_config_dir() / "connections.json"
     
-    def save_connection_details(self, host: str, username: str, group: Optional[str] = None) -> bool:
+    def save_connection_details(self, host: str, username: str, group: Optional[str] = None, verbose: bool = True) -> bool:
         """Save connection details to history file.
         
         Args:
@@ -412,7 +416,8 @@ class SimpleOMEROConnection:
             with open(connections_file, 'w') as f:
                 json.dump(connections, f, indent=2)
             
-            print(f"💾 Connection details saved to history")
+            if verbose:
+                print(f"💾 Connection details saved to history")
             return True
             
         except Exception as e:

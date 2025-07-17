@@ -2,7 +2,7 @@
 
 from .core.config import AnnotationConfig, load_config, create_default_config
 from .core.pipeline import create_pipeline, AnnotationPipeline
-from .widgets.config_widget import create_config_widget
+from .widgets.workflow_widget import create_workflow_widget
 from .widgets.omero_connection_widget import create_omero_connection_widget
 
 # OMERO utilities (optional import)
@@ -22,8 +22,8 @@ __all__ = [
     "create_default_config",
     "create_pipeline",
     "AnnotationPipeline",
-    "create_config_widget",
     "create_omero_connection_widget",
+    "create_workflow_widget",
 ]
 
 # Add OMERO utils to exports if available

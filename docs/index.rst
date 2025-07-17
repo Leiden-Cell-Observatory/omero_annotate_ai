@@ -1,9 +1,12 @@
 .. omero-annotate-ai documentation master file
 
-Welcome to omero-annotate-ai's documentation!
-==============================================
+OMERO Annotate AI Documentation
+=================================
 
-omero-annotate-ai is a Python package that provides micro-SAM annotation workflows for OMERO (Open Microscopy Environment) data repositories. The package enables automated image processing workflows that connect OMERO data with micro-SAM for generating training datasets and annotations.
+omero-annotate-ai is a streamlined Python package that provides micro-SAM annotation 
+workflows for OMERO (Open Microscopy Environment) data repositories. The package enables 
+automated image processing workflows that connect OMERO data with micro-SAM for generating 
+training datasets and annotations.
 
 .. toctree::
    :maxdepth: 2
@@ -13,17 +16,16 @@ omero-annotate-ai is a Python package that provides micro-SAM annotation workflo
    quickstart
    api/modules
    examples
-   contributing
+   changelog
 
 Key Features
 ------------
 
-- **Micro-SAM Integration**: Focused exclusively on micro-SAM for image segmentation
-- **OMERO Connectivity**: Professional-grade connection management with secure password storage
-- **Modern Architecture**: Clean, pip-installable solution with src layout
-- **Jupyter Widgets**: Interactive configuration and connection widgets
-- **Batch Processing**: Efficient processing of large image datasets
-- **Training Data Generation**: Automated creation of training/validation datasets
+* **Streamlined 2-Widget Workflow**: Simplified interface with connection and workflow widgets
+* **MIFA-Compliant Tracking**: Enhanced annotation ID tracking compatible with BioImage Archive standards  
+* **Enhanced Resume Functionality**: Robust workflow resumption with status tracking
+* **Comprehensive Configuration**: YAML-based configuration with validation
+* **Full Pipeline Integration**: Direct micro-SAM processing with OMERO integration
 
 Quick Start
 -----------
@@ -33,20 +35,27 @@ Installation requires conda for micro-SAM dependency:
 .. code-block:: bash
 
    conda activate micro-sam
-   pip install omero-annotate-ai
+   pip install -e .
 
-Basic usage:
+Basic usage with 2-widget workflow:
 
 .. code-block:: python
 
-   from omero_annotate_ai import create_config_widget, create_pipeline
+   from omero_annotate_ai import create_omero_connection_widget, create_workflow_widget, create_pipeline
 
-   # Create configuration widget for Jupyter
-   config_widget = create_config_widget()
-   
-   # Create and run annotation pipeline
+   # Step 1: Connect to OMERO
+   conn_widget = create_omero_connection_widget()
+   conn_widget.display()
+   conn = conn_widget.get_connection()
+
+   # Step 2: Configure workflow
+   workflow_widget = create_workflow_widget(connection=conn)
+   workflow_widget.display()
+   config = workflow_widget.get_config()
+
+   # Step 3: Run pipeline
    pipeline = create_pipeline(config, conn)
-   results = pipeline.run()
+   table_id, processed_images = pipeline.run_full_workflow()
 
 Indices and tables
 ==================

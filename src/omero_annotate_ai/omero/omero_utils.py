@@ -48,22 +48,25 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
             
             for ann_id in annotations:
                 try:
-                    file_ann = conn.getObject("FileAnnotation", ann_id)
-                    if file_ann and hasattr(file_ann, 'getFile'):
-                        original_file = file_ann.getFile()
-                        if original_file:
-                            file_name = original_file.getName()
-                            # Check if this looks like a table file
-                            if file_name and ('.csv' in file_name or 'table' in file_name.lower()):
-                                tables.append({
-                                    'id': ann_id,
-                                    'name': file_name,
-                                    'container_type': container_type,
-                                    'container_id': container_id,
-                                    'description': file_ann.getDescription() or "",
-                                    'namespace': file_ann.getNs() or ""
-                                })
+                    # Try to read as table using ezomero - simpler and more reliable
+                    table = ezomero.get_table(conn, ann_id)
+                    if table is not None:
+                        # This is a valid OMERO.table, get the annotation details
+                        file_ann = conn.getObject("FileAnnotation", ann_id)
+                        if file_ann and hasattr(file_ann, 'getFile'):
+                            original_file = file_ann.getFile()
+                            file_name = original_file.getName() if original_file else f"table_{ann_id}"
+                            
+                            tables.append({
+                                'id': ann_id,
+                                'name': file_name,
+                                'container_type': container_type,
+                                'container_id': container_id,
+                                'description': file_ann.getDescription() or "",
+                                'namespace': file_ann.getNs() or ""
+                            })
                 except Exception:
+                    # Not a valid OMERO.table, skip silently
                     continue
         else:
             # More complex search across user's space would go here
