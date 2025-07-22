@@ -1045,7 +1045,7 @@ class WorkflowWidget:
 
 
 def create_workflow_widget(connection=None):
-    """Create workflow widget.
+    """Create workflow widget with connection validation.
     
     Args:
         connection: Optional OMERO connection object. If provided, 
@@ -1053,5 +1053,12 @@ def create_workflow_widget(connection=None):
     
     Returns:
         WorkflowWidget instance
+        
+    Raises:
+        ValueError: If the provided connection is not active
     """
+    if connection is not None:
+        if not hasattr(connection, 'isConnected') or not connection.isConnected():
+            raise ValueError("Provided OMERO connection is not active. Please establish a valid connection first.")
+    
     return WorkflowWidget(connection=connection)

@@ -5,19 +5,8 @@ import random as rnd
 import numpy as np
 
 # Optional dependencies for ROI functionality
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    cv2 = None
-
-try:
-    import ezomero.rois
-    EZOMERO_ROIS_AVAILABLE = True
-except ImportError:
-    EZOMERO_ROIS_AVAILABLE = False
-    ezomero = None
+import cv2
+import ezomero.rois
 
 
 def generate_patch_coordinates(image_shape: Tuple[int, int], patch_size: Tuple[int, int], 
@@ -145,8 +134,6 @@ def mask_to_contour(mask):
     Returns:
         list: list of ROI coordinates
     """
-    if not CV2_AVAILABLE:
-        raise ImportError("OpenCV is required for ROI creation. Reinstall package: pip install -e .")
     
     contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     return contours
@@ -168,8 +155,6 @@ def process_label_plane(label_plane, z_slice, channel, timepoint, model_type, x_
     Returns:
         list: List of OMERO shapes
     """
-    if not EZOMERO_ROIS_AVAILABLE:
-        raise ImportError("ezomero ROI support is required. Install with: pip install -e .[omero]")
     
     shapes = []
     unique_labels = np.unique(label_plane)

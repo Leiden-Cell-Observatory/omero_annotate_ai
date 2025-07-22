@@ -419,7 +419,7 @@ class AnnotationPipeline:
         # image_series_annotator saves files as seg_00000.tif, seg_00001.tif, etc.
         tiff_files = []
         for i in range(len(metadata)):
-            tiff_file = annotations_path / f"seg_{i:05d}.tif"
+            tiff_file = annotations_path / f"seg_{i:05d}.tif" # TODO make this configurable for future compatibility
             if tiff_file.exists():
                 tiff_files.append(str(tiff_file))
             else:
@@ -482,7 +482,7 @@ class AnnotationPipeline:
                         status="completed",
                         label_id=label_id,
                         roi_id=roi_id,
-                        annotation_type="segmentation_mask",
+                        annotation_type=self.config.training.annotation_type,
                         container_type=self.config.omero.container_type,
                         container_id=self.config.omero.container_id
                     )

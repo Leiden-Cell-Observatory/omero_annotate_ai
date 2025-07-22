@@ -93,7 +93,7 @@ class TestTrackingTable:
         """Test updating table rows when ezomero is not available."""
         with patch('omero_annotate_ai.omero.omero_functions.ezomero', None):
             with pytest.raises(ImportError, match="ezomero is required"):
-                update_tracking_table_rows(None, 123, [0, 1], "completed")
+                update_tracking_table_rows(None, 123, [0, 1], "completed", "segmentation_mask", container_type="", container_id=0)
     
     @patch('omero_annotate_ai.omero.omero_functions.ezomero')
     def test_update_tracking_table_rows_success(self, mock_ezomero):
@@ -304,7 +304,7 @@ class TestMockBehavior:
                 get_unprocessed_units(None, 123)
             
             with pytest.raises(ImportError):
-                update_tracking_table_rows(None, 123, [0], "completed")
+                update_tracking_table_rows(None, 123, [0], "completed", "segmentation_mask", container_type="", container_id=0)
             
             with pytest.raises(ImportError):
                 upload_rois_and_labels(None, 123, "test.tif")

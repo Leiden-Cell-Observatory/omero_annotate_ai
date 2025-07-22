@@ -15,6 +15,9 @@ try:
     import ezomero
 except ImportError:
     ezomero = None
+
+from ..processing.image_functions import label_to_rois
+import imageio.v3 as imageio
     
 
 
@@ -207,8 +210,8 @@ def get_unprocessed_units(conn, table_id: int) -> List[Tuple]:
 
 
 def update_tracking_table_rows(conn, table_id: int, row_indices: List[int], 
-                              status: str, label_id: Optional[int] = None, roi_id: Optional[int] = None,
-                              annotation_type: str = "segmentation_mask",
+                              status: str, annotation_type: str,
+                              label_id: Optional[int] = None, roi_id: Optional[int] = None,
                               container_type: str = "", container_id: int = 0) -> Optional[int]:
     """Update tracking table rows with processing status and annotation IDs.
     
@@ -221,7 +224,7 @@ def update_tracking_table_rows(conn, table_id: int, row_indices: List[int],
         status: Status to set ('completed', 'failed', etc.)
         label_id: ID of uploaded label file annotation (optional)
         roi_id: ID of uploaded ROI collection (optional)
-        annotation_type: Type of annotation (default: 'segmentation_mask')
+        annotation_type: Type of annotation
         container_type: Type of OMERO container (e.g. 'dataset', 'project')
         container_id: ID of the container
         
@@ -333,24 +336,6 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
     Returns:
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
     """
-    try:
-        from ..processing.image_functions import label_to_rois, CV2_AVAILABLE, EZOMERO_ROIS_AVAILABLE
-        import imageio.v3 as imageio
-        import numpy as np
-    except ImportError as e:
-        print(f"❌ Missing dependencies for ROI creation: {e}")
-        print("💡 Reinstall package: pip install -e .")
-        return None, None
-    
-    # Validate dependencies for ROI creation
-    if not CV2_AVAILABLE:
-        print(f"❌ OpenCV not available - this should not happen with proper installation")
-        print("📁 File annotation will still be uploaded")
-    
-    if not EZOMERO_ROIS_AVAILABLE:
-        print(f"❌ ezomero.rois not available - ROI shapes cannot be created")
-        print("💡 Update ezomero: pip install ezomero>=3.1.0")
-        print("📁 File annotation will still be uploaded")
     
     if ezomero is None:
         raise ImportError("ezomero is required for OMERO operations. Install with: pip install -e .[omero]")
@@ -370,20 +355,16 @@ def upload_rois_and_labels(conn, image_id: int, annotation_file: str,
     
     # Create ROI shapes from label image
     print(f"🔍 Step 2: Converting labels to ROI shapes...")
-    if not CV2_AVAILABLE or not EZOMERO_ROIS_AVAILABLE:
-        print(f"⚠️ Missing dependencies - skipping ROI shape creation")
-        shapes = []
-    else:
-        shapes = label_to_rois(
-            label_img=label_img,
-            z_slice=z_slice,
-            channel=channel,
-            timepoint=timepoint,
-            model_type=model_type,
-            is_volumetric=False,  # Assume 2D for now
-            patch_offset=patch_offset
-        )
-        print(f"✅ Created {len(shapes)} ROI shapes from labels")
+    shapes = label_to_rois(
+        label_img=label_img,
+        z_slice=z_slice,
+        channel=channel,
+        timepoint=timepoint,
+        model_type=model_type,
+        is_volumetric=False,  # Assume 2D for now
+        patch_offset=patch_offset
+    )
+    print(f"✅ Created {len(shapes)} ROI shapes from labels")
     
     # Upload label file as attachment
     print(f"🔍 Step 3: Uploading label file as attachment")
