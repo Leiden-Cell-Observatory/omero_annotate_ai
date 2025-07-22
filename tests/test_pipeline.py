@@ -270,7 +270,15 @@ class TestAnnotationPipeline:
         
         # Should update table once for the batch
         mock_update_table.assert_called_once_with(
-            Mock(), 123, [0, 1], "completed", mock_upload.return_value
+            conn=pipeline.conn,
+            table_id=123,
+            row_indices=[0, 1],
+            status="completed",
+            label_id=789,
+            roi_id=456,
+            annotation_type=config.training.annotation_type,
+            container_type=config.omero.container_type,
+            container_id=config.omero.container_id
         )
     
     def test_process_batch_complete_workflow(self):

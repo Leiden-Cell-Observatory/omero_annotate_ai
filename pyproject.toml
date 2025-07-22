@@ -79,9 +79,6 @@ Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
 Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
 Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
 
-[project.scripts]
-omero-annotate-ai = "omero_annotate_ai.cli.main:main"
-
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["omero_annotate_ai*"]

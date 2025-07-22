@@ -354,6 +354,10 @@ class OMEROConnectionWidget:
             
             if self.connection:
                 print("✅ Connection created and ready to use!")
+                # Show user info
+                print(f"👤 User: {self.connection.getUser().getName()}")
+                print(f"🏢 Group: {self.connection.getGroupFromContext().getName()}")
+                print("💾 Connection details saved to history")
             else:
                 print("❌ Failed to create connection")
     
@@ -394,7 +398,7 @@ class OMEROConnectionWidget:
         # Populate fields from selected connection
         self.host_widget.value = selected_connection['host']
         self.username_widget.value = selected_connection['username']
-        self.group_widget.value = selected_connection.get('group', '')
+        self.group_widget.value = selected_connection.get('group', '') or ''
         
         # Enable delete button
         self.delete_connection_button.disabled = False
