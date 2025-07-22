@@ -101,6 +101,7 @@ class AnnotationPipeline:
             
             table_title = generate_unique_table_name(
                 self.conn, 
+                'project',
                 self.project_config['project_id'],
                 self.config.training.trainingset_name
             )
