@@ -35,6 +35,10 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
     Returns:
         List of dictionaries with table information
     """
+    if conn is None:
+        print("❌ Cannot list tables: OMERO connection is None")
+        return []
+        
     if not EZOMERO_AVAILABLE:
         print("⚠️ ezomero not available - cannot list tables")
         return []
@@ -112,6 +116,10 @@ def delete_table(conn, table_id: int) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    if conn is None:
+        print("❌ Cannot delete table: OMERO connection is None")
+        return False
+        
     if not EZOMERO_AVAILABLE:
         print("⚠️ ezomero not available - cannot delete table")
         return False
