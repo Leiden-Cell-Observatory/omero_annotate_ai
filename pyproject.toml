@@ -36,7 +36,8 @@ dependencies = [
     "pyyaml>=6.0",
     "ipywidgets>=7.6.0",
     "opencv-python>=4.5.0",
-    "keyring>=23.0.0", "ezomero>=2.1.0,<3",
+    "keyring>=23.0.0",
+    "ezomero>=2.1.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -73,62 +74,78 @@ all = [
     # conda install -c conda-forge micro-sam
     # or use: pixi install (recommended)
 ]
+
 [project.urls]
 Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
 Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
 Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
+
 [tool.setuptools.packages.find]
-[tool.setuptools.packages.find]
-where = ["src"]ro_annotate_ai*"]
+where = ["src"]
 include = ["omero_annotate_ai*"]
+
 [tool.setuptools.package-data]
-[tool.setuptools.package-data].yaml"]
 omero_annotate_ai = ["config/*.yaml"]
+
 [tool.black]
-[tool.black]= 88
-line-length = 88 ['py38']
+line-length = 88
 target-version = ['py38']
+
 [tool.isort]
-[tool.isort]lack"
 profile = "black"
 line_length = 88
+
 [tool.pytest.ini_options]
-[tool.pytest.ini_options]
-testpaths = ["tests"]_*.py"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
-python_classes = ["Test*"]*"]
-python_functions = ["test_*"]te_ai --cov-report=html --cov-report=term-missing"
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 addopts = "--cov=omero_annotate_ai --cov-report=html --cov-report=term-missing"
+
 # Pixi configuration
-# Pixi configuration
-[tool.pixi.project]forge"]
-channels = ["conda-forge"]win-64", "osx-64", "osx-arm64"]
+[tool.pixi.project]
+channels = ["conda-forge"]
 platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
-[tool.pixi.dependencies]
+
+# Default environment - minimal user installation
 [tool.pixi.dependencies]
 python = "3.12.*"
-micro_sam = "*"1.1,<2"
-jupyter = ">=1.1.1,<2""
+micro_sam = "*"
+jupyter = ">=1.1.1,<2"
 napari = ">=0.6.2,<0.7"
-# Add build dependencies[tool.pixi.pypi-dependencies]
-build = "*"".", editable = true }
-twine = "*"
-[tool.pixi.target.win-64.pypi-dependencies]
-[tool.pixi.pypi-dependencies]ncoesoftware/zeroc-ice-py-win-x86_64/releases/download/20240325/zeroc_ice-3.6.5-cp312-cp312-win_amd64.whl" }
-omero-annotate-ai = { path = ".", editable = true }
-[tool.pixi.target.linux-64.pypi-dependencies]
-# Add pixi tasks for CI/CDoesoftware/zeroc-ice-py-linux-x86_64/releases/download/20240202/zeroc_ice-3.6.5-cp312-cp312-manylinux_2_28_x86_64.whl" }
-[tool.pixi.tasks]
-test = "pytest tests/ -v"[tool.pixi.target.osx-64.pypi-dependencies]
-test-cov = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml"ncoesoftware/zeroc-ice-py-macos-universal2/releases/download/20240131/zeroc_ice-3.6.5-cp312-cp312-macosx_11_0_universal2.whl" }
-lint = "flake8 src/ tests/"
-format = "black src/ tests/"[tool.pixi.target.osx-arm64.pypi-dependencies]
-format-check = "black --check src/ tests/"esoftware/zeroc-ice-py-macos-universal2/releases/download/20240131/zeroc_ice-3.6.5-cp312-cp312-macosx_11_0_universal2.whl" }
-sort-imports = "isort src/ tests/"sort-imports-check = "isort --check-only src/ tests/"
-build-package = "python -m build"
-clean = "rm -rf dist/ build/ *.egg-info/"
 
-# Platform-specific zeroc-ice dependencies...
+# Development feature
+[tool.pixi.feature.dev.dependencies]
+pytest = ">=8.4.1,<9"
+pytest-cov = ">=6.2.1,<7"
+pytest-mock = ">=3.14.1,<4"
+flake8 = ">=7.3.0,<8"
+black = ">=25.1.0,<26"
+isort = ">=6.0.1,<7"
+
+[tool.pixi.feature.dev.pypi-dependencies]
+build = "*"
+twine = "*"
+
+# Environment definitions
+[tool.pixi.environments]
+default = []
+dev = ["dev"]
+
+[tool.pixi.pypi-dependencies]
+omero-annotate-ai = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+test = {cmd = "pytest tests/ -v"}
+test-cov = { cmd = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml" }
+lint = { cmd = "flake8 src/ tests/" }
+format = { cmd = "black src/ tests/" }
+format-check = { cmd = "black --check src/ tests/" }
+sort-imports = { cmd = "isort src/ tests/" }
+sort-imports-check = { cmd = "isort --check-only src/ tests/" }
+build-package = { cmd = "python -m build" }
+
+# Platform-specific zeroc-ice dependencies
 [tool.pixi.target.win-64.pypi-dependencies]
 zeroc-ice = { url = "https://github.com/glencoesoftware/zeroc-ice-py-win-x86_64/releases/download/20240325/zeroc_ice-3.6.5-cp312-cp312-win_amd64.whl" }
 
