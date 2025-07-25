@@ -74,8 +74,7 @@ all = [
     # or use: pixi install (recommended)
 ]
 [project.urls]
-[project.urls]tps://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
-Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"i.git"
+Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
 Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
 Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
 [tool.setuptools.packages.find]
