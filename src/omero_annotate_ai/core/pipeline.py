@@ -116,9 +116,9 @@ class AnnotationPipeline:
             )
             print(f"📋 Generated unique table name: {table_title}")
 
-        # Check for legacy resume functionality
+        # Check if need to resume
         if self.config.workflow.resume_from_table and not self.project_config:
-            # Try to find existing table (legacy behavior)
+            # Try to find existing table
             existing_table = get_table_by_name(self.conn, table_title)
             if existing_table:
                 table_id = existing_table.getId()
@@ -408,12 +408,6 @@ class AnnotationPipeline:
 
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
         """Load image data from OMERO based on metadata."""
-        try:
-            from ..omero.omero_utils import get_dask_image_multiple
-        except ImportError:
-            raise ImportError(
-                "OMERO functions are required. Install with: pip install -e .[omero]"
-            )
 
         timepoint = metadata["timepoint"]
         z_slice = metadata["z_slice"]
