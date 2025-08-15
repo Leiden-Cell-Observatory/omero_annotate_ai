@@ -104,11 +104,12 @@ class AnnotationPipeline:
 
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
         """Initialize or resume tracking table for the annotation process."""
+        
+        import logging
+        logger = logging.getLogger(__name__)
 
         # If table_id is already set, validate and use it
         if self.table_id is not None:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.info(f"Using existing table ID: {self.table_id}")
             # Validate table exists
             try:
