@@ -367,9 +367,9 @@ class AnnotationConfig:
 
         # OMERO connection info
         summary.append(
-            f"📡 OMERO: {self.omero.container_type} ID {self.omero.container_id}"
+            f"OMERO: {self.omero.container_type} ID {self.omero.container_id}"
         )
-        summary.append(f"🎯 Training Set: {self.training.trainingset_name}")
+        summary.append(f"Training Set: {self.training.trainingset_name}")
 
         # Annotation scope
         if self.training.segment_all:
