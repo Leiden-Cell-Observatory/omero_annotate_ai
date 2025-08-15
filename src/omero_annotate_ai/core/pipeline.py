@@ -344,52 +344,67 @@ class AnnotationPipeline:
                 "micro-sam and napari are required. Install micro-sam via conda: conda install -c conda-forge micro_sam"
             )
 
-        # Prepare image data for annotation
-        images = []
-        metadata = []
-
-        for image_obj, sequence_val, meta, row_idx in batch_data:
-            # Load image data from OMERO
-            image_data = self._load_image_data(image_obj, meta)
-            images.append(image_data)
-            # Include image_id in metadata for later ROI upload
-            meta_with_image_id = meta.copy()
-            meta_with_image_id["image_id"] = image_obj.getId()
-            metadata.append((sequence_val, meta_with_image_id, row_idx))
-
-        # Set up output paths
-        output_path = Path(self.config.batch_processing.output_folder)
-        embedding_path = output_path / "embed"
-        annotations_path = output_path / "annotations"
-        annotations_path.mkdir(exist_ok=True)
-
-        # Run micro-SAM annotation
-        model_type = self.config.micro_sam.model_type
-
-        # Configure napari settings for batch processing
+        # Configure napari settings to ensure proper blocking behavior
         napari_settings = napari.settings.get_settings()
+
+        # Store original setting to restore later
+        original_ipy_interactive = napari_settings.application.ipy_interactive
+
+        # Force blocking behavior - this is crucial for proper event loop handling
+        napari_settings.application.ipy_interactive = False
         napari_settings.application.save_window_geometry = False
 
-        # Run image series annotator (saves files to annotations folder)
-        segmentation_results = image_series_annotator(
-            images=images,
-            output_folder=str(annotations_path),
-            model_type=model_type,
-            embedding_path=str(embedding_path),
-            is_volumetric=self.config.micro_sam.three_d,
-        )
+        try:
+            # Prepare image data for annotation
+            images = []
+            metadata = []
 
-        # Small delay to ensure all files are fully written to disk
-        # This helps with file system synchronization on Windows
-        import time
-        time.sleep(0.5)
+            for image_obj, sequence_val, meta, row_idx in batch_data:
+                # Load image data from OMERO
+                image_data = self._load_image_data(image_obj, meta)
+                images.append(image_data)
+                # Include image_id in metadata for later ROI upload
+                meta_with_image_id = meta.copy()
+                meta_with_image_id["image_id"] = image_obj.getId()
+                metadata.append((sequence_val, meta_with_image_id, row_idx))
+
+            # Set up output paths
+            output_path = Path(self.config.batch_processing.output_folder)
+            embedding_path = output_path / "embed"
+            annotations_path = output_path / "annotations"
+            annotations_path.mkdir(exist_ok=True)
+
+            # Run micro-SAM annotation
+            model_type = self.config.micro_sam.model_type
+
+            # Run image series annotator with explicit napari.run() call
+            viewer = image_series_annotator(
+                images=images,
+                output_folder=str(annotations_path),
+                model_type=model_type,
+                viewer=None,  # Let it create its own viewer
+                return_viewer=True,  # Important: get the viewer back
+                embedding_path=str(embedding_path),
+                is_volumetric=self.config.micro_sam.three_d,
+            )
+
+            # Explicitly start the event loop - this will block until viewer is closed
+            napari.run()
+
+            # Small delay to ensure all files are fully written to disk
+            import time
+
+            time.sleep(0.5)
+
+        finally:
+            # Always restore the original setting
+            napari_settings.application.ipy_interactive = original_ipy_interactive
 
         return {
-            "results": segmentation_results,
             "metadata": metadata,
             "embedding_path": embedding_path,
             "annotations_path": annotations_path,
-        }
+    }
 
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
         """Load image data from OMERO based on metadata."""
@@ -743,12 +758,6 @@ class AnnotationPipeline:
 
     def get_images_from_container(self) -> List[Any]:
         """Get images from the configured OMERO container."""
-        try:
-            import ezomero
-        except ImportError:
-            raise ImportError(
-                "ezomero is required. Install with: pip install -e .[omero]"
-            )
 
         container_type = self.config.omero.container_type
         container_id = self.config.omero.container_id
