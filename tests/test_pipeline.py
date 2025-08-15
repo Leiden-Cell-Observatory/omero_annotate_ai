@@ -9,6 +9,7 @@ from omero_annotate_ai.core.pipeline import AnnotationPipeline
 from omero_annotate_ai.core.config import create_default_config
 
 
+@pytest.mark.unit
 class TestAnnotationPipeline:
     """Test the main annotation pipeline class."""
     
@@ -216,7 +217,7 @@ class TestAnnotationPipeline:
         assert len(batches[0]) == 4
     
     @patch('omero_annotate_ai.core.pipeline.image_series_annotator')
-    def test_run_microsam_annotation(self, mock_annotator):
+    def test_run_micro_sam_annotation(self, mock_annotator):
         """Test running micro-SAM annotation."""
         import numpy as np
         
@@ -224,7 +225,7 @@ class TestAnnotationPipeline:
         mock_annotator.return_value = None
         
         config = create_default_config()
-        config.microsam.model_type = "vit_b_lm"
+        config.micro_sam.model_type = "vit_b_lm"
         
         pipeline = AnnotationPipeline(config, conn=Mock())
         
@@ -238,7 +239,7 @@ class TestAnnotationPipeline:
         with tempfile.TemporaryDirectory() as temp_dir:
             config.batch_processing.output_folder = temp_dir
             
-            pipeline._run_microsam_annotation(images, batch_metadata)
+            pipeline._run_micro_sam_annotation(images, batch_metadata)
             
             mock_annotator.assert_called_once()
             call_args = mock_annotator.call_args
@@ -295,7 +296,7 @@ class TestAnnotationPipeline:
         ]
         
         with patch.object(pipeline, '_load_images_for_batch') as mock_load, \
-             patch.object(pipeline, '_run_microsam_annotation') as mock_annotate, \
+             patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
              patch.object(pipeline, '_upload_and_update_results') as mock_upload:
             
             mock_load.return_value = [Mock(), Mock()]  # Mock images
@@ -307,6 +308,7 @@ class TestAnnotationPipeline:
             mock_upload.assert_called_once()
 
 
+@pytest.mark.unit
 class TestPipelineIntegration:
     """Test pipeline integration scenarios."""
     
@@ -385,6 +387,7 @@ class TestPipelineIntegration:
             pipeline.run_full_workflow()
 
 
+@pytest.mark.unit
 class TestPipelineUtils:
     """Test pipeline utility functions."""
     
@@ -402,12 +405,12 @@ class TestPipelineUtils:
     def test_pipeline_config_access(self):
         """Test accessing pipeline configuration."""
         config = create_default_config()
-        config.microsam.model_type = "vit_h"
+        config.micro_sam.model_type = "vit_h"
         config.batch_processing.batch_size = 5
         
         pipeline = AnnotationPipeline(config, conn=Mock())
         
-        assert pipeline.config.microsam.model_type == "vit_h"
+        assert pipeline.config.micro_sam.model_type == "vit_h"
         assert pipeline.config.batch_processing.batch_size == 5
     
     def test_pipeline_with_custom_config(self):
@@ -415,12 +418,12 @@ class TestPipelineUtils:
         config = create_default_config()
         config.omero.container_type = "plate"
         config.omero.container_id = 999
-        config.microsam.model_type = "vit_l"
-        config.microsam.three_d = True
+        config.micro_sam.model_type = "vit_l"
+        config.micro_sam.three_d = True
         config.training.trainingset_name = "custom_training_set"
         
         pipeline = AnnotationPipeline(config, conn=Mock())
         
         assert pipeline.config.omero.container_type == "plate"
-        assert pipeline.config.microsam.three_d is True
+        assert pipeline.config.micro_sam.three_d is True
         assert pipeline.config.training.trainingset_name == "custom_training_set"

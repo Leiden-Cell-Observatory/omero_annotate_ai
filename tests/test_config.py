@@ -4,6 +4,7 @@ import pytest
 import yaml
 import tempfile
 from pathlib import Path
+from dataclasses import asdict
 
 from omero_annotate_ai.core.config import (
     AnnotationConfig,
@@ -19,6 +20,7 @@ from omero_annotate_ai.core.config import (
 )
 
 
+@pytest.mark.unit
 class TestAnnotationConfig:
     """Test the AnnotationConfig class with modern structure."""
     
@@ -28,7 +30,7 @@ class TestAnnotationConfig:
         assert isinstance(config, AnnotationConfig)
         assert config.batch_processing.batch_size == 0  # New default
         assert config.omero.container_type == "dataset"
-        assert config.microsam.model_type == "vit_b_lm"  # New default
+        assert config.micro_sam.model_type == "vit_b_lm"  # New default
         assert config.training.trainingset_name == "default_training_set"
     
     def test_config_to_dict(self):
@@ -39,7 +41,7 @@ class TestAnnotationConfig:
         assert isinstance(config_dict, dict)
         assert "batch_processing" in config_dict
         assert "omero" in config_dict
-        assert "microsam" in config_dict  # Updated from image_processing
+        assert "micro_sam" in config_dict  # Updated from image_processing
         assert "patches" in config_dict
         assert "training" in config_dict
         assert "workflow" in config_dict
@@ -52,7 +54,7 @@ class TestAnnotationConfig:
         assert isinstance(yaml_str, str)
         assert "batch_processing:" in yaml_str
         assert "omero:" in yaml_str
-        assert "microsam:" in yaml_str  # Updated name
+        assert "micro_sam:" in yaml_str  # Updated name
         assert "model_type: vit_b_lm" in yaml_str  # New default
         assert "batch_size: 0" in yaml_str  # New default
         
@@ -65,7 +67,7 @@ class TestAnnotationConfig:
         config_dict = {
             "batch_processing": {"batch_size": 5},
             "omero": {"container_type": "plate", "container_id": 123},
-            "microsam": {"model_type": "vit_h", "three_d": True}
+            "micro_sam": {"model_type": "vit_h", "three_d": True}
         }
         
         config = AnnotationConfig.from_dict(config_dict)
@@ -73,8 +75,8 @@ class TestAnnotationConfig:
         assert config.batch_processing.batch_size == 5
         assert config.omero.container_type == "plate"
         assert config.omero.container_id == 123
-        assert config.microsam.model_type == "vit_h"
-        assert config.microsam.three_d is True
+        assert config.micro_sam.model_type == "vit_h"
+        assert config.micro_sam.three_d is True
     
     def test_backward_compatibility_ai_model(self):
         """Test backward compatibility with old ai_model config."""
@@ -88,10 +90,10 @@ class TestAnnotationConfig:
         
         config = AnnotationConfig.from_dict(config_dict)
         
-        # Should be mapped to microsam config
-        assert config.microsam.model_type == "vit_l"
-        assert config.microsam.timepoints == [1, 2]
-        assert config.microsam.three_d is True
+        # Should be mapped to micro_sam config
+        assert config.micro_sam.model_type == "vit_l"
+        assert config.micro_sam.timepoints == [1, 2]
+        assert config.micro_sam.three_d is True
     
     def test_backward_compatibility_image_processing(self):
         """Test backward compatibility with old image_processing config."""
@@ -104,9 +106,9 @@ class TestAnnotationConfig:
         
         config = AnnotationConfig.from_dict(config_dict)
         
-        # Should be mapped to microsam config
-        assert config.microsam.model_type == "vit_b"
-        assert config.microsam.z_slices == [0, 1, 2]
+        # Should be mapped to micro_sam config
+        assert config.micro_sam.model_type == "vit_b"
+        assert config.micro_sam.z_slices == [0, 1, 2]
     
     def test_config_from_yaml_string(self):
         """Test creating configuration from YAML string."""
@@ -116,7 +118,7 @@ class TestAnnotationConfig:
         omero:
           container_type: project
           container_id: 456
-        microsam:
+        micro_sam:
           model_type: vit_b_lm
         """
         
@@ -125,7 +127,7 @@ class TestAnnotationConfig:
         assert config.batch_processing.batch_size == 0
         assert config.omero.container_type == "project"
         assert config.omero.container_id == 456
-        assert config.microsam.model_type == "vit_b_lm"
+        assert config.micro_sam.model_type == "vit_b_lm"
     
     def test_config_from_yaml_file(self):
         """Test creating configuration from YAML file."""
@@ -185,7 +187,7 @@ class TestAnnotationConfig:
         # Test invalid model type
         config = create_default_config()
         config.omero.container_id = 123
-        config.microsam.model_type = "invalid_model"
+        config.micro_sam.model_type = "invalid_model"
         with pytest.raises(ValueError, match="model_type must be one of"):
             config.validate()
     
@@ -196,10 +198,9 @@ class TestAnnotationConfig:
         # Should not have group_by_image attribute
         assert not hasattr(config.training, 'group_by_image')
         
-        # Should not appear in legacy params
-        legacy_params = config.get_legacy_params()
-        assert 'group_by_image' not in legacy_params
-    
+        # Should not appear in config dict
+        config_dict = asdict(config)
+        assert 'group_by_image' not in str(config_dict)    
     def test_training_set_name_required(self):
         """Test that training set name is included."""
         config = create_default_config()
@@ -210,24 +211,21 @@ class TestAnnotationConfig:
         yaml_str = config.to_yaml()
         assert "trainingset_name: default_training_set" in yaml_str
     
-    def test_get_legacy_params(self):
-        """Test conversion to legacy parameters."""
+    def test_config_structure(self):
+        """Test configuration structure and key parameters."""
         config = create_default_config()
         config.omero.container_id = 123
         
-        legacy_params = config.get_legacy_params()
+        # Test key configuration values
+        assert config.batch_processing.batch_size == 0  # Updated default
+        assert config.omero.container_type == "dataset"
+        assert config.omero.container_id == 123
+        assert config.micro_sam.model_type == "vit_b_lm"  # Updated default
+        assert config.patches.use_patches is False
+        assert config.training.trainingset_name == "default_training_set"
         
-        assert isinstance(legacy_params, dict)
-        assert legacy_params["batch_size"] == 0  # Updated default
-        assert legacy_params["container_type"] == "dataset"
-        assert legacy_params["container_id"] == 123
-        assert legacy_params["model_type"] == "vit_b_lm"  # Updated default
-        assert legacy_params["use_patches"] is False
-        assert legacy_params["trainingset_name"] == "default_training_set"
-        
-        # Ensure removed parameter is not present
-        assert 'group_by_image' not in legacy_params
-    
+        # Ensure removed parameter is not present in config
+        assert not hasattr(config.training, 'group_by_image')    
     def test_load_config_from_dict(self):
         """Test load_config function with dictionary."""
         config_dict = {"omero": {"container_id": 999}}
@@ -250,18 +248,19 @@ class TestAnnotationConfig:
         parsed = yaml.safe_load(template)
         assert isinstance(parsed, dict)
     
-    def test_microsam_params(self):
+    def test_micro_sam_params(self):
         """Test micro-SAM specific parameters extraction."""
         config = create_default_config()
         config.batch_processing.output_folder = "./test_output"
         
-        microsam_params = config.get_microsam_params()
+        micro_sam_params = config.get_micro_sam_params()
         
-        assert microsam_params["model_type"] == "vit_b_lm"
-        assert microsam_params["embedding_path"] == "./test_output/embed"
-        assert microsam_params["is_volumetric"] is False
+        assert micro_sam_params["model_type"] == "vit_b_lm"
+        assert micro_sam_params["embedding_path"] == "./test_output/embed"
+        assert micro_sam_params["is_volumetric"] is False
 
 
+@pytest.mark.unit
 class TestConfigSubclasses:
     """Test individual configuration dataclasses."""
     
@@ -270,14 +269,14 @@ class TestConfigSubclasses:
         config = BatchProcessingConfig()
         
         assert config.batch_size == 0  # New default
-        assert config.output_folder == "./output"
+        assert config.output_folder == "./omero_annotations"
         
         # Test with custom values
         config = BatchProcessingConfig(batch_size=5, output_folder="./custom")
         assert config.batch_size == 5
         assert config.output_folder == "./custom"
     
-    def test_microsam_config(self):
+    def test_micro_sam_config(self):
         """Test MicroSAMConfig defaults and behavior."""
         config = MicroSAMConfig()
         
@@ -301,6 +300,7 @@ class TestConfigSubclasses:
         assert not hasattr(config, 'group_by_image')
 
 
+@pytest.mark.unit
 class TestConfigEdgeCases:
     """Test edge cases and error conditions."""
     
@@ -337,7 +337,7 @@ class TestConfigEdgeCases:
         """Test saving and loading configuration preserves all data."""
         config = create_default_config()
         config.omero.container_id = 999
-        config.microsam.model_type = "vit_h"
+        config.micro_sam.model_type = "vit_h"
         config.training.trainingset_name = "test_roundtrip"
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
@@ -347,7 +347,7 @@ class TestConfigEdgeCases:
             loaded_config = AnnotationConfig.from_yaml(f.name)
             
             assert loaded_config.omero.container_id == 999
-            assert loaded_config.microsam.model_type == "vit_h"
+            assert loaded_config.micro_sam.model_type == "vit_h"
             assert loaded_config.training.trainingset_name == "test_roundtrip"
             assert loaded_config.batch_processing.batch_size == 0  # Default preserved
         

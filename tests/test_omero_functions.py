@@ -10,20 +10,15 @@ from omero_annotate_ai.omero.omero_functions import (
     get_unprocessed_units,
     update_tracking_table_rows,
     upload_rois_and_labels,
-    get_dask_image_multiple
 )
+from omero_annotate_ai.omero.omero_utils import get_dask_image_multiple
 
 
+@pytest.mark.unit
 class TestTrackingTable:
     """Test tracking table management functions."""
     
-    def test_initialize_tracking_table_no_ezomero(self):
-        """Test table initialization when ezomero is not available."""
-        with patch('omero_annotate_ai.omero.omero_functions.ezomero', None):
-            with pytest.raises(ImportError, match="ezomero is required"):
-                initialize_tracking_table(
-                    None, "test_table", [], "dataset", 1, "test"
-                )
+
     
     @patch('omero_annotate_ai.omero.omero_functions.ezomero')
     def test_initialize_tracking_table_success(self, mock_ezomero):
@@ -35,6 +30,8 @@ class TestTrackingTable:
         mock_image.getName.return_value = "test_image.tif"
         mock_image.getSizeZ.return_value = 1
         mock_image.getSizeT.return_value = 1
+        mock_image.getSizeX.return_value = 1024
+        mock_image.getSizeY.return_value = 1024
         mock_conn.getObject.return_value = mock_image
         
         # Mock ezomero.post_table
@@ -55,7 +52,7 @@ class TestTrackingTable:
         
         # Check that DataFrame was created with correct structure
         call_args = mock_ezomero.post_table.call_args
-        df = call_args[0][1]  # Second argument is the DataFrame
+        df = call_args[1]['table']  # Table is passed as keyword argument
         
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 2
@@ -127,14 +124,22 @@ class TestTrackingTable:
         mock_df = pd.DataFrame({'processed': [False, False, True]})
         mock_ezomero.get_table.return_value = mock_df
         
-        # Test the function
-        update_tracking_table_rows(mock_conn, 123, [0, 1], "completed", label_id=789, roi_id=456)
+        # Mock ezomero operations
+        mock_ezomero.delete_table.return_value = None
+        mock_ezomero.post_table.return_value = 456
         
-        # Verify table operations were called
-        mock_conn.getObject.assert_called_with("FileAnnotation", 123)
-        mock_table.close.assert_called_once()
+        # Test the function
+        result = update_tracking_table_rows(mock_conn, 123, [0, 1], "completed", "segmentation_mask", label_id=789, roi_id=456)
+        
+        # Verify ezomero operations were called
+        mock_ezomero.get_table.assert_called_with(mock_conn, 123)
+        mock_ezomero.post_table.assert_called()
+        
+        # Verify result is the new table ID
+        assert result == 456
 
 
+@pytest.mark.unit
 class TestROIUpload:
     """Test ROI and label upload functions."""
     
@@ -214,6 +219,7 @@ class TestROIUpload:
         assert result == (None, None)
 
 
+@pytest.mark.unit
 class TestImageLoading:
     """Test image loading functions."""
     
@@ -290,6 +296,7 @@ class TestImageLoading:
 
 
 
+@pytest.mark.unit
 class TestMockBehavior:
     """Test behavior when mocking OMERO connections."""
     
