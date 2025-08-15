@@ -1,31 +1,62 @@
-"""Main pipeline for OMERO micro-SAM annotation workflows."""
+"""Main pipeline for OMERO annotation workflows."""
 
+import random
 import shutil
+import time
+import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
+
+import ezomero
+
+try:
+    import napari
+    from micro_sam.sam_annotator import image_series_annotator
+    MICRO_SAM_AVAILABLE = True
+except ImportError:
+    MICRO_SAM_AVAILABLE = False
+    napari = None
+    image_series_annotator = None
+except Exception as e:
+    MICRO_SAM_AVAILABLE = False
+    napari = None
+    image_series_annotator = None
 
 from .config import AnnotationConfig
+from ..omero.omero_functions import (
+    create_roi_namespace_for_table,
+    initialize_tracking_table
+)
+from ..omero.omero_utils import get_dask_image_multiple, get_table_by_name
+from ..processing.image_functions import generate_patch_coordinates
 
 
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
 
-    def __init__(
-        self, config: AnnotationConfig, conn=None, project_config: dict = None
-    ):
+    def __init__(self, config: AnnotationConfig, conn=None):
         """Initialize the pipeline with configuration and OMERO connection.
 
         Args:
             config: AnnotationConfig object containing all parameters
             conn: OMERO connection object (BlitzGateway)
-            project_config: Optional project configuration from ProjectAnnotationWidget
         """
         self.config = config
         self.conn = conn
-        self.project_config = project_config or {}
+        self.table_id = None  # Track current table ID
         self._validate_setup()
+
+    def set_table_id(self, table_id: int) -> None:
+        """Update the current table ID."""
+        self.table_id = table_id
+
+    def get_table_id(self) -> Optional[int]:
+        """Get the current table ID."""
+        return self.table_id
 
     def _validate_setup(self):
         """Validate the pipeline setup."""
@@ -64,61 +95,36 @@ class AnnotationPipeline:
 
     def _get_table_title(self) -> str:
         """Generate table title based on configuration."""
-        # Check if we have a project configuration with table name
-        if self.project_config.get("table_name"):
-            return self.project_config["table_name"]
-
-        # Fallback to legacy naming
+        # Use the existing trainingset_name from config
         if self.config.training.trainingset_name:
             return f"micro_sam_training_{self.config.training.trainingset_name}"
         else:
+            # Fallback to container-based naming
             return f"micro_sam_training_{self.config.omero.container_type}_{self.config.omero.container_id}"
 
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
         """Initialize or resume tracking table for the annotation process."""
-        try:
-            from ..omero.omero_functions import (
-                create_roi_namespace_for_table,
-                generate_unique_table_name,
-                initialize_tracking_table,
-            )
-            from ..omero.omero_utils import get_table_by_name
-        except ImportError:
-            raise ImportError(
-                "ezomero and OMERO functions are required. Install with: pip install -e .[omero]"
-            )
 
-        # Handle project-based workflow
-        if self.project_config.get("action") == "continue" and self.project_config.get(
-            "table_id"
-        ):
-            # Continue existing table
-            table_id = self.project_config["table_id"]
-            table_name = self.project_config.get("table_name", "Unknown")
-            print(f"📋 Continuing existing table: {table_name} (ID: {table_id})")
-            return table_id
+        # If table_id is already set, validate and use it
+        if self.table_id is not None:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Using existing table ID: {self.table_id}")
+            # Validate table exists
+            try:
+                table_obj = self.conn.getObject("FileAnnotation", self.table_id)
+                if table_obj is None:
+                    raise ValueError(f"Table with ID {self.table_id} not found")
+                return self.table_id
+            except Exception as e:
+                raise ValueError(f"Cannot access table {self.table_id}: {e}")
 
-        # Generate table name for new table
+        # Generate table name
         table_title = self._get_table_title()
 
-        # If we have a project_id and no explicit table name, generate unique name
-        if (
-            self.project_config.get("project_id")
-            and self.project_config.get("action") == "new"
-            and not self.project_config.get("table_name")
-        ):
-
-            table_title = generate_unique_table_name(
-                self.conn,
-                "project",
-                self.project_config["project_id"],
-                self.config.training.trainingset_name,
-            )
-            print(f"📋 Generated unique table name: {table_title}")
-
-        # Check if need to resume
-        if self.config.workflow.resume_from_table and not self.project_config:
-            # Try to find existing table
+        # Check if need to resume from existing table
+        if self.config.workflow.resume_from_table:
+            print(f"🔍 Looking for existing table: {table_title}")
             existing_table = get_table_by_name(self.conn, table_title)
             if existing_table:
                 table_id = existing_table.getId()
@@ -131,30 +137,30 @@ class AnnotationPipeline:
                     total = status_map.get("total_units", "0")
 
                     if status == "complete":
-                        print(
-                            f"✅ Workflow already complete: {completed}/{total} units processed"
-                        )
+                        print(f"✅ Workflow already complete: {completed}/{total} units processed")
                         print(f"📋 Table: {table_title} (ID: {table_id})")
+                        self.table_id = table_id
                         return table_id
                     elif status == "incomplete":
-                        print(
-                            f"🔄 Resuming incomplete workflow: {completed}/{total} units completed"
-                        )
+                        print(f"🔄 Resuming incomplete workflow: {completed}/{total} units completed")
                         print(f"📋 Table: {table_title} (ID: {table_id})")
+                        self.table_id = table_id
                         return table_id
                     else:
                         print(f"📋 Resuming from existing table: {table_title}")
+                        self.table_id = table_id
                         return table_id
                 else:
                     print(f"📋 Resuming from existing table: {table_title}")
+                    self.table_id = table_id
                     return table_id
 
         # Create new table
-        print(f"📋 Creating new tracking table: {table_title}")
+        logger.info(f"Creating new tracking table: {table_title}")
 
         # Store ROI namespace for consistent naming
         roi_namespace = create_roi_namespace_for_table(table_title)
-        print(f"📋 ROI namespace: {roi_namespace}")
+        logger.info(f"ROI namespace: {roi_namespace}")
 
         # Prepare processing units for table initialization
         processing_units = self._prepare_processing_units(images_list)
@@ -169,10 +175,7 @@ class AnnotationPipeline:
             source_desc=self.config.omero.source_desc,
         )
 
-        # Store annotation configuration in OMERO using ezomero
-        import ezomero
-        import pandas as pd
-
+        # Store configuration in OMERO
         config_dict = self.config.to_dict()
 
         # Flatten nested config and convert to strings
@@ -185,13 +188,11 @@ class AnnotationPipeline:
                 flat_config[key] = str(value)
 
         # Add metadata
-        flat_config.update(
-            {
-                "config_type": "micro_sam_annotation_settings",
-                "created_at": pd.Timestamp.now().isoformat(),
-                "config_name": f"micro_sam_config_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}",
-            }
-        )
+        flat_config.update({
+            "config_type": "micro_sam_annotation_settings",
+            "created_at": pd.Timestamp.now().isoformat(),
+            "config_name": f"micro_sam_config_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}",
+        })
 
         try:
             config_ann_id = ezomero.post_map_annotation(
@@ -204,11 +205,12 @@ class AnnotationPipeline:
             print(f"Stored configuration as annotation ID: {config_ann_id}")
         except Exception as e:
             print(f"Warning: Could not store configuration annotation: {e}")
-            # Continue without storing annotation
 
         # Initialize workflow status map for new table
         self._update_workflow_status_map(table_id)
 
+        # Store table ID internally
+        self.table_id = table_id
         return table_id
 
     def _prepare_processing_units(self, images_list: List[Any]) -> List[Tuple]:
@@ -226,8 +228,6 @@ class AnnotationPipeline:
             n_val = min(self.config.training.validate_n, n_total - n_train)
 
             # Randomly select images
-            import random
-
             shuffled_indices = list(range(n_total))
             random.shuffle(shuffled_indices)
 
@@ -296,8 +296,6 @@ class AnnotationPipeline:
         if self.config.micro_sam.timepoint_mode == "all":
             return list(range(max_t))
         elif self.config.micro_sam.timepoint_mode == "random":
-            import random
-
             n_points = min(len(self.config.micro_sam.timepoints), max_t)
             return random.sample(range(max_t), n_points)
         else:  # specific
@@ -310,8 +308,6 @@ class AnnotationPipeline:
         if self.config.micro_sam.z_slice_mode == "all":
             return list(range(max_z))
         elif self.config.micro_sam.z_slice_mode == "random":
-            import random
-
             n_slices = min(len(self.config.micro_sam.z_slices), max_z)
             return random.sample(range(max_z), n_slices)
         else:  # specific
@@ -319,8 +315,6 @@ class AnnotationPipeline:
 
     def _generate_patch_coordinates(self, image) -> List[Tuple[int, int]]:
         """Generate patch coordinates for an image."""
-        from ..processing.image_functions import generate_patch_coordinates
-
         patch_size = self.config.patches.patch_size
         patches_per_image = self.config.patches.patches_per_image
         random_patches = self.config.patches.random_patches
@@ -336,10 +330,7 @@ class AnnotationPipeline:
 
     def _run_micro_sam_annotation(self, batch_data: List[Tuple]) -> dict:
         """Run micro-SAM annotation on a batch of data."""
-        try:
-            import napari
-            from micro_sam.sam_annotator import image_series_annotator
-        except ImportError:
+        if not MICRO_SAM_AVAILABLE:
             raise ImportError(
                 "micro-sam and napari are required. Install micro-sam via conda: conda install -c conda-forge micro_sam"
             )
@@ -386,14 +377,17 @@ class AnnotationPipeline:
                 return_viewer=True,  # Important: get the viewer back
                 embedding_path=str(embedding_path),
                 is_volumetric=self.config.micro_sam.three_d,
+                skip_segmented=True
             )
 
             # Explicitly start the event loop - this will block until viewer is closed
-            napari.run()
+            if napari is not None:
+                napari.run()
+            else:
+                raise ImportError("napari is not available. Please install napari to run the annotation viewer.")
 
-            # Small delay to ensure all files are fully written to disk
-            import time
-
+            # The following delay helps ensure all files are written before proceeding.
+            # If file writing is synchronous, this may be unnecessary; profile or document as needed.
             time.sleep(0.5)
 
         finally:
@@ -482,7 +476,6 @@ class AnnotationPipeline:
                 # Handle file access issues (e.g., still locked by micro-SAM)
                 print(f"⚠️ Warning: Cannot access annotation file {tiff_file}: {e}")
                 # Small additional delay and retry once
-                import time
                 time.sleep(0.2)
                 try:
                     if tiff_file.exists() and tiff_file.stat().st_size > 0:
@@ -578,7 +571,7 @@ class AnnotationPipeline:
         return table_id
 
     def create_annotation_table(
-        self, images_list: List[Any] = None
+        self, images_list: Optional[List[Any]] = None
     ) -> Tuple[int, List[Any]]:
         """Create annotation table and initialize tracking for annotation workflow.
 
@@ -617,7 +610,7 @@ class AnnotationPipeline:
         return table_id, images_list
 
     def run_annotation(
-        self, table_id: int, images_list: List[Any] = None
+        self, table_id: int, images_list: Optional[List[Any]] = None
     ) -> Tuple[int, List[Any]]:
         """Run annotation workflow using existing table.
 
@@ -703,8 +696,6 @@ class AnnotationPipeline:
 
             except Exception as e:
                 print(f"❌ Error processing batch {batch_num}: {e}")
-                import traceback
-
                 traceback.print_exc()
                 # Continue with next batch - don't let one batch failure stop the pipeline
                 continue
@@ -793,10 +784,6 @@ class AnnotationPipeline:
             completed_row_indices: List of completed row indices
             metadata: List of metadata tuples (sequence_val, meta_dict, row_idx)
         """
-        from datetime import datetime
-
-        import pandas as pd
-
         output_path = Path(self.config.batch_processing.output_folder)
         table_file = output_path / "tracking_table.csv"
 
@@ -847,16 +834,15 @@ class AnnotationPipeline:
 
 
 def create_pipeline(
-    config: AnnotationConfig, conn=None, project_config: dict = None
+    config: AnnotationConfig, conn=None
 ) -> AnnotationPipeline:
     """Create a micro-SAM annotation pipeline with the given configuration.
 
     Args:
         config: AnnotationConfig object
         conn: OMERO connection object
-        project_config: Optional project configuration from ProjectAnnotationWidget
 
     Returns:
         AnnotationPipeline instance
     """
-    return AnnotationPipeline(config, conn, project_config)
+    return AnnotationPipeline(config, conn)
