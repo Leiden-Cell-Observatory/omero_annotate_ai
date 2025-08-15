@@ -10,14 +10,8 @@ from typing import List, Dict, Optional, Any, Tuple
 import pandas as pd
 import numpy as np
 import dask.array as da
-from dask import delayed
-
-try:
-    import ezomero
-    EZOMERO_AVAILABLE = True
-except ImportError:
-    EZOMERO_AVAILABLE = False
-    ezomero = None
+from dask.delayed import delayed
+import ezomero
 
 
 # =============================================================================
@@ -39,9 +33,7 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
         print("❌ Cannot list tables: OMERO connection is None")
         return []
         
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot list tables")
-        return []
+
     
     tables = []
     
@@ -120,9 +112,7 @@ def delete_table(conn, table_id: int) -> bool:
         print("❌ Cannot delete table: OMERO connection is None")
         return False
         
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot delete table")
-        return False
+
     
     try:
         # Get table info first
@@ -155,9 +145,7 @@ def backup_table(conn, table_id: int, backup_path: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot backup table")
-        return False
+
     
     try:
         # Get table data
@@ -189,9 +177,7 @@ def validate_table_schema(conn, table_id: int, expected_columns: List[str]) -> T
     Returns:
         Tuple of (is_valid, missing_columns)
     """
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot validate table")
-        return False, expected_columns
+
     
     try:
         df = ezomero.get_table(conn, table_id)
@@ -232,9 +218,7 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
     Returns:
         New table ID if successful, None otherwise
     """
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot merge tables")
-        return None
+
     
     try:
         # Load all tables
@@ -303,9 +287,7 @@ def list_annotations_by_namespace(conn, object_type: str, object_id: int,
     Returns:
         List of annotation dictionaries
     """
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot list annotations")
-        return []
+
     
     annotations = []
     
@@ -348,9 +330,7 @@ def delete_annotations_by_namespace(conn, object_type: str, object_id: int,
     Returns:
         Number of annotations deleted
     """
-    if not EZOMERO_AVAILABLE:
-        print("⚠️ ezomero not available - cannot delete annotations")
-        return 0
+
     
     try:
         annotations = list_annotations_by_namespace(conn, object_type, object_id, namespace)
@@ -584,9 +564,7 @@ def get_table_by_name(conn, table_name: str, container_type: str = None, contain
     Returns:
         Table object if found, None otherwise
     """
-    if not EZOMERO_AVAILABLE:
-        print(f"🔍 Would search for table: {table_name}")
-        return None
+
     
     print(f"🔍 Searching for table: {table_name}")
     

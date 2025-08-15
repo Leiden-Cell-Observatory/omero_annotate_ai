@@ -109,10 +109,11 @@ platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
 
 # Default environment - minimal user installation
 [tool.pixi.dependencies]
-python = "3.12.*"
-micro_sam = "*"
+python = "3.11.*"
+micro_sam = ">=1.6.1,<2"
 jupyter = ">=1.1.1,<2"
 napari = ">=0.6.2,<0.7"
+zeroc-ice = ">=3.6.4,<3.7"
 
 # Development feature
 [tool.pixi.feature.dev.dependencies]
@@ -136,24 +137,31 @@ dev = ["dev"]
 omero-annotate-ai = { path = ".", editable = true }
 
 [tool.pixi.tasks]
+# Testing tasks
 test = {cmd = "pytest tests/ -v"}
+test-unit = {cmd = "pytest tests/ -v -m \"not (omero or integration or docker)\""}
+test-integration = {cmd = "cd tests && docker-compose up -d && echo \"Waiting for OMERO server...\" && timeout 60 && pytest tests/test_omero_integration.py -v -m \"omero or integration\" && docker-compose down -v"}
+test-omero = {cmd = "pytest tests/ -v -m \"omero\""}
 test-cov = { cmd = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml" }
-lint = { cmd = "flake8 src/ tests/" }
-format = { cmd = "black src/ tests/" }
+
+# Code quality tasks
+lint = { cmd = "flake8 src/omero_annotate_ai && black --check src/omero_annotate_ai && isort --check-only src/omero_annotate_ai" }
+format = { cmd = "black src/omero_annotate_ai && isort src/omero_annotate_ai" }
 format-check = { cmd = "black --check src/ tests/" }
 sort-imports = { cmd = "isort src/ tests/" }
 sort-imports-check = { cmd = "isort --check-only src/ tests/" }
+check = {cmd = "pixi run lint && pixi run test-unit"}
+
+# OMERO server management
+start-omero = {cmd = "cd tests && docker-compose up -d && echo \"OMERO server starting... wait ~60 seconds for full startup\" && echo \"OMERO.web will be available at http://localhost:5080\" && echo \"OMERO server ports: 6063, 6064\""}
+stop-omero = {cmd = "cd tests && docker-compose down -v"}
+
+# Documentation tasks
+docs = {cmd = "cd docs && make html && echo \"Documentation built in docs/_build/html/\""}
+docs-serve = {cmd = "cd docs/_build/html && python -m http.server 8000"}
+
+# Build tasks
 build-package = { cmd = "python -m build" }
+clean = {cmd = "rm -rf build/ dist/ *.egg-info/ && find . -type d -name __pycache__ -exec rm -rf {} + && find . -type f -name \"*.pyc\" -delete"}
 
-# Platform-specific zeroc-ice dependencies
-[tool.pixi.target.win-64.pypi-dependencies]
-zeroc-ice = { url = "https://github.com/glencoesoftware/zeroc-ice-py-win-x86_64/releases/download/20240325/zeroc_ice-3.6.5-cp312-cp312-win_amd64.whl" }
 
-[tool.pixi.target.linux-64.pypi-dependencies]
-zeroc-ice = { url = "https://github.com/glencoesoftware/zeroc-ice-py-linux-x86_64/releases/download/20240202/zeroc_ice-3.6.5-cp312-cp312-manylinux_2_28_x86_64.whl" }
-
-[tool.pixi.target.osx-64.pypi-dependencies]
-zeroc-ice = { url = "https://github.com/glencoesoftware/zeroc-ice-py-macos-universal2/releases/download/20240131/zeroc_ice-3.6.5-cp312-cp312-macosx_11_0_universal2.whl" }
-
-[tool.pixi.target.osx-arm64.pypi-dependencies]
-zeroc-ice = { url = "https://github.com/glencoesoftware/zeroc-ice-py-macos-universal2/releases/download/20240131/zeroc_ice-3.6.5-cp312-cp312-macosx_11_0_universal2.whl" }
