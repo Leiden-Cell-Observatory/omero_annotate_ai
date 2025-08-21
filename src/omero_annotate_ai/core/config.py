@@ -1,187 +1,226 @@
 """Configuration management for OMERO AI annotation workflows."""
 
-from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
+from pydantic import BaseModel, Field, HttpUrl
+from typing_extensions import Literal
 
 
-@dataclass
-class BatchProcessingConfig:
-    """Configuration for batch processing parameters.
+# Sub-models for the configuration
+class AuthorInfo(BaseModel):
+    """Author information compatible with bioimage.io"""
 
-    batch_size: Number of images to process at once.
-                0 means process all images in one batch (default: 0)
-    """
-
-    batch_size: int = 0  # 0 = all images in one batch
-    output_folder: str = "./omero_annotations"
+    name: str = Field(description="Full name of the author")
+    affiliation: Optional[str] = Field(None, description="Institution affiliation")
+    email: Optional[str] = Field(None, description="Contact email")
+    orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
 
 
-@dataclass
-class OMEROConfig:
-    """Configuration for OMERO connection and data selection."""
+class AnnotationMethodology(BaseModel):
+    """MIFA-compatible annotation methodology"""
 
-    container_type: str = "dataset"
-    container_id: int = 0
-    source_desc: str = ""
-    channel: int = 0
+    annotation_type: Literal[
+        "segmentation_mask", "bounding_box", "point", "classification"
+    ] = "segmentation_mask"
+    annotation_method: Literal["manual", "semi_automatic", "automatic"] = "automatic"
+    annotation_criteria: str = Field(description="Criteria used for annotation")
+    annotation_coverage: Literal["all", "representative", "partial"] = "representative"
 
 
-@dataclass
-class MicroSAMConfig:
-    """Configuration for micro-SAM model parameters."""
+class SpatialCoverage(BaseModel):
+    """Spatial scope of annotations (MIFA requirement)"""
 
-    model_type: str = (
-        "vit_b_lm"  # Default model: vit_b_lm. Available: vit_b, vit_l, vit_h, vit_b_lm
+    channels: List[int] = Field(description="Channel indices processed")
+    timepoints: Union[str, List[int]] = Field(description="Timepoints as range or list")
+    timepoint_mode: Literal["all", "random", "specific"] = "specific"
+    z_slices: Union[str, List[int]] = Field(description="Z-slices as range or list")
+    z_slice_mode: Literal["all", "random", "specific"] = "specific"
+    spatial_units: str = Field(
+        default="pixels", description="Spatial measurement units"
     )
-    timepoints: list = field(default_factory=lambda: [0])
-    timepoint_mode: str = "specific"  # "all", "random", "specific"
-    z_slices: list = field(default_factory=lambda: [0])
-    z_slice_mode: str = "specific"  # "all", "random", "specific"
-    three_d: bool = False
 
 
-@dataclass
-class PatchConfig:
-    """Configuration for patch extraction."""
+class DatasetInfo(BaseModel):
+    """Dataset identification and linking (both schemas)"""
 
-    use_patches: bool = False
-    patch_size: tuple = (512, 512)
-    patches_per_image: int = 1
-    random_patches: bool = True
-
-
-@dataclass
-class TrainingConfig:
-    """Configuration for training data organization."""
-
-    segment_all: bool = True
-    train_n: int = 3
-    validate_n: int = 3
-    trainingset_name: str = (
-        "default_training_set"  # Required field for training set name
+    source_dataset_id: Optional[str] = Field(
+        None, description="BioImage Archive accession or DOI"
     )
-    annotation_type: str = "segmentation_mask"
-
-
-@dataclass
-class WorkflowConfig:
-    """Configuration for workflow behavior."""
-
-    resume_from_table: bool = False
-    read_only_mode: bool = False
-
-
-@dataclass
-class AnnotationConfig:
-    """Complete configuration for micro-SAM OMERO workflows."""
-
-    batch_processing: BatchProcessingConfig = field(
-        default_factory=BatchProcessingConfig
+    source_dataset_url: Optional[HttpUrl] = Field(
+        None, description="URL to source dataset"
     )
-    omero: OMEROConfig = field(default_factory=OMEROConfig)
-    micro_sam: MicroSAMConfig = field(default_factory=MicroSAMConfig)
-    patches: PatchConfig = field(default_factory=PatchConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
-    workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
+    source_description: str = Field(description="Human-readable source description")
+    license: str = Field(default="CC-BY-4.0", description="Data license")
+
+
+class StudyContext(BaseModel):
+    """Biological and experimental context (MIFA emphasis)"""
+
+    title: str = Field(description="Study/experiment title")
+    description: str = Field(description="Detailed study description")
+    keywords: List[str] = Field(default_factory=list, description="Study keywords/tags")
+    organism: Optional[str] = Field(None, description="Organism studied")
+    imaging_method: Optional[str] = Field(None, description="Microscopy technique used")
+
+
+class AIModelConfig(BaseModel):
+    """AI model configuration (bioimage.io compatible)"""
+
+    name: str = Field(description="Model name/identifier")
+    version: str = Field(default="latest", description="Model version")
+    model_type: str = Field(default="vit_b_lm", description="Model type/architecture")
+    framework: str = Field(default="pytorch", description="AI framework")
+
+
+class ProcessingConfig(BaseModel):
+    """Processing parameters"""
+
+    batch_size: int = Field(default=0, ge=0, description="Batch size (0 = all)")
+    use_patches: bool = Field(
+        default=False, description="Extract patches vs full images"
+    )
+    patch_size: List[int] = Field(
+        default=[512, 512], description="Patch dimensions [width, height]"
+    )
+    patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
+    three_d: bool = Field(default=False, description="3D processing mode")
+
+
+class QualityControl(BaseModel):
+    """Quality metrics and validation (MIFA requirement)"""
+
+    validation_strategy: Literal[
+        "random_split", "expert_review", "cross_validation"
+    ] = "random_split"
+    train_fraction: float = Field(
+        default=0.7, ge=0.1, le=0.9, description="Training data fraction"
+    )
+    train_n: int = Field(default=3, gt=0, description="Number of training images")
+    validation_fraction: float = Field(
+        default=0.3, ge=0.1, le=0.9, description="Validation data fraction"
+    )
+    validate_n: int = Field(default=3, gt=0, description="Number of validation images")
+    quality_threshold: Optional[float] = Field(
+        None, description="Minimum quality score"
+    )
+
+
+class OMEROConfig(BaseModel):
+    """OMERO connection and data selection configuration"""
+
+    container_type: str = Field(default="dataset", description="OMERO container type")
+    container_id: int = Field(default=0, description="OMERO container ID")
+    source_desc: str = Field(default="", description="Source description for tracking")
+
+
+class OutputConfig(BaseModel):
+    """Output and workflow configuration"""
+
+    output_directory: Path = Field(
+        default=Path("./annotations"), description="Output directory"
+    )
+    format: Literal["ome_tiff", "png", "numpy"] = Field(
+        default="ome_tiff", description="Output format"
+    )
+    compression: Optional[str] = Field(None, description="Compression method")
+    resume_from_checkpoint: bool = Field(
+        default=False, description="Resume interrupted workflow"
+    )
+
+
+class AnnotationConfig(BaseModel):
+    """Unified configuration compatible with MIFA and bioimage.io standards"""
+
+    # Schema identification
+    schema_version: str = Field(
+        default="1.0.0", description="Configuration schema version"
+    )
+
+    # Core identification (both schemas)
+    name: str = Field(description="Annotation workflow name")
+    version: str = Field(default="1.0.0", description="Configuration version")
+    authors: List[AuthorInfo] = Field(
+        default_factory=list, description="Workflow authors"
+    )
+    created: datetime = Field(
+        default_factory=datetime.now, description="Creation timestamp"
+    )
+
+    # Study context (MIFA emphasis)
+    study: StudyContext = Field(default_factory=StudyContext)
+    dataset: DatasetInfo = Field(default_factory=DatasetInfo)
+
+    # Annotation specifics (MIFA requirement)
+    annotation_methodology: AnnotationMethodology = Field(
+        default_factory=AnnotationMethodology
+    )
+    spatial_coverage: SpatialCoverage = Field(
+        default_factory=lambda: SpatialCoverage(
+            channels=[0], timepoints=[0], z_slices=[0]
+        )
+    )
+    quality_control: QualityControl = Field(default_factory=QualityControl)
+
+    # Technical configuration
+    ai_model: AIModelConfig = Field(default_factory=AIModelConfig)
+    processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)
+    omero: OMEROConfig = Field(default_factory=OMEROConfig)
+
+    # Workflow metadata (bioimage.io style)
+    documentation: Optional[HttpUrl] = Field(None, description="Documentation URL")
+    repository: Optional[HttpUrl] = Field(None, description="Code repository URL")
+    tags: List[str] = Field(default_factory=list, description="Classification tags")
+
+    class Config:
+        extra = "forbid"
+        json_encoders = {datetime: lambda dt: dt.isoformat(), Path: str}
+
+    def to_mifa_metadata(self) -> dict:
+        """Export MIFA-compatible metadata"""
+        return {
+            "annotation_type": self.annotation_methodology.annotation_type,
+            "annotation_method": self.annotation_methodology.annotation_method,
+            "annotation_criteria": self.annotation_methodology.annotation_criteria,
+            "spatial_coverage": self.spatial_coverage.dict(),
+            "study_context": self.study.dict(),
+            "quality_metrics": self.quality_control.dict(),
+        }
+
+    def to_bioimage_io_rdf(self) -> dict:
+        """Export bioimage.io RDF-compatible structure"""
+        return {
+            "format_version": "0.5.3",
+            "type": "dataset",
+            "name": self.name,
+            "description": self.study.description,
+            "authors": [author.dict() for author in self.authors],
+            "tags": self.tags,
+            "source": self.dataset.source_dataset_url,
+            "documentation": self.documentation,
+            "git_repo": self.repository,
+        }
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
-        return asdict(self)
+        return self.dict()
 
     def to_yaml(self) -> str:
         """Convert configuration to YAML string."""
         config_dict = self.to_dict()
-        # Convert patch_size tuple to list for YAML compatibility
-        if "patches" in config_dict and "patch_size" in config_dict["patches"]:
-            if isinstance(config_dict["patches"]["patch_size"], tuple):
-                config_dict["patches"]["patch_size"] = list(
-                    config_dict["patches"]["patch_size"]
-                )
         return yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "AnnotationConfig":
         """Create configuration from dictionary."""
-        config = cls()
-
-        # Update each section if present in the dictionary
-        if "batch_processing" in config_dict:
-            config.batch_processing = BatchProcessingConfig(
-                **config_dict["batch_processing"]
-            )
-
-        if "omero" in config_dict:
-            config.omero = OMEROConfig(**config_dict["omero"])
-
-        if "micro_sam" in config_dict:
-            config.micro_sam = MicroSAMConfig(**config_dict["micro_sam"])
-        elif "ai_model" in config_dict:  # Backward compatibility
-            # Map old ai_model config to new micro_sam config
-            old_config = config_dict["ai_model"]
-            micro_sam_config = {
-                "model_type": old_config.get("model_type", "vit_l"),
-                "timepoints": old_config.get("timepoints", [0]),
-                "timepoint_mode": old_config.get("timepoint_mode", "specific"),
-                "z_slices": old_config.get("z_slices", [0]),
-                "z_slice_mode": old_config.get("z_slice_mode", "specific"),
-                "three_d": old_config.get("three_d", False),
-            }
-            config.micro_sam = MicroSAMConfig(**micro_sam_config)
-        elif "image_processing" in config_dict:  # Legacy backward compatibility
-            # Map old image_processing config to new micro_sam config
-            old_config = config_dict["image_processing"]
-            micro_sam_config = {
-                "model_type": old_config.get("model_type", "vit_l"),
-                "timepoints": old_config.get("timepoints", [0]),
-                "timepoint_mode": old_config.get("timepoint_mode", "specific"),
-                "z_slices": old_config.get("z_slices", [0]),
-                "z_slice_mode": old_config.get("z_slice_mode", "specific"),
-                "three_d": old_config.get("three_d", False),
-            }
-            config.micro_sam = MicroSAMConfig(**micro_sam_config)
-
-        if "patches" in config_dict:
-            # Convert patch_size from list to tuple if needed
-            patch_data = config_dict["patches"].copy()
-            if "patch_size" in patch_data and isinstance(
-                patch_data["patch_size"], list
-            ):
-                patch_data["patch_size"] = tuple(patch_data["patch_size"])
-            config.patches = PatchConfig(**patch_data)
-
-        if "training" in config_dict:
-            config.training = TrainingConfig(**config_dict["training"])
-
-        if "workflow" in config_dict:
-            # Handle backward compatibility for local_output_dir
-            workflow_data = config_dict["workflow"].copy()
-            if "local_output_dir" in workflow_data:
-                # If local_output_dir exists, use it as output_folder if not already set
-                if "batch_processing" not in config_dict:
-                    config.batch_processing.output_folder = workflow_data[
-                        "local_output_dir"
-                    ]
-                # Remove local_output_dir from workflow data
-                del workflow_data["local_output_dir"]
-            config.workflow = WorkflowConfig(**workflow_data)
-
-        return config
+        return cls(**config_dict)
 
     @classmethod
     def from_yaml(cls, yaml_content: Union[str, Path]) -> "AnnotationConfig":
         """Create configuration from YAML string or file path."""
-
-        # Add custom constructor for tuples to SafeLoader
-        def tuple_constructor(loader, node):
-            return tuple(loader.construct_sequence(node))
-
-        yaml.SafeLoader.add_constructor(
-            "tag:yaml.org,2002:python/tuple", tuple_constructor
-        )
-
         if isinstance(yaml_content, (str, Path)) and Path(yaml_content).exists():
             # It's a file path
             with open(yaml_content, "r") as f:
@@ -199,209 +238,21 @@ class AnnotationConfig:
         with open(file_path, "w") as f:
             yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
 
-    def validate(self) -> None:
-        """Validate configuration parameters."""
-        errors = []
 
-        # Validate batch processing
-        if self.batch_processing.batch_size < 0:
-            errors.append(
-                "batch_size must be non-negative (0 means process all in one batch)"
-            )
-
-        # Validate OMERO config
-        valid_container_types = ["dataset", "plate", "project", "screen", "image"]
-        if self.omero.container_type not in valid_container_types:
-            errors.append(f"container_type must be one of {valid_container_types}")
-
-        if self.omero.container_id <= 0:
-            errors.append("container_id must be positive")
-
-        if self.omero.channel < 0:
-            errors.append("channel must be non-negative")
-
-        # Validate micro-SAM config
-        valid_models = ["vit_b", "vit_l", "vit_h", "vit_b_lm"]
-        if self.micro_sam.model_type not in valid_models:
-            errors.append(f"model_type must be one of {valid_models}")
-
-        valid_modes = ["all", "random", "specific"]
-        if self.micro_sam.timepoint_mode not in valid_modes:
-            errors.append(f"timepoint_mode must be one of {valid_modes}")
-
-        if self.micro_sam.z_slice_mode not in valid_modes:
-            errors.append(f"z_slice_mode must be one of {valid_modes}")
-
-        # Validate patch config
-        if self.patches.use_patches:
-            if len(self.patches.patch_size) != 2:
-                errors.append("patch_size must be a tuple of 2 values")
-
-            if any(s <= 0 for s in self.patches.patch_size):
-                errors.append("patch_size values must be positive")
-
-            if self.patches.patches_per_image <= 0:
-                errors.append("patches_per_image must be positive")
-
-        # Validate training config
-        if not self.training.segment_all:
-            if self.training.train_n <= 0:
-                errors.append("train_n must be positive when not segmenting all")
-
-            if self.training.validate_n <= 0:
-                errors.append("validate_n must be positive when not segmenting all")
-
-        if errors:
-            raise ValueError(
-                "Configuration validation failed:\n"
-                + "\n".join(f"- {error}" for error in errors)
-            )
-
-    def get_micro_sam_params(self) -> Dict[str, Any]:
-        """Get micro-SAM specific parameters."""
-        return {
-            "model_type": self.micro_sam.model_type,
-            "embedding_path": f"{self.batch_processing.output_folder}/embed",
-            "is_volumetric": self.micro_sam.three_d,
-        }
-
-    def get_omero_settings(self) -> Dict[str, Any]:
-        """Get OMERO-specific settings for user display."""
-        return {
-            "container_type": self.omero.container_type,
-            "container_id": self.omero.container_id,
-            "training_set_name": self.training.trainingset_name,
-            "source_description": self.omero.source_desc,
-            "channel": self.omero.channel,
-        }
-
-    def get_annotation_settings(self) -> Dict[str, Any]:
-        """Get annotation-specific settings for user display."""
-        return {
-            "segment_all": self.training.segment_all,
-            "training_images": self.training.train_n,
-            "validation_images": self.training.validate_n,
-            "channel": self.omero.channel,
-            "timepoint_mode": self.micro_sam.timepoint_mode,
-            "timepoints": self.micro_sam.timepoints,
-            "z_slice_mode": self.micro_sam.z_slice_mode,
-            "z_slices": self.micro_sam.z_slices,
-            "three_d": self.micro_sam.three_d,
-            "use_patches": self.patches.use_patches,
-            "patches_per_image": self.patches.patches_per_image,
-            "patch_size": self.patches.patch_size,
-            "random_patches": self.patches.random_patches,
-        }
-
-    def get_technical_settings(self) -> Dict[str, Any]:
-        """Get technical settings for user display."""
-        return {
-            "batch_size": self.batch_processing.batch_size,
-            "sam_model": self.micro_sam.model_type,
-            "output_folder": self.batch_processing.output_folder,
-            "resume_from_table": self.workflow.resume_from_table,
-            "read_only_mode": self.workflow.read_only_mode,
-        }
-
-    def update_from_widget_values(self, widget_values: Dict[str, Any]) -> None:
-        """Update configuration from widget values."""
-        # Update OMERO settings
-        if "container_type" in widget_values:
-            self.omero.container_type = widget_values["container_type"]
-        if "container_id" in widget_values:
-            self.omero.container_id = widget_values["container_id"]
-        if "channel" in widget_values:
-            self.omero.channel = widget_values["channel"]
-        if "source_desc" in widget_values:
-            self.omero.source_desc = widget_values["source_desc"]
-
-        # Update training settings
-        if "training_set_name" in widget_values:
-            self.training.trainingset_name = widget_values["training_set_name"]
-        if "segment_all" in widget_values:
-            self.training.segment_all = widget_values["segment_all"]
-        if "train_n" in widget_values:
-            self.training.train_n = widget_values["train_n"]
-        if "validate_n" in widget_values:
-            self.training.validate_n = widget_values["validate_n"]
-
-        # Update micro-SAM settings
-        if "model_type" in widget_values:
-            self.micro_sam.model_type = widget_values["model_type"]
-        if "timepoint_mode" in widget_values:
-            self.micro_sam.timepoint_mode = widget_values["timepoint_mode"]
-        if "timepoints" in widget_values:
-            self.micro_sam.timepoints = widget_values["timepoints"]
-        if "z_slice_mode" in widget_values:
-            self.micro_sam.z_slice_mode = widget_values["z_slice_mode"]
-        if "z_slices" in widget_values:
-            self.micro_sam.z_slices = widget_values["z_slices"]
-        if "three_d" in widget_values:
-            self.micro_sam.three_d = widget_values["three_d"]
-
-        # Update patch settings
-        if "use_patches" in widget_values:
-            self.patches.use_patches = widget_values["use_patches"]
-        if "patch_size" in widget_values:
-            self.patches.patch_size = widget_values["patch_size"]
-        if "patches_per_image" in widget_values:
-            self.patches.patches_per_image = widget_values["patches_per_image"]
-        if "random_patches" in widget_values:
-            self.patches.random_patches = widget_values["random_patches"]
-
-        # Update batch processing settings
-        if "batch_size" in widget_values:
-            self.batch_processing.batch_size = widget_values["batch_size"]
-        if "output_folder" in widget_values:
-            self.batch_processing.output_folder = widget_values["output_folder"]
-
-        # Update workflow settings
-        if "resume_from_table" in widget_values:
-            self.workflow.resume_from_table = widget_values["resume_from_table"]
-        if "read_only_mode" in widget_values:
-            self.workflow.read_only_mode = widget_values["read_only_mode"]
-
-    def get_workflow_summary(self) -> str:
-        """Get a human-readable summary of the current workflow configuration."""
-        summary = []
-
-        # OMERO connection info
-        summary.append(
-            f"OMERO: {self.omero.container_type} ID {self.omero.container_id}"
-        )
-        summary.append(f"Training Set: {self.training.trainingset_name}")
-
-        # Annotation scope
-        if self.training.segment_all:
-            summary.append("📊 Scope: All images")
+def parse_sequence(value: Union[str, List[int]]) -> List[int]:
+    """Parse a sequence specification into a list of integers."""
+    if isinstance(value, list):
+        return value
+    elif isinstance(value, str):
+        # Handle range notation like "0:100"
+        if ":" in value:
+            start, end = value.split(":")
+            return list(range(int(start), int(end)))
         else:
-            summary.append(
-                f"📊 Scope: {self.training.train_n} training, {self.training.validate_n} validation"
-            )
-
-        # Channel and dimensions
-        summary.append(f"📺 Channel: {self.omero.channel}")
-        if self.micro_sam.three_d:
-            summary.append("🧊 3D processing enabled")
-
-        # Patches
-        if self.patches.use_patches:
-            summary.append(
-                f"🧩 Patches: {self.patches.patches_per_image} per image ({self.patches.patch_size[0]}×{self.patches.patch_size[1]})"
-            )
-
-        # Technical details
-        summary.append(f"🔬 Model: {self.micro_sam.model_type}")
-        if self.batch_processing.batch_size > 0:
-            summary.append(f"⚙️ Batch size: {self.batch_processing.batch_size}")
-
-        # Workflow mode
-        if self.workflow.resume_from_table:
-            summary.append("🔄 Resuming from existing table")
-        else:
-            summary.append("✨ Creating new table")
-
-        return "\n".join(summary)
+            # Handle comma-separated values
+            return [int(x.strip()) for x in value.split(",")]
+    else:
+        return [value]
 
 
 def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationConfig:
@@ -450,40 +301,72 @@ def create_default_config() -> AnnotationConfig:
 
 def get_config_template() -> str:
     """Get a YAML template with comments for all configuration options."""
-    template = """# OMERO micro-SAM Configuration Template
+    template = """# OMERO micro-SAM Configuration Template v1.0.0
 
-batch_processing:
-  batch_size: 0                    # Number of images to process at once (0 = all in one batch)
-  output_folder: "./omero_annotations"  # Single output directory for all files
+schema_version: "1.0.0"
 
-omero:
-  container_type: "dataset"        # Type: dataset, plate, project, screen, image
-  container_id: 0                  # ID of the OMERO container
-  source_desc: ""                  # Description for tracking
-  channel: 0                       # Channel index to process
+name: "micro_sam_nuclei_segmentation"
+version: "1.0.0"
+authors: []
+created: "2025-01-14T10:30:00Z"
 
-micro_sam:
-  model_type: "vit_b_lm"          # Default model. Available: vit_b, vit_l, vit_h, vit_b_lm
-  timepoints: [0]                 # List of timepoint indices
-  timepoint_mode: "specific"      # Mode: all, random, specific
-  z_slices: [0]                   # List of z-slice indices
-  z_slice_mode: "specific"        # Mode: all, random, specific
-  three_d: false                  # Process as 3D volumes
+study:
+  title: "Automated nuclei segmentation in fluorescence microscopy"
+  description: "Large-scale annotation of cell nuclei using micro-SAM for training segmentation models"
+  keywords: ["nuclei", "segmentation", "fluorescence", "deep learning"]
+  organism: "Homo sapiens"
+  imaging_method: "fluorescence microscopy"
 
-patches:
-  use_patches: false              # Extract patches instead of full images
-  patch_size: [512, 512]          # Width and height of patches
-  patches_per_image: 1            # Number of non-overlapping patches per image
-  random_patches: true            # Random vs grid-based patch extraction
+dataset:
+  source_dataset_id: "S-BIAD123"
+  source_dataset_url: "https://www.ebi.ac.uk/bioimaging/studies/S-BIAD123"
+  source_description: "HeLa cell imaging dataset"
+  license: "CC-BY-4.0"
 
-training:
-  segment_all: true               # Process all images or subset
-  train_n: 3                      # Number of training images (if not segment_all)
-  validate_n: 3                   # Number of validation images (if not segment_all)
-  trainingset_name: "default_training_set"  # Required name for the training set
+annotation_methodology:
+  annotation_type: "segmentation_mask"
+  annotation_method: "automatic"
+  annotation_criteria: "Complete nuclei boundaries based on DAPI staining"
+  annotation_coverage: "representative"
 
-workflow:
-  resume_from_table: false        # Resume from existing tracking table
-  read_only_mode: false           # Save locally instead of uploading
+spatial_coverage:
+  channels: [0]
+  timepoints: [0]
+  timepoint_mode: "specific"
+  z_slices: [0]
+  z_slice_mode: "specific"
+  spatial_units: "pixels"
+
+quality_control:
+  validation_strategy: "random_split"
+  train_fraction: 0.7
+  train_n: 3
+  validation_fraction: 0.3
+  validate_n: 3
+
+ai_model:
+  name: "micro-sam"
+  model_type: "vit_b_lm"
+  framework: "pytorch"
+
+processing:
+  batch_size: 8
+  use_patches: true
+  patch_size: [512, 512]
+  patches_per_image: 4
+  three_d: false
+
+output:
+  output_directory: "./annotations"
+  format: "ome_tiff"
+  resume_from_checkpoint: false
+
+tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """
     return template
+    patch_size: tuple = (512, 512)
+    patches_per_image: int = 1
+    random_patches: bool = True
+
+
+
