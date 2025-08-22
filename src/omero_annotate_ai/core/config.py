@@ -86,6 +86,9 @@ class ProcessingConfig(BaseModel):
         default=[512, 512], description="Patch dimensions [width, height]"
     )
     patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
+    random_patches: bool = Field(
+        default=True, description="Use random patch extraction"
+    )
     three_d: bool = Field(default=False, description="3D processing mode")
 
 
@@ -103,10 +106,22 @@ class QualityControl(BaseModel):
         default=0.3, ge=0.1, le=0.9, description="Validation data fraction"
     )
     validate_n: int = Field(default=3, gt=0, description="Number of validation images")
+    segment_all: bool = Field(
+        default=False, description="Segment all objects vs sample"
+    ) 
     quality_threshold: Optional[float] = Field(
         None, description="Minimum quality score"
     )
 
+class WorkflowConfig(BaseModel):
+    """Workflow control and state management"""
+
+    resume_from_table: bool = Field(
+        default=False, description="Resume from existing annotation table"
+    )
+    read_only_mode: bool = Field(
+        default=False, description="Read-only mode for viewing results"
+    )
 
 class OMEROConfig(BaseModel):
     """OMERO connection and data selection configuration"""
@@ -150,12 +165,16 @@ class AnnotationConfig(BaseModel):
     )
 
     # Study context (MIFA emphasis)
-    study: StudyContext = Field(default_factory=StudyContext)
-    dataset: DatasetInfo = Field(default_factory=DatasetInfo)
+    study: StudyContext = Field(
+        default_factory=lambda: StudyContext(title="", description="")
+    )
+    dataset: DatasetInfo = Field(
+        default_factory=lambda: DatasetInfo(source_description="")
+    )
 
     # Annotation specifics (MIFA requirement)
     annotation_methodology: AnnotationMethodology = Field(
-        default_factory=AnnotationMethodology
+        default_factory=lambda: AnnotationMethodology(annotation_criteria="")
     )
     spatial_coverage: SpatialCoverage = Field(
         default_factory=lambda: SpatialCoverage(
@@ -165,8 +184,9 @@ class AnnotationConfig(BaseModel):
     quality_control: QualityControl = Field(default_factory=QualityControl)
 
     # Technical configuration
-    ai_model: AIModelConfig = Field(default_factory=AIModelConfig)
+    ai_model: AIModelConfig = Field(default_factory=lambda: AIModelConfig(name=""))
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)  # NEW
     output: OutputConfig = Field(default_factory=OutputConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
 
@@ -174,10 +194,6 @@ class AnnotationConfig(BaseModel):
     documentation: Optional[HttpUrl] = Field(None, description="Documentation URL")
     repository: Optional[HttpUrl] = Field(None, description="Code repository URL")
     tags: List[str] = Field(default_factory=list, description="Classification tags")
-
-    class Config:
-        extra = "forbid"
-        json_encoders = {datetime: lambda dt: dt.isoformat(), Path: str}
 
     def to_mifa_metadata(self) -> dict:
         """Export MIFA-compatible metadata"""
@@ -343,6 +359,11 @@ quality_control:
   train_n: 3
   validation_fraction: 0.3
   validate_n: 3
+  segment_all: false  # NEW
+
+workflow:  # NEW SECTION
+  resume_from_table: false
+  read_only_mode: false
 
 ai_model:
   name: "micro-sam"
@@ -354,6 +375,7 @@ processing:
   use_patches: true
   patch_size: [512, 512]
   patches_per_image: 4
+  random_patches: true  # NEW
   three_d: false
 
 output:
@@ -364,9 +386,6 @@ output:
 tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """
     return template
-    patch_size: tuple = (512, 512)
-    patches_per_image: int = 1
-    random_patches: bool = True
 
 
 
