@@ -37,7 +37,7 @@ dependencies = [
     "ipywidgets>=7.6.0",
     "opencv-python>=4.5.0",
     "keyring>=23.0.0",
-    "ezomero>=2.1.0,<3",
+    "ezomero>=2.1.0,<3", "ipykernel",
 ]
 
 [project.optional-dependencies]
@@ -115,6 +115,8 @@ jupyter = ">=1.1.1,<2"
 napari = ">=0.6.2,<0.7"
 zeroc-ice = ">=3.6.4,<3.7"
 kornia = "<0.7"
+ipykernel = ">=6.30.1,<7"
+pip = ">=25.2,<26"
 
 # Development feature
 [tool.pixi.feature.dev.dependencies]

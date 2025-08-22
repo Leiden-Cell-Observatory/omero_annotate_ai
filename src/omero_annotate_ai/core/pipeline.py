@@ -38,105 +38,129 @@ from ..processing.image_functions import generate_patch_coordinates
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
 
-    def _update_workflow_status_map(self, table_id: int) -> None:
-        """Update workflow status map annotation after batch completion."""
-        try:
-            from ..omero.omero_functions import update_workflow_status_map
-            update_workflow_status_map(
-                conn=self.conn,
-                container_type=self.config.omero.container_type,
-                container_id=self.config.omero.container_id,
-                table_id=table_id,
-            )
-        except ImportError:
-            print("Could not update workflow status - OMERO functions not available")
-        except Exception as e:
-            print(f"Could not update workflow status: {e}")
+    def __init__(self, config: AnnotationConfig, conn=None):
+        """Initialize the pipeline with configuration and OMERO connection.
 
-    def _get_workflow_status_map(self) -> Optional[Dict[str, str]]:
-        """Get current workflow status map annotation."""
-        try:
-            from ..omero.omero_functions import get_workflow_status_map
-            return get_workflow_status_map(
-                conn=self.conn,
-                container_type=self.config.omero.container_type,
-                container_id=self.config.omero.container_id,
-            )
-        except ImportError:
-            return None
-        except Exception as e:
-            print(f"Could not get workflow status: {e}")
-            return None
+        Args:
+            config: AnnotationConfig object containing all parameters
+            conn: OMERO connection object (BlitzGateway)
+        """
+        self.config = config
+        self.conn = conn
+        self.table_id = None  # Track current table ID
+        self._validate_setup()
 
-    def get_images_from_container(self) -> List[Any]:
-        """Get images from the configured OMERO container."""
-        container_type = self.config.omero.container_type
-        container_id = self.config.omero.container_id
-        print(f"Loading images from {container_type} {container_id}")
-        if container_type == "dataset":
-            image_ids = list(ezomero.get_image_ids(self.conn, dataset=container_id))
-        elif container_type == "project":
-            dataset_ids = ezomero.get_dataset_ids(self.conn, project=container_id)
-            image_ids = []
-            for ds_id in dataset_ids:
-                image_ids.extend(ezomero.get_image_ids(self.conn, dataset=ds_id))
-        elif container_type == "plate":
-            image_ids = list(ezomero.get_image_ids(self.conn, plate=container_id))
-        elif container_type == "screen":
-            plate_ids = ezomero.get_plate_ids(self.conn, screen=container_id)
-            image_ids = []
-            for plate_id in plate_ids:
-                image_ids.extend(ezomero.get_image_ids(self.conn, plate=plate_id))
-        elif container_type == "image":
-            return [self.conn.getObject("Image", container_id)]
-        else:
-            raise ValueError(f"Unsupported container type: {container_type}")
-        images = [self.conn.getObject("Image", img_id) for img_id in image_ids]
-        images = [img for img in images if img is not None]
-        print(f"Found {len(images)} images")
-        return images
+    def set_table_id(self, table_id: int) -> None:
+        """Update the current table ID."""
+        self.table_id = table_id
 
-    def _save_local_progress(
-        self, completed_row_indices: List[int], metadata: List[Tuple]
-    ) -> None:
-        """Save progress locally in read-only mode by creating/updating a CSV table."""
+    def get_table_id(self) -> Optional[int]:
+        """Get the current table ID."""
+        return self.table_id
+
+    def _validate_setup(self):
+        """Validate the pipeline setup."""
+        if self.conn is None:
+            raise ValueError("OMERO connection is required")
+
+        # Validate configuration
+        self.config.validate()
+
+    def _setup_directories(self):
+        """Create necessary output directories."""
         output_path = Path(self.config.batch_processing.output_folder)
-        table_file = output_path / "tracking_table.csv"
-        if table_file.exists():
-            df = pd.read_csv(table_file)
-        else:
-            rows = []
-            for sequence_val, meta, row_idx in metadata:
-                image_id = meta.get("image_id", -1)
-                rows.append(
-                    {
-                        "row_index": row_idx,
-                        "image_id": image_id,
-                        "sequence_val": sequence_val,
-                        "timepoint": meta.get("timepoint", -1),
-                        "z_slice": meta.get("z_slice", -1),
-                        "channel": meta.get("channel", -1),
-                        "model_type": meta.get("model_type", "vit_b_lm"),
-                        "processed": False,
-                        "completed_timestamp": "",
-                    }
-                )
-            df = pd.DataFrame(rows)
-        timestamp = datetime.now().isoformat()
-        for row_idx in completed_row_indices:
-            mask = df["row_index"] == row_idx
-            df.loc[mask, "processed"] = True
-            df.loc[mask, "completed_timestamp"] = timestamp
-        df.to_csv(table_file, index=False)
-        completed_count = df["processed"].sum()
-        total_count = len(df)
-        print(f"Local progress saved: {completed_count}/{total_count} units completed")
-        print(f" Progress file: {table_file}")
 
-    def run_full_workflow(self) -> Tuple[int, List[Any]]:
-        """Run the complete workflow: create table and process annotations."""
-        table_id, images_list = self.create_annotation_table()
-        return self.run_annotation(table_id, images_list)
+        # Create main directories - everything under the single output folder
+        dirs = [
+            output_path,
+            output_path / "embed",
+            output_path / "zarr",
+            output_path / "annotations",  # Final annotations go here
+        ]
+
+        for dir_path in dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
+
+        return output_path
+
+    def _cleanup_embeddings(self, output_path: Path):
+        """Clean up any existing embeddings from interrupted runs."""
+        embed_path = output_path / "embed"
+        if embed_path.exists():
+            for file in embed_path.glob("*"):
+                if file.is_file():
+                    file.unlink()
+                elif file.is_dir():
+                    shutil.rmtree(file)
+
+    def _get_table_title(self) -> str:
+        """Generate table title based on configuration."""
+        # Use the existing trainingset_name from config
+        if self.config.training.trainingset_name:
+            return f"micro_sam_training_{self.config.training.trainingset_name}"
+        else:
+            # Fallback to container-based naming
+            return f"micro_sam_training_{self.config.omero.container_type}_{self.config.omero.container_id}"
+
+    def _initialize_tracking_table(self, images_list: List[Any]) -> int:
+        """Initialize or resume tracking table for the annotation process."""
+        
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # If table_id is already set, validate and use it
+        if self.table_id is not None:
+            logger.info(f"Using existing table ID: {self.table_id}")
+            # Validate table exists
+            try:
+                table_obj = self.conn.getObject("FileAnnotation", self.table_id)
+                if table_obj is None:
+                    raise ValueError(f"Table with ID {self.table_id} not found")
+                return self.table_id
+            except Exception as e:
+                raise ValueError(f"Cannot access table {self.table_id}: {e}")
+
+        # Generate table name
+        table_title = self._get_table_title()
+
+        # Check if need to resume from existing table
+        if self.config.workflow.resume_from_table:
+            print(f"Looking for existing table: {table_title}")
+            existing_table = get_table_by_name(self.conn, table_title)
+            if existing_table:
+                table_id = existing_table.getId()
+
+                # Check workflow status before resuming
+                status_map = self._get_workflow_status_map()
+                if status_map:
+                    status = status_map.get("workflow_status", "unknown")
+                    completed = status_map.get("completed_units", "0")
+                    total = status_map.get("total_units", "0")
+
+                    if status == "complete":
+                        print(f"Workflow already complete: {completed}/{total} units processed")
+                        print(f"Table: {table_title} (ID: {table_id})")
+                        self.table_id = table_id
+                        return table_id
+                    elif status == "incomplete":
+                        print(f"Resuming incomplete workflow: {completed}/{total} units completed")
+                        print(f"Table: {table_title} (ID: {table_id})")
+                        self.table_id = table_id
+                        return table_id
+                    else:
+                        print(f"Resuming from existing table: {table_title}")
+                        self.table_id = table_id
+                        return table_id
+                else:
+                    print(f"Resuming from existing table: {table_title}")
+                    self.table_id = table_id
+                    return table_id
+
+        # Create new table
+        logger.info(f"Creating new tracking table: {table_title}")
+
+        # Store ROI namespace for consistent naming
+        roi_namespace = create_roi_namespace_for_table(table_title)
         logger.info(f"ROI namespace: {roi_namespace}")
 
         # Prepare processing units for table initialization
@@ -674,7 +698,7 @@ class AnnotationPipeline:
                 f"Annotation processing completed successfully! Processed {processed_count} units"
             )
         else:
-            print(f"Annotation processing failed - no units were processed")
+            print("Annotation processing failed - no units were processed")
 
         return table_id, images_list or []
 
@@ -714,9 +738,7 @@ class AnnotationPipeline:
         """Get images from the configured OMERO container."""
         container_type = self.config.omero.container_type
         container_id = self.config.omero.container_id
-
         print(f"Loading images from {container_type} {container_id}")
-
         if container_type == "dataset":
             image_ids = list(ezomero.get_image_ids(self.conn, dataset=container_id))
         elif container_type == "project":
@@ -735,31 +757,20 @@ class AnnotationPipeline:
             return [self.conn.getObject("Image", container_id)]
         else:
             raise ValueError(f"Unsupported container type: {container_type}")
-
-        # Convert IDs to image objects
         images = [self.conn.getObject("Image", img_id) for img_id in image_ids]
-        images = [img for img in images if img is not None] # Filter out None values
-
+        images = [img for img in images if img is not None]
         print(f"Found {len(images)} images")
         return images
 
     def _save_local_progress(
         self, completed_row_indices: List[int], metadata: List[Tuple]
     ) -> None:
-        """Save progress locally in read-only mode by creating/updating a CSV table.
-
-        Args:
-            completed_row_indices: List of completed row indices
-            metadata: List of metadata tuples (sequence_val, meta_dict, row_idx)
-        """
+        """Save progress locally in read-only mode by creating/updating a CSV table."""
         output_path = Path(self.config.batch_processing.output_folder)
         table_file = output_path / "tracking_table.csv"
-
-        # Create table if it doesn't exist, or load existing
         if table_file.exists():
             df = pd.read_csv(table_file)
         else:
-            # Create new DataFrame with all metadata
             rows = []
             for sequence_val, meta, row_idx in metadata:
                 image_id = meta.get("image_id", -1)
@@ -777,29 +788,21 @@ class AnnotationPipeline:
                     }
                 )
             df = pd.DataFrame(rows)
-
-        # Mark completed rows
         timestamp = datetime.now().isoformat()
         for row_idx in completed_row_indices:
             mask = df["row_index"] == row_idx
             df.loc[mask, "processed"] = True
             df.loc[mask, "completed_timestamp"] = timestamp
-
-        # Save updated table
         df.to_csv(table_file, index=False)
         completed_count = df["processed"].sum()
         total_count = len(df)
-
-        print(
-            f"Local progress saved: {completed_count}/{total_count} units completed"
-        )
+        print(f"Local progress saved: {completed_count}/{total_count} units completed")
         print(f" Progress file: {table_file}")
 
     def run_full_workflow(self) -> Tuple[int, List[Any]]:
         """Run the complete workflow: create table and process annotations."""
         table_id, images_list = self.create_annotation_table()
         return self.run_annotation(table_id, images_list)
-
 
 def create_pipeline(
     config: AnnotationConfig, conn=None
