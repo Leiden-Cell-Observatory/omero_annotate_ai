@@ -4,9 +4,9 @@ from .config import AnnotationConfig, create_default_config, load_config
 from .pipeline import AnnotationPipeline, create_pipeline
 
 __all__ = [
- "AnnotationConfig",
- "load_config",
- "create_default_config",
- "AnnotationPipeline",
- "create_pipeline",
+    "AnnotationConfig",
+    "load_config",
+    "create_default_config",
+    "AnnotationPipeline",
+    "create_pipeline",
 ]

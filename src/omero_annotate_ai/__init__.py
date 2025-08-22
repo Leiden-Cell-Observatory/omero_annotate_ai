@@ -13,12 +13,12 @@ __author__ = "Maarten Paul"
 __email__ = "m.w.paul@lumc.nl"
 
 __all__ = [
- "AnnotationConfig",
- "load_config",
- "create_default_config",
- "create_pipeline",
- "AnnotationPipeline",
- "create_omero_connection_widget",
- "create_workflow_widget",
- "omero_utils",
+    "AnnotationConfig",
+    "load_config",
+    "create_default_config",
+    "create_pipeline",
+    "AnnotationPipeline",
+    "create_omero_connection_widget",
+    "create_workflow_widget",
+    "omero_utils",
 ]
