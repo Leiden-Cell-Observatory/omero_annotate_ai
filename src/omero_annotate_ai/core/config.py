@@ -13,8 +13,8 @@ from typing_extensions import Literal
 class AuthorInfo(BaseModel):
     """Author information compatible with bioimage.io"""
 
-    name: str = Field(description="Full name of the author")
-    affiliation: Optional[str] = Field(None, description="Institution affiliation")
+    name: Optional[str] = Field(default=None, description="Full name of the author")
+    affiliation: Optional[str] = Field(default=None, description="Institution affiliation")
     email: Optional[str] = Field(None, description="Contact email")
     orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
 
@@ -34,23 +34,34 @@ class SpatialCoverage(BaseModel):
     """Spatial scope of annotations (MIFA requirement)"""
 
     channels: List[int] = Field(description="Channel indices processed")
-    timepoints: Union[str, List[int]] = Field(description="Timepoints as range or list")
+    timepoints: List[int] = Field(description="Timepoints as list")
     timepoint_mode: Literal["all", "random", "specific"] = "specific"
-    z_slices: Union[str, List[int]] = Field(description="Z-slices as range or list")
+    z_slices: List[int] = Field(description="Z-slices as list")
     z_slice_mode: Literal["all", "random", "specific"] = "specific"
     spatial_units: str = Field(
         default="pixels", description="Spatial measurement units"
     )
+    three_d: bool = Field(default=False, description="3D processing mode")
+    
+    @property
+    def primary_channel(self) -> int:
+        """Get the primary/first channel"""
+        return self.channels[0]
+    
+    @property
+    def is_single_channel(self) -> bool:
+        """Check if only one channel is configured"""
+        return len(self.channels) == 1
 
 
 class DatasetInfo(BaseModel):
     """Dataset identification and linking (both schemas)"""
 
     source_dataset_id: Optional[str] = Field(
-        None, description="BioImage Archive accession or DOI"
+        default=None, description="BioImage Archive accession or DOI"
     )
     source_dataset_url: Optional[HttpUrl] = Field(
-        None, description="URL to source dataset"
+        default=None, description="URL to source dataset"
     )
     source_description: str = Field(description="Human-readable source description")
     license: str = Field(default="CC-BY-4.0", description="Data license")
@@ -62,8 +73,8 @@ class StudyContext(BaseModel):
     title: str = Field(description="Study/experiment title")
     description: str = Field(description="Detailed study description")
     keywords: List[str] = Field(default_factory=list, description="Study keywords/tags")
-    organism: Optional[str] = Field(None, description="Organism studied")
-    imaging_method: Optional[str] = Field(None, description="Microscopy technique used")
+    organism: Optional[str] = Field(default=None, description="Organism studied")
+    imaging_method: Optional[str] = Field(default=None, description="Microscopy technique used")
 
 
 class AIModelConfig(BaseModel):
@@ -89,10 +100,9 @@ class ProcessingConfig(BaseModel):
     random_patches: bool = Field(
         default=True, description="Use random patch extraction"
     )
-    three_d: bool = Field(default=False, description="3D processing mode")
 
 
-class QualityControl(BaseModel):
+class TrainingConfig(BaseModel):
     """Quality metrics and validation (MIFA requirement)"""
 
     validation_strategy: Literal[
@@ -110,7 +120,7 @@ class QualityControl(BaseModel):
         default=False, description="Segment all objects vs sample"
     ) 
     quality_threshold: Optional[float] = Field(
-        None, description="Minimum quality score"
+        default=None, description="Minimum quality score"
     )
 
 class WorkflowConfig(BaseModel):
@@ -140,7 +150,7 @@ class OutputConfig(BaseModel):
     format: Literal["ome_tiff", "png", "numpy"] = Field(
         default="ome_tiff", description="Output format"
     )
-    compression: Optional[str] = Field(None, description="Compression method")
+    compression: Optional[str] = Field(default=None, description="Compression method")
     resume_from_checkpoint: bool = Field(
         default=False, description="Resume interrupted workflow"
     )
@@ -181,18 +191,19 @@ class AnnotationConfig(BaseModel):
             channels=[0], timepoints=[0], z_slices=[0]
         )
     )
-    quality_control: QualityControl = Field(default_factory=QualityControl)
+    training: TrainingConfig = Field(default_factory=lambda: TrainingConfig())
 
     # Technical configuration
     ai_model: AIModelConfig = Field(default_factory=lambda: AIModelConfig(name=""))
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
-    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)  # NEW
-    output: OutputConfig = Field(default_factory=OutputConfig)
-    omero: OMEROConfig = Field(default_factory=OMEROConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    output: OutputConfig = Field(default_factory=lambda: OutputConfig())  
+    omero: OMEROConfig = Field(default_factory=lambda: OMEROConfig())
+
 
     # Workflow metadata (bioimage.io style)
-    documentation: Optional[HttpUrl] = Field(None, description="Documentation URL")
-    repository: Optional[HttpUrl] = Field(None, description="Code repository URL")
+    documentation: Optional[HttpUrl] = Field(default=None, description="Documentation URL")
+    repository: Optional[HttpUrl] = Field(default=None, description="Code repository URL")
     tags: List[str] = Field(default_factory=list, description="Classification tags")
 
     def to_mifa_metadata(self) -> dict:
@@ -201,9 +212,9 @@ class AnnotationConfig(BaseModel):
             "annotation_type": self.annotation_methodology.annotation_type,
             "annotation_method": self.annotation_methodology.annotation_method,
             "annotation_criteria": self.annotation_methodology.annotation_criteria,
-            "spatial_coverage": self.spatial_coverage.dict(),
-            "study_context": self.study.dict(),
-            "quality_metrics": self.quality_control.dict(),
+            "spatial_coverage": self.spatial_coverage.model_dump(),
+            "study_context": self.study.model_dump(),
+            "quality_metrics": self.training.model_dump(),
         }
 
     def to_bioimage_io_rdf(self) -> dict:
@@ -312,7 +323,7 @@ def load_config_from_yaml(yaml_path: str) -> AnnotationConfig:
 
 def create_default_config() -> AnnotationConfig:
     """Create a default configuration."""
-    return AnnotationConfig()
+    return AnnotationConfig(name="default_annotation_workflow")
 
 
 def get_config_template() -> str:
@@ -352,8 +363,9 @@ spatial_coverage:
   z_slices: [0]
   z_slice_mode: "specific"
   spatial_units: "pixels"
-
-quality_control:
+  three_d: false
+  
+training:
   validation_strategy: "random_split"
   train_fraction: 0.7
   train_n: 3
@@ -376,7 +388,7 @@ processing:
   patch_size: [512, 512]
   patches_per_image: 4
   random_patches: true  # NEW
-  three_d: false
+  
 
 output:
   output_directory: "./annotations"

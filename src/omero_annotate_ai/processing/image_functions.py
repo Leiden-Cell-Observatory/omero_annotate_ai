@@ -11,7 +11,7 @@ import numpy as np
 
 def generate_patch_coordinates(
     image_shape: Tuple[int, int],
-    patch_size: Tuple[int, int],
+    patch_size: List[int],
     n_patches: int,
     random_patch: bool = True,
 ) -> List[Tuple[int, int]]:

@@ -835,7 +835,7 @@ class WorkflowWidget:
         try:
             container_id = self.container_widgets["container"].value
             container_type = self.container_widgets["type"].value
-            base_name = self.new_table_name.value.strip() or None
+            base_name = self.new_table_name.value.strip() or "micro_sam_annotation"
 
             unique_name = generate_unique_table_name(
                 self.connection, container_type, container_id, base_name
@@ -885,12 +885,17 @@ class WorkflowWidget:
 
                 # Get container name for description
                 try:
-                    container_obj = self.connection.getObject(
-                        container_type.capitalize(), container_id
-                    )
-                    if container_obj:
-                        container_name = container_obj.getName()
-                        self.config.omero.source_desc = f"Workflow: {container_type} {container_name} (ID: {container_id})"
+                    if self.connection is not None:
+                        container_obj = self.connection.getObject(
+                            container_type.capitalize(), container_id
+                        )
+                        if container_obj:
+                            container_name = container_obj.getName()
+                            self.config.omero.source_desc = f"Workflow: {container_type} {container_name} (ID: {container_id})"
+                        else:
+                            self.config.omero.source_desc = f"Workflow: {container_type} (ID: {container_id})"
+                    else:
+                        self.config.omero.source_desc = f"Workflow: {container_type} (ID: {container_id})"
                 except:
                     self.config.omero.source_desc = (
                         f"Workflow: {container_type} (ID: {container_id})"

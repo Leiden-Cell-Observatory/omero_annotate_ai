@@ -15648,7 +15648,7 @@ packages:
 - pypi: .
   name: omero-annotate-ai
   version: 0.1.0
-  sha256: 9b3a8149fc5753394e2e1337660f24640024e130bb19332c00588ddda85ee2c7
+  sha256: f38c7317959cf3db7d8887ae7b393b18029e6d71ea88aa14e3706b878938135d
   requires_dist:
   - numpy>=1.21.0
   - pandas>=1.3.0
@@ -15656,6 +15656,8 @@ packages:
   - zarr>=2.10.0
   - dask>=2021.6.0
   - pyyaml>=6.0
+  - pydantic>=2.0.0
+  - typing-extensions>=4.0.0
   - ipywidgets>=7.6.0
   - opencv-python>=4.5.0
   - keyring>=23.0.0

@@ -34,10 +34,13 @@ dependencies = [
     "zarr>=2.10.0",
     "dask>=2021.6.0",
     "pyyaml>=6.0",
+    "pydantic>=2.0.0",
+    "typing-extensions>=4.0.0",
     "ipywidgets>=7.6.0",
     "opencv-python>=4.5.0",
     "keyring>=23.0.0",
-    "ezomero>=2.1.0,<3", "ipykernel",
+    "ezomero>=2.1.0,<3", 
+    "ipykernel",
 ]
 
 [project.optional-dependencies]
