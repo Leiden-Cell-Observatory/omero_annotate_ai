@@ -531,11 +531,11 @@ class AnnotationPipeline:
                     table_id = update_tracking_table_rows(
                         conn=self.conn,
                         table_id=table_id,
-                        row_indices=[row_idx], # Update one row at a time
+                        row_indices=[row_idx],  # Update one row at a time
                         status="completed",
                         label_id=label_id,
                         roi_id=roi_id,
-                        annotation_type=self.config.training.annotation_type,
+                        annotation_type=self.config.annotation_methodology.annotation_type,
                         container_type=self.config.omero.container_type,
                         container_id=self.config.omero.container_id,
                     )
@@ -582,7 +582,7 @@ class AnnotationPipeline:
                 )
 
         print(
-            f"Creating table for {len(images_list)} images with model: {self.config.micro_sam.model_type}"
+            f"Creating table for {len(images_list)} images with model: {self.config.ai_model.model_type}"
         )
 
         # Setup directories
