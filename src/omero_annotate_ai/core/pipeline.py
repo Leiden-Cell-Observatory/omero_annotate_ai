@@ -71,7 +71,6 @@ class AnnotationPipeline:
         dirs = [
             output_path,
             output_path / "embed",
-            output_path / "zarr",
             output_path / "annotations",  # Final annotations go here
         ]
 
@@ -193,9 +192,10 @@ class AnnotationPipeline:
         })
 
         try:
+            container_type_str = str(self.config.omero.container_type).capitalize()
             config_ann_id = ezomero.post_map_annotation(
                 self.conn,
-                object_type=self.config.omero.container_type.capitalize(),
+                object_type=container_type_str,
                 object_id=self.config.omero.container_id,
                 kv_dict=flat_config,
                 ns="openmicroscopy.org/omero/annotation",
@@ -528,7 +528,7 @@ class AnnotationPipeline:
                     label_id, roi_id = (
                         annotation_ids[i] if i < len(annotation_ids) else (None, None)
                     )
-                    table_id = update_tracking_table_rows(
+                    updated_table_id = update_tracking_table_rows(
                         conn=self.conn,
                         table_id=table_id,
                         row_indices=[row_idx],  # Update one row at a time
@@ -539,6 +539,8 @@ class AnnotationPipeline:
                         container_type=self.config.omero.container_type,
                         container_id=self.config.omero.container_id,
                     )
+                    if updated_table_id is not None:
+                        table_id = updated_table_id
             else:
                 # In read-only mode, save progress locally
                 self._save_local_progress(completed_row_indices, metadata)

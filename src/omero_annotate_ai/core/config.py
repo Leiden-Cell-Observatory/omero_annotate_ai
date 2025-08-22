@@ -15,6 +15,8 @@ class AuthorInfo(BaseModel):
 
     name: Optional[str] = Field(default=None, description="Full name of the author")
     affiliation: Optional[str] = Field(default=None, description="Institution affiliation")
+    name: Optional[str] = Field(default=None, description="Full name of the author")
+    affiliation: Optional[str] = Field(default=None, description="Institution affiliation")
     email: Optional[str] = Field(None, description="Contact email")
     orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
 
@@ -155,6 +157,15 @@ class OutputConfig(BaseModel):
         default=False, description="Resume interrupted workflow"
     )
 
+    class Config:
+        json_encoders = {Path: str}
+
+    def model_dump(self, **kwargs):
+        """Override model_dump method to convert Path to string"""
+        data = super().model_dump(**kwargs)
+        if isinstance(data.get("output_directory"), Path):
+            data["output_directory"] = str(data["output_directory"])
+        return data
 
 class AnnotationConfig(BaseModel):
     """Unified configuration compatible with MIFA and bioimage.io standards"""
@@ -200,11 +211,21 @@ class AnnotationConfig(BaseModel):
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())  
     omero: OMEROConfig = Field(default_factory=lambda: OMEROConfig())
 
-
     # Workflow metadata (bioimage.io style)
     documentation: Optional[HttpUrl] = Field(default=None, description="Documentation URL")
     repository: Optional[HttpUrl] = Field(default=None, description="Code repository URL")
     tags: List[str] = Field(default_factory=list, description="Classification tags")
+
+    def model_dump(self, **kwargs):
+        """Override model_dump to handle Path serialization"""
+        data = super().model_dump(**kwargs)
+        
+        # Convert Path objects to strings
+        if 'output' in data and 'output_directory' in data['output']:
+            if isinstance(data['output']['output_directory'], Path):
+                data['output']['output_directory'] = str(data['output']['output_directory'])
+        
+        return data
 
     def to_mifa_metadata(self) -> dict:
         """Export MIFA-compatible metadata"""
@@ -224,7 +245,7 @@ class AnnotationConfig(BaseModel):
             "type": "dataset",
             "name": self.name,
             "description": self.study.description,
-            "authors": [author.dict() for author in self.authors],
+            "authors": [author.model_dump() for author in self.authors],
             "tags": self.tags,
             "source": self.dataset.source_dataset_url,
             "documentation": self.documentation,
@@ -233,37 +254,32 @@ class AnnotationConfig(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
-        return self.dict()
+        return self.model_dump()
 
     def to_yaml(self) -> str:
         """Convert configuration to YAML string."""
-        config_dict = self.to_dict()
+        config_dict = self.model_dump()
+        
+        # Custom YAML representer for Path objects (fallback)
+        def path_representer(dumper, data):
+            return dumper.represent_scalar('tag:yaml.org,2002:str', str(data))
+        
+        yaml.add_representer(Path, path_representer)
+        
         return yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
-
-    @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "AnnotationConfig":
-        """Create configuration from dictionary."""
-        return cls(**config_dict)
-
-    @classmethod
-    def from_yaml(cls, yaml_content: Union[str, Path]) -> "AnnotationConfig":
-        """Create configuration from YAML string or file path."""
-        if isinstance(yaml_content, (str, Path)) and Path(yaml_content).exists():
-            # It's a file path
-            with open(yaml_content, "r") as f:
-                config_dict = yaml.safe_load(f)
-        else:
-            # It's a YAML string
-            if isinstance(yaml_content, Path):
-                yaml_content = yaml_content.read_text()
-            config_dict = yaml.safe_load(yaml_content)
-
-        return cls.from_dict(config_dict)
 
     def save_yaml(self, file_path: Union[str, Path]) -> None:
         """Save configuration to YAML file."""
+        config_dict = self.model_dump()
+        
+        # Custom YAML representer for Path objects (fallback)
+        def path_representer(dumper, data):
+            return dumper.represent_scalar('tag:yaml.org,2002:str', str(data))
+        
+        yaml.add_representer(Path, path_representer)
+        
         with open(file_path, "w") as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
 
 def parse_sequence(value: Union[str, List[int]]) -> List[int]:
