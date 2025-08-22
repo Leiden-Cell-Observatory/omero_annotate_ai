@@ -4,6 +4,7 @@ from .core.config import AnnotationConfig, create_default_config, load_config
 from .core.pipeline import AnnotationPipeline, create_pipeline
 from .widgets.omero_connection_widget import create_omero_connection_widget
 from .widgets.workflow_widget import create_workflow_widget
+from .widgets.training_data_widget import create_training_data_widget
 
 # OMERO utilities
 from .omero import omero_utils
@@ -20,5 +21,6 @@ __all__ = [
     "AnnotationPipeline",
     "create_omero_connection_widget",
     "create_workflow_widget",
+    "create_training_data_widget",
     "omero_utils",
 ]
