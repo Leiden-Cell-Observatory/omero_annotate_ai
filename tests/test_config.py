@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from dataclasses import asdict
 
-from omero_annotate_ai.core.config import (
+from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     BatchProcessingConfig,
     OMEROConfig,

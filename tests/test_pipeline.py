@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch, MagicMock
 import tempfile
 from pathlib import Path
 
-from omero_annotate_ai.core.pipeline import AnnotationPipeline
-from omero_annotate_ai.core.config import create_default_config
+from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+from omero_annotate_ai.core.annotation_config import create_default_config
 
 
 @pytest.mark.unit

@@ -349,7 +349,7 @@ class AnnotationPipeline:
             images = []
             metadata = []
 
-            for image_obj, sequence_val, meta, row_idx in batch_data:
+            for image_obj, sequence_val, meta, row_idx in batch_data    :
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
@@ -363,10 +363,11 @@ class AnnotationPipeline:
             embedding_path = output_path / "embed"
             annotations_path = output_path / "annotations"
             annotations_path.mkdir(exist_ok=True)
-
+            print("DEBUG: Ready to run micro_sam annotations")
             # Run micro-SAM annotation
             model_type = self.config.ai_model.model_type
 
+    
             # Run image series annotator with explicit napari.run() call
             viewer = image_series_annotator(
                 images=images,
@@ -520,27 +521,27 @@ class AnnotationPipeline:
                 # Add to list of completed rows
                 completed_row_indices.append(row_idx)
 
-        # Update tracking table with annotation IDs for each completed row
+        # Update tracking table with annotation IDs for all completed rows in batch
         if completed_row_indices:
             if not self.config.workflow.read_only_mode:
-                # Update rows individually since each has different annotation IDs
-                for i, row_idx in enumerate(completed_row_indices):
-                    label_id, roi_id = (
-                        annotation_ids[i] if i < len(annotation_ids) else (None, None)
-                    )
-                    updated_table_id = update_tracking_table_rows(
-                        conn=self.conn,
-                        table_id=table_id,
-                        row_indices=[row_idx],  # Update one row at a time
-                        status="completed",
-                        label_id=label_id,
-                        roi_id=roi_id,
-                        annotation_type=self.config.annotation_methodology.annotation_type,
-                        container_type=self.config.omero.container_type,
-                        container_id=self.config.omero.container_id,
-                    )
-                    if updated_table_id is not None:
-                        table_id = updated_table_id
+                # Extract label and ROI IDs for batch update
+                label_ids = [aid[0] for aid in annotation_ids] if annotation_ids else None
+                roi_ids = [aid[1] for aid in annotation_ids] if annotation_ids else None
+                
+                # Update all rows in a single operation
+                updated_table_id = update_tracking_table_rows(
+                    conn=self.conn,
+                    table_id=table_id,
+                    row_indices=completed_row_indices,  # All rows at once
+                    status="completed",
+                    label_ids=label_ids,  # List of label IDs
+                    roi_ids=roi_ids,      # List of ROI IDs
+                    annotation_type=self.config.annotation_methodology.annotation_type,
+                    container_type=self.config.omero.container_type,
+                    container_id=self.config.omero.container_id,
+                )
+                if updated_table_id is not None:
+                    table_id = updated_table_id
             else:
                 # In read-only mode, save progress locally
                 self._save_local_progress(completed_row_indices, metadata)

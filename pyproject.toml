@@ -11,19 +11,27 @@ license = {file = "LICENSE"}
 authors = [
     {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
 ]
+maintainers = [
+    {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research", 
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Environment :: Console",
+    "Environment :: Other Environment",
 ]
 keywords = ["omero", "microscopy", "segmentation", "ai", "annotation", "sam", "micro-sam"]
 requires-python = ">=3.8"
@@ -82,13 +90,14 @@ all = [
 Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
 Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
 Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
+Documentation = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai#readme"
+Changelog = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["omero_annotate_ai*"]
 
-[tool.setuptools.package-data]
-omero_annotate_ai = ["config/*.yaml"]
+
 
 [tool.black]
 line-length = 88

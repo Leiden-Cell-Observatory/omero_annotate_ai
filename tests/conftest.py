@@ -17,7 +17,7 @@ except ImportError:
     OMERO_AVAILABLE = False
 
 try:
-    from omero_annotate_ai.core.config import create_default_config
+    from omero_annotate_ai.core.annotation_config import create_default_config
     CONFIG_AVAILABLE = True
 except ImportError:
     CONFIG_AVAILABLE = False

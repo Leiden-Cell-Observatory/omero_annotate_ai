@@ -245,20 +245,25 @@ def update_tracking_table_rows(
     annotation_type: str,
     label_id: Optional[int] = None,
     roi_id: Optional[int] = None,
+    label_ids: Optional[List[Optional[int]]] = None,
+    roi_ids: Optional[List[Optional[int]]] = None,
     container_type: str = "",
     container_id: int = 0,
 ) -> Optional[int]:
     """Update tracking table rows with processing status and annotation IDs.
 
     This implementation updates the table by replacing it with a new one.
+    Supports both single annotation IDs (legacy) and lists of IDs (batch mode).
 
     Args:
         conn: OMERO connection
         table_id: ID of tracking table
         row_indices: List of row indices to update
         status: Status to set ('completed', 'failed', etc.)
-        label_id: ID of uploaded label file annotation (optional)
-        roi_id: ID of uploaded ROI collection (optional)
+        label_id: Single label file annotation ID (legacy, optional)
+        roi_id: Single ROI collection ID (legacy, optional)
+        label_ids: List of label file annotation IDs, one per row (optional)
+        roi_ids: List of ROI collection IDs, one per row (optional)
         annotation_type: Type of annotation
         container_type: Type of OMERO container (e.g. 'dataset', 'project')
         container_id: ID of the container
@@ -287,15 +292,32 @@ def update_tracking_table_rows(
 
         current_time = datetime.now().isoformat()
 
-        for idx in row_indices:
+        for i, idx in enumerate(row_indices):
             if idx < len(df):
                 df.loc[idx, "processed"] = status == "completed"
                 if status == "completed":
                     # Only update these fields when successfully completed
-                    if label_id is not None:
-                        df.loc[idx, "label_id"] = str(label_id)
-                    if roi_id is not None:
-                        df.loc[idx, "roi_id"] = str(roi_id)
+                    
+                    # Handle label IDs: use list if provided, otherwise single value for all rows
+                    current_label_id = None
+                    if label_ids is not None and i < len(label_ids):
+                        current_label_id = label_ids[i]
+                    elif label_id is not None:
+                        current_label_id = label_id
+                    
+                    if current_label_id is not None:
+                        df.loc[idx, "label_id"] = str(current_label_id)
+                    
+                    # Handle ROI IDs: use list if provided, otherwise single value for all rows  
+                    current_roi_id = None
+                    if roi_ids is not None and i < len(roi_ids):
+                        current_roi_id = roi_ids[i]
+                    elif roi_id is not None:
+                        current_roi_id = roi_id
+                    
+                    if current_roi_id is not None:
+                        df.loc[idx, "roi_id"] = str(current_roi_id)
+                    
                     df.loc[idx, "annotation_type"] = annotation_type
                     df.loc[idx, "annotation_creation_time"] = current_time
 

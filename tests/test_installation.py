@@ -11,12 +11,12 @@ def test_package_import():
 
 def test_core_imports():
     """Test core module imports."""
-    from omero_annotate_ai.core.config import (
+    from omero_annotate_ai.core.annotation_config import (
         AnnotationConfig, 
         create_default_config, 
         load_config
     )
-    from omero_annotate_ai.core.pipeline import AnnotationPipeline
+    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
     
     # Test that we can create instances
     config = create_default_config()
@@ -88,8 +88,8 @@ def test_config_functionality():
 
 def test_pipeline_creation():
     """Test that pipeline can be created with mock connection."""
-    from omero_annotate_ai.core.pipeline import AnnotationPipeline
-    from omero_annotate_ai.core.config import create_default_config
+    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+    from omero_annotate_ai.core.annotation_config import create_default_config
     from unittest.mock import Mock
     
     config = create_default_config()
@@ -126,7 +126,7 @@ def test_optional_dependencies():
 def test_all_submodules_importable():
     """Test that all submodules can be imported without errors."""
     # Core modules
-    from omero_annotate_ai.core import config, pipeline
+    from omero_annotate_ai.core import annotation_config, annotation_pipeline
     
     # OMERO modules
     from omero_annotate_ai.omero import omero_functions, omero_utils

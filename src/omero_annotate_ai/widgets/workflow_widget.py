@@ -6,7 +6,7 @@ from pathlib import Path
 import ipywidgets as widgets
 from IPython.display import clear_output, display
 
-from ..core.config import AnnotationConfig, create_default_config
+from ..core.annotation_config import AnnotationConfig, create_default_config
 from ..omero.omero_functions import (
     generate_unique_table_name,
     list_annotation_tables,
@@ -20,9 +20,7 @@ class WorkflowWidget:
         """Initialize the workflow widget."""
         self.connection = connection
         self.config = create_default_config()
-        self.current_step = (
-            0 if connection is None else 1
-        )  # Skip connection step if provided
+        self.current_step = 0  # Always start at first tab
         self.steps = [
             "Select Working Directory",
             "Choose Container",
