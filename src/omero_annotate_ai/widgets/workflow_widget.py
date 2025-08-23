@@ -835,11 +835,19 @@ class WorkflowWidget:
         try:
             container_id = self.container_widgets["container"].value
             container_type = self.container_widgets["type"].value
-            base_name = self.new_table_name.value.strip() or "micro_sam_annotation"
-
-            unique_name = generate_unique_table_name(
-                self.connection, container_type, container_id, base_name
-            )
+            # If user provided a custom name, use it; otherwise let function generate timestamped name
+            custom_name = self.new_table_name.value.strip()
+            
+            if custom_name:
+                # User provided custom name - make it unique
+                unique_name = generate_unique_table_name(
+                    self.connection, container_type, container_id, custom_name
+                )
+            else:
+                # No custom name - let function generate timestamped name
+                unique_name = generate_unique_table_name(
+                    self.connection, container_type, container_id
+                )
             self.new_table_name.value = unique_name
             self.config.name = unique_name
             self.config.workflow.resume_from_table = False
