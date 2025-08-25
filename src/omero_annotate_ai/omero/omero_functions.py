@@ -1017,31 +1017,28 @@ def get_tables_by_roi_namespace(conn, project_id: int, namespace: str) -> List[i
 
 
 def cleanup_project_annotations(
-    conn, project_id: int, trainingset_name: Optional[str] = None
-) -> Dict[str, int]:
-    def cleanup_project_annotations(
-        conn, project_id: int, trainingset_name: str = ""
+    conn, project_id: int, trainingset_name: str = ""
     ) -> Dict[str, int]:
-        """Clean up all annotations created by omero-annotate-ai from a project.
+    """Clean up all annotations created by omero-annotate-ai from a project.
 
-        Removes annotation tables, ROIs, and map annotations from the project
-        and all its underlying datasets and images.
+    Removes annotation tables, ROIs, and map annotations from the project
+    and all its underlying datasets and images.
 
-        Args:
-            conn: OMERO connection
-            project_id: Project ID to clean up
-            trainingset_name: Optional - if provided, only clean up annotations
-                             matching this training set name. Defaults to empty string.
+    Args:
+        conn: OMERO connection
+        project_id: Project ID to clean up
+        trainingset_name: Optional - if provided, only clean up annotations
+                            matching this training set name. Defaults to empty string.
 
-        Returns:
-            Dictionary with counts of deleted items:
-            {
-                'tables': int,
-                'rois': int,
-                'map_annotations': int,
-                'images_processed': int
-            }
-        """
+    Returns:
+        Dictionary with counts of deleted items:
+        {
+            'tables': int,
+            'rois': int,
+            'map_annotations': int,
+            'images_processed': int
+        }
+    """
     # Import required functions
     from .omero_utils import delete_annotations_by_namespace, delete_table
 

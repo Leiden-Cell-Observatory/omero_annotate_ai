@@ -911,10 +911,8 @@ class AnnotationPipeline:
                 print(f"❌ Error processing batch {batch_num}: {e}")
                 traceback.print_exc()
                 # Continue with next batch instead of failing completely
-                continue
-                # Continue with next batch - don't let one batch failure stop the pipeline
-                continue
-        
+                raise
+  
         # Final workflow status update
         if not self.config.workflow.read_only_mode and self.table_id != -1:
             self._update_workflow_status_map(self.table_id)
