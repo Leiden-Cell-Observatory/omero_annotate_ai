@@ -17,10 +17,6 @@ class AuthorInfo(BaseModel):
     affiliation: Optional[str] = Field(
         default=None, description="Institution affiliation"
     )
-    name: Optional[str] = Field(default=None, description="Full name of the author")
-    affiliation: Optional[str] = Field(
-        default=None, description="Institution affiliation"
-    )
     email: Optional[str] = Field(None, description="Contact email")
     orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
 

@@ -58,7 +58,6 @@ def initialize_tracking_table(
             "annotation_type",
             "annotation_creation_time",
             "schema_attachment_id",
-            # New 3D fields
             "z_start",
             "z_end", 
             "z_length",

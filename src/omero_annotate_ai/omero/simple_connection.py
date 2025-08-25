@@ -21,8 +21,6 @@ except ImportError:
 from dotenv import load_dotenv
 from omero.gateway import BlitzGateway
 
-OMERO_AVAILABLE = True
-
 class SimpleOMEROConnection:
     """Simple OMERO connection manager with keychain support for passwords."""
 
