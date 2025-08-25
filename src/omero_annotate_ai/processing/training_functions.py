@@ -28,6 +28,9 @@ def validate_table_schema(df: pd.DataFrame) -> None:
         'patch_width', 'patch_height'
     }
     
+    # Optional columns that enhance functionality
+    optional_columns = {'is_volumetric'}
+    
     missing_columns = required_columns - set(df.columns)
     if missing_columns:
         raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
@@ -44,6 +47,11 @@ def validate_table_schema(df: pd.DataFrame) -> None:
             pd.to_numeric(df['image_id'], errors='raise')
         except (ValueError, TypeError):
             raise ValueError("Column 'image_id' contains non-numeric data")
+    
+    # Log optional columns that are available
+    available_optional = optional_columns.intersection(set(df.columns))
+    if available_optional:
+        print(f"Optional columns found: {sorted(available_optional)}")
 
 
 def prepare_training_data_from_table(
@@ -113,6 +121,34 @@ def prepare_training_data_from_table(
         
     print(f"Loaded table with {len(table)} rows")
     
+    # Save the table locally for inspection (without debug in name)
+    table_path = output_dir / f"table_{table_id}.csv"
+    try:
+        table.to_csv(table_path, index=True)
+        print(f"Table saved to: {table_path}")
+    except Exception as e:
+        print(f"Warning: Failed to save table: {e}")
+    
+    # Check if 'processed' column exists and filter to only processed rows
+    if 'processed' in table.columns:
+        initial_count = len(table)
+        unprocessed_count = len(table[~table['processed']])
+        
+        if unprocessed_count > 0:
+            print(f"⚠️  Found {unprocessed_count} unprocessed rows out of {initial_count} total rows")
+            print(f"   Proceeding with {initial_count - unprocessed_count} processed rows for training")
+        
+        # Filter to only processed rows
+        table = table[table['processed']].copy()
+        
+        if len(table) == 0:
+            raise ValueError("No processed rows found in the table. Cannot proceed with training.")
+            
+        print(f"✅ Using {len(table)} processed rows for training")
+        
+    else:
+        print("Warning: No 'processed' column found - assuming all rows are ready for training")
+    
     # Validate table schema and data integrity
     validate_table_schema(table)
     print("Table schema validated for processing")
@@ -128,8 +164,8 @@ def prepare_training_data_from_table(
     # Split data based on existing 'train'/'validate' columns or automatic split
     if 'train' in table.columns and 'validate' in table.columns:
         # Use existing split from table
-        train_images = table[table['train'] == True]
-        val_images = table[table['validate'] == True]
+        train_images = table[table['train']]
+        val_images = table[table['validate']]
     else:
         # Automatic split
         n_val = int(len(table) * validation_split)
@@ -222,76 +258,221 @@ def _prepare_dataset_from_table(
         raise OSError(f"Failed to create dataset directories {input_dir}, {label_dir}: {e}")
     
     for n in tqdm(range(len(df)), desc=f"Preparing {subset_type} data"):
-        # Extract metadata (types already normalized)
-        image_id = int(df.iloc[n]['image_id'])
-        channel = int(df.iloc[n]['channel'])
-        timepoint = int(df.iloc[n]['timepoint'])
-        z_val = int(df.iloc[n]['z_slice'])
-        
-        # Get patch information  
-        is_patch = bool(df.iloc[n]['is_patch'])
-        patch_x = int(df.iloc[n]['patch_x'])
-        patch_y = int(df.iloc[n]['patch_y'])
-        patch_width = int(df.iloc[n]['patch_width'])
-        patch_height = int(df.iloc[n]['patch_height'])
-        
-        # Get image data
         try:
-            if is_patch and patch_width > 0 and patch_height > 0:
-                _, img_data = ezomero.get_image(
-                    conn,
-                    image_id,
-                    start_coords=(patch_x, patch_y, z_val, channel, timepoint),
-                    axis_lengths=(patch_width, patch_height, 1, 1, 1),
-                    xyzct=True
-                )
-            else:
-                # Get full image without specifying axis_lengths (let ezomero determine size)
-                _, img_data = ezomero.get_image(
-                    conn,
-                    image_id,
-                    start_coords=(0, 0, z_val, channel, timepoint),
-                    xyzct=True
-                )
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch image {image_id} from OMERO: {e}")
-        
-        # Process image data
-        if len(img_data.shape) == 5:
-            img_data = img_data[:, :, 0, 0, 0]
-            img_data = np.swapaxes(img_data, 0, 1)
-        
-        # Normalize to 8-bit
-        max_val = img_data.max()
-        if max_val > 0:
-            img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
-        else:
-            img_8bit = img_data.astype(np.uint8)
-        
-        # Save image
-        output_path = input_dir / f"input_{n:05d}.tif"
-        try:
-            imwrite(str(output_path), img_8bit)
-        except Exception as e:
-            raise OSError(f"Failed to save image to {output_path}: {e}")
-        
-        # Get label file (already normalized to int or NaN)
-        label_id_val = df.iloc[n]['label_id']
-        if pd.notna(label_id_val):
-            label_id = int(label_id_val)
+            # Extract metadata
+            image_id = int(df.iloc[n]['image_id'])
             
-            try:
-                file_path = ezomero.get_file_annotation(conn, label_id, str(tmp_dir))
-            except Exception as e:
-                raise RuntimeError(f"Failed to download label file {label_id} from OMERO: {e}")
-
-            if not file_path:
-                raise FileNotFoundError(f"Label file {label_id} not found in OMERO")
-
-            label_dest = label_dir / f"label_{n:05d}.tif"
-            try:
-                shutil.move(file_path, str(label_dest))
-            except Exception as e:
-                raise OSError(f"Failed to move label file {label_id} to {label_dest}: {e}")
+            # Handle z_slice - could be int, string representation of list, or NaN
+            z_slice = df.iloc[n]['z_slice']
+            if pd.isna(z_slice):
+                z_slice = 0
+            elif isinstance(z_slice, str) and z_slice.startswith('['):
+                try:
+                    z_slice = eval(z_slice)
+                    if isinstance(z_slice, list) and len(z_slice) > 0:
+                        z_slice = z_slice[0]  # Use first slice for 2D
+                except Exception:
+                    z_slice = 0
+            
+            # Handle other metadata columns
+            channel = int(df.iloc[n]['channel']) if pd.notna(df.iloc[n]['channel']) else 0
+            timepoint = int(df.iloc[n]['timepoint']) if pd.notna(df.iloc[n]['timepoint']) else 0
+            is_volumetric = bool(df.iloc[n]['is_volumetric']) if 'is_volumetric' in df.columns and pd.notna(df.iloc[n]['is_volumetric']) else False
+            
+            # Get patch information  
+            is_patch = bool(df.iloc[n]['is_patch'])
+            patch_x = int(df.iloc[n]['patch_x'])
+            patch_y = int(df.iloc[n]['patch_y'])
+            patch_width = int(df.iloc[n]['patch_width'])
+            patch_height = int(df.iloc[n]['patch_height'])
+            
+            # Debug patch dimensions
+            print(f"Item {n} - Image ID: {image_id}, Patch: {is_patch}, Dimensions: {patch_width}x{patch_height} at ({patch_x},{patch_y}), Volumetric: {is_volumetric}")
+            
+            # Process based on whether it's 3D volumetric or 2D
+            if is_volumetric:
+                # Handle 3D volumetric data
+                # Determine which z-slices to load
+                if isinstance(z_slice, list):
+                    z_slices = z_slice
+                elif z_slice == 'all':
+                    # Get image object to determine size
+                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+                    if not omero_image:
+                        print(f"Warning: Image {image_id} not found, skipping")
+                        continue
+                    z_slices = range(omero_image.getSizeZ())
+                else:
+                    z_slices = [int(z_slice)]
+                
+                # Create empty 3D array to hold all z-slices
+                img_3d = []
+                
+                # Load each z-slice using ezomero.get_image
+                for z in z_slices:
+                    z_val = int(z)
+                    if is_patch and patch_width > 0 and patch_height > 0:
+                        # Debug start_coords and axis_lengths
+                        print(f"  3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}")
+                        
+                        # Use ezomero.get_image to extract the patch for this z-slice
+                        _, img_slice = ezomero.get_image(
+                            conn,
+                            image_id,
+                            start_coords=(patch_x, patch_y, z_val, channel, timepoint),
+                            axis_lengths=(patch_width, patch_height, 1, 1, 1),
+                            xyzct=True  # Use XYZCT ordering
+                        )
+                        
+                        # Check shape of returned array
+                        print(f"  Returned array shape (before extraction): {img_slice.shape}")
+                        
+                        # The result will be 5D, extract just the 2D slice
+                        img_slice = img_slice[:,:,0, 0, 0]  # Extract the single z-slice
+                        print(f"  Extracted slice shape: {img_slice.shape}")
+                    else:
+                        # Get full plane for this z-slice
+                        _, img_slice = ezomero.get_image(
+                            conn,
+                            image_id,
+                            start_coords=(0, 0, z_val, channel, timepoint),
+                            xyzct=True  # Use XYZCT ordering
+                        )
+                        # Check shape of returned array
+                        print(f"  Full plane shape (before extraction): {img_slice.shape}")
+                        
+                        # The result will be 5D, extract just the 2D slice
+                        if len(img_slice.shape) == 5:
+                            img_slice = img_slice[:, :, 0, 0, 0]
+                            img_slice = np.swapaxes(img_slice, 0, 1)
+                        print(f"  Extracted full plane shape: {img_slice.shape}")
+                    
+                    img_3d.append(img_slice)
+                
+                # Convert to numpy array
+                img_3d = np.array(img_3d)
+                print(f"  Final 3D array shape: {img_3d.shape}")
+                
+                # Normalize to 8-bit
+                max_val = img_3d.max()
+                if max_val > 0:
+                    img_8bit = ((img_3d) * (255.0 / max_val)).astype(np.uint8)
+                else:
+                    img_8bit = img_3d.astype(np.uint8)
+                
+                # Save as multi-page TIFF for 3D data
+                output_path = input_dir / f"input_{n:05d}.tif"
+                imwrite(str(output_path), img_8bit)
+                print(f"  Saved 3D TIFF to {output_path} with shape {img_8bit.shape}")
+                
+            else:
+                # Handle 2D data with patch support using ezomero.get_image
+                if is_patch and patch_width > 0 and patch_height > 0:
+                    # Use ezomero.get_image with appropriate coordinates and dimensions
+                    z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+                    
+                    # Debug start_coords and axis_lengths
+                    print(f"  2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}")
+                    
+                    _, img_data = ezomero.get_image(
+                        conn,
+                        image_id,
+                        start_coords=(patch_x, patch_y, int(z_val), channel, timepoint),
+                        axis_lengths=(patch_width, patch_height, 1, 1, 1),
+                        xyzct=True
+                    )
+                    
+                    # Check shape of returned array
+                    print(f"  Returned array shape: {img_data.shape}")
+                    
+                    # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
+                    # We just need to remove the trailing dimensions
+                    if len(img_data.shape) == 5:
+                        # Take only the first (and only) z, c, t indices
+                        img_data = img_data[:, :, 0, 0, 0]
+                        # swap x and y dimensions in the numpy array
+                        img_data = np.swapaxes(img_data, 0, 1)
+                    
+                    print(f"  Extracted 2D shape: {img_data.shape}")
+                else:
+                    # Get full plane
+                    z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+                    
+                    # Debug start_coords
+                    print(f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint})")
+                    
+                    _, img_data = ezomero.get_image(
+                        conn,
+                        image_id,
+                        start_coords=(0, 0, int(z_val), channel, timepoint),
+                        xyzct=True
+                    )
+                    
+                    # Check shape of returned array 
+                    print(f"  Returned array shape: {img_data.shape}")
+                    
+                    # Remove trailing dimensions
+                    if len(img_data.shape) == 5:
+                        img_data = img_data[:, :, 0, 0, 0]
+                        img_data = np.swapaxes(img_data, 0, 1)
+                    
+                    print(f"  Extracted 2D shape: {img_data.shape}")
+                
+                # Normalize to 8-bit
+                max_val = img_data.max()
+                if max_val > 0:
+                    img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
+                else:
+                    img_8bit = img_data.astype(np.uint8)
+                
+                # Save as TIFF
+                output_path = input_dir / f"input_{n:05d}.tif"
+                imwrite(str(output_path), img_8bit)
+                print(f"  Saved 2D TIFF to {output_path} with shape {img_8bit.shape}")
+            
+            # Get label file (already normalized to int or NaN)
+            label_id_val = df.iloc[n]['label_id']
+            if pd.notna(label_id_val):
+                label_id = int(label_id_val)
+                
+                try:
+                    # First, check if the file annotation exists
+                    print(f"  Attempting to download label with ID: {label_id}")
+                    
+                    # Try to get the file annotation object first to validate it exists
+                    try:
+                        file_ann = conn.getObject("FileAnnotation", label_id)
+                        if file_ann is None:
+                            print(f"  Warning: File annotation {label_id} not found in OMERO")
+                            continue
+                        print(f"  File annotation found: {file_ann.getFile().getName()}")
+                    except Exception as check_e:
+                        print(f"  Error checking file annotation {label_id}: {check_e}")
+                        continue
+                    
+                    # Now try to download it using ezomero
+                    file_path = ezomero.get_file_annotation(conn, label_id, str(tmp_dir))
+                    if file_path:
+                        label_dest = label_dir / f"label_{n:05d}.tif"
+                        shutil.move(file_path, str(label_dest))
+                        
+                        # Check the size of the saved label
+                        from tifffile import imread
+                        label_img = imread(str(label_dest))
+                        print(f"  Label shape: {label_img.shape} saved to {label_dest}")
+                    else:
+                        print(f"  Warning: Label file for image {image_id} not downloaded (ezomero returned None)")
+                        
+                except Exception as e:
+                    print(f"  Error downloading label file {label_id}: {e}")
+                    # Print more detailed error information for debugging
+                    import traceback
+                    print(f"  Full traceback: {traceback.format_exc()}")
+            else:
+                print(f"  Warning: No label ID for image {image_id}")
+        except Exception as e:
+            print(f"Error processing row {n}: {e}")
+            import traceback
+            print(traceback.format_exc())
     
     return input_dir, label_dir

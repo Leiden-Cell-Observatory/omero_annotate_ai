@@ -242,48 +242,111 @@ class AnnotationPipeline:
             # Handle timepoints
             timepoints = self._get_timepoints_for_image(image)
 
-            # Handle z-slices
+            # Handle z-slices based on processing mode
             z_slices = self._get_z_slices_for_image(image)
+            
+            # Check if we're doing volumetric 3D processing
+            is_volumetric = self.config.spatial_coverage.is_volumetric
 
-            # Create units for each timepoint/z-slice combination
+            # Create units based on processing mode
             for t in timepoints:
-                for z in z_slices:
+                if is_volumetric:
+                    # 3D volumetric mode: one unit per timepoint (includes all z-slices)
+                    z_start = min(z_slices) if z_slices else 0
+                    z_end = max(z_slices) if z_slices else 0 
+                    z_length = len(z_slices) if z_slices else 1
+                    
                     if self.config.processing.use_patches:
-                        # Create multiple units for patches
+                        # Create multiple units for 3D patches
                         patch_coords = self._generate_patch_coordinates(image)
                         for i, (x, y) in enumerate(patch_coords):
                             processing_units.append(
                                 (
                                     image_id,
-                                    f"{t}_{z}_{i}",
+                                    f"{t}_3d_{i}",
                                     {
                                         "timepoint": t,
-                                        "z_slice": z,
+                                        "z_slice": z_start,  # Start slice for compatibility
+                                        "z_start": z_start,
+                                        "z_end": z_end,
+                                        "z_length": z_length,
                                         "patch_x": x,
                                         "patch_y": y,
                                         "category": category,
                                         "model_type": self.config.ai_model.model_type,
                                         "channel": self.config.spatial_coverage.primary_channel,
-                                        "three_d": self.config.spatial_coverage.three_d,
+                                        "three_d": True,
+                                        "is_volumetric": True,
                                     },
                                 )
                             )
                     else:
-                        # Single unit for full image
+                        # Single unit for full 3D volume
                         processing_units.append(
                             (
                                 image_id,
-                                f"{t}_{z}",
+                                f"{t}_3d",
                                 {
                                     "timepoint": t,
-                                    "z_slice": z,
+                                    "z_slice": z_start,  # Start slice for compatibility
+                                    "z_start": z_start,
+                                    "z_end": z_end,
+                                    "z_length": z_length,
                                     "category": category,
                                     "model_type": self.config.ai_model.model_type,
                                     "channel": self.config.spatial_coverage.primary_channel,
-                                    "three_d": self.config.spatial_coverage.three_d,
+                                    "three_d": True,
+                                    "is_volumetric": True,
                                 },
                             )
                         )
+                else:
+                    # 2D mode: create units per z-slice (existing behavior)
+                    for z in z_slices:
+                        if self.config.processing.use_patches:
+                            # Create multiple units for 2D patches
+                            patch_coords = self._generate_patch_coordinates(image)
+                            for i, (x, y) in enumerate(patch_coords):
+                                processing_units.append(
+                                    (
+                                        image_id,
+                                        f"{t}_{z}_{i}",
+                                        {
+                                            "timepoint": t,
+                                            "z_slice": z,
+                                            "z_start": z,
+                                            "z_end": z,
+                                            "z_length": 1,
+                                            "patch_x": x,
+                                            "patch_y": y,
+                                            "category": category,
+                                            "model_type": self.config.ai_model.model_type,
+                                            "channel": self.config.spatial_coverage.primary_channel,
+                                            "three_d": False,
+                                            "is_volumetric": False,
+                                        },
+                                    )
+                                )
+                        else:
+                            # Single unit for 2D slice
+                            processing_units.append(
+                                (
+                                    image_id,
+                                    f"{t}_{z}",
+                                    {
+                                        "timepoint": t,
+                                        "z_slice": z,
+                                        "z_start": z,
+                                        "z_end": z,
+                                        "z_length": 1,
+                                        "category": category,
+                                        "model_type": self.config.ai_model.model_type,
+                                        "channel": self.config.spatial_coverage.primary_channel,
+                                        "three_d": False,
+                                        "is_volumetric": False,
+                                    },
+                                )
+                            )
 
         return processing_units
 
@@ -363,7 +426,7 @@ class AnnotationPipeline:
             embedding_path = output_path / "embed"
             annotations_path = output_path / "annotations"
             annotations_path.mkdir(exist_ok=True)
-            print("DEBUG: Ready to run micro_sam annotations")
+            # print("DEBUG: Ready to run micro_sam annotations")
             # Run micro-SAM annotation
             model_type = self.config.ai_model.model_type
 
@@ -397,28 +460,60 @@ class AnnotationPipeline:
         """Load image data from OMERO based on metadata."""
 
         timepoint = metadata["timepoint"]
-        z_slice = metadata["z_slice"]
         channel = self.config.spatial_coverage.primary_channel
+        is_volumetric = metadata.get("is_volumetric", False)
 
-        # Load image data using dask for efficiency
-        image_data = get_dask_image_multiple(
-            conn=self.conn,
-            image_list=[image_obj],
-            timepoints=[timepoint],
-            channels=[channel],
-            z_slices=[z_slice],
-        )[0]  # Get first (and only) image
+        if is_volumetric:
+            # Load 3D volume: all z-slices at once
+            z_start = metadata.get("z_start", 0)
+            z_end = metadata.get("z_end", 0)
+            z_length = metadata.get("z_length", 1)
 
-        # Handle patches if needed
+            # Generate z-slice list
+            z_slices = list(range(z_start, z_end + 1))
+
+            print(f"Loading 3D volume: z_slices {z_start}-{z_end} (length: {z_length})")
+
+            image_data = get_dask_image_multiple(
+                conn=self.conn,
+                image_list=[image_obj],
+                timepoints=[timepoint],
+                channels=[channel],
+                z_slices=z_slices,  # All z-slices for 3D volume
+            )[0]
+
+            # Result should be 3D: (z, y, x) or 4D: (t, z, y, x)
+            print(f"Loaded 3D data shape: {image_data.shape}")
+
+        else:
+            # Load single z-slice for 2D processing
+            z_slice = metadata["z_slice"]
+            image_data = get_dask_image_multiple(
+                conn=self.conn,
+                image_list=[image_obj],
+                timepoints=[timepoint],
+                channels=[channel],
+                z_slices=[z_slice],
+            )[0]
+
+            print(f"Loaded 2D data shape: {image_data.shape}")
+
+        # Handle patches if needed (works for both 2D and 3D)
         if self.config.processing.use_patches and "patch_x" in metadata:
             patch_x = metadata["patch_x"]
             patch_y = metadata["patch_y"]
             patch_h, patch_w = self.config.processing.patch_size
 
-            # Extract patch
-            image_data = image_data[
-                patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
-            ]
+            if is_volumetric:
+                # Extract 3D patch: (z, y, x)
+                image_data = image_data[
+                    :, patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
+                ]
+            else:
+                # Extract 2D patch: (y, x)
+                image_data = image_data[
+                    patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
+                ]
 
         return image_data
 

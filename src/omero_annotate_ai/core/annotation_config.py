@@ -2,10 +2,10 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 from typing_extensions import Literal
 
 
@@ -14,9 +14,13 @@ class AuthorInfo(BaseModel):
     """Author information compatible with bioimage.io"""
 
     name: Optional[str] = Field(default=None, description="Full name of the author")
-    affiliation: Optional[str] = Field(default=None, description="Institution affiliation")
+    affiliation: Optional[str] = Field(
+        default=None, description="Institution affiliation"
+    )
     name: Optional[str] = Field(default=None, description="Full name of the author")
-    affiliation: Optional[str] = Field(default=None, description="Institution affiliation")
+    affiliation: Optional[str] = Field(
+        default=None, description="Institution affiliation"
+    )
     email: Optional[str] = Field(None, description="Contact email")
     orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
 
@@ -43,17 +47,69 @@ class SpatialCoverage(BaseModel):
     spatial_units: str = Field(
         default="pixels", description="Spatial measurement units"
     )
-    three_d: bool = Field(default=False, description="3D processing mode")
-    
+    three_d: bool = Field(default=False, description="3D volumetric processing mode")
+
+    # 3D volumetric processing fields (used when three_d=True)
+    z_range_start: Optional[int] = Field(
+        default=None, description="Starting z-slice for 3D volumes (when three_d=True)"
+    )
+    z_range_end: Optional[int] = Field(
+        default=None, description="Ending z-slice for 3D volumes (when three_d=True)"
+    )
+
     @property
     def primary_channel(self) -> int:
         """Get the primary/first channel"""
         return self.channels[0]
-    
+
     @property
     def is_single_channel(self) -> bool:
         """Check if only one channel is configured"""
         return len(self.channels) == 1
+
+    @property
+    def is_volumetric(self) -> bool:
+        """Check if 3D volumetric processing is enabled"""
+        return self.three_d
+
+    def get_z_range(self) -> Tuple[int, int]:
+        """Get the z-range for volumetric processing"""
+        if (
+            self.is_volumetric
+            and self.z_range_start is not None
+            and self.z_range_end is not None
+        ):
+            return (self.z_range_start, self.z_range_end)
+        elif self.z_slices:
+            return (min(self.z_slices), max(self.z_slices))
+        else:
+            return (0, 0)
+
+    def get_z_length(self) -> int:
+        """Get the number of z-slices for volumetric processing"""
+        if self.is_volumetric:
+            z_start, z_end = self.get_z_range()
+            return z_end - z_start + 1
+        else:
+            return 1
+
+    @model_validator(mode="after")
+    def validate_3d_settings(self):
+        """Validate 3D configuration consistency"""
+        if self.three_d:
+            if self.z_range_start is None or self.z_range_end is None:
+                if not self.z_slices:
+                    raise ValueError(
+                        "three_d=True requires either "
+                        "z_range_start/z_range_end or z_slices"
+                    )
+                # Auto-set z_range from z_slices
+                self.z_range_start = min(self.z_slices)
+                self.z_range_end = max(self.z_slices)
+            elif self.z_range_start > self.z_range_end:
+                raise ValueError("z_range_start must be <= z_range_end")
+
+        return self
 
 
 class DatasetInfo(BaseModel):
@@ -76,7 +132,9 @@ class StudyContext(BaseModel):
     description: str = Field(description="Detailed study description")
     keywords: List[str] = Field(default_factory=list, description="Study keywords/tags")
     organism: Optional[str] = Field(default=None, description="Organism studied")
-    imaging_method: Optional[str] = Field(default=None, description="Microscopy technique used")
+    imaging_method: Optional[str] = Field(
+        default=None, description="Microscopy technique used"
+    )
 
 
 class AIModelConfig(BaseModel):
@@ -120,10 +178,11 @@ class TrainingConfig(BaseModel):
     validate_n: int = Field(default=3, gt=0, description="Number of validation images")
     segment_all: bool = Field(
         default=False, description="Segment all objects vs sample"
-    ) 
+    )
     quality_threshold: Optional[float] = Field(
         default=None, description="Minimum quality score"
     )
+
 
 class WorkflowConfig(BaseModel):
     """Workflow control and state management"""
@@ -134,6 +193,7 @@ class WorkflowConfig(BaseModel):
     read_only_mode: bool = Field(
         default=False, description="Read-only mode for viewing results"
     )
+
 
 class OMEROConfig(BaseModel):
     """OMERO connection and data selection configuration"""
@@ -166,6 +226,7 @@ class OutputConfig(BaseModel):
         if isinstance(data.get("output_directory"), Path):
             data["output_directory"] = str(data["output_directory"])
         return data
+
 
 class AnnotationConfig(BaseModel):
     """Unified configuration compatible with MIFA and bioimage.io standards"""
@@ -208,23 +269,29 @@ class AnnotationConfig(BaseModel):
     ai_model: AIModelConfig = Field(default_factory=lambda: AIModelConfig(name=""))
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
-    output: OutputConfig = Field(default_factory=lambda: OutputConfig())  
+    output: OutputConfig = Field(default_factory=lambda: OutputConfig())
     omero: OMEROConfig = Field(default_factory=lambda: OMEROConfig())
 
     # Workflow metadata (bioimage.io style)
-    documentation: Optional[HttpUrl] = Field(default=None, description="Documentation URL")
-    repository: Optional[HttpUrl] = Field(default=None, description="Code repository URL")
+    documentation: Optional[HttpUrl] = Field(
+        default=None, description="Documentation URL"
+    )
+    repository: Optional[HttpUrl] = Field(
+        default=None, description="Code repository URL"
+    )
     tags: List[str] = Field(default_factory=list, description="Classification tags")
 
     def model_dump(self, **kwargs):
         """Override model_dump to handle Path serialization"""
         data = super().model_dump(**kwargs)
-        
+
         # Convert Path objects to strings
-        if 'output' in data and 'output_directory' in data['output']:
-            if isinstance(data['output']['output_directory'], Path):
-                data['output']['output_directory'] = str(data['output']['output_directory'])
-        
+        if "output" in data and "output_directory" in data["output"]:
+            if isinstance(data["output"]["output_directory"], Path):
+                data["output"]["output_directory"] = str(
+                    data["output"]["output_directory"]
+                )
+
         return data
 
     def to_mifa_metadata(self) -> dict:
@@ -259,27 +326,48 @@ class AnnotationConfig(BaseModel):
     def to_yaml(self) -> str:
         """Convert configuration to YAML string."""
         config_dict = self.model_dump()
-        
+
         # Custom YAML representer for Path objects (fallback)
         def path_representer(dumper, data):
-            return dumper.represent_scalar('tag:yaml.org,2002:str', str(data))
-        
+            return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
+
         yaml.add_representer(Path, path_representer)
-        
+
         return yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
 
     def save_yaml(self, file_path: Union[str, Path]) -> None:
         """Save configuration to YAML file."""
         config_dict = self.model_dump()
-        
+
         # Custom YAML representer for Path objects (fallback)
         def path_representer(dumper, data):
-            return dumper.represent_scalar('tag:yaml.org,2002:str', str(data))
-        
+            return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
+
         yaml.add_representer(Path, path_representer)
-        
+
         with open(file_path, "w") as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "AnnotationConfig":
+        """Create configuration from dictionary."""
+        return cls(**config_dict)
+
+    @classmethod
+    def from_yaml(cls, yaml_source: Union[str, Path]) -> "AnnotationConfig":
+        """Create configuration from YAML string or file path."""
+        if isinstance(yaml_source, (str, Path)):
+            yaml_path = Path(yaml_source)
+            if yaml_path.exists():
+                with open(yaml_path, "r") as f:
+                    config_dict = yaml.safe_load(f)
+            else:
+                # Assume it's a YAML string
+                config_dict = yaml.safe_load(str(yaml_source))
+        else:
+            config_dict = yaml.safe_load(yaml_source)
+
+        return cls.from_dict(config_dict)
 
 
 def parse_sequence(value: Union[str, List[int]]) -> List[int]:
@@ -380,6 +468,9 @@ spatial_coverage:
   z_slice_mode: "specific"
   spatial_units: "pixels"
   three_d: false
+  # 3D volumetric processing settings  
+  z_range_start: null          # starting z-slice for 3D volumes
+  z_range_end: null            # ending z-slice for 3D volumes
   
 training:
   validation_strategy: "random_split"
@@ -414,6 +505,3 @@ output:
 tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """
     return template
-
-
-

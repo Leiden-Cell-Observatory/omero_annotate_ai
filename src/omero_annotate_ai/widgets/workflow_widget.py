@@ -468,6 +468,26 @@ class WorkflowWidget:
             value=self.config.spatial_coverage.three_d, description="3D processing"
         )
 
+        # 3D volumetric processing settings
+        z_range_start = widgets.IntText(
+            value=self.config.spatial_coverage.z_range_start or 0,
+            description="Z-range start:",
+            disabled=not three_d.value,
+            style={"description_width": "initial"},
+        )
+
+        z_range_end = widgets.IntText(
+            value=self.config.spatial_coverage.z_range_end or 0,
+            description="Z-range end:",
+            disabled=not three_d.value,
+            style={"description_width": "initial"},
+        )
+
+        # Info text for 3D modes
+        three_d_info = widgets.HTML(
+            value="<small><i>3D processing: specify z-range for volumetric processing</i></small>"
+        )
+
         # Patches settings
         use_patches = widgets.Checkbox(
             value=self.config.processing.use_patches, description="Use patches"
@@ -499,6 +519,10 @@ class WorkflowWidget:
         z_slice_mode.observe(
             lambda c: self._toggle_list_setting(c, z_slices), names="value"
         )
+        three_d.observe(
+            lambda c: self._toggle_3d_settings(c, z_range_start, z_range_end),
+            names="value",
+        )
         use_patches.observe(
             lambda c: self._toggle_patch_settings(c, patches_per_image, patch_size),
             names="value",
@@ -516,6 +540,9 @@ class WorkflowWidget:
                 z_slice_mode,
                 z_slices,
                 three_d,
+                z_range_start,
+                z_range_end,
+                three_d_info,
                 use_patches,
                 patches_per_image,
                 patch_size,
@@ -835,7 +862,7 @@ class WorkflowWidget:
             container_type = self.container_widgets["type"].value
             # If user provided a custom name, use it; otherwise let function generate timestamped name
             custom_name = self.new_table_name.value.strip()
-            
+
             if custom_name:
                 # User provided custom name - make it unique
                 unique_name = generate_unique_table_name(
@@ -878,6 +905,12 @@ class WorkflowWidget:
         patches_per_image.disabled = not enabled
         patch_size.disabled = not enabled
 
+    def _toggle_3d_settings(self, change, z_range_start, z_range_end):
+        """Toggle 3D settings based on three_d checkbox."""
+        enabled = change["new"]
+        z_range_start.disabled = not enabled
+        z_range_end.disabled = not enabled
+
     def _on_update_config(self, button):
         """Update configuration from all widget values."""
         try:
@@ -899,9 +932,13 @@ class WorkflowWidget:
                             container_name = container_obj.getName()
                             self.config.omero.source_desc = f"Workflow: {container_type} {container_name} (ID: {container_id})"
                         else:
-                            self.config.omero.source_desc = f"Workflow: {container_type} (ID: {container_id})"
+                            self.config.omero.source_desc = (
+                                f"Workflow: {container_type} (ID: {container_id})"
+                            )
                     else:
-                        self.config.omero.source_desc = f"Workflow: {container_type} (ID: {container_id})"
+                        self.config.omero.source_desc = (
+                            f"Workflow: {container_type} (ID: {container_id})"
+                        )
                 except:
                     self.config.omero.source_desc = (
                         f"Workflow: {container_type} (ID: {container_id})"
@@ -912,16 +949,12 @@ class WorkflowWidget:
                     # Continuing existing table
                     for table in self.annotation_tables:
                         if table.get("id") == self.selected_table_id:
-                            self.config.name = table.get(
-                                "name", "unknown"
-                            )
+                            self.config.name = table.get("name", "unknown")
                             self.config.workflow.resume_from_table = True
                             break
                 elif self.new_table_name.value.strip():
                     # Creating new table
-                    self.config.name = (
-                        self.new_table_name.value.strip()
-                    )
+                    self.config.name = self.new_table_name.value.strip()
                     self.config.workflow.resume_from_table = False
 
                 # Update OMERO status display
@@ -983,6 +1016,12 @@ class WorkflowWidget:
                     annotation_widgets["z_slice_mode"] = child
                 elif "3D processing" in child.description:
                     annotation_widgets["three_d"] = child
+                elif "Volumetric 3D mode" in child.description:
+                    annotation_widgets["volumetric_processing"] = child
+                elif "Z-range start" in child.description:
+                    annotation_widgets["z_range_start"] = child
+                elif "Z-range end" in child.description:
+                    annotation_widgets["z_range_end"] = child
                 elif "Use patches" in child.description:
                     annotation_widgets["use_patches"] = child
                 elif "Patches per image" in child.description:
@@ -998,7 +1037,9 @@ class WorkflowWidget:
         if "validate_n" in annotation_widgets:
             self.config.training.validate_n = annotation_widgets["validate_n"].value
         if "channel" in annotation_widgets:
-            self.config.spatial_coverage.channels[0] = annotation_widgets["channel"].value
+            self.config.spatial_coverage.channels[0] = annotation_widgets[
+                "channel"
+            ].value
         if "timepoint_mode" in annotation_widgets:
             self.config.spatial_coverage.timepoint_mode = annotation_widgets[
                 "timepoint_mode"
@@ -1025,6 +1066,15 @@ class WorkflowWidget:
                 self.config.spatial_coverage.z_slices = [0]
         if "three_d" in annotation_widgets:
             self.config.spatial_coverage.three_d = annotation_widgets["three_d"].value
+
+        if "z_range_start" in annotation_widgets:
+            self.config.spatial_coverage.z_range_start = annotation_widgets[
+                "z_range_start"
+            ].value
+        if "z_range_end" in annotation_widgets:
+            self.config.spatial_coverage.z_range_end = annotation_widgets[
+                "z_range_end"
+            ].value
         if "use_patches" in annotation_widgets:
             self.config.processing.use_patches = annotation_widgets["use_patches"].value
         if "patches_per_image" in annotation_widgets:
