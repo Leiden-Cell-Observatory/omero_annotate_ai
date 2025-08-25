@@ -6,7 +6,7 @@ from pathlib import Path
 import ipywidgets as widgets
 from IPython.display import clear_output, display
 
-from ..core.config import AnnotationConfig, create_default_config
+from ..core.annotation_config import AnnotationConfig, create_default_config
 from ..omero.omero_functions import (
     generate_unique_table_name,
     list_annotation_tables,
@@ -20,9 +20,7 @@ class WorkflowWidget:
         """Initialize the workflow widget."""
         self.connection = connection
         self.config = create_default_config()
-        self.current_step = (
-            0 if connection is None else 1
-        )  # Skip connection step if provided
+        self.current_step = 0  # Always start at first tab
         self.steps = [
             "Select Working Directory",
             "Choose Container",
@@ -135,7 +133,7 @@ class WorkflowWidget:
     def _create_connection_tab(self):
         """Create connection step tab."""
         connection_status = widgets.HTML(
-            value="❌ No OMERO connection", layout=widgets.Layout(margin="10px 0")
+            value="No OMERO connection", layout=widgets.Layout(margin="10px 0")
         )
 
         connect_info = widgets.HTML(
@@ -368,9 +366,9 @@ class WorkflowWidget:
             self.workflow_settings,
         ]
 
-        config_tabs.set_title(0, "🎯 Annotation Settings")
-        config_tabs.set_title(1, "⚙️ Technical Settings")
-        config_tabs.set_title(2, "🔄 Workflow Settings")
+        config_tabs.set_title(0, "Annotation Settings")
+        config_tabs.set_title(1, "Technical Settings")
+        config_tabs.set_title(2, "Workflow Settings")
 
         # Update configuration button
         update_config_button = widgets.Button(
@@ -425,7 +423,7 @@ class WorkflowWidget:
 
         # Channel selection
         channel = widgets.IntText(
-            value=self.config.omero.channel,
+            value=self.config.spatial_coverage.channels[0],
             description="Channel:",
             style={"description_width": "initial"},
         )
@@ -437,12 +435,12 @@ class WorkflowWidget:
                 ("All timepoints", "all"),
                 ("Random selection", "random"),
             ],
-            value=self.config.micro_sam.timepoint_mode,
+            value=self.config.spatial_coverage.timepoint_mode,
             description="Timepoints:",
         )
 
         timepoints = widgets.Text(
-            value=", ".join(map(str, self.config.micro_sam.timepoints)),
+            value=", ".join(map(str, self.config.spatial_coverage.timepoints)),
             description="Timepoint list:",
             placeholder="0, 1, 2",
             disabled=timepoint_mode.value != "specific",
@@ -455,28 +453,48 @@ class WorkflowWidget:
                 ("All slices", "all"),
                 ("Random selection", "random"),
             ],
-            value=self.config.micro_sam.z_slice_mode,
+            value=self.config.spatial_coverage.z_slice_mode,
             description="Z-slices:",
         )
 
         z_slices = widgets.Text(
-            value=", ".join(map(str, self.config.micro_sam.z_slices)),
+            value=", ".join(map(str, self.config.spatial_coverage.z_slices)),
             description="Z-slice list:",
             placeholder="0, 1, 2",
             disabled=z_slice_mode.value != "specific",
         )
 
         three_d = widgets.Checkbox(
-            value=self.config.micro_sam.three_d, description="3D processing"
+            value=self.config.spatial_coverage.three_d, description="3D processing"
+        )
+
+        # 3D volumetric processing settings
+        z_range_start = widgets.IntText(
+            value=self.config.spatial_coverage.z_range_start or 0,
+            description="Z-range start:",
+            disabled=not three_d.value,
+            style={"description_width": "initial"},
+        )
+
+        z_range_end = widgets.IntText(
+            value=self.config.spatial_coverage.z_range_end or 0,
+            description="Z-range end:",
+            disabled=not three_d.value,
+            style={"description_width": "initial"},
+        )
+
+        # Info text for 3D modes
+        three_d_info = widgets.HTML(
+            value="<small><i>3D processing: specify z-range for volumetric processing</i></small>"
         )
 
         # Patches settings
         use_patches = widgets.Checkbox(
-            value=self.config.patches.use_patches, description="Use patches"
+            value=self.config.processing.use_patches, description="Use patches"
         )
 
         patches_per_image = widgets.IntSlider(
-            value=self.config.patches.patches_per_image,
+            value=self.config.processing.patches_per_image,
             min=1,
             max=20,
             description="Patches per image:",
@@ -484,7 +502,7 @@ class WorkflowWidget:
         )
 
         patch_size = widgets.Text(
-            value=f"{self.config.patches.patch_size[0]}, {self.config.patches.patch_size[1]}",
+            value=f"{self.config.processing.patch_size[0]}, {self.config.processing.patch_size[1]}",
             description="Patch size:",
             placeholder="512, 512",
             disabled=not use_patches.value,
@@ -500,6 +518,10 @@ class WorkflowWidget:
         )
         z_slice_mode.observe(
             lambda c: self._toggle_list_setting(c, z_slices), names="value"
+        )
+        three_d.observe(
+            lambda c: self._toggle_3d_settings(c, z_range_start, z_range_end),
+            names="value",
         )
         use_patches.observe(
             lambda c: self._toggle_patch_settings(c, patches_per_image, patch_size),
@@ -518,6 +540,9 @@ class WorkflowWidget:
                 z_slice_mode,
                 z_slices,
                 three_d,
+                z_range_start,
+                z_range_end,
+                three_d_info,
                 use_patches,
                 patches_per_image,
                 patch_size,
@@ -528,7 +553,7 @@ class WorkflowWidget:
         """Create technical settings group."""
         # Batch processing
         batch_size = widgets.IntSlider(
-            value=self.config.batch_processing.batch_size,
+            value=self.config.processing.batch_size,
             min=0,
             max=10,
             description="Batch size:",
@@ -547,7 +572,7 @@ class WorkflowWidget:
                 ("vit_l", "vit_l"),
                 ("vit_h", "vit_h"),
             ],
-            value=self.config.micro_sam.model_type,
+            value=self.config.ai_model.model_type,
             description="SAM Model:",
             style={"description_width": "initial"},
         )
@@ -728,7 +753,7 @@ class WorkflowWidget:
             )
 
             # Update config output folder
-            self.config.batch_processing.output_folder = self.working_directory
+            self.config.output.output_directory = Path(self.working_directory)
             self._update_progress()
         except Exception as e:
             self.directory_status.value = f"❌ Error creating directory: {e}"
@@ -824,7 +849,7 @@ class WorkflowWidget:
             # Find table name
             for table in self.annotation_tables:
                 if table.get("id") == self.selected_table_id:
-                    self.config.training.trainingset_name = table.get("name", "unknown")
+                    self.config.name = table.get("name", "unknown")
                     break
 
             self.config.workflow.resume_from_table = True
@@ -835,13 +860,21 @@ class WorkflowWidget:
         try:
             container_id = self.container_widgets["container"].value
             container_type = self.container_widgets["type"].value
-            base_name = self.new_table_name.value.strip() or None
+            # If user provided a custom name, use it; otherwise let function generate timestamped name
+            custom_name = self.new_table_name.value.strip()
 
-            unique_name = generate_unique_table_name(
-                self.connection, container_type, container_id, base_name
-            )
+            if custom_name:
+                # User provided custom name - make it unique
+                unique_name = generate_unique_table_name(
+                    self.connection, container_type, container_id, custom_name
+                )
+            else:
+                # No custom name - let function generate timestamped name
+                unique_name = generate_unique_table_name(
+                    self.connection, container_type, container_id
+                )
             self.new_table_name.value = unique_name
-            self.config.training.trainingset_name = unique_name
+            self.config.name = unique_name
             self.config.workflow.resume_from_table = False
 
             with self.status_output:
@@ -872,6 +905,12 @@ class WorkflowWidget:
         patches_per_image.disabled = not enabled
         patch_size.disabled = not enabled
 
+    def _toggle_3d_settings(self, change, z_range_start, z_range_end):
+        """Toggle 3D settings based on three_d checkbox."""
+        enabled = change["new"]
+        z_range_start.disabled = not enabled
+        z_range_end.disabled = not enabled
+
     def _on_update_config(self, button):
         """Update configuration from all widget values."""
         try:
@@ -885,12 +924,21 @@ class WorkflowWidget:
 
                 # Get container name for description
                 try:
-                    container_obj = self.connection.getObject(
-                        container_type.capitalize(), container_id
-                    )
-                    if container_obj:
-                        container_name = container_obj.getName()
-                        self.config.omero.source_desc = f"Workflow: {container_type} {container_name} (ID: {container_id})"
+                    if self.connection is not None:
+                        container_obj = self.connection.getObject(
+                            container_type.capitalize(), container_id
+                        )
+                        if container_obj:
+                            container_name = container_obj.getName()
+                            self.config.omero.source_desc = f"Workflow: {container_type} {container_name} (ID: {container_id})"
+                        else:
+                            self.config.omero.source_desc = (
+                                f"Workflow: {container_type} (ID: {container_id})"
+                            )
+                    else:
+                        self.config.omero.source_desc = (
+                            f"Workflow: {container_type} (ID: {container_id})"
+                        )
                 except:
                     self.config.omero.source_desc = (
                         f"Workflow: {container_type} (ID: {container_id})"
@@ -901,23 +949,19 @@ class WorkflowWidget:
                     # Continuing existing table
                     for table in self.annotation_tables:
                         if table.get("id") == self.selected_table_id:
-                            self.config.training.trainingset_name = table.get(
-                                "name", "unknown"
-                            )
+                            self.config.name = table.get("name", "unknown")
                             self.config.workflow.resume_from_table = True
                             break
                 elif self.new_table_name.value.strip():
                     # Creating new table
-                    self.config.training.trainingset_name = (
-                        self.new_table_name.value.strip()
-                    )
+                    self.config.name = self.new_table_name.value.strip()
                     self.config.workflow.resume_from_table = False
 
                 # Update OMERO status display
                 self.omero_status.value = f"""
                 <h5>📡 OMERO Settings</h5>
                 <p><b>Container:</b> {container_type} (ID: {container_id})</p>
-                <p><b>Training Set:</b> {self.config.training.trainingset_name}</p>
+                <p><b>Training Set:</b> {self.config.name}</p>
                 <p><b>Resume from table:</b> {self.config.workflow.resume_from_table}</p>
                 """
 
@@ -932,7 +976,7 @@ class WorkflowWidget:
 
             # Update working directory
             if self.working_directory:
-                self.config.batch_processing.output_folder = self.working_directory
+                self.config.output.output_directory = Path(self.working_directory)
 
             with self.status_output:
                 clear_output()
@@ -940,8 +984,8 @@ class WorkflowWidget:
                 print(
                     f"📊 Container: {self.config.omero.container_type} (ID: {self.config.omero.container_id})"
                 )
-                print(f"🎯 Training Set: {self.config.training.trainingset_name}")
-                print(f"🔬 Model: {self.config.micro_sam.model_type}")
+                print(f"🎯 Training Set: {self.config.name}")
+                print(f"🔬 Model: {self.config.ai_model.model_type}")
 
         except Exception as e:
             with self.status_output:
@@ -972,6 +1016,12 @@ class WorkflowWidget:
                     annotation_widgets["z_slice_mode"] = child
                 elif "3D processing" in child.description:
                     annotation_widgets["three_d"] = child
+                elif "Volumetric 3D mode" in child.description:
+                    annotation_widgets["volumetric_processing"] = child
+                elif "Z-range start" in child.description:
+                    annotation_widgets["z_range_start"] = child
+                elif "Z-range end" in child.description:
+                    annotation_widgets["z_range_end"] = child
                 elif "Use patches" in child.description:
                     annotation_widgets["use_patches"] = child
                 elif "Patches per image" in child.description:
@@ -987,37 +1037,48 @@ class WorkflowWidget:
         if "validate_n" in annotation_widgets:
             self.config.training.validate_n = annotation_widgets["validate_n"].value
         if "channel" in annotation_widgets:
-            self.config.omero.channel = annotation_widgets["channel"].value
+            self.config.spatial_coverage.channels[0] = annotation_widgets[
+                "channel"
+            ].value
         if "timepoint_mode" in annotation_widgets:
-            self.config.micro_sam.timepoint_mode = annotation_widgets[
+            self.config.spatial_coverage.timepoint_mode = annotation_widgets[
                 "timepoint_mode"
             ].value
         if "timepoints" in annotation_widgets:
             timepoints_str = annotation_widgets["timepoints"].value
             try:
-                self.config.micro_sam.timepoints = [
+                self.config.spatial_coverage.timepoints = [
                     int(x.strip()) for x in timepoints_str.split(",") if x.strip()
                 ]
             except:
-                self.config.micro_sam.timepoints = [0]
+                self.config.spatial_coverage.timepoints = [0]
         if "z_slice_mode" in annotation_widgets:
-            self.config.micro_sam.z_slice_mode = annotation_widgets[
+            self.config.spatial_coverage.z_slice_mode = annotation_widgets[
                 "z_slice_mode"
             ].value
         if "z_slices" in annotation_widgets:
             z_slices_str = annotation_widgets["z_slices"].value
             try:
-                self.config.micro_sam.z_slices = [
+                self.config.spatial_coverage.z_slices = [
                     int(x.strip()) for x in z_slices_str.split(",") if x.strip()
                 ]
             except:
-                self.config.micro_sam.z_slices = [0]
+                self.config.spatial_coverage.z_slices = [0]
         if "three_d" in annotation_widgets:
-            self.config.micro_sam.three_d = annotation_widgets["three_d"].value
+            self.config.spatial_coverage.three_d = annotation_widgets["three_d"].value
+
+        if "z_range_start" in annotation_widgets:
+            self.config.spatial_coverage.z_range_start = annotation_widgets[
+                "z_range_start"
+            ].value
+        if "z_range_end" in annotation_widgets:
+            self.config.spatial_coverage.z_range_end = annotation_widgets[
+                "z_range_end"
+            ].value
         if "use_patches" in annotation_widgets:
-            self.config.patches.use_patches = annotation_widgets["use_patches"].value
+            self.config.processing.use_patches = annotation_widgets["use_patches"].value
         if "patches_per_image" in annotation_widgets:
-            self.config.patches.patches_per_image = annotation_widgets[
+            self.config.processing.patches_per_image = annotation_widgets[
                 "patches_per_image"
             ].value
         if "patch_size" in annotation_widgets:
@@ -1025,7 +1086,7 @@ class WorkflowWidget:
             try:
                 sizes = [int(x.strip()) for x in patch_size_str.split(",") if x.strip()]
                 if len(sizes) == 2:
-                    self.config.patches.patch_size = tuple(sizes)
+                    self.config.processing.patch_size = list(sizes)
             except:
                 pass
 
@@ -1044,13 +1105,11 @@ class WorkflowWidget:
 
         # Update configuration from widgets
         if "batch_size" in technical_widgets:
-            self.config.batch_processing.batch_size = technical_widgets[
-                "batch_size"
-            ].value
+            self.config.processing.batch_size = technical_widgets["batch_size"].value
         if "model_type" in technical_widgets:
-            self.config.micro_sam.model_type = technical_widgets["model_type"].value
+            self.config.ai_model.model_type = technical_widgets["model_type"].value
         if "output_folder" in technical_widgets:
-            self.config.batch_processing.output_folder = technical_widgets[
+            self.config.output.output_directory = technical_widgets[
                 "output_folder"
             ].value
 
@@ -1083,7 +1142,7 @@ class WorkflowWidget:
         """Handle save configuration."""
         try:
             if not self.working_directory:
-                self.save_status.value = "❌ No working directory selected"
+                self.save_status.value = "No working directory selected"
                 return
 
             # First update configuration from all widgets

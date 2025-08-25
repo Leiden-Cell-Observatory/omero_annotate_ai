@@ -63,18 +63,14 @@ class AnnotationPipeline:
         if self.conn is None:
             raise ValueError("OMERO connection is required")
 
-        # Validate configuration
-        self.config.validate()
-
     def _setup_directories(self):
         """Create necessary output directories."""
-        output_path = Path(self.config.batch_processing.output_folder)
+        output_path = Path(self.config.output.output_directory)
 
         # Create main directories - everything under the single output folder
         dirs = [
             output_path,
             output_path / "embed",
-            output_path / "zarr",
             output_path / "annotations",  # Final annotations go here
         ]
 
@@ -96,8 +92,8 @@ class AnnotationPipeline:
     def _get_table_title(self) -> str:
         """Generate table title based on configuration."""
         # Use the existing trainingset_name from config
-        if self.config.training.trainingset_name:
-            return f"micro_sam_training_{self.config.training.trainingset_name}"
+        if self.config.name:
+            return f"micro_sam_training_{self.config.name}"
         else:
             # Fallback to container-based naming
             return f"micro_sam_training_{self.config.omero.container_type}_{self.config.omero.container_id}"
@@ -196,9 +192,10 @@ class AnnotationPipeline:
         })
 
         try:
+            container_type_str = str(self.config.omero.container_type).capitalize()
             config_ann_id = ezomero.post_map_annotation(
                 self.conn,
-                object_type=self.config.omero.container_type.capitalize(),
+                object_type=container_type_str,
                 object_id=self.config.omero.container_id,
                 kv_dict=flat_config,
                 ns="openmicroscopy.org/omero/annotation",
@@ -245,48 +242,111 @@ class AnnotationPipeline:
             # Handle timepoints
             timepoints = self._get_timepoints_for_image(image)
 
-            # Handle z-slices
+            # Handle z-slices based on processing mode
             z_slices = self._get_z_slices_for_image(image)
+            
+            # Check if we're doing volumetric 3D processing
+            is_volumetric = self.config.spatial_coverage.is_volumetric
 
-            # Create units for each timepoint/z-slice combination
+            # Create units based on processing mode
             for t in timepoints:
-                for z in z_slices:
-                    if self.config.patches.use_patches:
-                        # Create multiple units for patches
+                if is_volumetric:
+                    # 3D volumetric mode: one unit per timepoint (includes all z-slices)
+                    z_start = min(z_slices) if z_slices else 0
+                    z_end = max(z_slices) if z_slices else 0 
+                    z_length = len(z_slices) if z_slices else 1
+                    
+                    if self.config.processing.use_patches:
+                        # Create multiple units for 3D patches
                         patch_coords = self._generate_patch_coordinates(image)
                         for i, (x, y) in enumerate(patch_coords):
                             processing_units.append(
                                 (
                                     image_id,
-                                    f"{t}_{z}_{i}",
+                                    f"{t}_3d_{i}",
                                     {
                                         "timepoint": t,
-                                        "z_slice": z,
+                                        "z_slice": z_start,  # Start slice for compatibility
+                                        "z_start": z_start,
+                                        "z_end": z_end,
+                                        "z_length": z_length,
                                         "patch_x": x,
                                         "patch_y": y,
                                         "category": category,
-                                        "model_type": self.config.micro_sam.model_type,
-                                        "channel": self.config.omero.channel,
-                                        "three_d": self.config.micro_sam.three_d,
+                                        "model_type": self.config.ai_model.model_type,
+                                        "channel": self.config.spatial_coverage.primary_channel,
+                                        "three_d": True,
+                                        "is_volumetric": True,
                                     },
                                 )
                             )
                     else:
-                        # Single unit for full image
+                        # Single unit for full 3D volume
                         processing_units.append(
                             (
                                 image_id,
-                                f"{t}_{z}",
+                                f"{t}_3d",
                                 {
                                     "timepoint": t,
-                                    "z_slice": z,
+                                    "z_slice": z_start,  # Start slice for compatibility
+                                    "z_start": z_start,
+                                    "z_end": z_end,
+                                    "z_length": z_length,
                                     "category": category,
-                                    "model_type": self.config.micro_sam.model_type,
-                                    "channel": self.config.omero.channel,
-                                    "three_d": self.config.micro_sam.three_d,
+                                    "model_type": self.config.ai_model.model_type,
+                                    "channel": self.config.spatial_coverage.primary_channel,
+                                    "three_d": True,
+                                    "is_volumetric": True,
                                 },
                             )
                         )
+                else:
+                    # 2D mode: create units per z-slice (existing behavior)
+                    for z in z_slices:
+                        if self.config.processing.use_patches:
+                            # Create multiple units for 2D patches
+                            patch_coords = self._generate_patch_coordinates(image)
+                            for i, (x, y) in enumerate(patch_coords):
+                                processing_units.append(
+                                    (
+                                        image_id,
+                                        f"{t}_{z}_{i}",
+                                        {
+                                            "timepoint": t,
+                                            "z_slice": z,
+                                            "z_start": z,
+                                            "z_end": z,
+                                            "z_length": 1,
+                                            "patch_x": x,
+                                            "patch_y": y,
+                                            "category": category,
+                                            "model_type": self.config.ai_model.model_type,
+                                            "channel": self.config.spatial_coverage.primary_channel,
+                                            "three_d": False,
+                                            "is_volumetric": False,
+                                        },
+                                    )
+                                )
+                        else:
+                            # Single unit for 2D slice
+                            processing_units.append(
+                                (
+                                    image_id,
+                                    f"{t}_{z}",
+                                    {
+                                        "timepoint": t,
+                                        "z_slice": z,
+                                        "z_start": z,
+                                        "z_end": z,
+                                        "z_length": 1,
+                                        "category": category,
+                                        "model_type": self.config.ai_model.model_type,
+                                        "channel": self.config.spatial_coverage.primary_channel,
+                                        "three_d": False,
+                                        "is_volumetric": False,
+                                    },
+                                )
+                            )
 
         return processing_units
 
@@ -294,31 +354,31 @@ class AnnotationPipeline:
         """Get timepoints to process for an image based on configuration."""
         max_t = image.getSizeT()
 
-        if self.config.micro_sam.timepoint_mode == "all":
+        if self.config.spatial_coverage.timepoint_mode == "all":
             return list(range(max_t))
-        elif self.config.micro_sam.timepoint_mode == "random":
-            n_points = min(len(self.config.micro_sam.timepoints), max_t)
+        elif self.config.spatial_coverage.timepoint_mode == "random":
+            n_points = min(len(self.config.spatial_coverage.timepoints), max_t)
             return random.sample(range(max_t), n_points)
         else: # specific
-            return [t for t in self.config.micro_sam.timepoints if t < max_t]
+            return [t for t in self.config.spatial_coverage.timepoints if t < max_t]
 
     def _get_z_slices_for_image(self, image) -> List[int]:
         """Get z-slices to process for an image based on configuration."""
         max_z = image.getSizeZ()
 
-        if self.config.micro_sam.z_slice_mode == "all":
+        if self.config.spatial_coverage.z_slice_mode == "all":
             return list(range(max_z))
-        elif self.config.micro_sam.z_slice_mode == "random":
-            n_slices = min(len(self.config.micro_sam.z_slices), max_z)
+        elif self.config.spatial_coverage.z_slice_mode == "random":
+            n_slices = min(len(self.config.spatial_coverage.z_slices), max_z)
             return random.sample(range(max_z), n_slices)
         else: # specific
-            return [z for z in self.config.micro_sam.z_slices if z < max_z]
+            return [z for z in self.config.spatial_coverage.z_slices if z < max_z]
 
     def _generate_patch_coordinates(self, image) -> List[Tuple[int, int]]:
         """Generate patch coordinates for an image."""
-        patch_size = self.config.patches.patch_size
-        patches_per_image = self.config.patches.patches_per_image
-        random_patches = self.config.patches.random_patches
+        patch_size = self.config.processing.patch_size
+        patches_per_image = self.config.processing.patches_per_image
+        random_patches = self.config.processing.random_patches
 
         image_shape = (image.getSizeY(), image.getSizeX())
 
@@ -352,7 +412,7 @@ class AnnotationPipeline:
             images = []
             metadata = []
 
-            for image_obj, sequence_val, meta, row_idx in batch_data:
+            for image_obj, sequence_val, meta, row_idx in batch_data    :
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
@@ -362,24 +422,25 @@ class AnnotationPipeline:
                 metadata.append((sequence_val, meta_with_image_id, row_idx))
 
             # Set up output paths
-            output_path = Path(self.config.batch_processing.output_folder)
+            output_path = Path(self.config.output.output_directory)
             embedding_path = output_path / "embed"
             annotations_path = output_path / "annotations"
             annotations_path.mkdir(exist_ok=True)
-
+            # print("DEBUG: Ready to run micro_sam annotations")
             # Run micro-SAM annotation
-            model_type = self.config.micro_sam.model_type
+            model_type = self.config.ai_model.model_type
 
+    
             # Run image series annotator with explicit napari.run() call
             viewer = image_series_annotator(
                 images=images,
                 output_folder=str(annotations_path),
                 model_type=model_type,
-                viewer=None, # Let it create its own viewer
-                return_viewer=True, # Important: get the viewer back
+                viewer=None,  # Let it create its own viewer
+                return_viewer=True,  # Important: get the viewer back
                 embedding_path=str(embedding_path),
-                is_volumetric=self.config.micro_sam.three_d,
-                skip_segmented=True
+                is_volumetric=self.config.spatial_coverage.three_d,
+                skip_segmented=True,
             )
 
             # Explicitly start the event loop - this will block until viewer is closed
@@ -399,28 +460,60 @@ class AnnotationPipeline:
         """Load image data from OMERO based on metadata."""
 
         timepoint = metadata["timepoint"]
-        z_slice = metadata["z_slice"]
-        channel = self.config.omero.channel
+        channel = self.config.spatial_coverage.primary_channel
+        is_volumetric = metadata.get("is_volumetric", False)
 
-        # Load image data using dask for efficiency
-        image_data = get_dask_image_multiple(
-            conn=self.conn,
-            image_list=[image_obj],
-            timepoints=[timepoint],
-            channels=[channel],
-            z_slices=[z_slice],
-        )[0]  # Get first (and only) image
+        if is_volumetric:
+            # Load 3D volume: all z-slices at once
+            z_start = metadata.get("z_start", 0)
+            z_end = metadata.get("z_end", 0)
+            z_length = metadata.get("z_length", 1)
 
-        # Handle patches if needed
-        if self.config.patches.use_patches and "patch_x" in metadata:
+            # Generate z-slice list
+            z_slices = list(range(z_start, z_end + 1))
+
+            print(f"Loading 3D volume: z_slices {z_start}-{z_end} (length: {z_length})")
+
+            image_data = get_dask_image_multiple(
+                conn=self.conn,
+                image_list=[image_obj],
+                timepoints=[timepoint],
+                channels=[channel],
+                z_slices=z_slices,  # All z-slices for 3D volume
+            )[0]
+
+            # Result should be 3D: (z, y, x) or 4D: (t, z, y, x)
+            print(f"Loaded 3D data shape: {image_data.shape}")
+
+        else:
+            # Load single z-slice for 2D processing
+            z_slice = metadata["z_slice"]
+            image_data = get_dask_image_multiple(
+                conn=self.conn,
+                image_list=[image_obj],
+                timepoints=[timepoint],
+                channels=[channel],
+                z_slices=[z_slice],
+            )[0]
+
+            print(f"Loaded 2D data shape: {image_data.shape}")
+
+        # Handle patches if needed (works for both 2D and 3D)
+        if self.config.processing.use_patches and "patch_x" in metadata:
             patch_x = metadata["patch_x"]
             patch_y = metadata["patch_y"]
-            patch_h, patch_w = self.config.patches.patch_size
+            patch_h, patch_w = self.config.processing.patch_size
 
-            # Extract patch
-            image_data = image_data[
-                patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
-            ]
+            if is_volumetric:
+                # Extract 3D patch: (z, y, x)
+                image_data = image_data[
+                    :, patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
+                ]
+            else:
+                # Extract 2D patch: (y, x)
+                image_data = image_data[
+                    patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
+                ]
 
         return image_data
 
@@ -499,7 +592,7 @@ class AnnotationPipeline:
                     image_id = meta.get("image_id")
                     patch_offset = None
 
-                    if self.config.patches.use_patches:
+                    if self.config.processing.use_patches:
                         patch_offset = (meta["patch_x"], meta["patch_y"])
 
                     label_id, roi_id = upload_rois_and_labels(
@@ -507,15 +600,15 @@ class AnnotationPipeline:
                         image_id=image_id,
                         annotation_file=tiff_path,
                         patch_offset=patch_offset,
-                        trainingset_name=self.config.training.trainingset_name,
-                        trainingset_description=f"Training set: {self.config.training.trainingset_name}",
+                        trainingset_name=self.config.name,
+                        trainingset_description=f"Training set: {self.config.name}",
                     )
 
                     # Store the annotation IDs
                     annotation_ids.append((label_id, roi_id))
                 else:
                     # Save locally
-                    local_dir = Path(self.config.batch_processing.output_folder)
+                    local_dir = Path(self.config.output.output_directory)
                     local_file = local_dir / f"annotation_{sequence_val}.tiff"
                     shutil.copy(tiff_path, local_file)
                     annotation_ids.append((None, None))
@@ -523,25 +616,27 @@ class AnnotationPipeline:
                 # Add to list of completed rows
                 completed_row_indices.append(row_idx)
 
-        # Update tracking table with annotation IDs for each completed row
+        # Update tracking table with annotation IDs for all completed rows in batch
         if completed_row_indices:
             if not self.config.workflow.read_only_mode:
-                # Update rows individually since each has different annotation IDs
-                for i, row_idx in enumerate(completed_row_indices):
-                    label_id, roi_id = (
-                        annotation_ids[i] if i < len(annotation_ids) else (None, None)
-                    )
-                    table_id = update_tracking_table_rows(
-                        conn=self.conn,
-                        table_id=table_id,
-                        row_indices=[row_idx], # Update one row at a time
-                        status="completed",
-                        label_id=label_id,
-                        roi_id=roi_id,
-                        annotation_type=self.config.training.annotation_type,
-                        container_type=self.config.omero.container_type,
-                        container_id=self.config.omero.container_id,
-                    )
+                # Extract label and ROI IDs for batch update
+                label_ids = [aid[0] for aid in annotation_ids] if annotation_ids else None
+                roi_ids = [aid[1] for aid in annotation_ids] if annotation_ids else None
+                
+                # Update all rows in a single operation
+                updated_table_id = update_tracking_table_rows(
+                    conn=self.conn,
+                    table_id=table_id,
+                    row_indices=completed_row_indices,  # All rows at once
+                    status="completed",
+                    label_ids=label_ids,  # List of label IDs
+                    roi_ids=roi_ids,      # List of ROI IDs
+                    annotation_type=self.config.annotation_methodology.annotation_type,
+                    container_type=self.config.omero.container_type,
+                    container_id=self.config.omero.container_id,
+                )
+                if updated_table_id is not None:
+                    table_id = updated_table_id
             else:
                 # In read-only mode, save progress locally
                 self._save_local_progress(completed_row_indices, metadata)
@@ -585,7 +680,7 @@ class AnnotationPipeline:
                 )
 
         print(
-            f"Creating table for {len(images_list)} images with model: {self.config.micro_sam.model_type}"
+            f"Creating table for {len(images_list)} images with model: {self.config.ai_model.model_type}"
         )
 
         # Setup directories
@@ -648,7 +743,7 @@ class AnnotationPipeline:
         print(f"Found {len(processing_units)} processing units")
 
         # Process in batches
-        batch_size = self.config.batch_processing.batch_size
+        batch_size = self.config.processing.batch_size
         processed_count = 0
 
         # Handle batch_size = 0 (process all images in one batch)
@@ -766,7 +861,7 @@ class AnnotationPipeline:
         self, completed_row_indices: List[int], metadata: List[Tuple]
     ) -> None:
         """Save progress locally in read-only mode by creating/updating a CSV table."""
-        output_path = Path(self.config.batch_processing.output_folder)
+        output_path = Path(self.config.output.output_directory)
         table_file = output_path / "tracking_table.csv"
         if table_file.exists():
             df = pd.read_csv(table_file)

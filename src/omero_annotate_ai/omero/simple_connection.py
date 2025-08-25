@@ -17,14 +17,9 @@ try:
 except ImportError:
     KEYRING_AVAILABLE = False
 
-try:
-    from dotenv import load_dotenv
-    from omero.gateway import BlitzGateway
 
-    OMERO_AVAILABLE = True
-except ImportError:
-    OMERO_AVAILABLE = False
-
+from dotenv import load_dotenv
+from omero.gateway import BlitzGateway
 
 class SimpleOMEROConnection:
     """Simple OMERO connection manager with keychain support for passwords."""
@@ -197,7 +192,7 @@ class SimpleOMEROConnection:
                 )
 
         # Try to load .ezomero file (if no other config found)
-        if not config and OMERO_AVAILABLE:
+        if not config:
             try:
                 # Save current environment to restore later
                 original_env = {}
@@ -258,7 +253,7 @@ class SimpleOMEROConnection:
         group: Optional[str] = None,
         secure: bool = True,
         verbose: bool = True,
-    ) -> Optional["BlitzGateway"]:
+    ) -> Optional[Any]:
         """Create OMERO connection.
 
         Args:
@@ -272,11 +267,6 @@ class SimpleOMEROConnection:
         Returns:
             BlitzGateway connection object if successful, None otherwise
         """
-        if not OMERO_AVAILABLE:
-            if verbose:
-                print("❌ OMERO not available. Install with: pip install -e .[omero]")
-            return None
-
         try:
             if verbose:
                 print(f"🔌 Connecting to OMERO server: {host}")
@@ -343,7 +333,7 @@ class SimpleOMEROConnection:
 
     def create_connection_from_config(
         self, widget_config: Dict[str, Any]
-    ) -> Optional["BlitzGateway"]:
+    ) -> Optional[Any]:
         """Create connection from widget configuration.
 
         Args:

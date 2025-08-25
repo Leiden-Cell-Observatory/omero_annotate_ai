@@ -58,6 +58,9 @@ def initialize_tracking_table(
             "annotation_type",
             "annotation_creation_time",
             "schema_attachment_id",
+            "z_start",
+            "z_end", 
+            "z_length",
         ]
     )
 
@@ -86,6 +89,12 @@ def initialize_tracking_table(
             patch_height = image.getSizeY()
 
         model_type = metadata.get("model_type", "vit_l")
+        
+        # Handle 3D fields
+        is_volumetric = metadata.get("is_volumetric", metadata.get("three_d", False))
+        z_start = metadata.get("z_start", metadata.get("z_slice", -1))
+        z_end = metadata.get("z_end", metadata.get("z_slice", -1))
+        z_length = metadata.get("z_length", 1)
 
         new_row = pd.DataFrame(
             [
@@ -100,7 +109,7 @@ def initialize_tracking_table(
                     "sam_model": model_type,
                     "label_id": -1,
                     "roi_id": -1,
-                    "is_volumetric": metadata.get("three_d", False),
+                    "is_volumetric": is_volumetric,
                     "processed": False,
                     "is_patch": is_patch,
                     "patch_x": int(patch_x),
@@ -110,6 +119,10 @@ def initialize_tracking_table(
                     "annotation_type": "segmentation_mask",
                     "annotation_creation_time": None,
                     "schema_attachment_id": -1,
+                    # New 3D fields
+                    "z_start": int(z_start),
+                    "z_end": int(z_end),
+                    "z_length": int(z_length),
                 }
             ]
         )
@@ -124,6 +137,9 @@ def initialize_tracking_table(
         "patch_height",
         "z_slice",
         "timepoint",
+        "z_start",
+        "z_end", 
+        "z_length",
     ]
     for col in numeric_columns:
         if col in df.columns:
@@ -212,14 +228,25 @@ def get_unprocessed_units(conn, table_id: int) -> List[Tuple]:
         sequence_val = 0 if row.get("train", True) else 1
 
         # Build metadata dict
+        is_volumetric = bool(row.get("is_volumetric", False))
+        
         metadata = {
             "timepoint": int(row.get("timepoint", -1)),
             "z_slice": int(row.get("z_slice", -1)),
             "channel": int(row.get("channel", -1)),
-            "three_d": bool(row.get("is_volumetric", False)),
+            "three_d": is_volumetric,  # For backward compatibility
+            "is_volumetric": is_volumetric,
             "model_type": str(row.get("sam_model", "")),
             "category": "training" if row.get("train", True) else "validation",
         }
+        
+        # Add 3D fields if available (backward compatibility with old tables)
+        if "z_start" in row and row.get("z_start") is not None and row.get("z_start") != -1:
+            metadata.update({
+                "z_start": int(row.get("z_start", -1)),
+                "z_end": int(row.get("z_end", -1)),
+                "z_length": int(row.get("z_length", 1)),
+            })
 
         # Add patch info if it's a patch
         if row.get("is_patch", False):
@@ -245,20 +272,25 @@ def update_tracking_table_rows(
     annotation_type: str,
     label_id: Optional[int] = None,
     roi_id: Optional[int] = None,
+    label_ids: Optional[List[Optional[int]]] = None,
+    roi_ids: Optional[List[Optional[int]]] = None,
     container_type: str = "",
     container_id: int = 0,
 ) -> Optional[int]:
     """Update tracking table rows with processing status and annotation IDs.
 
     This implementation updates the table by replacing it with a new one.
+    Supports both single annotation IDs (legacy) and lists of IDs (batch mode).
 
     Args:
         conn: OMERO connection
         table_id: ID of tracking table
         row_indices: List of row indices to update
         status: Status to set ('completed', 'failed', etc.)
-        label_id: ID of uploaded label file annotation (optional)
-        roi_id: ID of uploaded ROI collection (optional)
+        label_id: Single label file annotation ID (legacy, optional)
+        roi_id: Single ROI collection ID (legacy, optional)
+        label_ids: List of label file annotation IDs, one per row (optional)
+        roi_ids: List of ROI collection IDs, one per row (optional)
         annotation_type: Type of annotation
         container_type: Type of OMERO container (e.g. 'dataset', 'project')
         container_id: ID of the container
@@ -287,15 +319,32 @@ def update_tracking_table_rows(
 
         current_time = datetime.now().isoformat()
 
-        for idx in row_indices:
+        for i, idx in enumerate(row_indices):
             if idx < len(df):
                 df.loc[idx, "processed"] = status == "completed"
                 if status == "completed":
                     # Only update these fields when successfully completed
-                    if label_id is not None:
-                        df.loc[idx, "label_id"] = str(label_id)
-                    if roi_id is not None:
-                        df.loc[idx, "roi_id"] = str(roi_id)
+                    
+                    # Handle label IDs: use list if provided, otherwise single value for all rows
+                    current_label_id = None
+                    if label_ids is not None and i < len(label_ids):
+                        current_label_id = label_ids[i]
+                    elif label_id is not None:
+                        current_label_id = label_id
+                    
+                    if current_label_id is not None:
+                        df.loc[idx, "label_id"] = str(current_label_id)
+                    
+                    # Handle ROI IDs: use list if provided, otherwise single value for all rows  
+                    current_roi_id = None
+                    if roi_ids is not None and i < len(roi_ids):
+                        current_roi_id = roi_ids[i]
+                    elif roi_id is not None:
+                        current_roi_id = roi_id
+                    
+                    if current_roi_id is not None:
+                        df.loc[idx, "roi_id"] = str(current_roi_id)
+                    
                     df.loc[idx, "annotation_type"] = annotation_type
                     df.loc[idx, "annotation_creation_time"] = current_time
 
@@ -309,6 +358,9 @@ def update_tracking_table_rows(
             "patch_height",
             "z_slice",
             "timepoint",
+            "z_start",
+            "z_end", 
+            "z_length",
         ]
         for col in numeric_columns:
             if col in df_for_omero.columns:
@@ -403,11 +455,15 @@ def upload_rois_and_labels(
         f"🏷️ Found {len(unique_labels)} unique labels: {unique_labels[:10]}..."
     )  # Show first 10 labels
 
-    # Get metadata from image for ROI creation
+    # Default metadata for ROI creation (can be enhanced with actual metadata)
     z_slice = 0  # Default to first z-slice
     channel = 0  # Default to first channel
     timepoint = 0  # Default to first timepoint
     model_type = "vit_b_lm"  # Default model type
+    is_volumetric = False  # Default to 2D mode
+    
+    # For 3D volumes, label_img should already be the proper 3D stack
+    # The ROI creation will handle 3D volumes appropriately
 
     # Create ROI shapes from label image
     print(f"🔍 Step 2: Converting labels to ROI shapes...")
@@ -417,7 +473,7 @@ def upload_rois_and_labels(
         channel=channel,
         timepoint=timepoint,
         model_type=model_type,
-        is_volumetric=False,  # Assume 2D for now
+        is_volumetric=is_volumetric,
         patch_offset=patch_offset,
     )
     print(f"✅ Created {len(shapes)} ROI shapes from labels")

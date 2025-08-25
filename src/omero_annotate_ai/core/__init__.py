@@ -1,7 +1,7 @@
 """Core functionality for OMERO AI annotation."""
 
-from .config import AnnotationConfig, create_default_config, load_config
-from .pipeline import AnnotationPipeline, create_pipeline
+from .annotation_config import AnnotationConfig, create_default_config, load_config
+from .annotation_pipeline import AnnotationPipeline, create_pipeline
 
 __all__ = [
     "AnnotationConfig",
