@@ -1142,7 +1142,7 @@ class WorkflowWidget:
         """Handle save configuration."""
         try:
             if not self.working_directory:
-                self.save_status.value = "No working directory selected"
+                self.save_status.value = "❌ No working directory selected"
                 return
 
             # First update configuration from all widgets
@@ -1150,8 +1150,10 @@ class WorkflowWidget:
 
             # Then save to file
             config_path = Path(self.working_directory) / "annotation_config.yaml"
+            
+            # This will now set config.config_file_path automatically
             self.config.save_yaml(config_path)
-
+            
             self.save_status.value = f"✅ Configuration saved to: {config_path}"
 
         except Exception as e:

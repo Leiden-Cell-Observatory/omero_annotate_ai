@@ -1,18 +1,28 @@
 """Main pipeline for OMERO annotation workflows."""
 
+# ========================================
+# DEBUG CONFIGURATION
+# ========================================
+# To disable all debug output, change DEBUG_MODE to False in the AnnotationPipeline class
+# or set AnnotationPipeline.DEBUG_MODE = False after import
+# ========================================
+
+# Standard library imports
+import logging
 import random
 import shutil
 import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+# Third-party imports
 import numpy as np
 import pandas as pd
-
 import ezomero
 
+# Optional imports (with error handling)
 try:
     import napari
     from micro_sam.sam_annotator import image_series_annotator
@@ -21,15 +31,19 @@ except ImportError:
     MICRO_SAM_AVAILABLE = False
     napari = None
     image_series_annotator = None
-except Exception as e:
+except Exception:
     MICRO_SAM_AVAILABLE = False
     napari = None
     image_series_annotator = None
 
-from .config import AnnotationConfig
+# Local imports
+from .annotation_config import AnnotationConfig, ImageAnnotation
 from ..omero.omero_functions import (
-    create_roi_namespace_for_table,
-    initialize_tracking_table
+    create_or_replace_tracking_table,
+    sync_omero_table_to_config,
+    update_workflow_status_map,
+    get_workflow_status_map,
+    upload_rois_and_labels
 )
 from ..omero.omero_utils import get_dask_image_multiple, get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
@@ -37,17 +51,22 @@ from ..processing.image_functions import generate_patch_coordinates
 
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
+    
+    # DEBUG FLAG - Set to False to disable all debug output
+    DEBUG_MODE = True
 
-    def __init__(self, config: AnnotationConfig, conn=None):
+    def __init__(self, config: AnnotationConfig, conn=None, config_file_path: Optional[Union[str, Path]] = None):
         """Initialize the pipeline with configuration and OMERO connection.
 
         Args:
             config: AnnotationConfig object containing all parameters
             conn: OMERO connection object (BlitzGateway)
+            config_file_path: Optional path to the source YAML configuration file for persistence
         """
         self.config = config
         self.conn = conn
         self.table_id = None  # Track current table ID
+        self.config_file_path = Path(config_file_path) if config_file_path else None
         self._validate_setup()
 
     def set_table_id(self, table_id: int) -> None:
@@ -57,6 +76,34 @@ class AnnotationPipeline:
     def get_table_id(self) -> Optional[int]:
         """Get the current table ID."""
         return self.table_id
+
+    def save_config_to_yaml(self, file_path: Optional[Union[str, Path]] = None) -> None:
+        """Save current config state back to YAML file for persistence.
+        
+        Args:
+            file_path: Optional path to save to. If None, uses stored config_file_path
+        """
+        save_path = file_path or self.config_file_path
+        
+        if save_path is None:
+            print("Warning: No YAML file path provided for saving config state")
+            return
+            
+        try:
+            self.config.save_yaml(save_path)
+            print(f"Config state saved to: {save_path}")
+        except Exception as e:
+            print(f"Error saving config to YAML: {e}")
+
+    def _auto_save_config(self) -> None:
+        """Automatically save config to YAML if path is available."""
+        if self.config_file_path is not None:
+            self.save_config_to_yaml()
+
+    def _debug_print(self, message: str) -> None:
+        """Print debug message if debug mode is enabled."""
+        if self.DEBUG_MODE:
+            print(message)
 
     def _validate_setup(self):
         """Validate the pipeline setup."""
@@ -99,77 +146,29 @@ class AnnotationPipeline:
             return f"micro_sam_training_{self.config.omero.container_type}_{self.config.omero.container_id}"
 
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
-        """Initialize or resume tracking table for the annotation process."""
+        """Initialize tracking table for the annotation process using config-first approach.
         
-        import logging
+        This method only creates new tables from config state. Resume logic is handled elsewhere.
+        """
         logger = logging.getLogger(__name__)
-
-        # If table_id is already set, validate and use it
-        if self.table_id is not None:
-            logger.info(f"Using existing table ID: {self.table_id}")
-            # Validate table exists
-            try:
-                table_obj = self.conn.getObject("FileAnnotation", self.table_id)
-                if table_obj is None:
-                    raise ValueError(f"Table with ID {self.table_id} not found")
-                return self.table_id
-            except Exception as e:
-                raise ValueError(f"Cannot access table {self.table_id}: {e}")
 
         # Generate table name
         table_title = self._get_table_title()
-
-        # Check if need to resume from existing table
-        if self.config.workflow.resume_from_table:
-            print(f"Looking for existing table: {table_title}")
-            existing_table = get_table_by_name(self.conn, table_title)
-            if existing_table:
-                table_id = existing_table.getId()
-
-                # Check workflow status before resuming
-                status_map = self._get_workflow_status_map()
-                if status_map:
-                    status = status_map.get("workflow_status", "unknown")
-                    completed = status_map.get("completed_units", "0")
-                    total = status_map.get("total_units", "0")
-
-                    if status == "complete":
-                        print(f"Workflow already complete: {completed}/{total} units processed")
-                        print(f"Table: {table_title} (ID: {table_id})")
-                        self.table_id = table_id
-                        return table_id
-                    elif status == "incomplete":
-                        print(f"Resuming incomplete workflow: {completed}/{total} units completed")
-                        print(f"Table: {table_title} (ID: {table_id})")
-                        self.table_id = table_id
-                        return table_id
-                    else:
-                        print(f"Resuming from existing table: {table_title}")
-                        self.table_id = table_id
-                        return table_id
-                else:
-                    print(f"Resuming from existing table: {table_title}")
-                    self.table_id = table_id
-                    return table_id
-
-        # Create new table
         logger.info(f"Creating new tracking table: {table_title}")
 
-        # Store ROI namespace for consistent naming
-        roi_namespace = create_roi_namespace_for_table(table_title)
-        logger.info(f"ROI namespace: {roi_namespace}")
+        # Prepare processing units by populating config.annotations
+        self._prepare_processing_units(images_list)
 
-        # Prepare processing units for table initialization
-        processing_units = self._prepare_processing_units(images_list)
-
-        # Initialize table with all planned processing units
-        table_id = initialize_tracking_table(
+        # Create table from config (all processed=False for new table)
+        config_df = self.config.to_dataframe()
+        config_df['processed'] = False  # Ensure all start as unprocessed
+        
+        table_id = create_or_replace_tracking_table(
             conn=self.conn,
+            config_df=config_df,
             table_title=table_title,
-            processing_units=processing_units,
             container_type=self.config.omero.container_type,
             container_id=self.config.omero.container_id,
-            source_desc=self.config.omero.source_desc,
         )
 
         # Store configuration in OMERO
@@ -204,17 +203,16 @@ class AnnotationPipeline:
         except Exception as e:
             print(f"Warning: Could not store configuration annotation: {e}")
 
-        # Initialize workflow status map for new table
-        self._update_workflow_status_map(table_id)
-
         # Store table ID internally
         self.table_id = table_id
         return table_id
 
-    def _prepare_processing_units(self, images_list: List[Any]) -> List[Tuple]:
-        """Prepare processing units based on configuration."""
-        processing_units = []
-
+    def _prepare_processing_units(self, images_list: List[Any]) -> None:
+        """Prepare processing units by populating config.annotations."""
+        
+        # Clear existing annotations first
+        self.config.annotations.clear()
+        
         # Determine which images to process
         if self.config.training.segment_all:
             selected_images = images_list
@@ -235,9 +233,10 @@ class AnnotationPipeline:
             selected_images = [images_list[i] for i in train_indices + val_indices]
             image_categories = ["training"] * n_train + ["validation"] * n_val
 
-        # Create processing units for each image
+        # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
             image_id = image.getId()
+            image_name = image.getName()
 
             # Handle timepoints
             timepoints = self._get_timepoints_for_image(image)
@@ -248,107 +247,99 @@ class AnnotationPipeline:
             # Check if we're doing volumetric 3D processing
             is_volumetric = self.config.spatial_coverage.is_volumetric
 
-            # Create units based on processing mode
+            # Create annotations based on processing mode
             for t in timepoints:
                 if is_volumetric:
-                    # 3D volumetric mode: one unit per timepoint (includes all z-slices)
+                    # 3D volumetric mode: one annotation per timepoint (includes all z-slices)
                     z_start = min(z_slices) if z_slices else 0
                     z_end = max(z_slices) if z_slices else 0 
                     z_length = len(z_slices) if z_slices else 1
                     
                     if self.config.processing.use_patches:
-                        # Create multiple units for 3D patches
+                        # Create multiple annotations for 3D patches
                         patch_coords = self._generate_patch_coordinates(image)
                         for i, (x, y) in enumerate(patch_coords):
-                            processing_units.append(
-                                (
-                                    image_id,
-                                    f"{t}_3d_{i}",
-                                    {
-                                        "timepoint": t,
-                                        "z_slice": z_start,  # Start slice for compatibility
-                                        "z_start": z_start,
-                                        "z_end": z_end,
-                                        "z_length": z_length,
-                                        "patch_x": x,
-                                        "patch_y": y,
-                                        "category": category,
-                                        "model_type": self.config.ai_model.model_type,
-                                        "channel": self.config.spatial_coverage.primary_channel,
-                                        "three_d": True,
-                                        "is_volumetric": True,
-                                    },
-                                )
+                            annotation = ImageAnnotation(
+                                image_id=image_id,
+                                image_name=image_name,
+                                annotation_id=f"{image_id}_{t}_3d_{i}",
+                                timepoint=t,
+                                z_slice=z_start,  # Start slice for compatibility
+                                z_start=z_start,
+                                z_end=z_end,
+                                z_length=z_length,
+                                is_patch=True,
+                                patch_x=x,
+                                patch_y=y,
+                                patch_width=self.config.processing.patch_size[0],
+                                patch_height=self.config.processing.patch_size[1],
+                                category=category,
+                                model_type=self.config.ai_model.model_type,
+                                channel=self.config.spatial_coverage.primary_channel,
+                                is_volumetric=True,
                             )
+                            self.config.add_annotation(annotation)
                     else:
-                        # Single unit for full 3D volume
-                        processing_units.append(
-                            (
-                                image_id,
-                                f"{t}_3d",
-                                {
-                                    "timepoint": t,
-                                    "z_slice": z_start,  # Start slice for compatibility
-                                    "z_start": z_start,
-                                    "z_end": z_end,
-                                    "z_length": z_length,
-                                    "category": category,
-                                    "model_type": self.config.ai_model.model_type,
-                                    "channel": self.config.spatial_coverage.primary_channel,
-                                    "three_d": True,
-                                    "is_volumetric": True,
-                                },
-                            )
+                        # Single annotation for full 3D volume
+                        annotation = ImageAnnotation(
+                            image_id=image_id,
+                            image_name=image_name,
+                            annotation_id=f"{image_id}_{t}_3d",
+                            timepoint=t,
+                            z_slice=z_start,  # Start slice for compatibility
+                            z_start=z_start,
+                            z_end=z_end,
+                            z_length=z_length,
+                            category=category,
+                            model_type=self.config.ai_model.model_type,
+                            channel=self.config.spatial_coverage.primary_channel,
+                            is_volumetric=True,
                         )
+                        self.config.add_annotation(annotation)
                 else:
-                    # 2D mode: create units per z-slice (existing behavior)
+                    # 2D mode: create annotations per z-slice (existing behavior)
                     for z in z_slices:
                         if self.config.processing.use_patches:
-                            # Create multiple units for 2D patches
+                            # Create multiple annotations for 2D patches
                             patch_coords = self._generate_patch_coordinates(image)
                             for i, (x, y) in enumerate(patch_coords):
-                                processing_units.append(
-                                    (
-                                        image_id,
-                                        f"{t}_{z}_{i}",
-                                        {
-                                            "timepoint": t,
-                                            "z_slice": z,
-                                            "z_start": z,
-                                            "z_end": z,
-                                            "z_length": 1,
-                                            "patch_x": x,
-                                            "patch_y": y,
-                                            "category": category,
-                                            "model_type": self.config.ai_model.model_type,
-                                            "channel": self.config.spatial_coverage.primary_channel,
-                                            "three_d": False,
-                                            "is_volumetric": False,
-                                        },
-                                    )
+                                annotation = ImageAnnotation(
+                                    image_id=image_id,
+                                    image_name=image_name,
+                                    annotation_id=f"{image_id}_{t}_{z}_{i}",
+                                    timepoint=t,
+                                    z_slice=z,
+                                    z_start=z,
+                                    z_end=z,
+                                    z_length=1,
+                                    patch_x=x,
+                                    patch_y=y,
+                                    is_patch=True,
+                                    patch_width=self.config.processing.patch_size[0],
+                                    patch_height=self.config.processing.patch_size[1],
+                                    category=category,
+                                    model_type=self.config.ai_model.model_type,
+                                    channel=self.config.spatial_coverage.primary_channel,
+                                    is_volumetric=False,
                                 )
+                                self.config.add_annotation(annotation)
                         else:
-                            # Single unit for 2D slice
-                            processing_units.append(
-                                (
-                                    image_id,
-                                    f"{t}_{z}",
-                                    {
-                                        "timepoint": t,
-                                        "z_slice": z,
-                                        "z_start": z,
-                                        "z_end": z,
-                                        "z_length": 1,
-                                        "category": category,
-                                        "model_type": self.config.ai_model.model_type,
-                                        "channel": self.config.spatial_coverage.primary_channel,
-                                        "three_d": False,
-                                        "is_volumetric": False,
-                                    },
-                                )
+                            # Single annotation for 2D slice
+                            annotation = ImageAnnotation(
+                                image_id=image_id,
+                                image_name=image_name,
+                                annotation_id=f"{image_id}_{t}_{z}",
+                                timepoint=t,
+                                z_slice=z,
+                                z_start=z,
+                                z_end=z,
+                                z_length=1,
+                                category=category,
+                                model_type=self.config.ai_model.model_type,
+                                channel=self.config.spatial_coverage.primary_channel,
+                                is_volumetric=False,
                             )
-
-        return processing_units
+                            self.config.add_annotation(annotation)
 
     def _get_timepoints_for_image(self, image) -> List[int]:
         """Get timepoints to process for an image based on configuration."""
@@ -412,14 +403,14 @@ class AnnotationPipeline:
             images = []
             metadata = []
 
-            for image_obj, sequence_val, meta, row_idx in batch_data    :
+            for image_obj, annotation_id, meta, row_idx in batch_data    :
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
                 # Include image_id in metadata for later ROI upload
                 meta_with_image_id = meta.copy()
                 meta_with_image_id["image_id"] = image_obj.getId()
-                metadata.append((sequence_val, meta_with_image_id, row_idx))
+                metadata.append((annotation_id, meta_with_image_id, row_idx))
 
             # Set up output paths
             output_path = Path(self.config.output.output_directory)
@@ -518,290 +509,107 @@ class AnnotationPipeline:
         return image_data
 
     def _process_annotation_results(
-        self, annotation_results: dict, table_id: int
-    ) -> int:
-        """Process and upload annotation results to OMERO.
+        self, annotation_results: dict
+    ) -> None:
+        """Process annotation results, upload ROIs to OMERO, and update config annotations."""
+        
+        self._debug_print("� Processing annotation results...")
+        
+        if not annotation_results:
+            self._debug_print("❌ No annotation results received")
+            return
 
-        Returns:
-            Updated table ID (may be different if table was recreated)
-        """
+        # Extract metadata and paths from results
         try:
-            from ..omero.omero_functions import (
-                update_tracking_table_rows,
-                upload_rois_and_labels,
-            )
-            from ..processing.file_io_functions import (
-                cleanup_local_embeddings,
-                zip_directory,
-            )
-        except ImportError:
-            raise ImportError(
-                "File I/O and OMERO functions are required. Install with: pip install -e .[omero]"
-            )
+            metadata = annotation_results["metadata"]
+            annotations_path = Path(annotation_results["annotations_path"])
+        except KeyError as e:
+            self._debug_print(f"❌ Missing required key: {e}")
+            return
 
-        metadata = annotation_results["metadata"]
-        embedding_path = Path(annotation_results["embedding_path"])
-        annotations_path = Path(annotation_results["annotations_path"])
+        # Get all TIFF files in the annotations directory
+        tiff_files = list(annotations_path.glob("*.tiff")) + list(annotations_path.glob("*.tif"))
+        self._debug_print(f"Found {len(tiff_files)} annotation files for {len(metadata)} metadata entries")
 
-        # Construct TIFF file paths based on micro-SAM naming convention
-        # image_series_annotator saves files as seg_00000.tif, seg_00001.tif, etc.
-        tiff_files = []
-        for i in range(len(metadata)):
-            tiff_file = (
-                annotations_path / f"seg_{i:05d}.tif"
-            ) # TODO make this configurable for future compatibility
-
-            # More robust file existence check that handles potential file locking issues
-            try:
-                if tiff_file.exists() and tiff_file.stat().st_size > 0:
-                    tiff_files.append(str(tiff_file))
-                else:
-                    # File doesn't exist or is empty - annotation failed for this image
-                    print(f"Warning: Expected annotation file not found or empty: {tiff_file}")
-            except (OSError, PermissionError) as e:
-                # Handle file access issues (e.g., still locked by micro-SAM)
-                print(f"Warning: Cannot access annotation file {tiff_file}: {e}")
-                # Small additional delay and retry once
-                time.sleep(0.2)
+        # Process each annotation metadata entry
+        updated_count = 0
+        for i, (annotation_id, meta, row_idx) in enumerate(metadata):
+            # Find matching annotation in config by annotation_id or sequence_val
+            matching_annotation = None
+            for annotation in self.config.annotations:
+                # Try both annotation_id and sequence_val for backward compatibility
+                if (annotation.annotation_id == annotation_id or 
+                    (hasattr(annotation, 'sequence_val') and annotation.sequence_val == annotation_id)):
+                    matching_annotation = annotation
+                    break
+            
+            if not matching_annotation:
+                self._debug_print(f"⚠️ No matching annotation for annotation_id: '{annotation_id}'")
+                continue
+            
+            # Find corresponding TIFF file
+            tiff_file = tiff_files[i] if i < len(tiff_files) else None
+            if not tiff_file:
+                self._debug_print(f"⚠️ No annotation file for metadata entry {i+1}")
+                continue
+            
+            # Process based on mode
+            if self.config.workflow.read_only_mode:
+                # Read-only mode: save locally
+                matching_annotation.processed = True
+                matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                
+                local_dir = Path(self.config.output.output_directory)
+                local_dir.mkdir(parents=True, exist_ok=True)
+                local_file = local_dir / f"annotation_{annotation_id}.tiff"
+                
+                shutil.copy(tiff_file, local_file)
+                updated_count += 1
+                
+            else:
+                # Upload mode: Upload ROIs to OMERO
                 try:
-                    if tiff_file.exists() and tiff_file.stat().st_size > 0:
-                        tiff_files.append(str(tiff_file))
-                    else:
-                        print(f"Warning: Expected annotation file not found after retry: {tiff_file}")
-                except (OSError, PermissionError):
-                    print(f"Warning: Annotation file still inaccessible after retry: {tiff_file}")
-
-        if not tiff_files:
-            raise RuntimeError(
-                "No annotation files were created by image_series_annotator"
-            )
-
-        print(f"Found {len(tiff_files)} annotation files in {annotations_path}")
-
-        # Collect all row indices and annotation IDs for batch update
-        completed_row_indices = []
-        annotation_ids = [] # Store (label_id, roi_id) pairs
-
-        # Process each annotation result
-        for i, (sequence_val, meta, row_idx) in enumerate(metadata):
-            if i < len(tiff_files):
-                tiff_path = tiff_files[i]
-
-                # Upload ROIs and labels to OMERO
-                if not self.config.workflow.read_only_mode:
                     image_id = meta.get("image_id")
                     patch_offset = None
-
+                    
                     if self.config.processing.use_patches:
-                        patch_offset = (meta["patch_x"], meta["patch_y"])
-
+                        patch_offset = (meta.get("patch_x", 0), meta.get("patch_y", 0))
+                    
+                    # Upload ROIs and labels using the existing function
                     label_id, roi_id = upload_rois_and_labels(
                         conn=self.conn,
                         image_id=image_id,
-                        annotation_file=tiff_path,
+                        annotation_file=str(tiff_file),
                         patch_offset=patch_offset,
                         trainingset_name=self.config.name,
                         trainingset_description=f"Training set: {self.config.name}",
                     )
-
-                    # Store the annotation IDs
-                    annotation_ids.append((label_id, roi_id))
-                else:
-                    # Save locally
-                    local_dir = Path(self.config.output.output_directory)
-                    local_file = local_dir / f"annotation_{sequence_val}.tiff"
-                    shutil.copy(tiff_path, local_file)
-                    annotation_ids.append((None, None))
-
-                # Add to list of completed rows
-                completed_row_indices.append(row_idx)
-
-        # Update tracking table with annotation IDs for all completed rows in batch
-        if completed_row_indices:
-            if not self.config.workflow.read_only_mode:
-                # Extract label and ROI IDs for batch update
-                label_ids = [aid[0] for aid in annotation_ids] if annotation_ids else None
-                roi_ids = [aid[1] for aid in annotation_ids] if annotation_ids else None
-                
-                # Update all rows in a single operation
-                updated_table_id = update_tracking_table_rows(
-                    conn=self.conn,
-                    table_id=table_id,
-                    row_indices=completed_row_indices,  # All rows at once
-                    status="completed",
-                    label_ids=label_ids,  # List of label IDs
-                    roi_ids=roi_ids,      # List of ROI IDs
-                    annotation_type=self.config.annotation_methodology.annotation_type,
-                    container_type=self.config.omero.container_type,
-                    container_id=self.config.omero.container_id,
-                )
-                if updated_table_id is not None:
-                    table_id = updated_table_id
-            else:
-                # In read-only mode, save progress locally
-                self._save_local_progress(completed_row_indices, metadata)
-
-        # Create and upload embeddings
-        if embedding_path.exists():
-            zip_path = embedding_path.parent / f"embeddings_{len(metadata)}.zip"
-            zip_directory(embedding_path, zip_path)
-
-            # Upload embeddings to OMERO as file annotation
-            # This would require additional OMERO upload functionality
-
-            # Cleanup embeddings
-            cleanup_local_embeddings(embedding_path)
-
-        # Cleanup temporary TIFF files (keep annotations folder)
-        # Note: We keep the annotations folder and files for debugging/review
-        # Users can manually delete if needed
-
-        return table_id
-
-    def create_annotation_table(
-        self, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, List[Any]]:
-        """Create annotation table and initialize tracking for annotation workflow.
-
-        Args:
-            images_list: List of OMERO image objects to process. If None, loads from container.
-
-        Returns:
-            Tuple of (table_id, images_list)
-        """
-        print(f"Creating annotation table")
-
-        # Load images if not provided
-        if images_list is None:
-            images_list = self.get_images_from_container()
-            if not images_list:
-                raise ValueError(
-                    f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
-                )
-
-        print(
-            f"Creating table for {len(images_list)} images with model: {self.config.ai_model.model_type}"
-        )
-
-        # Setup directories
-        output_path = self._setup_directories()
-        self._cleanup_embeddings(output_path)
-
-        # Initialize tracking table (skip in read-only mode)
-        if not self.config.workflow.read_only_mode:
-            table_id = self._initialize_tracking_table(images_list)
-            print(f"Created annotation table with ID: {table_id}")
-        else:
-            print("Read-only mode: Skipping OMERO table creation")
-            table_id = -1 # Mock table ID for read-only mode
-
-        return table_id, images_list
-
-    def run_annotation(
-        self, table_id: int, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, List[Any]]:
-        """Run annotation workflow using existing table.
-
-        Args:
-            table_id: ID of existing annotation table
-            images_list: Optional list of images (for read-only mode)
-
-        Returns:
-            Tuple of (table_id, processed_images)
-        """
-        print(f"Starting annotation processing from table ID: {table_id}")
-
-        # Setup directories
-        output_path = self._setup_directories()
-        self._cleanup_embeddings(output_path)
-
-        # Get processing units from table
-        if not self.config.workflow.read_only_mode:
-            # Get unprocessed units from existing table
-            try:
-                from ..omero.omero_functions import get_unprocessed_units
-
-                processing_units = get_unprocessed_units(self.conn, table_id)
-            except ImportError:
-                raise ImportError(
-                    "Cannot get unprocessed units without OMERO functions. Install with: pip install -e .[omero]"
-                )
-        else:
-            if images_list is None:
-                raise ValueError("images_list is required for read-only mode")
-            # Create processing units directly from images
-            processing_units = self._prepare_processing_units(images_list)
-            processing_units = [
-                (img_id, seq, meta, i)
-                for i, (img_id, seq, meta) in enumerate(processing_units)
-            ]
-
-        if not processing_units:
-            print("All images already processed!")
-            return table_id, images_list or []
-
-        print(f"Found {len(processing_units)} processing units")
-
-        # Process in batches
-        batch_size = self.config.processing.batch_size
-        processed_count = 0
-
-        # Handle batch_size = 0 (process all images in one batch)
-        if batch_size == 0:
-            batch_size = len(processing_units)
-
-        for i in range(0, len(processing_units), batch_size):
-            batch = processing_units[i : i + batch_size]
-            batch_num = i // batch_size + 1
-
-            print(
-                f"Processing batch {batch_num}/{(len(processing_units) + batch_size - 1) // batch_size}"
-            )
-
-            try:
-                # Load image objects for batch
-                batch_with_images = []
-                for img_id, seq_val, meta, row_idx in batch:
-                    image_obj = self.conn.getObject("Image", img_id)
-                    batch_with_images.append((image_obj, seq_val, meta, row_idx))
-
-                # Run annotation
-                annotation_results = self._run_micro_sam_annotation(batch_with_images)
-
-                # Process results
-                table_id = self._process_annotation_results(
-                    annotation_results, table_id
-                )
-
-                # Update workflow status map after batch completion
-                if not self.config.workflow.read_only_mode:
-                    self._update_workflow_status_map(table_id)
-
-                processed_count += len(batch)
-                print(
-                    f"Completed batch {batch_num} ({processed_count}/{len(processing_units)} total)"
-                )
-
-            except Exception as e:
-                print(f"Error processing batch {batch_num}: {e}")
-                traceback.print_exc()
-                # Continue with next batch - don't let one batch failure stop the pipeline
-                continue
-
-        if processed_count > 0:
-            print(
-                f"Annotation processing completed successfully! Processed {processed_count} units"
-            )
-        else:
-            print("Annotation processing failed - no units were processed")
-
-        return table_id, images_list or []
+                    
+                    # Update config annotation with OMERO IDs
+                    matching_annotation.processed = True
+                    matching_annotation.label_id = label_id
+                    matching_annotation.roi_id = roi_id
+                    matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                    matching_annotation.annotation_type = self.config.annotation_methodology.annotation_type
+                    
+                    updated_count += 1
+                    self._debug_print(f"✅ Uploaded ROI for annotation_id '{annotation_id}' (label_id: {label_id}, roi_id: {roi_id})")
+                    
+                except Exception as e:
+                    self._debug_print(f"❌ Error uploading ROI for '{annotation_id}': {e}")
+                    # Still mark as processed but without OMERO IDs
+                    matching_annotation.processed = True
+                    matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                    updated_count += 1
+        
+        # Show final results
+        processed_count = sum(1 for ann in self.config.annotations if ann.processed)
+        self._debug_print(f"📊 Updated {updated_count}/{len(metadata)} annotations")
+        self._debug_print(f"📈 Config now has {processed_count}/{len(self.config.annotations)} processed annotations")
 
     def _update_workflow_status_map(self, table_id: int) -> None:
         """Update workflow status map annotation after batch completion."""
         try:
-            from ..omero.omero_functions import update_workflow_status_map
-
             update_workflow_status_map(
                 conn=self.conn,
                 container_type=self.config.omero.container_type,
@@ -816,8 +624,6 @@ class AnnotationPipeline:
     def _get_workflow_status_map(self) -> Optional[Dict[str, str]]:
         """Get current workflow status map annotation."""
         try:
-            from ..omero.omero_functions import get_workflow_status_map
-
             return get_workflow_status_map(
                 conn=self.conn,
                 container_type=self.config.omero.container_type,
@@ -867,13 +673,13 @@ class AnnotationPipeline:
             df = pd.read_csv(table_file)
         else:
             rows = []
-            for sequence_val, meta, row_idx in metadata:
+            for annotation_id, meta, row_idx in metadata:
                 image_id = meta.get("image_id", -1)
                 rows.append(
                     {
                         "row_index": row_idx,
                         "image_id": image_id,
-                        "sequence_val": sequence_val,
+                        "annotation_id": annotation_id,
                         "timepoint": meta.get("timepoint", -1),
                         "z_slice": meta.get("z_slice", -1),
                         "channel": meta.get("channel", -1),
@@ -894,21 +700,250 @@ class AnnotationPipeline:
         print(f"Local progress saved: {completed_count}/{total_count} units completed")
         print(f" Progress file: {table_file}")
 
-    def run_full_workflow(self) -> Tuple[int, List[Any]]:
-        """Run the complete workflow: create table and process annotations."""
-        table_id, images_list = self.create_annotation_table()
-        return self.run_annotation(table_id, images_list)
+    def _save_local_progress_from_annotations(self, completed_annotations) -> None:
+        """Save progress locally in read-only mode using completed annotations."""
+        output_path = Path(self.config.output.output_directory)
+        table_file = output_path / "tracking_table.csv"
+        
+        # Convert current config state to DataFrame for local storage
+        df = self.config.to_dataframe()
+        
+        # Mark completed annotations as processed
+        for annotation in completed_annotations:
+            mask = df["annotation_id"] == annotation.annotation_id
+            df.loc[mask, "processed"] = True
+            df.loc[mask, "completed_timestamp"] = annotation.annotation_creation_time
+
+        df.to_csv(table_file, index=False)
+        completed_count = df["processed"].sum()
+        total_count = len(df)
+        print(f"Local progress saved: {completed_count}/{total_count} units completed")
+        print(f" Progress file: {table_file}")
+
+    def _find_existing_table(self) -> Optional[int]:
+        """Find existing table by name for resume functionality.
+        
+        Returns:
+            Table ID if found, None otherwise
+        """
+        table_title = self._get_table_title()
+        print(f"Looking for existing table: {table_title}")
+        
+        try:
+            existing_table = get_table_by_name(self.conn, table_title)
+            if existing_table:
+                table_id = existing_table.getId()
+                print(f"Found existing table: {table_title} (ID: {table_id})")
+                return table_id
+            else:
+                print(f"No existing table found with name: {table_title}")
+                return None
+        except Exception as e:
+            print(f"Error searching for existing table: {e}")
+            return None
+
+    def _replace_omero_table_from_config(self) -> int:
+        """Replace entire OMERO table with current config state.
+        
+        Returns:
+            Updated table ID
+        """
+        print("📋 Updating OMERO table...")
+        
+        config_df = self.config.to_dataframe()
+        table_title = self._get_table_title()
+        
+        table_id = create_or_replace_tracking_table(
+            conn=self.conn,
+            config_df=config_df,
+            table_title=table_title,
+            container_type=self.config.omero.container_type,
+            container_id=self.config.omero.container_id,
+            existing_table_id=self.table_id
+        )
+        
+        # Update internal table ID
+        self.table_id = table_id
+        print(f"OMERO table updated successfully (ID: {table_id})")
+        
+        return table_id
+
+    def run_full_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
+        """Run the complete simplified workflow: config-first approach with single source of truth.
+        
+        Args:
+            images_list: Optional list of OMERO image objects. If None, loads from container.
+            
+        Returns:
+            Tuple of (table_id, processed_images)
+        """        
+        # Setup directories
+        output_path = self._setup_directories()
+        self._cleanup_embeddings(output_path)
+        
+        # Load images if not provided
+        if images_list is None:
+            images_list = self.get_images_from_container()
+            if not images_list:
+                raise ValueError(
+                    f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
+                )
+        
+        print(f"Processing {len(images_list)} images with model: {self.config.ai_model.model_type}")
+        
+        # Handle resume logic (one-time sync at workflow start)
+        if self.config.workflow.resume_from_table and not self.config.workflow.read_only_mode:
+            existing_table_id = self._find_existing_table()
+            if existing_table_id:
+                print("Syncing OMERO table state to config...")
+                sync_omero_table_to_config(self.conn, existing_table_id, self.config)
+                self.table_id = existing_table_id
+        
+        # Prepare processing units (populate config.annotations)
+        if not self.config.annotations or not self.config.workflow.resume_from_table:
+            print("Preparing processing units...")
+            self._prepare_processing_units(images_list)
+        
+        # Create initial OMERO table (all processed=False) - skip in read-only mode
+        if not self.config.workflow.read_only_mode:
+            if self.table_id is None:
+                print("Creating initial OMERO table...")
+                config_df = self.config.to_dataframe()
+                # Ensure all rows start as unprocessed for new table
+                if not self.config.workflow.resume_from_table:
+                    config_df['processed'] = False
+                    
+                table_id = create_or_replace_tracking_table(
+                    conn=self.conn,
+                    config_df=config_df,
+                    table_title=self._get_table_title(),
+                    container_type=self.config.omero.container_type,
+                    container_id=self.config.omero.container_id,
+                )
+                self.table_id = table_id
+                print(f"Created OMERO table with ID: {table_id}")
+            
+            # Initialize workflow status map for new table
+            self._update_workflow_status_map(self.table_id)
+        else:
+            print("Read-only mode: Skipping OMERO table creation")
+            self.table_id = -1  # Mock table ID for read-only mode
+        
+        # Get unprocessed annotations from config
+        unprocessed_annotations = self.config.get_unprocessed()
+        
+        if not unprocessed_annotations:
+            print("All images already processed!")
+            return self.table_id, self.config
+        
+        print(f"Found {len(unprocessed_annotations)} unprocessed annotations")
+        
+        # Convert annotations to processing units format for micro-SAM
+        processing_units = []
+        for i, annotation in enumerate(unprocessed_annotations):
+            metadata = {
+                "image_id": annotation.image_id,
+                "timepoint": annotation.timepoint,
+                "z_slice": annotation.z_slice,
+                "z_start": annotation.z_start,
+                "z_end": annotation.z_end,
+                "z_length": annotation.z_length,
+                "patch_x": annotation.patch_x,
+                "patch_y": annotation.patch_y,
+                "category": annotation.category,
+                "model_type": annotation.model_type,
+                "channel": annotation.channel,
+                "is_volumetric": annotation.is_volumetric,
+            }
+            processing_units.append((annotation.image_id, annotation.annotation_id, metadata, i))
+        
+        # Process in batches
+        batch_size = self.config.processing.batch_size or len(processing_units)
+        processed_count = 0
+        
+        for i in range(0, len(processing_units), batch_size):
+            batch = processing_units[i : i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (len(processing_units) + batch_size - 1) // batch_size
+            
+            print(f"\n🔄 Processing batch {batch_num}/{total_batches}")
+            self._debug_print(f"   📦 Batch size: {len(batch)}")
+            
+            # Show config state before processing
+            processed_before = sum(1 for ann in self.config.annotations if ann.processed)
+            self._debug_print(f"   📊 Config state before: {processed_before}/{len(self.config.annotations)} processed")
+            
+            try:
+                # Load image objects for batch
+                batch_with_images = []
+                for img_id, seq_val, meta, row_idx in batch:
+                    image_obj = self.conn.getObject("Image", img_id)
+                    batch_with_images.append((image_obj, seq_val, meta, row_idx))
+                
+                # Run annotation
+                self._debug_print(f"   🎨 Running micro-SAM annotation...")
+                annotation_results = self._run_micro_sam_annotation(batch_with_images)
+                self._debug_print(f"   ✅ micro-SAM completed, got results: {type(annotation_results)}")
+                
+                # Process results (updates config only)
+                self._debug_print(f"   🔄 Processing annotation results...")
+                self._process_annotation_results(annotation_results)
+                
+                # Show config state after processing
+                processed_after = sum(1 for ann in self.config.annotations if ann.processed)
+                self._debug_print(f"   📊 Config state after: {processed_after}/{len(self.config.annotations)} processed")
+                
+                # Replace OMERO table with updated config state
+                if not self.config.workflow.read_only_mode:
+                    self._debug_print(f"   📋 Updating OMERO table...")
+                    self._replace_omero_table_from_config()
+                    self._debug_print(f"   ✅ OMERO table updated (ID: {self.table_id})")
+                
+                # Auto-save config state to YAML
+                self._debug_print(f"   💾 Auto-saving config...")
+                self._auto_save_config()
+                self._debug_print(f"   ✅ Config saved")
+                
+                processed_count += len(batch)
+                print(f"✅ Batch {batch_num} completed ({processed_count}/{len(processing_units)} total)")
+                
+            except Exception as e:
+                print(f"❌ Error processing batch {batch_num}: {e}")
+                traceback.print_exc()
+                # Continue with next batch instead of failing completely
+                continue
+                # Continue with next batch - don't let one batch failure stop the pipeline
+                continue
+        
+        # Final workflow status update
+        if not self.config.workflow.read_only_mode and self.table_id != -1:
+            self._update_workflow_status_map(self.table_id)
+        
+        # Final config save
+        self._auto_save_config()
+        
+        if processed_count > 0:
+            print(f"Annotation workflow completed successfully! Processed {processed_count} units")
+        else:
+            print("Annotation workflow failed - no units were processed")
+        
+        return self.table_id, self.config
 
 def create_pipeline(
-    config: AnnotationConfig, conn=None
+    config: AnnotationConfig, conn=None, config_file_path: Optional[Union[str, Path]] = None
 ) -> AnnotationPipeline:
     """Create a micro-SAM annotation pipeline with the given configuration.
 
     Args:
         config: AnnotationConfig object
         conn: OMERO connection object
+        config_file_path: Optional path to the source YAML configuration file for persistence.
+                         If None, uses config.config_file_path if available.
 
     Returns:
         AnnotationPipeline instance
     """
-    return AnnotationPipeline(config, conn)
+    # Use provided path, or fall back to config's stored path
+    actual_config_path = config_file_path or config.config_file_path
+    
+    return AnnotationPipeline(config, conn, actual_config_path)
