@@ -227,7 +227,8 @@ def _prepare_dataset_from_table(
     df: pd.DataFrame,
     output_dir: Path,
     subset_type: str = "training",
-    tmp_dir: Optional[Path] = None
+    tmp_dir: Optional[Path] = None,
+    train_channel: Optional[int] = None
 ) -> Tuple[Path, Path]:
     """
     Prepare dataset from annotation table subset.
@@ -238,7 +239,8 @@ def _prepare_dataset_from_table(
         output_dir: Base output directory
         subset_type: "training" or "val"
         tmp_dir: Temporary directory for downloading annotations
-        
+        train_channel: Optional channel for annotation, then override 
+
     Returns:
         (input_dir, label_dir): Paths to the input and label directories
     """
@@ -275,7 +277,10 @@ def _prepare_dataset_from_table(
                     z_slice = 0
             
             # Handle other metadata columns
-            channel = int(df.iloc[n]['channel']) if pd.notna(df.iloc[n]['channel']) else 0
+            if train_channel is not None:
+                channel = train_channel
+            else:
+                channel = int(df.iloc[n]['channel']) if pd.notna(df.iloc[n]['channel']) else 0
             timepoint = int(df.iloc[n]['timepoint']) if pd.notna(df.iloc[n]['timepoint']) else 0
             is_volumetric = bool(df.iloc[n]['is_volumetric']) if 'is_volumetric' in df.columns and pd.notna(df.iloc[n]['is_volumetric']) else False
             
@@ -474,5 +479,5 @@ def _prepare_dataset_from_table(
             print(f"Error processing row {n}: {e}")
             import traceback
             print(traceback.format_exc())
-    
+            raise
     return input_dir, label_dir

@@ -14,6 +14,124 @@ import imageio.v3 as imageio
 from ..processing.image_functions import label_to_rois
 
 
+# =============================================================================
+# Config-First Table Management Functions
+# =============================================================================
+
+
+def create_or_replace_tracking_table(
+    conn,
+    config_df: pd.DataFrame,
+    table_title: str,
+    container_type: str,
+    container_id: int,
+    existing_table_id: Optional[int] = None,
+) -> int:
+    """Create new tracking table or replace existing one (delete + recreate pattern).
+    
+    Args:
+        conn: OMERO connection
+        config_df: DataFrame from config.to_dataframe()
+        table_title: Name for the tracking table
+        container_type: Type of OMERO container
+        container_id: ID of container
+        existing_table_id: Optional existing table to replace
+        
+    Returns:
+        New table ID
+    """
+    # Delete existing table if provided
+    if existing_table_id is not None:
+        print(f"🗑️ Deleting table: {table_title}")
+        if not delete_table(conn, existing_table_id):
+            print(f"Warning: Could not delete existing table: {existing_table_id}")
+    
+    # Create new table with the DataFrame
+    new_table_id = ezomero.post_table(
+        conn,
+        object_type=container_type.capitalize(),
+        object_id=container_id,
+        table=config_df,
+        title=table_title,
+    )
+    
+    if new_table_id is None:
+        raise RuntimeError(f"Failed to create table '{table_title}' in {container_type} {container_id}")
+    
+    print(f"📋 Created/replaced tracking table '{table_title}' with {len(config_df)} units")
+    print(f"   Container: {container_type} {container_id}")
+    print(f"   Table ID: {new_table_id}")
+    
+    return new_table_id
+
+
+def sync_config_to_omero_table(
+    conn,
+    config,  # AnnotationConfig object
+    table_title: str,
+    container_type: str,
+    container_id: int,
+    existing_table_id: Optional[int] = None,
+) -> int:
+    """High-level sync: config.annotations → OMERO table.
+    
+    Args:
+        conn: OMERO connection
+        config: AnnotationConfig object with annotations
+        table_title: Name for the tracking table
+        container_type: Type of OMERO container
+        container_id: ID of container
+        existing_table_id: Optional existing table to replace
+        
+    Returns:
+        New table ID
+    """
+    # Convert config annotations to DataFrame
+    config_df = config.to_dataframe()
+    
+    if config_df.empty:
+        print("Warning: No annotations in config to sync")
+        return existing_table_id if existing_table_id else -1
+    
+    # Create or replace table
+    return create_or_replace_tracking_table(
+        conn=conn,
+        config_df=config_df,
+        table_title=table_title,
+        container_type=container_type,
+        container_id=container_id,
+        existing_table_id=existing_table_id,
+    )
+
+
+def sync_omero_table_to_config(conn, table_id: int, config):
+    """High-level sync: OMERO table → config.annotations.
+    
+    Args:
+        conn: OMERO connection
+        table_id: ID of OMERO table to load
+        config: AnnotationConfig object to populate
+    """
+    try:
+        # Get table data
+        df = ezomero.get_table(conn, table_id)
+        if df is None or df.empty:
+            print(f"Warning: Table {table_id} is empty or could not be read")
+            return
+            
+        # Load into config
+        config.from_dataframe(df)
+        print(f"Loaded {len(config.annotations)} annotations from table {table_id}")
+        
+    except Exception as e:
+        print(f"Error loading table {table_id} into config: {e}")
+
+
+# =============================================================================
+# Original Table Management Functions (LEGACY - for backwards compatibility)
+# =============================================================================
+
+
 def initialize_tracking_table(
     conn,
     table_title: str,
@@ -899,8 +1017,8 @@ def get_tables_by_roi_namespace(conn, project_id: int, namespace: str) -> List[i
 
 
 def cleanup_project_annotations(
-    conn, project_id: int, trainingset_name: str = None
-) -> Dict[str, int]:
+    conn, project_id: int, trainingset_name: str = ""
+    ) -> Dict[str, int]:
     """Clean up all annotations created by omero-annotate-ai from a project.
 
     Removes annotation tables, ROIs, and map annotations from the project
@@ -910,7 +1028,7 @@ def cleanup_project_annotations(
         conn: OMERO connection
         project_id: Project ID to clean up
         trainingset_name: Optional - if provided, only clean up annotations
-                         matching this training set name
+                            matching this training set name. Defaults to empty string.
 
     Returns:
         Dictionary with counts of deleted items:
@@ -934,7 +1052,7 @@ def cleanup_project_annotations(
     # Get project and all its datasets and images
     project = conn.getObject("Project", project_id)
     if not project:
-        print(f"❌ Project {project_id} not found")
+        print(f"Project {project_id} not found")
         return results
 
     # Collect all datasets and images in the project
@@ -951,7 +1069,7 @@ def cleanup_project_annotations(
     )
 
     # 1. Clean up annotation tables
-    print("🗂️ Cleaning up annotation tables...")
+    print("Cleaning up annotation tables...")
     for dataset in all_datasets:
         try:
             tables = list_annotation_tables(conn, "dataset", dataset.getId())
@@ -966,11 +1084,11 @@ def cleanup_project_annotations(
                 # Delete the table
                 if delete_table(conn, table_id):
                     results["tables"] += 1
-                    print(f"✅ Deleted table: {table_name} (ID: {table_id})")
+                    print(f"Deleted table: {table_name} (ID: {table_id})")
                 else:
-                    print(f"❌ Failed to delete table: {table_name} (ID: {table_id})")
+                    print(f"Failed to delete table: {table_name} (ID: {table_id})")
         except Exception as e:
-            print(f"❌ Error cleaning tables for dataset {dataset.getId()}: {str(e)}")
+            print(f"Error cleaning tables for dataset {dataset.getId()}: {str(e)}")
 
     # 2. Clean up ROIs by name patterns
     print("🎯 Cleaning up ROIs...")
@@ -1017,7 +1135,7 @@ def cleanup_project_annotations(
             results["images_processed"] += 1
 
         except Exception as e:
-            print(f"❌ Error cleaning ROIs for image {image.getId()}: {str(e)}")
+            print(f"Error cleaning ROIs for image {image.getId()}: {str(e)}")
 
     # 3. Clean up map annotations (workflow status)
     print("🗺️ Cleaning up map annotations...")
@@ -1038,7 +1156,7 @@ def cleanup_project_annotations(
         results["map_annotations"] += count
 
     except Exception as e:
-        print(f"❌ Error cleaning map annotations: {str(e)}")
+        print(f"Error cleaning map annotations: {str(e)}")
 
     # Print summary
     print(f"\n📊 Cleanup completed:")

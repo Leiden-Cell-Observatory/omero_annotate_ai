@@ -4,12 +4,56 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import pandas as pd
 import yaml
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from typing_extensions import Literal
 
+from pathlib import Path
 
 # Sub-models for the configuration
+
+class ImageAnnotation(BaseModel):
+    """Individual image annotation record for tracking processing state"""
+    
+    # Image identification
+    image_id: int = Field(description="OMERO image ID")
+    image_name: str = Field(description="OMERO image name")
+    annotation_id: str = Field(default="", description="Unique annotation identifier")
+    
+    # Processing parameters
+    category: str = Field(default="training", description="training or validation")
+    timepoint: int = Field(default=-1, description="Timepoint index")
+    z_slice: int = Field(default=-1, description="Z-slice index")
+    channel: int = Field(default=-1, description="Channel index")
+    
+    # 3D/volumetric processing
+    is_volumetric: bool = Field(default=False, description="3D volumetric processing mode")
+    z_start: int = Field(default=-1, description="Starting z-slice for 3D volumes")
+    z_end: int = Field(default=-1, description="Ending z-slice for 3D volumes") 
+    z_length: int = Field(default=1, description="Number of z-slices")
+    
+    # Patch processing
+    is_patch: bool = Field(default=False, description="Whether this is a patch")
+    patch_x: int = Field(default=0, description="Patch X coordinate")
+    patch_y: int = Field(default=0, description="Patch Y coordinate")
+    patch_width: int = Field(default=0, description="Patch width")
+    patch_height: int = Field(default=0, description="Patch height")
+    
+    # AI model info
+    model_type: str = Field(default="vit_b_lm", description="SAM model type")
+    
+    # Processing status
+    processed: bool = Field(default=False, description="Whether processing is complete")
+    annotation_creation_time: Optional[str] = Field(default=None, description="Completion timestamp in ISO format")
+    annotation_type: str = Field(default="segmentation_mask", description="Type of annotation")
+    
+    # OMERO annotation IDs (None until uploaded)
+    roi_id: Optional[int] = Field(default=None, description="OMERO ROI ID")
+    label_id: Optional[int] = Field(default=None, description="OMERO label file annotation ID") 
+    schema_attachment_id: Optional[int] = Field(default=None, description="OMERO schema attachment ID")
+
+
 class AuthorInfo(BaseModel):
     """Author information compatible with bioimage.io"""
 
@@ -232,6 +276,11 @@ class AnnotationConfig(BaseModel):
         default="1.0.0", description="Configuration schema version"
     )
 
+    # Config file tracking for persistence
+    config_file_path: Optional[Path] = Field(
+        default=None, description="Path to the configuration file for persistence"
+    )
+
     # Core identification (both schemas)
     name: str = Field(description="Annotation workflow name")
     version: str = Field(default="1.0.0", description="Configuration version")
@@ -268,6 +317,11 @@ class AnnotationConfig(BaseModel):
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
     omero: OMEROConfig = Field(default_factory=lambda: OMEROConfig())
 
+    # NEW: Annotation tracking
+    annotations: List[ImageAnnotation] = Field(
+        default_factory=list, description="List of image annotations for tracking processing state"
+    )
+
     # Workflow metadata (bioimage.io style)
     documentation: Optional[HttpUrl] = Field(
         default=None, description="Documentation URL"
@@ -288,7 +342,194 @@ class AnnotationConfig(BaseModel):
                     data["output"]["output_directory"]
                 )
 
+        # Handle config_file_path
+        if "config_file_path" in data and data["config_file_path"] is not None:
+            if isinstance(data["config_file_path"], Path):
+                data["config_file_path"] = str(data["config_file_path"])
+
         return data
+
+    # Annotation management methods
+    def add_annotation(self, annotation: ImageAnnotation) -> ImageAnnotation:
+        """Add new annotation record to the configuration.
+
+        Args:
+            annotation: Pre-created ImageAnnotation object
+
+        Returns:
+            The added ImageAnnotation object
+        """
+        self.annotations.append(annotation)
+        return annotation
+
+    def get_unprocessed(self) -> List[ImageAnnotation]:
+        """Get annotations where processed=False.
+        
+        Returns:
+            List of unprocessed ImageAnnotation objects
+        """
+        return [ann for ann in self.annotations if not ann.processed]
+    
+    def get_processed(self) -> List[ImageAnnotation]:
+        """Get annotations where processed=True.
+        
+        Returns:
+            List of processed ImageAnnotation objects
+        """
+        return [ann for ann in self.annotations if ann.processed]
+
+    def mark_completed(self, image_id: int, roi_id: Optional[int] = None, 
+                      label_id: Optional[int] = None, **kwargs):
+        """Mark annotation as completed with OMERO IDs.
+        
+        Args:
+            image_id: OMERO image ID to update
+            roi_id: OMERO ROI ID (optional)
+            label_id: OMERO label file annotation ID (optional)
+            **kwargs: Additional fields to update
+        """
+        for annotation in self.annotations:
+            if annotation.image_id == image_id:
+                annotation.processed = True
+                annotation.annotation_creation_time = datetime.now().isoformat()
+                if roi_id is not None:
+                    annotation.roi_id = roi_id
+                if label_id is not None:
+                    annotation.label_id = label_id
+                # Update any additional fields
+                for key, value in kwargs.items():
+                    if hasattr(annotation, key):
+                        setattr(annotation, key, value)
+
+    def get_progress_summary(self) -> Dict[str, Union[int, float]]:
+        """Get completion statistics.
+        
+        Returns:
+            Dictionary with progress information
+        """
+        total = len(self.annotations)
+        completed = len(self.get_processed())
+        return {
+            "total_units": total,
+            "completed_units": completed,
+            "pending_units": total - completed,
+            "progress_percent": round(100 * completed / total, 1) if total > 0 else 0
+        }
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert annotations to OMERO-compatible DataFrame.
+        
+        Returns:
+            DataFrame matching OMERO table schema
+        """
+        if not self.annotations:
+            return pd.DataFrame()
+            
+        # Convert annotations to list of dicts
+        rows = []
+        for annotation in self.annotations:
+            # Map ImageAnnotation fields to OMERO table columns
+            row = {
+                "image_id": annotation.image_id,
+                "image_name": annotation.image_name,
+                "train": annotation.category == "training",
+                "validate": annotation.category == "validation",
+                "channel": annotation.channel,
+                "z_slice": annotation.z_slice,
+                "timepoint": annotation.timepoint,
+                "sam_model": annotation.model_type,
+                "label_id": str(annotation.label_id) if annotation.label_id is not None else "None",
+                "roi_id": str(annotation.roi_id) if annotation.roi_id is not None else "None",
+                "is_volumetric": annotation.is_volumetric,
+                "processed": annotation.processed,
+                "is_patch": annotation.is_patch,
+                "patch_x": annotation.patch_x,
+                "patch_y": annotation.patch_y,
+                "patch_width": annotation.patch_width,
+                "patch_height": annotation.patch_height,
+                "annotation_type": annotation.annotation_type,
+                "annotation_creation_time": annotation.annotation_creation_time or "None",
+                "schema_attachment_id": str(annotation.schema_attachment_id) if annotation.schema_attachment_id is not None else "None",
+                "z_start": annotation.z_start,
+                "z_end": annotation.z_end,
+                "z_length": annotation.z_length,
+            }
+            rows.append(row)
+        
+        # Create DataFrame with proper column order
+        columns = [
+            "image_id", "image_name", "train", "validate", "channel", "z_slice", "timepoint",
+            "sam_model", "label_id", "roi_id", "is_volumetric", "processed", "is_patch",
+            "patch_x", "patch_y", "patch_width", "patch_height", "annotation_type",
+            "annotation_creation_time", "schema_attachment_id", "z_start", "z_end", "z_length"
+        ]
+        
+        df = pd.DataFrame(rows, columns=columns)
+        
+        # Ensure proper data types for OMERO compatibility
+        numeric_columns = ["image_id", "patch_x", "patch_y", "patch_width", "patch_height",
+                          "z_slice", "timepoint", "z_start", "z_end", "z_length"]
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-1).astype(int)
+        
+        boolean_columns = ["train", "validate", "processed", "is_patch", "is_volumetric"]
+        for col in boolean_columns:
+            if col in df.columns:
+                df[col] = df[col].astype(bool)
+                
+        return df
+
+    def from_dataframe(self, df: pd.DataFrame):
+        """Load annotations from existing OMERO table DataFrame.
+        
+        Args:
+            df: DataFrame from OMERO table
+        """
+        self.annotations.clear()
+        
+        for _, row in df.iterrows():
+            # Map OMERO table columns back to ImageAnnotation fields
+            annotation_data = {
+                "image_id": int(row.get("image_id", -1)),
+                "image_name": str(row.get("image_name", "")),
+                "category": "training" if row.get("train", True) else "validation",
+                "timepoint": int(row.get("timepoint", -1)),
+                "z_slice": int(row.get("z_slice", -1)),
+                "channel": int(row.get("channel", -1)),
+                "is_volumetric": bool(row.get("is_volumetric", False)),
+                "z_start": int(row.get("z_start", -1)),
+                "z_end": int(row.get("z_end", -1)),
+                "z_length": int(row.get("z_length", 1)),
+                "is_patch": bool(row.get("is_patch", False)),
+                "patch_x": int(row.get("patch_x", 0)),
+                "patch_y": int(row.get("patch_y", 0)),
+                "patch_width": int(row.get("patch_width", 0)),
+                "patch_height": int(row.get("patch_height", 0)),
+                "model_type": str(row.get("sam_model", "vit_b_lm")),
+                "processed": bool(row.get("processed", False)),
+                "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
+            }
+            
+            # Handle optional fields
+            roi_id_str = str(row.get("roi_id", "None"))
+            if roi_id_str != "None" and roi_id_str.isdigit():
+                annotation_data["roi_id"] = int(roi_id_str)
+                
+            label_id_str = str(row.get("label_id", "None"))  
+            if label_id_str != "None" and label_id_str.isdigit():
+                annotation_data["label_id"] = int(label_id_str)
+                
+            schema_id_str = str(row.get("schema_attachment_id", "None"))
+            if schema_id_str != "None" and schema_id_str.isdigit():
+                annotation_data["schema_attachment_id"] = int(schema_id_str)
+                
+            # Handle timestamp - keep as string
+            creation_time_str = str(row.get("annotation_creation_time", "None"))
+            if creation_time_str != "None":
+                annotation_data["annotation_creation_time"] = creation_time_str
+            
+            self.add_annotation(**annotation_data)
 
     def to_mifa_metadata(self) -> dict:
         """Export MIFA-compatible metadata"""
@@ -332,17 +573,17 @@ class AnnotationConfig(BaseModel):
         return yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
 
     def save_yaml(self, file_path: Union[str, Path]) -> None:
-        """Save configuration to YAML file."""
-        config_dict = self.model_dump()
-
-        # Custom YAML representer for Path objects (fallback)
-        def path_representer(dumper, data):
-            return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
-
-        yaml.add_representer(Path, path_representer)
-
-        with open(file_path, "w") as f:
-            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+        """Save configuration to YAML file and remember the path."""
+        file_path = Path(file_path)
+        
+        # Save the config
+        with open(file_path, 'w') as f:
+            yaml.dump(self.to_dict(), f, default_flow_style=False, indent=2)
+        
+        # Remember where we saved it
+        self.config_file_path = file_path
+        
+        print(f"✅ Configuration saved to: {file_path}")
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "AnnotationConfig":
@@ -352,18 +593,28 @@ class AnnotationConfig(BaseModel):
     @classmethod
     def from_yaml(cls, yaml_source: Union[str, Path]) -> "AnnotationConfig":
         """Create configuration from YAML string or file path."""
+        config_dict = None
+        source_path = None
+        
         if isinstance(yaml_source, (str, Path)):
             yaml_path = Path(yaml_source)
             if yaml_path.exists():
                 with open(yaml_path, "r") as f:
                     config_dict = yaml.safe_load(f)
+                source_path = yaml_path
             else:
                 # Assume it's a YAML string
                 config_dict = yaml.safe_load(str(yaml_source))
         else:
             config_dict = yaml.safe_load(yaml_source)
 
-        return cls.from_dict(config_dict)
+        config = cls.from_dict(config_dict)
+        
+        # Remember source path if loaded from file
+        if source_path:
+            config.config_file_path = source_path
+        
+        return config
 
 
 def parse_sequence(value: Union[str, List[int]]) -> List[int]:
@@ -412,7 +663,6 @@ def load_config_from_yaml(yaml_path: str) -> AnnotationConfig:
         # Instead of: config = workflow_widget.get_config()
         config = load_config_from_yaml('test_config.yaml')
     """
-    from pathlib import Path
 
     config_path = Path(yaml_path)
     if not config_path.exists():
