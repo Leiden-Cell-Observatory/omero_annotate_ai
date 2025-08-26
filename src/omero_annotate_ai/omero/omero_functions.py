@@ -1,6 +1,6 @@
 """OMERO integration functions for micro-SAM workflows."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -126,7 +126,29 @@ def sync_omero_table_to_config(conn, table_id: int, config):
     except Exception as e:
         print(f"Error loading table {table_id} into config: {e}")
 
+def upload_annotation_config_to_omero(
+        conn, 
+        object_type: str, 
+        object_id: int, 
+        file_path: Optional[str] = None
+) -> int:
+    """
+    Upload the annotation configuration file to OMERO.
 
+    Args:
+        conn: OMERO connection
+        object_type: Type of OMERO object (e.g., "Image", "Dataset")
+        object_id: ID of the OMERO object
+        file_path: Path to the YAML configuration file
+
+    Returns:
+        ID of the uploaded file annotation
+    """
+    id = ezomero.post_file_annotation(conn, 
+                                      file_path=file_path,
+                                      object_type=object_type,
+                                      object_id=object_id)
+    return id
 # =============================================================================
 # Original Table Management Functions (LEGACY - for backwards compatibility)
 # =============================================================================
@@ -778,7 +800,7 @@ def get_workflow_status_map(
         return None
 
     except Exception as e:
-        print(f"⚠️ Could not get workflow status: {e}")
+        print(f"Could not get workflow status: {e}")
         return None
 
 
