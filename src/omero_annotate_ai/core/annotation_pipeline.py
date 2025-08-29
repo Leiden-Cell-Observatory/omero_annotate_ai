@@ -594,6 +594,7 @@ class AnnotationPipeline:
                         trainingset_description=f"Training set: {self.config.name}",
                         z_slice=meta.get("z_slice"),
                         channel=meta.get("channel"),
+                        timepoint=meta.get("timepoint"),
                         model_type=meta.get("model_type"),
                         is_volumetric=meta.get("is_volumetric"),
                         z_start=meta.get("z_start")
