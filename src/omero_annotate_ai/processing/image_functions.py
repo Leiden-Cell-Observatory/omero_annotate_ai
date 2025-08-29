@@ -150,7 +150,7 @@ def mask_to_contour(mask):
 
 
 def process_label_plane(
-    label_plane, z_slice, channel, timepoint, model_type, x_offset=0, y_offset=0
+    label_plane, z_slice, channel, timepoint=0, model_type, x_offset=0, y_offset=0
 ):
     """
     Process a single 2D label plane to generate OMERO shapes with optional offset
