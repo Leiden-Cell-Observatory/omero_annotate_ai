@@ -146,6 +146,7 @@ def upload_annotation_config_to_omero(
     """
     id = ezomero.post_file_annotation(conn, 
                                       file_path=file_path,
+                                      ns="openmicroscopy.org/omero/annnotate/config",
                                       object_type=object_type,
                                       object_id=object_id)
     return id
@@ -650,7 +651,7 @@ def upload_rois_and_labels(
         conn,
         file_path=annotation_file,
         description=label_desc,
-        ns="openmicroscopy.org/omero/micro_sam",
+        ns="openmicroscopy.org/omero/annotate/labels",
         object_type="Image",
         object_id=image_id,
     )
@@ -760,7 +761,7 @@ def update_workflow_status_map(
             object_type=container_type.capitalize(),
             object_id=container_id,
             kv_dict=status_map,
-            ns="openmicroscopy.org/omero/micro_sam/workflow_status",
+            ns="openmicroscopy.org/omero/annotate/workflow_status",
         )
 
         print(
@@ -1161,7 +1162,7 @@ def cleanup_project_annotations(
 
     # 3. Clean up map annotations (workflow status)
     print("🗺️ Cleaning up map annotations...")
-    workflow_namespace = "openmicroscopy.org/omero/micro_sam/workflow_status"
+    workflow_namespace = "openmicroscopy.org/omero/annotate/workflow_status"
 
     try:
         # Clean up from datasets
