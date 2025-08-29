@@ -7,9 +7,9 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 def setup_training(
     training_result: Dict[str, Any],
+    model_name: str = "",
     # Model parameters
-    model_type: str = "vit_b",
-    
+    model_type: str = "vit_b_lm",
     # Training parameters
     epochs: int = 50,
     n_iterations: Optional[int] = None,
@@ -31,6 +31,7 @@ def setup_training(
     
     Args:
         training_result: Dictionary from prepare_training_data_from_table()
+        model_name: Name for the training session/model
         model_type: SAM model variant ("vit_b", "vit_l", "vit_h")
         epochs: Number of training epochs (primary training parameter)
         n_iterations: Number of training iterations (calculated from epochs if None)
@@ -63,7 +64,8 @@ def setup_training(
     
     # Generate model name and output paths
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    model_name = f"micro_sam_training_{timestamp}"
+    if not model_name:
+        model_name = f"micro_sam_training_{timestamp}"
     
     # Determine output directory - use from training_result or create from paths
     if 'output_dir' in training_result:

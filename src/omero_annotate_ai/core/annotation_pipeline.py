@@ -213,26 +213,29 @@ class AnnotationPipeline:
         
         # Clear existing annotations first
         self.config.annotations.clear()
-        
+        n_total = len(images_list)
+
         # Determine which images to process
         if self.config.training.segment_all:
             selected_images = images_list
+            n_train = n_total // self.config.training.train_fraction
+            n_val = n_total - n_train
             image_categories = ["training"] * len(images_list)
+            
         else:
-            # Select subset for training/validation
-            n_total = len(images_list)
+            # Select subset for training/validation            
             n_train = min(self.config.training.train_n, n_total)
             n_val = min(self.config.training.validate_n, n_total - n_train)
 
-            # Randomly select images
-            shuffled_indices = list(range(n_total))
-            random.shuffle(shuffled_indices)
+        # Randomly select images
+        shuffled_indices = list(range(n_total))
+        random.shuffle(shuffled_indices)
 
-            train_indices = shuffled_indices[:n_train]
-            val_indices = shuffled_indices[n_train : n_train + n_val]
+        train_indices = shuffled_indices[:n_train]
+        val_indices = shuffled_indices[n_train : n_train + n_val]
 
-            selected_images = [images_list[i] for i in train_indices + val_indices]
-            image_categories = ["training"] * n_train + ["validation"] * n_val
+        selected_images = [images_list[i] for i in train_indices + val_indices]
+        image_categories = ["training"] * n_train + ["validation"] * n_val
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):

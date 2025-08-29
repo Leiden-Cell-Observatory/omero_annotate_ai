@@ -58,6 +58,7 @@ def prepare_training_data_from_table(
     conn: Any,
     table_id: int,
     output_dir: Union[str, Path],
+    training_name: str = "micro_sam_training",
     validation_split: float = 0.2,
     clean_existing: bool = True,
     tmp_dir: Optional[Union[str, Path]] = None
@@ -73,7 +74,8 @@ def prepare_training_data_from_table(
         conn: OMERO connection object
         table_id: ID of the annotation table in OMERO
         output_dir: Directory to store training data
-        validation_split: Fraction of data to use for validation (0.0-1.0)
+        training_name: Name for the training session (used in directory naming)
+        validation_split: Fraction of data to use for validation (0.0-1.0) if not already defined in the table
         clean_existing: Whether to clean existing output directories
         tmp_dir: Temporary directory for downloads (optional)
         
