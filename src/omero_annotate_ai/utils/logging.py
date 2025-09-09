@@ -39,10 +39,7 @@ def setup_logger(
     
     # Auto-detect Jupyter if not specified
     if jupyter_mode is None:
-        try:
-            jupyter_mode = 'ipykernel' in sys.modules
-        except:
-            jupyter_mode = False
+        jupyter_mode = 'ipykernel' in sys.modules
     
     # Create formatter
     formatter = logging.Formatter(
