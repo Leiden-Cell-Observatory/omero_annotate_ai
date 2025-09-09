@@ -64,7 +64,7 @@ def setup_training(
     
     # Generate model name and output paths
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    if not model_name:
+    if not model_name or model_name.strip() == '':
         model_name = f"micro_sam_training_{timestamp}"
     
     # Determine output directory - use from training_result or create from paths
