@@ -146,7 +146,7 @@ def upload_annotation_config_to_omero(
     """
     id = ezomero.post_file_annotation(conn, 
                                       file_path=file_path,
-                                      ns="openmicroscopy.org/omero/annnotate/config",
+                                      ns="openmicroscopy.org/omero/annotate/config",
                                       object_type=object_type,
                                       object_id=object_id)
     return id
