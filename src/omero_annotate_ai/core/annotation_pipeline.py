@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import ezomero
+from tifffile import imwrite
 
 # Optional imports (with error handling)
 try:
@@ -394,6 +395,21 @@ class AnnotationPipeline:
             n_patches=patches_per_image,
             random_patch=random_patches,
         )
+
+    def _get_images_for_cp(self,image_list: List[Tuple]) -> List[Any]:
+        """Get images to save locally for cellpose trainin"""
+        metadata = []
+
+        output_path = Path(self.config.output.output_directory)
+
+        for image_obj, annotation_id, meta, row_idx in image_list  :
+            # Load image data from OMERO
+            image_data = self._load_image_data(image_obj, meta)
+            imwrite(output_path / f"{annotation_id}.tiff", image_data)
+            # Include image_id in metadata for later ROI upload
+            meta_with_image_id = meta.copy()
+            meta_with_image_id["image_id"] = image_obj.getId()
+            metadata.append((annotation_id, meta_with_image_id, row_idx))
 
     def _run_micro_sam_annotation(self, batch_data: List[Tuple]) -> dict:
         """Run micro-SAM annotation on a batch of data."""
@@ -790,7 +806,7 @@ class AnnotationPipeline:
         return table_id
 
     def run_full_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
-        """Run the complete simplified workflow: config-first approach with single source of truth.
+        """Run the complete workflow using the micro-sam series annotator in napari.
         
         Args:
             images_list: Optional list of OMERO image objects. If None, loads from container.
@@ -950,6 +966,107 @@ class AnnotationPipeline:
             print("Annotation workflow failed - no units were processed")
         
         return self.table_id, self.config
+
+    def run_cp_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
+        """Run a workflow where we prepare images for cellpose training.
+        
+        Args:
+            images_list: Optional list of OMERO image objects. If None, loads from container.
+            
+        Returns:
+            Tuple of (table_id, processed_images)
+        """        
+        # Setup directories
+        output_path = self._setup_directories()
+        self._cleanup_embeddings(output_path)
+        
+        # Load images if not provided
+        if images_list is None:
+            images_list = self.get_images_from_container()
+            if not images_list:
+                raise ValueError(
+                    f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
+                )
+        
+        print(f"Processing {len(images_list)} images for Cellpose training")
+        
+        # Handle resume logic (one-time sync at workflow start, we check at OMERO what annotations are already processed)
+        if self.config.workflow.resume_from_table and not self.config.workflow.read_only_mode:
+            existing_table_id = self._find_existing_table()
+            if existing_table_id:
+                print("Syncing OMERO table state to config...")
+                sync_omero_table_to_config(self.conn, existing_table_id, self.config)
+                self.table_id = existing_table_id
+        
+        # Prepare processing units (populate config.annotations)
+        if not self.config.annotations or not self.config.workflow.resume_from_table:
+            print("Preparing processing units...")
+            self._prepare_processing_units(images_list)
+        
+        # Create initial OMERO table (all processed=False) - skip in read-only mode
+        if not self.config.workflow.read_only_mode:
+            if self.table_id is None:
+                print("Creating initial OMERO table...")
+                config_df = self.config.to_dataframe()
+                # Ensure all rows start as unprocessed for new table
+                if not self.config.workflow.resume_from_table:
+                    config_df['processed'] = False
+                    
+                table_id = create_or_replace_tracking_table(
+                    conn=self.conn,
+                    config_df=config_df,
+                    table_title=self._get_table_title(),
+                    container_type=self.config.omero.container_type,
+                    container_id=self.config.omero.container_id,
+                )
+                self.table_id = table_id
+                print(f"Created OMERO table with ID: {table_id}")
+            
+            # # Initialize workflow status map for new table #TO DO make this more useful where we update the progress leave out for now
+            # self._update_workflow_status_map(self.table_id)
+        else:
+            print("Read-only mode: Skipping OMERO table creation")
+            self.table_id = -1  # Mock table ID for read-only mode
+        
+        # Get unprocessed annotations from config
+        unprocessed_annotations = self.config.get_unprocessed()
+        
+        if not unprocessed_annotations:
+            print("All images already processed!")
+            return self.table_id, self.config
+        
+        print(f"Found {len(unprocessed_annotations)} unprocessed annotations")
+        
+        # Convert annotations to processing units format
+        processing_units = []
+        for i, annotation in enumerate(unprocessed_annotations):
+            metadata = {
+                "image_id": annotation.image_id,
+                "timepoint": annotation.timepoint,
+                "z_slice": annotation.z_slice,
+                "z_start": annotation.z_start,
+                "z_end": annotation.z_end,
+                "z_length": annotation.z_length,
+                "patch_x": annotation.patch_x,
+                "patch_y": annotation.patch_y,
+                "category": annotation.category,
+                "model_type": annotation.model_type,
+                "channel": annotation.channel,
+                "is_volumetric": annotation.is_volumetric,
+            }
+            processing_units.append((annotation.image_id, annotation.annotation_id, metadata, i))
+        
+        processed_count = 0
+        batch_with_images = []
+        for img_id, seq_val, meta, row_idx in processing_units:
+            image_obj = self.conn.getObject("Image", img_id)
+            batch_with_images.append((image_obj, seq_val, meta, row_idx))
+        # Get images from OMERO based on processing units and save locally
+        self._get_images_for_cp(batch_with_images)
+
+        return self.table_id, self.config
+
+
 
 def create_pipeline(
     config: AnnotationConfig, conn=None, config_file_path: Optional[Union[str, Path]] = None

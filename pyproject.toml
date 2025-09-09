@@ -48,7 +48,7 @@ dependencies = [
     "opencv-python>=4.5.0",
     "keyring>=23.0.0",
     "ezomero>=3.1.0", 
-    "ipykernel",
+    "ipykernel", "pixi-kernel>=0.6.6,<0.7",
 ]
 
 [project.optional-dependencies]
