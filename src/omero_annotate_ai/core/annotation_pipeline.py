@@ -347,10 +347,13 @@ class AnnotationPipeline:
 
     def _upload_annotation_config_to_omero(self) -> int: 
         container_type_str = str(self.config.omero.container_type).capitalize()
-        id = upload_annotation_config_to_omero(self.conn, 
-                                                object_type=container_type_str, 
-                                                object_id=self.config.omero.container_id, 
-                                                file_path=self.config_file_path)
+        file_path = str(self.config_file_path) if isinstance(self.config_file_path, Path) else self.config_file_path
+        id = upload_annotation_config_to_omero(
+            self.conn,
+            object_type=container_type_str,
+            object_id=self.config.omero.container_id,
+            file_path=file_path
+        )
         return id
 
     def _get_timepoints_for_image(self, image) -> List[int]:
@@ -923,7 +926,7 @@ class AnnotationPipeline:
                 self._debug_print(f"   ✅ Config saved")
                 
                 processed_count += len(batch)
-                print(f"✅ Batch {batch_num} completed ({processed_count}/{len(processing_units)} total)")
+                #print(f"✅ Batch {batch_num} completed ({processed_count}/{len(processing_units)} total)")
                 
             except Exception as e:
                 print(f"Error processing batch {batch_num}: {e}")
