@@ -1,6 +1,6 @@
 """OMERO integration functions for micro-SAM workflows."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -126,7 +126,30 @@ def sync_omero_table_to_config(conn, table_id: int, config):
     except Exception as e:
         print(f"Error loading table {table_id} into config: {e}")
 
+def upload_annotation_config_to_omero(
+        conn, 
+        object_type: str, 
+        object_id: int, 
+        file_path: Optional[str] = None
+) -> int:
+    """
+    Upload the annotation configuration file to OMERO.
 
+    Args:
+        conn: OMERO connection
+        object_type: Type of OMERO object (e.g., "Image", "Dataset")
+        object_id: ID of the OMERO object
+        file_path: Path to the YAML configuration file
+
+    Returns:
+        ID of the uploaded file annotation
+    """
+    id = ezomero.post_file_annotation(conn, 
+                                      file_path=file_path,
+                                      ns="openmicroscopy.org/omero/annotate/config",
+                                      object_type=object_type,
+                                      object_id=object_id)
+    return id
 # =============================================================================
 # Original Table Management Functions (LEGACY - for backwards compatibility)
 # =============================================================================
@@ -549,6 +572,12 @@ def upload_rois_and_labels(
     patch_offset: Optional[Tuple[int, int]] = None,
     trainingset_name: Optional[str] = None,
     trainingset_description: Optional[str] = None,
+    timepoint: Optional[int] = None,
+    z_slice: Optional[int] = None,
+    channel: Optional[int] = None,
+    model_type: Optional[str] = "vit_b_lm",
+    is_volumetric: Optional[bool] = False,
+    z_start: Optional[int] = 0,
 ):
     """Upload ROIs and labels to OMERO image.
 
@@ -559,6 +588,13 @@ def upload_rois_and_labels(
         patch_offset: Optional (x,y) offset for patch placement
         trainingset_name: Optional training set name for custom annotation naming
         trainingset_description: Optional training set description for custom annotation description
+        timepoint: Optional timepoint for positioning the roi properly in OMERO
+        z_slice: Optional z_slice for positioning the roi properly in OMERO
+        channel: Optional channel for positioning the roi properly in OMERO
+        model_type: Optional model type for setting description in OMERO
+        is_volumetric: check if we need to handle roi as 3D
+        z_start: use for volumetric to use z_start as offset in the stack
+
 
     Returns:
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
@@ -571,29 +607,32 @@ def upload_rois_and_labels(
     unique_labels = np.unique(label_img)
     print(
         f"🏷️ Found {len(unique_labels)} unique labels: {unique_labels[:10]}..."
-    )  # Show first 10 labels
-
-    # Default metadata for ROI creation (can be enhanced with actual metadata)
-    z_slice = 0  # Default to first z-slice
-    channel = 0  # Default to first channel
-    timepoint = 0  # Default to first timepoint
-    model_type = "vit_b_lm"  # Default model type
-    is_volumetric = False  # Default to 2D mode
-    
-    # For 3D volumes, label_img should already be the proper 3D stack
-    # The ROI creation will handle 3D volumes appropriately
+    )  
 
     # Create ROI shapes from label image
     print(f"🔍 Step 2: Converting labels to ROI shapes...")
-    shapes = label_to_rois(
-        label_img=label_img,
-        z_slice=z_slice,
-        channel=channel,
-        timepoint=timepoint,
-        model_type=model_type,
-        is_volumetric=is_volumetric,
-        patch_offset=patch_offset,
-    )
+    if (is_volumetric):
+        shapes = label_to_rois(
+            label_img=label_img,
+            z_slice=z_start,
+            channel=channel,
+            timepoint=timepoint,
+            model_type=model_type,
+            is_volumetric=is_volumetric,
+            patch_offset=patch_offset,
+        ) 
+    else:
+        shapes = label_to_rois(
+            label_img=label_img,
+            z_slice=z_slice,
+            channel=channel,
+            timepoint=timepoint,
+            model_type=model_type,
+            is_volumetric=is_volumetric,
+            patch_offset=patch_offset,
+        )
+    
+
     print(f"✅ Created {len(shapes)} ROI shapes from labels")
 
     # Upload label file as attachment
@@ -612,7 +651,7 @@ def upload_rois_and_labels(
         conn,
         file_path=annotation_file,
         description=label_desc,
-        ns="openmicroscopy.org/omero/micro_sam",
+        ns="openmicroscopy.org/omero/annotate/labels",
         object_type="Image",
         object_id=image_id,
     )
@@ -722,7 +761,7 @@ def update_workflow_status_map(
             object_type=container_type.capitalize(),
             object_id=container_id,
             kv_dict=status_map,
-            ns="openmicroscopy.org/omero/micro_sam/workflow_status",
+            ns="openmicroscopy.org/omero/annotate/workflow_status",
         )
 
         print(
@@ -762,7 +801,7 @@ def get_workflow_status_map(
         return None
 
     except Exception as e:
-        print(f"⚠️ Could not get workflow status: {e}")
+        print(f"Could not get workflow status: {e}")
         return None
 
 
@@ -999,22 +1038,6 @@ def create_roi_namespace_for_table(table_name: str) -> str:
     return f"omero_annotate_ai.table.{table_name}"
 
 
-def get_tables_by_roi_namespace(conn, project_id: int, namespace: str) -> List[int]:
-    """Find tables that have ROIs with a specific namespace.
-
-    Args:
-        conn: OMERO connection
-        project_id: Project ID to search in
-        namespace: ROI namespace to look for
-
-    Returns:
-        List of table IDs
-    """
-    # This would require scanning ROIs across the project
-    # Implementation depends on OMERO's ROI search capabilities
-    # For now, return empty list - can be enhanced later
-    return []
-
 
 def cleanup_project_annotations(
     conn, project_id: int, trainingset_name: str = ""
@@ -1139,7 +1162,7 @@ def cleanup_project_annotations(
 
     # 3. Clean up map annotations (workflow status)
     print("🗺️ Cleaning up map annotations...")
-    workflow_namespace = "openmicroscopy.org/omero/micro_sam/workflow_status"
+    workflow_namespace = "openmicroscopy.org/omero/annotate/workflow_status"
 
     try:
         # Clean up from datasets

@@ -41,8 +41,9 @@ from .annotation_config import AnnotationConfig, ImageAnnotation
 from ..omero.omero_functions import (
     create_or_replace_tracking_table,
     sync_omero_table_to_config,
-    update_workflow_status_map,
-    get_workflow_status_map,
+   # update_workflow_status_map,
+   # get_workflow_status_map,
+    upload_annotation_config_to_omero,
     upload_rois_and_labels
 )
 from ..omero.omero_utils import get_dask_image_multiple, get_table_by_name
@@ -212,26 +213,29 @@ class AnnotationPipeline:
         
         # Clear existing annotations first
         self.config.annotations.clear()
-        
+        n_total = len(images_list)
+
         # Determine which images to process
         if self.config.training.segment_all:
             selected_images = images_list
+            n_train = n_total // self.config.training.train_fraction
+            n_val = n_total - n_train
             image_categories = ["training"] * len(images_list)
+            
         else:
-            # Select subset for training/validation
-            n_total = len(images_list)
+            # Select subset for training/validation            
             n_train = min(self.config.training.train_n, n_total)
             n_val = min(self.config.training.validate_n, n_total - n_train)
 
-            # Randomly select images
-            shuffled_indices = list(range(n_total))
-            random.shuffle(shuffled_indices)
+        # Randomly select images
+        shuffled_indices = list(range(n_total))
+        random.shuffle(shuffled_indices)
 
-            train_indices = shuffled_indices[:n_train]
-            val_indices = shuffled_indices[n_train : n_train + n_val]
+        train_indices = shuffled_indices[:n_train]
+        val_indices = shuffled_indices[n_train : n_train + n_val]
 
-            selected_images = [images_list[i] for i in train_indices + val_indices]
-            image_categories = ["training"] * n_train + ["validation"] * n_val
+        selected_images = [images_list[i] for i in train_indices + val_indices]
+        image_categories = ["training"] * n_train + ["validation"] * n_val
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
@@ -340,6 +344,17 @@ class AnnotationPipeline:
                                 is_volumetric=False,
                             )
                             self.config.add_annotation(annotation)
+
+    def _upload_annotation_config_to_omero(self) -> int: 
+        container_type_str = str(self.config.omero.container_type).capitalize()
+        file_path = str(self.config_file_path) if isinstance(self.config_file_path, Path) else self.config_file_path
+        id = upload_annotation_config_to_omero(
+            self.conn,
+            object_type=container_type_str,
+            object_id=self.config.omero.container_id,
+            file_path=file_path
+        )
+        return id
 
     def _get_timepoints_for_image(self, image) -> List[int]:
         """Get timepoints to process for an image based on configuration."""
@@ -583,6 +598,12 @@ class AnnotationPipeline:
                         patch_offset=patch_offset,
                         trainingset_name=self.config.name,
                         trainingset_description=f"Training set: {self.config.name}",
+                        z_slice=meta.get("z_slice"),
+                        channel=meta.get("channel"),
+                        timepoint=meta.get("timepoint"),
+                        model_type=meta.get("model_type"),
+                        is_volumetric=meta.get("is_volumetric"),
+                        z_start=meta.get("z_start")
                     )
                     
                     # Update config annotation with OMERO IDs
@@ -607,33 +628,33 @@ class AnnotationPipeline:
         self._debug_print(f"📊 Updated {updated_count}/{len(metadata)} annotations")
         self._debug_print(f"📈 Config now has {processed_count}/{len(self.config.annotations)} processed annotations")
 
-    def _update_workflow_status_map(self, table_id: int) -> None:
-        """Update workflow status map annotation after batch completion."""
-        try:
-            update_workflow_status_map(
-                conn=self.conn,
-                container_type=self.config.omero.container_type,
-                container_id=self.config.omero.container_id,
-                table_id=table_id,
-            )
-        except ImportError:
-            print("Could not update workflow status - OMERO functions not available")
-        except Exception as e:
-            print(f"Could not update workflow status: {e}")
+    # def _update_workflow_status_map(self, table_id: int) -> None:
+    #     """Update workflow status map annotation after batch completion."""
+    #     try:
+    #         update_workflow_status_map(
+    #             conn=self.conn,
+    #             container_type=self.config.omero.container_type,
+    #             container_id=self.config.omero.container_id,
+    #             table_id=table_id,
+    #         )
+    #     except ImportError:
+    #         print("Could not update workflow status - OMERO functions not available")
+    #     except Exception as e:
+    #         print(f"Could not update workflow status: {e}")
 
-    def _get_workflow_status_map(self) -> Optional[Dict[str, str]]:
-        """Get current workflow status map annotation."""
-        try:
-            return get_workflow_status_map(
-                conn=self.conn,
-                container_type=self.config.omero.container_type,
-                container_id=self.config.omero.container_id,
-            )
-        except ImportError:
-            return None
-        except Exception as e:
-            print(f"Could not get workflow status: {e}")
-            return None
+    # def _get_workflow_status_map(self) -> Optional[Dict[str, str]]:
+    #     """Get current workflow status map annotation."""
+    #     try:
+    #         return get_workflow_status_map(
+    #             conn=self.conn,
+    #             container_type=self.config.omero.container_type,
+    #             container_id=self.config.omero.container_id,
+    #         )
+    #     except ImportError:
+    #         return None
+    #     except Exception as e:
+    #         print(f"Could not get workflow status: {e}")
+    #         return None
 
     def get_images_from_container(self) -> List[Any]:
         """Get images from the configured OMERO container."""
@@ -791,7 +812,7 @@ class AnnotationPipeline:
         
         print(f"Processing {len(images_list)} images with model: {self.config.ai_model.model_type}")
         
-        # Handle resume logic (one-time sync at workflow start)
+        # Handle resume logic (one-time sync at workflow start, we check at OMERO what annotations are already processed)
         if self.config.workflow.resume_from_table and not self.config.workflow.read_only_mode:
             existing_table_id = self._find_existing_table()
             if existing_table_id:
@@ -823,8 +844,8 @@ class AnnotationPipeline:
                 self.table_id = table_id
                 print(f"Created OMERO table with ID: {table_id}")
             
-            # Initialize workflow status map for new table
-            self._update_workflow_status_map(self.table_id)
+            # # Initialize workflow status map for new table #TO DO make this more useful where we update the progress leave out for now
+            # self._update_workflow_status_map(self.table_id)
         else:
             print("Read-only mode: Skipping OMERO table creation")
             self.table_id = -1  # Mock table ID for read-only mode
@@ -905,20 +926,23 @@ class AnnotationPipeline:
                 self._debug_print(f"   ✅ Config saved")
                 
                 processed_count += len(batch)
-                print(f"✅ Batch {batch_num} completed ({processed_count}/{len(processing_units)} total)")
+                #print(f"✅ Batch {batch_num} completed ({processed_count}/{len(processing_units)} total)")
                 
             except Exception as e:
-                print(f"❌ Error processing batch {batch_num}: {e}")
+                print(f"Error processing batch {batch_num}: {e}")
                 traceback.print_exc()
                 # Continue with next batch instead of failing completely
                 raise
   
-        # Final workflow status update
-        if not self.config.workflow.read_only_mode and self.table_id != -1:
-            self._update_workflow_status_map(self.table_id)
+        # Final workflow status update #See above comment
+        # if not self.config.workflow.read_only_mode and self.table_id != -1:
+        #     self._update_workflow_status_map(self.table_id)
         
         # Final config save
         self._auto_save_config()
+
+        # Upload config to OMERO
+        self._upload_annotation_config_to_omero()
         
         if processed_count > 0:
             print(f"Annotation workflow completed successfully! Processed {processed_count} units")

@@ -24,20 +24,20 @@ jobs:
         pixi-version: v0.34.0
         cache: true
         
-    - name: Run tests
-      run: pixi run pytest tests/ -v
+    - name: Run unit tests
+      run: pixi run -e dev pytest tests/ -m "not (omero or integration or docker)" -v
       
     - name: Check code formatting
       run: |
-        pixi run black --check src/ tests/
-        pixi run isort --check-only src/ tests/
+        pixi run -e dev black --check src/ tests/
+        pixi run -e dev isort --check-only src/ tests/
         
     - name: Lint code
-      run: pixi run flake8 src/ tests/
+      run: pixi run -e dev flake8 src/ tests/
       
     - name: Test OMERO functionality (Linux only)
       if: matrix.os == 'ubuntu-latest'
-      run: pixi run pytest tests/ -m omero -v
+      run: pixi run -e dev pytest tests/ -m "omero or integration" -v
 
   build:
     needs: test
@@ -54,7 +54,7 @@ jobs:
         
     - name: Build package
       run: |
-        pixi run python -m build
+        pixi run -e dev python -m build
         
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4

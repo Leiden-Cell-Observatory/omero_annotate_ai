@@ -209,7 +209,7 @@ class TrainingConfig(BaseModel):
         "random_split", "expert_review", "cross_validation"
     ] = "random_split"
     train_fraction: float = Field(
-        default=0.7, ge=0.1, le=0.9, description="Training data fraction"
+        default=0.7, ge=0.1, le=0.9, description="Training data fraction" #TO DO add function to calculate this
     )
     train_n: int = Field(default=3, gt=0, description="Number of training images")
     validation_fraction: float = Field(
@@ -742,7 +742,6 @@ processing:
   patches_per_image: 4
   random_patches: true  # NEW
   
-
 output:
   output_directory: "./annotations"
   format: "ome_tiff"
