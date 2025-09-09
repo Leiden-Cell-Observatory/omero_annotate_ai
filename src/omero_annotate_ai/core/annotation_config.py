@@ -742,7 +742,6 @@ processing:
   patches_per_image: 4
   random_patches: true  # NEW
   
-
 output:
   output_directory: "./annotations"
   format: "ome_tiff"
