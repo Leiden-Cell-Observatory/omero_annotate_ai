@@ -74,10 +74,14 @@ test = [
     "pytest-mock>=3.0",
 ]
 docs = [
-    "sphinx>=4.0",
-    "sphinx-rtd-theme>=1.0",
-    "sphinxcontrib-napoleon>=0.7",
-    "myst-parser>=0.18",
+    "mkdocs>=1.5.3",
+    "mkdocs-material>=9.5.9",
+    "mkdocstrings>=0.24.0",
+    "mkdocstrings-python>=1.7.0",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.1",
+    "mkdocs-section-index>=0.3.8",
+    "mkdocs-autorefs>=0.5.0",
 ]
 all = [
     "napari>=0.4.15",
@@ -144,6 +148,17 @@ flake8 = ">=7.3.0,<8"
 black = ">=25.1.0,<26"
 isort = ">=6.0.1,<7"
 
+# Documentation feature
+[tool.pixi.feature.docs.dependencies]
+mkdocs = ">=1.5.3"
+mkdocs-material = ">=9.5.9"
+mkdocstrings = ">=0.24.0"
+mkdocs-gen-files = ">=0.5.0"
+mkdocs-literate-nav = ">=0.6.1"
+mkdocs-section-index = ">=0.3.8"
+mkdocs-autorefs = ">=0.5.0"
+mkdocstrings-python = ">=1.7.0"
+
 [tool.pixi.feature.dev.pypi-dependencies]
 build = "*"
 twine = "*"
@@ -152,6 +167,7 @@ twine = "*"
 [tool.pixi.environments]
 default = []
 dev = ["dev"]
+docs = ["docs"]
 
 [tool.pixi.pypi-dependencies]
 omero-annotate-ai = { path = ".", editable = true }
@@ -177,8 +193,11 @@ start-omero = {cmd = "cd tests && docker-compose up -d && echo \"OMERO server st
 stop-omero = {cmd = "cd tests && docker-compose down -v"}
 
 # Documentation tasks
-docs = {cmd = "cd docs && make html && echo \"Documentation built in docs/_build/html/\""}
-docs-serve = {cmd = "cd docs/_build/html && python -m http.server 8000"}
+docs-build = {cmd = "mkdocs build"}
+docs-serve = {cmd = "mkdocs serve"}
+docs-deploy = {cmd = "mkdocs gh-deploy"}
+mkdocs-serve = {cmd = "mkdocs serve"}
+mkdocs-build = {cmd = "mkdocs build"}
 
 # Build tasks
 build-package = { cmd = "python -m build" }
