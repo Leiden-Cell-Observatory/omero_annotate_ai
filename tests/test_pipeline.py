@@ -233,7 +233,6 @@ class TestAnnotationPipeline:
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
         
-        print(pipeline.config.annotations)
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 6
         
