@@ -403,7 +403,7 @@ class AnnotationPipeline:
         return coordinates, actual_patch_size
 
     def _get_images_for_cp(self,image_list: List[Tuple]) -> List[Any]:
-        """Get images to save locally for cellpose trainin"""
+        """Get images to save locally for cellpose training"""
         metadata = []
 
         output_path = Path(self.config.output.output_directory)
