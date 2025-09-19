@@ -26,9 +26,9 @@ jobs:
         lfs: true
 
     - name: Install pixi (docs env)
-      uses: prefix-dev/setup-pixi@v0.8.1
+      uses: prefix-dev/setup-pixi@v0.9.0
       with:
-        pixi-version: v0.34.0
+        pixi-version: v0.55.0
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         locked: true
