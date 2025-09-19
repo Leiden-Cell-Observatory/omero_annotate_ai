@@ -219,24 +219,26 @@ class AnnotationPipeline:
         # Determine which images to process
         if self.config.training.segment_all:
             selected_images = images_list
-            n_train = n_total // self.config.training.train_fraction
+            n_train = int(n_total * self.config.training.train_fraction)
             n_val = n_total - n_train
-            image_categories = ["training"] * len(images_list)
             
+            # Create categories for all images
+            image_categories = (["training"] * n_train + 
+                              ["validation"] * n_val)
         else:
             # Select subset for training/validation            
             n_train = min(self.config.training.train_n, n_total)
             n_val = min(self.config.training.validate_n, n_total - n_train)
 
-        # Randomly select images
-        shuffled_indices = list(range(n_total))
-        random.shuffle(shuffled_indices)
+            # Randomly select images
+            shuffled_indices = list(range(n_total))
+            random.shuffle(shuffled_indices)
 
-        train_indices = shuffled_indices[:n_train]
-        val_indices = shuffled_indices[n_train : n_train + n_val]
+            train_indices = shuffled_indices[:n_train]
+            val_indices = shuffled_indices[n_train : n_train + n_val]
 
-        selected_images = [images_list[i] for i in train_indices + val_indices]
-        image_categories = ["training"] * n_train + ["validation"] * n_val
+            selected_images = [images_list[i] for i in train_indices + val_indices]
+            image_categories = ["training"] * n_train + ["validation"] * n_val
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
@@ -262,7 +264,8 @@ class AnnotationPipeline:
                     
                     if self.config.processing.use_patches:
                         # Create multiple annotations for 3D patches
-                        patch_coords = self._generate_patch_coordinates(image)
+                        patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                        patch_h, patch_w = actual_patch_size
                         for i, (x, y) in enumerate(patch_coords):
                             annotation = ImageAnnotation(
                                 image_id=image_id,
@@ -276,8 +279,8 @@ class AnnotationPipeline:
                                 is_patch=True,
                                 patch_x=x,
                                 patch_y=y,
-                                patch_width=self.config.processing.patch_size[0],
-                                patch_height=self.config.processing.patch_size[1],
+                                patch_width=patch_w,
+                                patch_height=patch_h,
                                 category=category,
                                 model_type=self.config.ai_model.model_type,
                                 channel=self.config.spatial_coverage.primary_channel,
@@ -306,7 +309,8 @@ class AnnotationPipeline:
                     for z in z_slices:
                         if self.config.processing.use_patches:
                             # Create multiple annotations for 2D patches
-                            patch_coords = self._generate_patch_coordinates(image)
+                            patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                            patch_h, patch_w = actual_patch_size
                             for i, (x, y) in enumerate(patch_coords):
                                 annotation = ImageAnnotation(
                                     image_id=image_id,
@@ -320,8 +324,8 @@ class AnnotationPipeline:
                                     patch_x=x,
                                     patch_y=y,
                                     is_patch=True,
-                                    patch_width=self.config.processing.patch_size[0],
-                                    patch_height=self.config.processing.patch_size[1],
+                                    patch_width=patch_w,
+                                    patch_height=patch_h,
                                     category=category,
                                     model_type=self.config.ai_model.model_type,
                                     channel=self.config.spatial_coverage.primary_channel,
@@ -381,20 +385,22 @@ class AnnotationPipeline:
         else: # specific
             return [z for z in self.config.spatial_coverage.z_slices if z < max_z]
 
-    def _generate_patch_coordinates(self, image) -> List[Tuple[int, int]]:
-        """Generate patch coordinates for an image."""
+    def _generate_patch_coordinates(self, image) -> Tuple[List[Tuple[int, int]], List[int]]:
+        """Generate patch coordinates for an image and return actual patch size."""
         patch_size = self.config.processing.patch_size
         patches_per_image = self.config.processing.patches_per_image
         random_patches = self.config.processing.random_patches
 
         image_shape = (image.getSizeY(), image.getSizeX())
 
-        return generate_patch_coordinates(
+        coordinates, actual_patch_size = generate_patch_coordinates(
             image_shape=image_shape,
             patch_size=patch_size,
             n_patches=patches_per_image,
             random_patch=random_patches,
         )
+        
+        return coordinates, actual_patch_size
 
     def _get_images_for_cp(self,image_list: List[Tuple]) -> List[Any]:
         """Get images to save locally for cellpose trainin"""
@@ -524,7 +530,9 @@ class AnnotationPipeline:
         if self.config.processing.use_patches and "patch_x" in metadata:
             patch_x = metadata["patch_x"]
             patch_y = metadata["patch_y"]
-            patch_h, patch_w = self.config.processing.patch_size
+            # Use the actual patch dimensions from metadata instead of config
+            patch_h = metadata.get("patch_height", self.config.processing.patch_size[0])
+            patch_w = metadata.get("patch_width", self.config.processing.patch_size[1])
 
             if is_volumetric:
                 # Extract 3D patch: (z, y, x)
