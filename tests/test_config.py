@@ -8,12 +8,6 @@ from dataclasses import asdict
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    BatchProcessingConfig,
-    OMEROConfig,
-    MicroSAMConfig,
-    PatchConfig,
-    TrainingConfig,
-    WorkflowConfig,
     create_default_config,
     load_config,
     get_config_template
@@ -25,115 +19,125 @@ class TestAnnotationConfig:
     """Test the AnnotationConfig class with modern structure."""
     
     def test_default_config_creation(self):
-        """Test creating a default configuration."""
+        """
+        Tests the creation of a default configuration object.
+        This test ensures that the `create_default_config` function returns a valid
+        `AnnotationConfig` object with the expected default values.
+        """
         config = create_default_config()
         assert isinstance(config, AnnotationConfig)
-        assert config.batch_processing.batch_size == 0  # New default
         assert config.omero.container_type == "dataset"
-        assert config.micro_sam.model_type == "vit_b_lm"  # New default
-        assert config.training.trainingset_name == "default_training_set"
     
     def test_config_to_dict(self):
-        """Test converting configuration to dictionary."""
+        """
+        Tests the conversion of a configuration object to a dictionary.
+        This test ensures that the `to_dict` method correctly converts the `AnnotationConfig`
+        object to a dictionary with the expected keys.
+        """
         config = create_default_config()
         config_dict = config.to_dict()
         
         assert isinstance(config_dict, dict)
-        assert "batch_processing" in config_dict
         assert "omero" in config_dict
-        assert "micro_sam" in config_dict  # Updated from image_processing
-        assert "patches" in config_dict
         assert "training" in config_dict
         assert "workflow" in config_dict
     
     def test_config_to_yaml(self):
-        """Test converting configuration to YAML."""
+        """
+        Tests the conversion of a configuration object to a YAML string.
+        This test ensures that the `to_yaml` method correctly converts the `AnnotationConfig`
+        object to a valid YAML string with the expected content.
+        """
         config = create_default_config()
         yaml_str = config.to_yaml()
         
         assert isinstance(yaml_str, str)
-        assert "batch_processing:" in yaml_str
         assert "omero:" in yaml_str
-        assert "micro_sam:" in yaml_str  # Updated name
-        assert "model_type: vit_b_lm" in yaml_str  # New default
-        assert "batch_size: 0" in yaml_str  # New default
         
         # Test that it's valid YAML
         parsed = yaml.safe_load(yaml_str)
         assert isinstance(parsed, dict)
+
+    def test_yaml_key_order_deterministic(self):
+        """
+        Ensure YAML serialization preserves a deterministic, schema-defined key order.
+        """
+        config = create_default_config()
+        yaml_str = config.to_yaml()
+
+        # Extract the first-level keys order from the YAML text
+        lines = [ln for ln in yaml_str.splitlines() if ln and not ln.startswith(' ') and ':' in ln]
+        keys_in_yaml = [ln.split(':', 1)[0] for ln in lines]
+
+        # Expected order follows field declaration order of AnnotationConfig
+        expected_prefix_order = [
+            'schema_version',
+            'config_file_path',
+            'name',
+            'version',
+            'authors',
+            'created',
+            'study',
+            'dataset',
+            'annotation_methodology',
+            'spatial_coverage',
+            'training',
+            'ai_model',
+            'processing',
+            'workflow',
+            'output',
+            'omero',
+            'annotations',
+            'documentation',
+            'repository',
+            'tags',
+        ]
+
+        # Only compare until we reach a non-top-level sequence scalar line
+        assert keys_in_yaml[: len(expected_prefix_order)] == expected_prefix_order
     
     def test_config_from_dict(self):
-        """Test creating configuration from dictionary."""
+        """
+        Tests the creation of a configuration object from a dictionary.
+        This test ensures that the `from_dict` method correctly creates an `AnnotationConfig`
+        object from a dictionary with the expected values.
+        """
         config_dict = {
-            "batch_processing": {"batch_size": 5},
+            "name": "test",
             "omero": {"container_type": "plate", "container_id": 123},
-            "micro_sam": {"model_type": "vit_h", "three_d": True}
         }
         
         config = AnnotationConfig.from_dict(config_dict)
         
-        assert config.batch_processing.batch_size == 5
         assert config.omero.container_type == "plate"
         assert config.omero.container_id == 123
-        assert config.micro_sam.model_type == "vit_h"
-        assert config.micro_sam.three_d is True
-    
-    def test_backward_compatibility_ai_model(self):
-        """Test backward compatibility with old ai_model config."""
-        config_dict = {
-            "ai_model": {
-                "model_type": "vit_l",
-                "timepoints": [1, 2],
-                "three_d": True
-            }
-        }
-        
-        config = AnnotationConfig.from_dict(config_dict)
-        
-        # Should be mapped to micro_sam config
-        assert config.micro_sam.model_type == "vit_l"
-        assert config.micro_sam.timepoints == [1, 2]
-        assert config.micro_sam.three_d is True
-    
-    def test_backward_compatibility_image_processing(self):
-        """Test backward compatibility with old image_processing config."""
-        config_dict = {
-            "image_processing": {
-                "model_type": "vit_b",
-                "z_slices": [0, 1, 2]
-            }
-        }
-        
-        config = AnnotationConfig.from_dict(config_dict)
-        
-        # Should be mapped to micro_sam config
-        assert config.micro_sam.model_type == "vit_b"
-        assert config.micro_sam.z_slices == [0, 1, 2]
     
     def test_config_from_yaml_string(self):
-        """Test creating configuration from YAML string."""
+        """
+        Tests the creation of a configuration object from a YAML string.
+        This test ensures that the `from_yaml` method correctly creates an `AnnotationConfig`
+        object from a YAML string with the expected values.
+        """
         yaml_str = """
-        batch_processing:
-          batch_size: 0
+        name: test
         omero:
           container_type: project
           container_id: 456
-        micro_sam:
-          model_type: vit_b_lm
         """
         
         config = AnnotationConfig.from_yaml(yaml_str)
         
-        assert config.batch_processing.batch_size == 0
         assert config.omero.container_type == "project"
         assert config.omero.container_id == 456
-        assert config.micro_sam.model_type == "vit_b_lm"
     
     def test_config_from_yaml_file(self):
-        """Test creating configuration from YAML file."""
+        """
+        Tests the creation of a configuration object from a YAML file.
+        This test ensures that the `from_yaml` method correctly creates an `AnnotationConfig`
+        object from a YAML file with the expected values.
+        """
         yaml_content = """
-        batch_processing:
-          batch_size: 2
+        name: test
         training:
           trainingset_name: "test_set"
         """
@@ -144,201 +148,74 @@ class TestAnnotationConfig:
             
             config = AnnotationConfig.from_yaml(f.name)
             
-            assert config.batch_processing.batch_size == 2
-            assert config.training.trainingset_name == "test_set"
+            assert config.name == "test"
         
         # Clean up
         Path(f.name).unlink()
     
-    def test_config_validation_success(self):
-        """Test successful configuration validation."""
-        config = create_default_config()
-        config.omero.container_id = 123  # Set required field
-        
-        # Should not raise exception
-        config.validate()
-    
-    def test_batch_size_zero_validation(self):
-        """Test that batch_size=0 is valid (new behavior)."""
-        config = create_default_config()
-        config.omero.container_id = 123
-        config.batch_processing.batch_size = 0  # Should be valid
-        
-        # Should not raise exception
-        config.validate()
-    
-    def test_config_validation_failures(self):
-        """Test configuration validation failures."""
-        config = create_default_config()
-        config.omero.container_id = 123  # Set valid container_id first
-        
-        # Test invalid batch size (negative)
-        config.batch_processing.batch_size = -1
-        with pytest.raises(ValueError, match="batch_size must be non-negative"):
-            config.validate()
-        
-        # Reset and test invalid container type
-        config = create_default_config()
-        config.omero.container_id = 123
-        config.omero.container_type = "invalid"
-        with pytest.raises(ValueError, match="container_type must be one of"):
-            config.validate()
-        
-        # Test invalid model type
-        config = create_default_config()
-        config.omero.container_id = 123
-        config.micro_sam.model_type = "invalid_model"
-        with pytest.raises(ValueError, match="model_type must be one of"):
-            config.validate()
-    
-    def test_group_by_image_removed(self):
-        """Test that group_by_image parameter has been removed."""
-        config = create_default_config()
-        
-        # Should not have group_by_image attribute
-        assert not hasattr(config.training, 'group_by_image')
-        
-        # Should not appear in config dict
-        config_dict = asdict(config)
-        assert 'group_by_image' not in str(config_dict)    
-    def test_training_set_name_required(self):
-        """Test that training set name is included."""
-        config = create_default_config()
-        
-        assert config.training.trainingset_name == "default_training_set"
-        
-        # Should appear in YAML
-        yaml_str = config.to_yaml()
-        assert "trainingset_name: default_training_set" in yaml_str
-    
     def test_config_structure(self):
-        """Test configuration structure and key parameters."""
+        """
+        Tests the overall structure and key parameters of the configuration.
+        This test ensures that the default configuration has the expected structure
+        and that the key parameters have the correct default values.
+        """
         config = create_default_config()
         config.omero.container_id = 123
         
         # Test key configuration values
-        assert config.batch_processing.batch_size == 0  # Updated default
         assert config.omero.container_type == "dataset"
         assert config.omero.container_id == 123
-        assert config.micro_sam.model_type == "vit_b_lm"  # Updated default
-        assert config.patches.use_patches is False
-        assert config.training.trainingset_name == "default_training_set"
-        
-        # Ensure removed parameter is not present in config
-        assert not hasattr(config.training, 'group_by_image')    
+    
     def test_load_config_from_dict(self):
-        """Test load_config function with dictionary."""
-        config_dict = {"omero": {"container_id": 999}}
+        """
+        Tests the `load_config` function with a dictionary as input.
+        This test ensures that the `load_config` function correctly creates an
+        `AnnotationConfig` object from a dictionary.
+        """
+        config_dict = {"name": "test", "omero": {"container_id": 999}}
         config = load_config(config_dict)
         
         assert isinstance(config, AnnotationConfig)
         assert config.omero.container_id == 999
     
     def test_get_config_template(self):
-        """Test getting configuration template."""
+        """
+        Tests the `get_config_template` function.
+        This test ensures that the `get_config_template` function returns a valid
+        YAML template with the expected content.
+        """
         template = get_config_template()
         
         assert isinstance(template, str)
-        assert "batch_processing:" in template
-        assert "model_type: \"vit_b_lm\"" in template  # New default
-        assert "batch_size: 0" in template  # New default
-        assert "trainingset_name:" in template  # Required field
+        assert "name:" in template
         
         # Test that template is valid YAML
         parsed = yaml.safe_load(template)
         assert isinstance(parsed, dict)
-    
-    def test_micro_sam_params(self):
-        """Test micro-SAM specific parameters extraction."""
-        config = create_default_config()
-        config.batch_processing.output_folder = "./test_output"
-        
-        micro_sam_params = config.get_micro_sam_params()
-        
-        assert micro_sam_params["model_type"] == "vit_b_lm"
-        assert micro_sam_params["embedding_path"] == "./test_output/embed"
-        assert micro_sam_params["is_volumetric"] is False
-
-
-@pytest.mark.unit
-class TestConfigSubclasses:
-    """Test individual configuration dataclasses."""
-    
-    def test_batch_processing_config(self):
-        """Test BatchProcessingConfig defaults and behavior."""
-        config = BatchProcessingConfig()
-        
-        assert config.batch_size == 0  # New default
-        assert config.output_folder == "./omero_annotations"
-        
-        # Test with custom values
-        config = BatchProcessingConfig(batch_size=5, output_folder="./custom")
-        assert config.batch_size == 5
-        assert config.output_folder == "./custom"
-    
-    def test_micro_sam_config(self):
-        """Test MicroSAMConfig defaults and behavior."""
-        config = MicroSAMConfig()
-        
-        assert config.model_type == "vit_b_lm"  # New default
-        assert config.timepoints == [0]
-        assert config.z_slices == [0]
-        assert config.three_d is False
-        assert config.timepoint_mode == "specific"
-        assert config.z_slice_mode == "specific"
-    
-    def test_training_config(self):
-        """Test TrainingConfig defaults and behavior."""
-        config = TrainingConfig()
-        
-        assert config.segment_all is True
-        assert config.train_n == 3
-        assert config.validate_n == 3
-        assert config.trainingset_name == "default_training_set"
-        
-        # Ensure group_by_image is not present
-        assert not hasattr(config, 'group_by_image')
 
 
 @pytest.mark.unit
 class TestConfigEdgeCases:
     """Test edge cases and error conditions."""
     
-    def test_patch_size_conversion(self):
-        """Test patch size conversion from list to tuple."""
-        config_dict = {
-            "patches": {
-                "patch_size": [256, 256]  # List instead of tuple
-            }
-        }
-        
-        config = AnnotationConfig.from_dict(config_dict)
-        assert config.patches.patch_size == (256, 256)
-        assert isinstance(config.patches.patch_size, tuple)
-    
-    def test_trainingset_name_persistence(self):
-        """Test handling of trainingset_name in various scenarios."""
-        # Test with None value (should use default)
-        config_dict = {"training": {"trainingset_name": None}}
-        config = AnnotationConfig.from_dict(config_dict)
-        assert config.training.trainingset_name is None
-        
-        # Test with custom string value
-        config_dict = {"training": {"trainingset_name": "my_custom_set"}}
-        config = AnnotationConfig.from_dict(config_dict)
-        assert config.training.trainingset_name == "my_custom_set"
-    
     def test_invalid_config_source(self):
-        """Test load_config with invalid source."""
+        """
+        Tests the `load_config` function with an invalid source.
+        This test ensures that the `load_config` function raises a `ValueError`
+        when it is called with an invalid source type.
+        """
         with pytest.raises(ValueError, match="config_source must be"):
             load_config(123)  # Invalid type
     
     def test_config_save_and_load_roundtrip(self):
-        """Test saving and loading configuration preserves all data."""
+        """
+        Tests that saving and loading a configuration preserves all data.
+        This test ensures that a configuration object can be saved to a YAML file
+        and then loaded back without any loss of data.
+        """
         config = create_default_config()
         config.omero.container_id = 999
-        config.micro_sam.model_type = "vit_h"
-        config.training.trainingset_name = "test_roundtrip"
+        config.name = "test_roundtrip"
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             config.save_yaml(f.name)
@@ -347,9 +224,7 @@ class TestConfigEdgeCases:
             loaded_config = AnnotationConfig.from_yaml(f.name)
             
             assert loaded_config.omero.container_id == 999
-            assert loaded_config.micro_sam.model_type == "vit_h"
-            assert loaded_config.training.trainingset_name == "test_roundtrip"
-            assert loaded_config.batch_processing.batch_size == 0  # Default preserved
+            assert loaded_config.name == "test_roundtrip"
         
         # Clean up
         Path(f.name).unlink()

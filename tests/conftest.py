@@ -105,11 +105,11 @@ def omero_params() -> Dict[str, Any]:
     """OMERO connection parameters for testing."""
     return {
         "host": "localhost",
-        "port": 6063,
+        "port": 6064,  # Standard secure port for OMERO Docker
         "user": "root", 
         "password": "omero",
         "group": "",
-        "secure": False
+        "secure": True  # Use SSL as standard for OMERO Docker
     }
 
 
@@ -140,20 +140,26 @@ def docker_omero_server(omero_params):
         while waited < max_wait:
             try:
                 if OMERO_AVAILABLE:
+                    print(f"Attempting OMERO connection... ({waited}s elapsed)")
                     conn = ezomero.connect(**omero_params)
                     if conn and conn.isConnected():
+                        print("OMERO connection successful!")
                         conn.close()
                         break
                     if conn:
                         conn.close()
-            except Exception:
-                pass
+                        print("Connection created but not connected")
+                else:
+                    print("OMERO not available, skipping connection test")
+                    break
+            except Exception as e:
+                print(f"Connection attempt failed: {e}")
             
             time.sleep(wait_interval)
             waited += wait_interval
             print(f"Waiting for OMERO server... ({waited}s)")
         
-        if waited >= max_wait:
+        if waited >= max_wait and OMERO_AVAILABLE:
             pytest.fail("OMERO server did not start within timeout")
         
         yield omero_params

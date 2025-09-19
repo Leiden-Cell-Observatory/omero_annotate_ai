@@ -1,0 +1,88 @@
+site_name: OMERO Annotate AI
+site_description: OMERO integration for AI-powered image annotation and segmentation workflows
+site_url: https://leiden-cell-observatory.github.io/omero_annotate_ai/
+repo_url: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai
+repo_name: Leiden-Cell-Observatory/omero_annotate_ai
+
+# Fail the build on any warning
+strict: false
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - toc.follow
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - API Reference: api/index.md
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - section-index
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_toc_entry: false
+            show_signature_annotations: true
+            show_symbol_type_heading: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            extensions:
+              - griffe_pydantic:
+                schema: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/omero-annotate-ai/

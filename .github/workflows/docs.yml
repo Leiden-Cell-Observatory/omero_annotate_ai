@@ -25,37 +25,34 @@ jobs:
       with:
         lfs: true
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Install pixi (docs env)
+      uses: prefix-dev/setup-pixi@v0.9.0
       with:
-        python-version: '3.11'
+        pixi-version: v0.55.0
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        locked: true
+        environments: docs
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install https://github.com/glencoesoftware/zeroc-ice-py-linux-x86_64/releases/download/20240202/zeroc_ice-3.6.5-cp311-cp311-manylinux_2_28_x86_64.whl
-        pip install -e .[docs,dev]
+    - name: Build documentation with MkDocs
+      run: pixi run -e docs docs-build
 
-    - name: Build API documentation with Sphinx
-      run: |
-        cd docs || (mkdir docs && cd docs)
-        if [ ! -f conf.py ]; then
-          sphinx-quickstart -q --ext-autodoc --ext-viewcode --ext-napoleon \
-            --makefile --no-batchfile --project="omero-annotate-ai" \
-            --author="Maarten Paul" --release="0.1.0" .
-        fi
-        sphinx-apidoc -o . ../src/omero_annotate_ai --force
-        make html
+    - name: Upload site artifact (PR preview)
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: mkdocs-site
+        path: site
 
     - name: Setup Pages
       if: github.ref == 'refs/heads/main'
       uses: actions/configure-pages@v4
 
-    - name: Upload artifact
+    - name: Upload artifact (Pages)
       if: github.ref == 'refs/heads/main'
       uses: actions/upload-pages-artifact@v3
       with:
-        path: 'docs/_build/html'
+        path: 'site'
 
   deploy-docs:
     name: Deploy documentation to GitHub Pages

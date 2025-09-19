@@ -1,0 +1,72 @@
+ai_model:
+  framework: pytorch
+  model_type: vit_b_lm
+  name: ''
+  version: latest
+annotation_methodology:
+  annotation_coverage: representative
+  annotation_criteria: ''
+  annotation_method: automatic
+  annotation_type: segmentation_mask
+annotations: []
+authors: []
+config_file_path: null
+created: 2025-09-16 09:19:11.684440
+dataset:
+  license: CC-BY-4.0
+  source_dataset_id: null
+  source_dataset_url: null
+  source_description: ''
+documentation: null
+name: micro_sam_senescence_20250916_091936
+omero:
+  container_id: 101
+  container_type: project
+  source_desc: 'Workflow: project Senescence (ID: 101)'
+output:
+  compression: null
+  format: ome_tiff
+  output_directory: c:\Users\Maarten\Documents\Github\omero_annotate_ai\examples\annotation\omero_annotations
+  resume_from_checkpoint: false
+processing:
+  batch_size: 0
+  patch_size:
+  - 512
+  - 512
+  patches_per_image: 1
+  random_patches: true
+  use_patches: false
+repository: null
+schema_version: 1.0.0
+spatial_coverage:
+  channels:
+  - 0
+  spatial_units: pixels
+  three_d: false
+  timepoint_mode: specific
+  timepoints:
+  - 0
+  z_range_end: 0
+  z_range_start: 0
+  z_slice_mode: specific
+  z_slices:
+  - 0
+study:
+  description: ''
+  imaging_method: null
+  keywords: []
+  organism: null
+  title: ''
+tags: []
+training:
+  quality_threshold: null
+  segment_all: false
+  train_fraction: 0.7
+  train_n: 3
+  validate_n: 3
+  validation_fraction: 0.3
+  validation_strategy: random_split
+version: 1.0.0
+workflow:
+  read_only_mode: false
+  resume_from_table: false

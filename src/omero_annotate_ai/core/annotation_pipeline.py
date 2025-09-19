@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import ezomero
+from tifffile import imwrite
 
 # Optional imports (with error handling)
 try:
@@ -218,24 +219,26 @@ class AnnotationPipeline:
         # Determine which images to process
         if self.config.training.segment_all:
             selected_images = images_list
-            n_train = n_total // self.config.training.train_fraction
+            n_train = int(n_total * self.config.training.train_fraction)
             n_val = n_total - n_train
-            image_categories = ["training"] * len(images_list)
             
+            # Create categories for all images
+            image_categories = (["training"] * n_train + 
+                              ["validation"] * n_val)
         else:
             # Select subset for training/validation            
             n_train = min(self.config.training.train_n, n_total)
             n_val = min(self.config.training.validate_n, n_total - n_train)
 
-        # Randomly select images
-        shuffled_indices = list(range(n_total))
-        random.shuffle(shuffled_indices)
+            # Randomly select images
+            shuffled_indices = list(range(n_total))
+            random.shuffle(shuffled_indices)
 
-        train_indices = shuffled_indices[:n_train]
-        val_indices = shuffled_indices[n_train : n_train + n_val]
+            train_indices = shuffled_indices[:n_train]
+            val_indices = shuffled_indices[n_train : n_train + n_val]
 
-        selected_images = [images_list[i] for i in train_indices + val_indices]
-        image_categories = ["training"] * n_train + ["validation"] * n_val
+            selected_images = [images_list[i] for i in train_indices + val_indices]
+            image_categories = ["training"] * n_train + ["validation"] * n_val
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
@@ -261,7 +264,8 @@ class AnnotationPipeline:
                     
                     if self.config.processing.use_patches:
                         # Create multiple annotations for 3D patches
-                        patch_coords = self._generate_patch_coordinates(image)
+                        patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                        patch_h, patch_w = actual_patch_size
                         for i, (x, y) in enumerate(patch_coords):
                             annotation = ImageAnnotation(
                                 image_id=image_id,
@@ -275,8 +279,8 @@ class AnnotationPipeline:
                                 is_patch=True,
                                 patch_x=x,
                                 patch_y=y,
-                                patch_width=self.config.processing.patch_size[0],
-                                patch_height=self.config.processing.patch_size[1],
+                                patch_width=patch_w,
+                                patch_height=patch_h,
                                 category=category,
                                 model_type=self.config.ai_model.model_type,
                                 channel=self.config.spatial_coverage.primary_channel,
@@ -305,7 +309,8 @@ class AnnotationPipeline:
                     for z in z_slices:
                         if self.config.processing.use_patches:
                             # Create multiple annotations for 2D patches
-                            patch_coords = self._generate_patch_coordinates(image)
+                            patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                            patch_h, patch_w = actual_patch_size
                             for i, (x, y) in enumerate(patch_coords):
                                 annotation = ImageAnnotation(
                                     image_id=image_id,
@@ -319,8 +324,8 @@ class AnnotationPipeline:
                                     patch_x=x,
                                     patch_y=y,
                                     is_patch=True,
-                                    patch_width=self.config.processing.patch_size[0],
-                                    patch_height=self.config.processing.patch_size[1],
+                                    patch_width=patch_w,
+                                    patch_height=patch_h,
                                     category=category,
                                     model_type=self.config.ai_model.model_type,
                                     channel=self.config.spatial_coverage.primary_channel,
@@ -380,20 +385,37 @@ class AnnotationPipeline:
         else: # specific
             return [z for z in self.config.spatial_coverage.z_slices if z < max_z]
 
-    def _generate_patch_coordinates(self, image) -> List[Tuple[int, int]]:
-        """Generate patch coordinates for an image."""
+    def _generate_patch_coordinates(self, image) -> Tuple[List[Tuple[int, int]], List[int]]:
+        """Generate patch coordinates for an image and return actual patch size."""
         patch_size = self.config.processing.patch_size
         patches_per_image = self.config.processing.patches_per_image
         random_patches = self.config.processing.random_patches
 
         image_shape = (image.getSizeY(), image.getSizeX())
 
-        return generate_patch_coordinates(
+        coordinates, actual_patch_size = generate_patch_coordinates(
             image_shape=image_shape,
             patch_size=patch_size,
             n_patches=patches_per_image,
             random_patch=random_patches,
         )
+        
+        return coordinates, actual_patch_size
+
+    def _get_images_for_cp(self, image_list: List[Tuple]) -> List[Any]:
+        """Get images to save locally for cellpose training"""
+        metadata = []
+
+        output_path = Path(self.config.output.output_directory)
+
+        for image_obj, annotation_id, meta, row_idx in image_list  :
+            # Load image data from OMERO
+            image_data = self._load_image_data(image_obj, meta)
+            imwrite(output_path / f"{annotation_id}.tiff", image_data)
+            # Include image_id in metadata for later ROI upload
+            meta_with_image_id = meta.copy()
+            meta_with_image_id["image_id"] = image_obj.getId()
+            metadata.append((annotation_id, meta_with_image_id, row_idx))
 
     def _run_micro_sam_annotation(self, batch_data: List[Tuple]) -> dict:
         """Run micro-SAM annotation on a batch of data."""
@@ -508,7 +530,9 @@ class AnnotationPipeline:
         if self.config.processing.use_patches and "patch_x" in metadata:
             patch_x = metadata["patch_x"]
             patch_y = metadata["patch_y"]
-            patch_h, patch_w = self.config.processing.patch_size
+            # Use the actual patch dimensions from metadata instead of config
+            patch_h = metadata.get("patch_height", self.config.processing.patch_size[0])
+            patch_w = metadata.get("patch_width", self.config.processing.patch_size[1])
 
             if is_volumetric:
                 # Extract 3D patch: (z, y, x)
@@ -790,7 +814,7 @@ class AnnotationPipeline:
         return table_id
 
     def run_full_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
-        """Run the complete simplified workflow: config-first approach with single source of truth.
+        """Run the complete workflow using the micro-sam series annotator in napari.
         
         Args:
             images_list: Optional list of OMERO image objects. If None, loads from container.
@@ -950,6 +974,107 @@ class AnnotationPipeline:
             print("Annotation workflow failed - no units were processed")
         
         return self.table_id, self.config
+
+    def run_cp_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
+        """Run a workflow where we prepare images for cellpose training.
+        
+        Args:
+            images_list: Optional list of OMERO image objects. If None, loads from container.
+            
+        Returns:
+            Tuple of (table_id, processed_images)
+        """        
+        # Setup directories
+        output_path = self._setup_directories()
+        self._cleanup_embeddings(output_path)
+        
+        # Load images if not provided
+        if images_list is None:
+            images_list = self.get_images_from_container()
+            if not images_list:
+                raise ValueError(
+                    f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
+                )
+        
+        print(f"Processing {len(images_list)} images for Cellpose training")
+        
+        # Handle resume logic (one-time sync at workflow start, we check at OMERO what annotations are already processed)
+        if self.config.workflow.resume_from_table and not self.config.workflow.read_only_mode:
+            existing_table_id = self._find_existing_table()
+            if existing_table_id:
+                print("Syncing OMERO table state to config...")
+                sync_omero_table_to_config(self.conn, existing_table_id, self.config)
+                self.table_id = existing_table_id
+        
+        # Prepare processing units (populate config.annotations)
+        if not self.config.annotations or not self.config.workflow.resume_from_table:
+            print("Preparing processing units...")
+            self._prepare_processing_units(images_list)
+        
+        # Create initial OMERO table (all processed=False) - skip in read-only mode
+        if not self.config.workflow.read_only_mode:
+            if self.table_id is None:
+                print("Creating initial OMERO table...")
+                config_df = self.config.to_dataframe()
+                # Ensure all rows start as unprocessed for new table
+                if not self.config.workflow.resume_from_table:
+                    config_df['processed'] = False
+                    
+                table_id = create_or_replace_tracking_table(
+                    conn=self.conn,
+                    config_df=config_df,
+                    table_title=self._get_table_title(),
+                    container_type=self.config.omero.container_type,
+                    container_id=self.config.omero.container_id,
+                )
+                self.table_id = table_id
+                print(f"Created OMERO table with ID: {table_id}")
+            
+            # # Initialize workflow status map for new table #TO DO make this more useful where we update the progress leave out for now
+            # self._update_workflow_status_map(self.table_id)
+        else:
+            print("Read-only mode: Skipping OMERO table creation")
+            self.table_id = -1  # Mock table ID for read-only mode
+        
+        # Get unprocessed annotations from config
+        unprocessed_annotations = self.config.get_unprocessed()
+        
+        if not unprocessed_annotations:
+            print("All images already processed!")
+            return self.table_id, self.config
+        
+        print(f"Found {len(unprocessed_annotations)} unprocessed annotations")
+        
+        # Convert annotations to processing units format
+        processing_units = []
+        for i, annotation in enumerate(unprocessed_annotations):
+            metadata = {
+                "image_id": annotation.image_id,
+                "timepoint": annotation.timepoint,
+                "z_slice": annotation.z_slice,
+                "z_start": annotation.z_start,
+                "z_end": annotation.z_end,
+                "z_length": annotation.z_length,
+                "patch_x": annotation.patch_x,
+                "patch_y": annotation.patch_y,
+                "category": annotation.category,
+                "model_type": annotation.model_type,
+                "channel": annotation.channel,
+                "is_volumetric": annotation.is_volumetric,
+            }
+            processing_units.append((annotation.image_id, annotation.annotation_id, metadata, i))
+        
+        processed_count = 0
+        batch_with_images = []
+        for img_id, seq_val, meta, row_idx in processing_units:
+            image_obj = self.conn.getObject("Image", img_id)
+            batch_with_images.append((image_obj, seq_val, meta, row_idx))
+        # Get images from OMERO based on processing units and save locally
+        self._get_images_for_cp(batch_with_images)
+
+        return self.table_id, self.config
+
+
 
 def create_pipeline(
     config: AnnotationConfig, conn=None, config_file_path: Optional[Union[str, Path]] = None

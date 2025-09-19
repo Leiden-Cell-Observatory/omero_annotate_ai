@@ -30,7 +30,7 @@ services:
     networks:
       - omero
     ports:
-      - "6063:4063"
+      - "6063:4063" # Run on different ports to avoid conflicts
       - "6064:4064"
     volumes:
       - "omero:/OMERO"
@@ -38,11 +38,11 @@ services:
       database:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "omero admin status || exit 1"]
+      test: ["CMD-SHELL", "/opt/omero/server/OMERO.server/bin/omero admin status || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 60s
+      start_period: 120s
 
   omeroweb:
     image: "openmicroscopy/omero-web-standalone:latest"

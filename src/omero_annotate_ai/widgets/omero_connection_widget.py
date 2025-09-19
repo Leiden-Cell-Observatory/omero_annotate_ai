@@ -24,7 +24,12 @@ class OMEROConnectionWidget:
 
         # Header
         self.header = widgets.HTML(
-            value="<h3>🔌 OMERO Server Connection</h3>",
+            value="""
+                <h3>🔌 OMERO Server Connection</h3>
+                <div style='font-size:90%;color:#888;margin-top:-10px;'>
+                    <b>Note:</b> If your OMERO server uses a non-default port, add it to the host as <code>host:port</code> (e.g., <code>localhost:6064</code>).
+                </div>
+            """,
             layout=widgets.Layout(margin="0 0 20px 0"),
         )
 

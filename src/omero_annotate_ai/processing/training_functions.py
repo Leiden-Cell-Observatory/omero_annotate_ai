@@ -1,6 +1,7 @@
 """Training data preparation functions for micro-SAM workflows."""
 
 import shutil
+import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -577,7 +578,6 @@ def _prepare_dataset_from_table(
                     else:
                         print(f"  Error downloading label file {label_id}: {e}")
                         # Print more detailed error information for debugging
-                        import traceback
                         print(f"  Full traceback: {traceback.format_exc()}")
             else:
                 if logger:
@@ -587,11 +587,9 @@ def _prepare_dataset_from_table(
         except Exception as e:
             if logger:
                 logger.error(f"Error processing row {n}: {e}")
-                import traceback
                 logger.debug(traceback.format_exc())
             else:
                 print(f"Error processing row {n}: {e}")
-                import traceback
                 print(traceback.format_exc())
             raise
     return input_dir, label_dir
