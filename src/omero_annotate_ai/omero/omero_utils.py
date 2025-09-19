@@ -410,72 +410,6 @@ def validate_roi_integrity(conn, image_id: int) -> Dict[str, Any]:
 # Connection and Error Handling Utilities
 # =============================================================================
 
-def with_retry(func, max_retries: int = 3, *args, **kwargs):
-    """Wrapper for OMERO operations with retry logic.
-    
-    Args:
-        func: Function to execute with retry
-        max_retries: Maximum number of retry attempts
-        *args, **kwargs: Arguments to pass to function
-        
-    Returns:
-        Function result or None if all retries failed
-    """
-    for attempt in range(max_retries):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"⚠️ Attempt {attempt + 1} failed: {e}")
-                print(f"🔄 Retrying... ({attempt + 2}/{max_retries})")
-            else:
-                print(f"❌ All {max_retries} attempts failed. Last error: {e}")
-                return None
-
-
-def validate_omero_permissions(conn, operation: str, object_type: str, object_id: int) -> bool:
-    """Check if user has required permissions for an operation.
-    
-    Args:
-        conn: OMERO connection
-        operation: Operation type ('read', 'write', 'delete')
-        object_type: OMERO object type
-        object_id: Object ID
-        
-    Returns:
-        True if user has permission, False otherwise
-    """
-    try:
-        obj = conn.getObject(object_type, object_id)
-        if not obj:
-            print(f"❌ {object_type} {object_id} not found")
-            return False
-        
-        # Basic permission check based on object accessibility
-        can_read = obj is not None
-        can_write = obj.canEdit() if hasattr(obj, 'canEdit') else False
-        can_delete = obj.canDelete() if hasattr(obj, 'canDelete') else False
-        
-        permissions = {
-            'read': can_read,
-            'write': can_write, 
-            'delete': can_delete
-        }
-        
-        has_permission = permissions.get(operation.lower(), False)
-        
-        if has_permission:
-            print(f"✅ User has {operation} permission for {object_type} {object_id}")
-        else:
-            print(f"❌ User lacks {operation} permission for {object_type} {object_id}")
-        
-        return has_permission
-        
-    except Exception as e:
-        print(f"❌ Error checking permissions: {e}")
-        return False
-
-
 def get_server_info(conn) -> Dict[str, Any]:
     """Get OMERO server information and status.
     
@@ -530,6 +464,104 @@ def get_server_info(conn) -> Dict[str, Any]:
         info['connection_status'] = f'Error: {e}'
     
     return info
+
+
+def get_container_info(conn, container_type: str, container_id: int) -> Optional[Dict[str, Any]]:
+    """Get summary information about a container (Project, Dataset, etc.).
+
+    Args:
+        conn: OMERO connection.
+        container_type: Type of container ('project', 'dataset', 'plate', 'screen').
+        container_id: ID of the container.
+
+    Returns:
+        A dictionary with container information or None if an error occurs.
+        Dictionary keys include:
+        - container_type
+        - container_id
+        - container_name
+        - total_images
+        - sample_image_id
+        - sample_image_name
+        - dimensions
+        - pixel_sizes
+    """
+    if not conn or not conn.isConnected():
+        return None
+
+    try:
+        container = conn.getObject(container_type.capitalize(), container_id)
+        if not container:
+            return None
+
+        image_ids = []
+        info = {
+            'container_type': container_type,
+            'container_id': container_id,
+            'container_name': container.getName(),
+            'total_images': 0,
+            'sample_image_id': None,
+            'sample_image_name': None,
+            'dimensions': None,
+            'pixel_sizes': None,
+        }
+
+        if container_type == 'screen':
+            plate_ids = ezomero.get_plate_ids(conn, screen=container_id)
+            info['total_plates'] = len(plate_ids)
+            all_image_ids = []
+            for plate_id in plate_ids:
+                all_image_ids.extend(ezomero.get_image_ids(conn, plate=plate_id))
+            image_ids = all_image_ids
+        else:
+            image_ids = ezomero.get_image_ids(conn, **{container_type: container_id})
+
+        total_images = len(image_ids)
+        info['total_images'] = total_images
+
+        if total_images > 0:
+            sample_image_id = image_ids[0]
+            sample_image = conn.getObject("Image", sample_image_id)
+
+            if sample_image:
+                info['sample_image_id'] = sample_image_id
+                info['sample_image_name'] = sample_image.getName()
+                info['dimensions'] = {
+                    'T': sample_image.getSizeT(),
+                    'C': sample_image.getSizeC(),
+                    'Z': sample_image.getSizeZ(),
+                    'Y': sample_image.getSizeY(),
+                    'X': sample_image.getSizeX(),
+                }
+
+                pixel_sizes = {}
+                try:
+                    size_x = sample_image.getPixelSizeX(units=True)
+                    if size_x:
+                        pixel_sizes['X'] = (size_x.getValue(), size_x.getSymbol())
+                except AttributeError:
+                    pass
+
+                try:
+                    size_y = sample_image.getPixelSizeY(units=True)
+                    if size_y:
+                        pixel_sizes['Y'] = (size_y.getValue(), size_y.getSymbol())
+                except AttributeError:
+                    pass
+
+                try:
+                    size_z = sample_image.getPixelSizeZ(units=True)
+                    if size_z:
+                        pixel_sizes['Z'] = (size_z.getValue(), size_z.getSymbol())
+                except AttributeError:
+                    pass
+
+                info['pixel_sizes'] = pixel_sizes
+        
+        return info
+
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -618,7 +650,7 @@ def get_dask_image_multiple(conn, image_list: List, timepoints: List[int],
     if not image_list:
         return []
     
-    print(f"📊 Loading {len(image_list)} images using dask...")
+    print(f"Loading {len(image_list)} images using dask...")
     
     # Create dask arrays for each image
     dask_arrays = []
@@ -640,7 +672,7 @@ def get_dask_image_multiple(conn, image_list: List, timepoints: List[int],
             dask_arrays.append(fallback_array)
     
     # Materialize dask arrays to numpy arrays in chunks for memory efficiency
-    print("💾 Materializing dask arrays to numpy...")
+    print("Materializing dask arrays to numpy...")
     materialized_images = []
     
     # Process in smaller chunks to avoid memory issues
@@ -663,7 +695,7 @@ def get_dask_image_multiple(conn, image_list: List, timepoints: List[int],
             
             materialized_images.append(numpy_array)
     
-    print(f"✅ Successfully loaded {len(materialized_images)} images")
+    print(f"Successfully loaded {len(materialized_images)} images")
     return materialized_images
 
 

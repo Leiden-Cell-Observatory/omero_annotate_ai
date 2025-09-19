@@ -36,7 +36,13 @@ theme:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - API Reference: api/
+  - API Reference:
+    - omero_annotate_ai: api/omero_annotate_ai/
+    - omero_annotate_ai.core: api/omero_annotate_ai/core/
+    - omero_annotate_ai.omero: api/omero_annotate_ai/omero/
+    - omero_annotate_ai.utils: api/omero_annotate_ai/utils/
+    - omero_annotate.processing: api/omero_annotate_ai/processing/
+    - omero_annotate.widgets: api/omero_annotate_ai/widgets/
 
 plugins:
   - search
@@ -58,6 +64,9 @@ plugins:
             show_symbol_type_heading: true
             signature_crossrefs: true
             merge_init_into_class: true
+            extensions:
+            - griffe_pydantic:
+              schema: true
 
 markdown_extensions:
   - admonition

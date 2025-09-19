@@ -7,6 +7,7 @@ import ipywidgets as widgets
 from IPython.display import clear_output, display
 
 from ..core.annotation_config import AnnotationConfig, create_default_config
+from ..omero.omero_utils import get_container_info
 from ..omero.omero_functions import (
     generate_unique_table_name,
     list_annotation_tables,
@@ -168,6 +169,8 @@ class WorkflowWidget:
             style={"description_width": "initial"},
             layout=widgets.Layout(width="400px"),
         )
+        # Update Next button state when user edits the path
+        self.directory_text.observe(self._on_directory_text_change, names="value")
 
         # Quick options
         temp_button = widgets.Button(
@@ -236,6 +239,10 @@ class WorkflowWidget:
             layout=widgets.Layout(width="400px"),
             disabled=True,
         )
+        # Update Next button state when user selects a container
+        self.container_dropdown.observe(
+            self._on_container_selection_change, names="value"
+        )
 
         # Refresh button
         refresh_button = widgets.Button(
@@ -252,6 +259,12 @@ class WorkflowWidget:
             "refresh": refresh_button,
         }
 
+        # Container summary (filled when user proceeds to next step)
+        self.container_summary = widgets.HTML(
+            value="",
+            layout=widgets.Layout(margin="10px 0")
+        )
+
         self.container_type_dropdown.observe(
             self._on_container_type_change, names="value"
         )
@@ -263,6 +276,7 @@ class WorkflowWidget:
                 container_info,
                 self.container_type_dropdown,
                 widgets.HBox([self.container_dropdown, refresh_button]),
+                self.container_summary,
             ]
         )
 
@@ -405,7 +419,8 @@ class WorkflowWidget:
             value=self.config.training.segment_all, description="Annotate all images"
         )
 
-        train_n = widgets.IntSlider(
+        # Expose sliders as instance attributes so we can adjust .max later
+        self.train_n_slider = widgets.IntSlider(
             value=self.config.training.train_n,
             min=1,
             max=50,
@@ -413,7 +428,7 @@ class WorkflowWidget:
             disabled=segment_all.value,
         )
 
-        validate_n = widgets.IntSlider(
+        self.validate_n_slider = widgets.IntSlider(
             value=self.config.training.validate_n,
             min=1,
             max=50,
@@ -510,7 +525,7 @@ class WorkflowWidget:
 
         # Setup observers
         segment_all.observe(
-            lambda c: self._toggle_subset_settings(c, train_n, validate_n),
+            lambda c: self._toggle_subset_settings(c, self.train_n_slider, self.validate_n_slider),
             names="value",
         )
         timepoint_mode.observe(
@@ -532,8 +547,8 @@ class WorkflowWidget:
             [
                 widgets.HTML("<h5>🎯 Annotation Settings</h5>"),
                 segment_all,
-                train_n,
-                validate_n,
+                self.train_n_slider,
+                self.validate_n_slider,
                 channel,
                 timepoint_mode,
                 timepoints,
@@ -678,9 +693,17 @@ class WorkflowWidget:
             if self.current_step == 0:  # Connection step
                 return self.connection is not None
             elif self.current_step == 1:  # Directory step
-                return self.working_directory is not None
+                # Allow proceeding if a directory path is entered; we'll create/set it on Next
+                try:
+                    return bool(self.directory_text.value.strip())
+                except Exception:
+                    return False
             elif self.current_step == 2:  # Container step
-                return self.config.omero.container_id > 0
+                # Enable Next if a container is selected in the dropdown
+                try:
+                    return self.container_widgets["container"].value is not None
+                except Exception:
+                    return False
             elif self.current_step == 3:  # Tables step
                 return (
                     self.selected_table_id is not None
@@ -691,9 +714,17 @@ class WorkflowWidget:
         else:
             # Without connection tab (connection already provided)
             if self.current_step == 0:  # Directory step
-                return self.working_directory is not None
+                # Allow proceeding if a directory path is entered; we'll create/set it on Next
+                try:
+                    return bool(self.directory_text.value.strip())
+                except Exception:
+                    return False
             elif self.current_step == 1:  # Container step
-                return self.config.omero.container_id > 0
+                # Enable Next if a container is selected in the dropdown
+                try:
+                    return self.container_widgets["container"].value is not None
+                except Exception:
+                    return False
             elif self.current_step == 2:  # Tables step
                 return (
                     self.selected_table_id is not None
@@ -713,6 +744,31 @@ class WorkflowWidget:
     def _on_next_step(self, button):
         """Handle next step button."""
         if self.current_step < len(self.steps) - 1 and self._can_proceed_to_next():
+            # If we are leaving the directory step, set/create the working directory now
+            try:
+                if self.steps[self.current_step] == "Select Working Directory":
+                    dir_path = Path(self.directory_text.value).expanduser()
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                    self.working_directory = str(dir_path)
+                    self.directory_status.value = f"✅ Directory ready: {self.working_directory}"
+            except Exception as e:
+                # If directory cannot be created, show error and do not advance
+                self.directory_status.value = f"❌ Error creating directory: {e}"
+                return
+
+            # If we are leaving the container selection step, fetch and apply container info once
+            try:
+                if self.steps[self.current_step] == "Choose Container":
+                    container_id = self.container_widgets["container"].value
+                    container_type = self.container_widgets["type"].value
+                    if container_id and container_type and self.connection is not None:
+                        info = get_container_info(self.connection, container_type, container_id)
+                        if info:
+                            self._apply_container_info(info)
+            except Exception:
+                # Silent fail; do not block navigation on summary issues
+                pass
+
             self.current_step += 1
             self._update_progress()
 
@@ -766,6 +822,15 @@ class WorkflowWidget:
     def _on_refresh_containers(self, button):
         """Handle refresh containers."""
         self._load_containers()
+
+    def _on_directory_text_change(self, change):
+        """Re-evaluate progress when directory text is edited."""
+        # Do not create directory here; just update button states
+        self._update_progress()
+
+    def _on_container_selection_change(self, change):
+        """Re-evaluate progress when a container is selected."""
+        self._update_progress()
 
     def _load_containers(self):
         """Load containers from OMERO."""
@@ -939,7 +1004,7 @@ class WorkflowWidget:
                         self.config.omero.source_desc = (
                             f"Workflow: {container_type} (ID: {container_id})"
                         )
-                except:
+                except Exception:
                     self.config.omero.source_desc = (
                         f"Workflow: {container_type} (ID: {container_id})"
                     )
@@ -1050,7 +1115,7 @@ class WorkflowWidget:
                 self.config.spatial_coverage.timepoints = [
                     int(x.strip()) for x in timepoints_str.split(",") if x.strip()
                 ]
-            except:
+            except Exception:
                 self.config.spatial_coverage.timepoints = [0]
         if "z_slice_mode" in annotation_widgets:
             self.config.spatial_coverage.z_slice_mode = annotation_widgets[
@@ -1062,7 +1127,7 @@ class WorkflowWidget:
                 self.config.spatial_coverage.z_slices = [
                     int(x.strip()) for x in z_slices_str.split(",") if x.strip()
                 ]
-            except:
+            except Exception:
                 self.config.spatial_coverage.z_slices = [0]
         if "three_d" in annotation_widgets:
             self.config.spatial_coverage.three_d = annotation_widgets["three_d"].value
@@ -1087,7 +1152,7 @@ class WorkflowWidget:
                 sizes = [int(x.strip()) for x in patch_size_str.split(",") if x.strip()]
                 if len(sizes) == 2:
                     self.config.processing.patch_size = list(sizes)
-            except:
+            except Exception:
                 pass
 
     def _update_technical_settings(self):
@@ -1158,6 +1223,89 @@ class WorkflowWidget:
 
         except Exception as e:
             self.save_status.value = f"❌ Error saving configuration: {e}"
+
+    def _apply_container_info(self, info: dict):
+        """Apply container info to UI and config-dependent widgets.
+
+        This updates:
+        - Container summary HTML in the container tab
+        - OMERO status summary in the config tab
+        - Max values for training/validation image sliders
+        """
+        self._container_info = info
+
+        # Build summary HTML
+        name = info.get("container_name", "")
+        ctype = info.get("container_type", self.container_widgets["type"].value)
+        total_images = info.get("total_images", 0)
+        dims = info.get("dimensions") or {}
+        px = info.get("pixel_sizes") or {}
+
+        summary_lines = [
+            f"<b>Container:</b> {ctype} {name} (ID: {info.get('container_id', '')})",
+            f"<b>Total images:</b> {total_images}",
+        ]
+
+        # Screen-specific info
+        if ctype == "screen":
+            total_plates = info.get("total_plates")
+            if total_plates is not None:
+                summary_lines.append(f"<b>Total plates:</b> {total_plates}")
+            # Optional per-plate details if available
+            plates = info.get("plates")
+            if isinstance(plates, dict) and plates:
+                # Show a compact list of first few plates
+                listed = 0
+                details = []
+                for pid, pinfo in plates.items():
+                    count = pinfo.get("total_images") if isinstance(pinfo, dict) else pinfo
+                    details.append(f"Plate {pid}: {count} images")
+                    listed += 1
+                    if listed >= 5:
+                        break
+                if details:
+                    summary_lines.append("<b>Plates (sample):</b> " + ", ".join(details))
+
+        if dims:
+            summary_lines.append(
+                f"<b>Sample image dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
+            )
+        if px:
+            parts = []
+            for axis in ("X", "Y", "Z"):
+                v = px.get(axis)
+                if v:
+                    parts.append(f"{axis}={v[0]} {v[1]}")
+            if parts:
+                summary_lines.append("<b>Pixel sizes:</b> " + ", ".join(parts))
+
+        self.container_summary.value = "<div>" + "<br>".join(summary_lines) + "</div>"
+
+        # Also inject into OMERO status (visible on Configure tab)
+        # Keep existing lines and append concise summary
+        current = self.omero_status.value or ""
+        extra = (
+            f"<p><b>Images:</b> {total_images}" +
+            (f" | <b>Plates:</b> {info.get('total_plates')}" if ctype == 'screen' and info.get('total_plates') is not None else "") +
+            (f" | <b>Sample dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}" if dims else "") +
+            "</p>"
+        )
+        # Replace or append a summary section
+        if "📡 OMERO Settings" in current:
+            # Append once; avoid duplicates by rudimentary check
+            if "<p><b>Images:</b>" not in current:
+                self.omero_status.value = current + extra
+        else:
+            self.omero_status.value = extra
+
+        # Update sliders' max to the number of available images
+        if hasattr(self, "train_n_slider") and hasattr(self, "validate_n_slider"):
+            max_imgs = max(1, int(total_images))
+            self.train_n_slider.max = max_imgs
+            self.validate_n_slider.max = max_imgs
+            # Clamp current values within new range
+            self.train_n_slider.value = min(self.train_n_slider.value, max_imgs)
+            self.validate_n_slider.value = min(self.validate_n_slider.value, max_imgs)
 
     def _enable_container_widgets(self):
         """Enable container widgets when connection is available."""

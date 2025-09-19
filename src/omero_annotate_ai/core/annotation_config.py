@@ -9,7 +9,6 @@ import yaml
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from typing_extensions import Literal
 
-from pathlib import Path
 
 # Sub-models for the configuration
 
@@ -560,25 +559,47 @@ class AnnotationConfig(BaseModel):
         """Convert configuration to dictionary."""
         return self.model_dump()
 
-    def to_yaml(self) -> str:
-        """Convert configuration to YAML string."""
+    def to_yaml(self, sort_keys: bool = False) -> str:
+        """Convert configuration to a YAML string.
+
+        Args:
+            sort_keys: When True, keys are sorted alphabetically. When False (default),
+                keys are emitted in the schema-defined order from the Pydantic model.
+
+        Returns:
+            YAML string representation of the configuration.
+        """
         config_dict = self.model_dump()
 
         # Custom YAML representer for Path objects (fallback)
         def path_representer(dumper, data):
             return dumper.represent_scalar("tag:yaml.org,2002:str", str(data))
 
-        yaml.add_representer(Path, path_representer)
+        # Use SafeDumper and ensure our Path is handled
+        class _Dumper(yaml.SafeDumper):
+            pass
 
-        return yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+        _Dumper.add_representer(Path, path_representer)
 
-    def save_yaml(self, file_path: Union[str, Path]) -> None:
+        # Note: sort_keys=False preserves insertion order from dict, which matches
+        # the field order defined on the Pydantic model (stable across runs).
+        return yaml.dump(
+            config_dict,
+            Dumper=_Dumper,
+            default_flow_style=False,
+            sort_keys=sort_keys,
+            indent=2,
+            allow_unicode=True,
+        )
+
+    def save_yaml(self, file_path: Union[str, Path], *, sort_keys: bool = False) -> None:
         """Save configuration to YAML file and remember the path."""
         file_path = Path(file_path)
         
-        # Save the config
-        with open(file_path, 'w') as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False, indent=2)
+        # Save the config using the same serialization as to_yaml to keep ordering consistent
+        yaml_str = self.to_yaml(sort_keys=sort_keys)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(yaml_str)
         
         # Remember where we saved it
         self.config_file_path = file_path
