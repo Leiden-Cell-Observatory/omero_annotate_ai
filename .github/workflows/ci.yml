@@ -23,6 +23,9 @@ jobs:
       with:
         pixi-version: v0.34.0
         cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        locked: true
+        environments: dev
         
     - name: Run unit tests
       run: pixi run -e dev pytest tests/ -m "not (omero or integration or docker)" -v
@@ -51,6 +54,9 @@ jobs:
       with:
         pixi-version: v0.34.0
         cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        locked: true
+        environments: dev
         
     - name: Build package
       run: |

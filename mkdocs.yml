@@ -4,6 +4,9 @@ site_url: https://leiden-cell-observatory.github.io/omero_annotate_ai/
 repo_url: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai
 repo_name: Leiden-Cell-Observatory/omero_annotate_ai
 
+# Fail the build on any warning
+strict: true
+
 theme:
   name: material
   palette:
@@ -41,8 +44,8 @@ nav:
     - omero_annotate_ai.core: api/omero_annotate_ai/core/
     - omero_annotate_ai.omero: api/omero_annotate_ai/omero/
     - omero_annotate_ai.utils: api/omero_annotate_ai/utils/
-    - omero_annotate.processing: api/omero_annotate_ai/processing/
-    - omero_annotate.widgets: api/omero_annotate_ai/widgets/
+    - omero_annotate_ai.processing: api/omero_annotate_ai/processing/
+    - omero_annotate_ai.widgets: api/omero_annotate_ai/widgets/
 
 plugins:
   - search
@@ -50,11 +53,17 @@ plugins:
       scripts:
         - docs/gen_ref_pages.py
   - literate-nav:
-      nav_file: SUMMARY.md
+    nav_file: api/SUMMARY.md
   - section-index
   - mkdocstrings:
       handlers:
         python:
+          paths:
+            - src
+          griffe:
+            extensions:
+              - griffe_pydantic:
+                  schema: true
           options:
             docstring_style: google
             show_source: true
@@ -64,9 +73,6 @@ plugins:
             show_symbol_type_heading: true
             signature_crossrefs: true
             merge_init_into_class: true
-            extensions:
-            - griffe_pydantic:
-              schema: true
 
 markdown_extensions:
   - admonition
