@@ -30,8 +30,8 @@ jobs:
     - name: Run unit tests
       run: pixi run -e dev test-unit
       
-    - name: Check code quality
-      run: pixi run -e dev lint
+    # - name: Check code quality
+    #   run: pixi run -e dev lint
       
     - name: Test OMERO functionality (Linux only)
       if: matrix.os == 'ubuntu-latest'

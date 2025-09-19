@@ -14,7 +14,7 @@ def generate_patch_coordinates(
     patch_size: List[int],
     n_patches: int,
     random_patch: bool = True,
-) -> Tuple[List[Tuple[int, int]], List[int]]:
+) -> Tuple[List[Tuple[int, int]], Tuple[int, int]]:
     """Generate non-overlapping patch coordinates for an image.
 
     CRUCIAL: Ensures patches do not overlap when generating multiple patches.
@@ -28,7 +28,7 @@ def generate_patch_coordinates(
     Returns:
         Tuple containing:
         - List of (x, y) coordinates for patch top-left corners (non-overlapping)
-        - Actual patch size [height, width] to use (adjusted if image smaller than patch)
+        - Actual patch size (height, width) to use (adjusted if image smaller than patch)
     """
     height, width = image_shape
     patch_h, patch_w = patch_size
@@ -37,11 +37,11 @@ def generate_patch_coordinates(
     if width < patch_w or height < patch_h:
         # Image smaller than patch, return image size as patch size
         print("⚠️ Image smaller than patch size, using full image")
-        actual_patch_size = [height, width]
+        actual_patch_size = (height, width)
         return [(0, 0)], actual_patch_size
 
     # Image is large enough for requested patch size
-    actual_patch_size = patch_size.copy()
+    actual_patch_size = (patch_h, patch_w)
     
     # Ensure patches fit within image
     max_x = max(0, width - patch_w)
