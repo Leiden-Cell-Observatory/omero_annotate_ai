@@ -35,7 +35,7 @@ jobs:
         environments: docs
 
     - name: Build documentation with MkDocs
-      run: pixi run -e docs mkdocs-build
+      run: pixi run -e docs docs-build
 
     - name: Upload site artifact (PR preview)
       if: github.event_name == 'pull_request'
