@@ -352,8 +352,8 @@ class SimpleOMEROConnection:
         username = widget_config.get("username", "").strip()
         password = widget_config.get("password", "").strip()
         group = widget_config.get("group", "").strip() or None
-    secure = widget_config.get("secure", True)
-    port = widget_config.get("port")
+        secure = widget_config.get("secure", True)
+        port = widget_config.get("port")
         save_password = widget_config.get("save_password", False)
         expire_hours = widget_config.get("expire_hours")
 

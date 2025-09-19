@@ -16,11 +16,15 @@ try:
         list_user_tables,
         validate_omero_permissions
     )
-    from omero_annotate_ai.widgets.omero_connection_widget import create_omero_connection_widget
-    import ezomero
     OMERO_AVAILABLE = True
 except ImportError:
     OMERO_AVAILABLE = False
+
+# Always import the widget for test discovery, even if OMERO is unavailable
+try:
+    from omero_annotate_ai.widgets.omero_connection_widget import create_omero_connection_widget
+except ImportError:
+    create_omero_connection_widget = None
 
 
 @pytest.mark.omero
@@ -70,6 +74,7 @@ class TestOMEROIntegration:
         tables = list_user_tables(omero_connection)
         assert isinstance(tables, list)
     
+    @pytest.mark.skipif(not OMERO_AVAILABLE, reason="OMERO dependencies not available")
     def test_connection_widget_creation(self):
         """
         Tests that the OMERO connection widget can be created.
@@ -92,18 +97,19 @@ class TestOMEROIntegration:
         Tests creating a connection from the widget's configuration.
         This test ensures that the `SimpleOMEROConnection` class can correctly
         create a connection from the configuration dictionary returned by the
-        connection widget.
-        """
-        conn_manager = SimpleOMEROConnection()
-        
         widget_config = {
             "host": docker_omero_server["host"],
             "username": docker_omero_server["user"], 
             "password": docker_omero_server["password"],
-            "secure": docker_omero_server["secure"]
+            "secure": docker_omero_server["secure"],
+            "port": docker_omero_server.get("port", 6064)
         }
         
         conn = conn_manager.create_connection_from_config(widget_config)
+        assert conn is not None
+        assert conn.isConnected()
+        
+        conn.close()
         assert conn is not None
         assert conn.isConnected()
         
