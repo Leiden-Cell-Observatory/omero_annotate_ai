@@ -49,7 +49,7 @@ class SimpleOMEROConnection:
             True if saved successfully, False otherwise
         """
         if not KEYRING_AVAILABLE:
-            print("⚠️ Keyring not available - password not saved")
+            print("Warning: Keyring not available - password not saved")
             return False
 
         try:
@@ -66,14 +66,14 @@ class SimpleOMEROConnection:
 
             if expire_hours:
                 print(
-                    f"🔐 Password saved to keychain (expires in {expire_hours} hours)"
+                    f"Password saved to keychain (expires in {expire_hours} hours)"
                 )
             else:
-                print("🔐 Password saved to keychain (never expires)")
+                print("Password saved to keychain (never expires)")
             return True
 
         except Exception as e:
-            print(f"❌ Failed to save password to keychain: {e}")
+            print(f"Failed to save password to keychain: {e}")
             return False
 
     def load_password(self, host: str, username: str) -> Optional[str]:
@@ -107,17 +107,17 @@ class SimpleOMEROConnection:
                 if datetime.now(timezone.utc) > expiry_time:
                     # Password expired, remove it
                     self._delete_password(host, username)
-                    print("🔐 Stored password has expired and was removed")
+                    print("Stored password has expired and was removed")
                     return None
                 else:
-                    print("🔐 Password loaded from keychain")
+                    print("Password loaded from keychain")
             else:
-                print("🔐 Password loaded from keychain (no expiration)")
+                print("Password loaded from keychain (no expiration)")
 
             return password
 
         except Exception as e:
-            print(f"⚠️ Error loading password from keychain: {e}")
+            print(f"Error loading password from keychain: {e}")
             return None
 
     def _delete_password(self, host: str, username: str) -> bool:
@@ -163,7 +163,7 @@ class SimpleOMEROConnection:
                         "source": ".env file",
                     }
                 )
-                print("📄 Loaded configuration from .env file")
+                print("Loaded configuration from .env file")
 
         # Try to load from connection history (if no .env file)
         if not config:
@@ -188,7 +188,7 @@ class SimpleOMEROConnection:
                     }
                 )
                 print(
-                    f"📄 Loaded configuration from connection history: {recent_conn['display_name']}"
+                    f"Loaded configuration from connection history: {recent_conn['display_name']}"
                 )
 
         # Try to load .ezomero file (if no other config found)
@@ -231,7 +231,7 @@ class SimpleOMEROConnection:
                                 else:
                                     config[key] = value
                         config["source"] = ".ezomero file"
-                        print("📄 Loaded configuration from .ezomero file")
+                        print("Loaded configuration from .ezomero file")
 
                 # Restore original environment
                 for key, value in original_env.items():
@@ -241,7 +241,7 @@ class SimpleOMEROConnection:
                         del os.environ[key]
 
             except Exception as e:
-                print(f"⚠️ Could not load .ezomero file: {e}")
+                print(f"Could not load .ezomero file: {e}")
 
         return config
 
@@ -253,6 +253,7 @@ class SimpleOMEROConnection:
         group: Optional[str] = None,
         secure: bool = True,
         verbose: bool = True,
+        port: Optional[int] = None,
     ) -> Optional[Any]:
         """Create OMERO connection.
 
@@ -269,23 +270,28 @@ class SimpleOMEROConnection:
         """
         try:
             if verbose:
-                print(f"🔌 Connecting to OMERO server: {host}")
+                host_display = f"{host}:{port}" if port else host
+                print(f"Connecting to OMERO server: {host_display}")
 
             # Create BlitzGateway connection
-            conn = BlitzGateway(
-                host=host,
-                username=username,
-                passwd=password,
-                group=group,
-                secure=secure,
-            )
+            bg_kwargs: Dict[str, Any] = {
+                "host": host,
+                "username": username,
+                "passwd": password,
+                "group": group,
+                "secure": secure,
+            }
+            if port is not None:
+                bg_kwargs["port"] = port
+
+            conn = BlitzGateway(**bg_kwargs)
 
             # Test connection
             if conn.connect():
                 if verbose:
-                    print("✅ Connected to OMERO Server")
-                    print(f"👤 User: {conn.getUser().getName()}")
-                    print(f"🏢 Group: {conn.getGroupFromContext().getName()}")
+                    print("Connected to OMERO Server")
+                    print(f"User: {conn.getUser().getName()}")
+                    print(f"Group: {conn.getGroupFromContext().getName()}")
 
                 # Enable keep-alive
                 conn.c.enableKeepAlive(60)
@@ -293,11 +299,11 @@ class SimpleOMEROConnection:
                 self.last_connection = conn
                 return conn
             else:
-                print("❌ Connection to OMERO Server Failed")
+                print("Connection to OMERO Server Failed")
                 return None
 
         except Exception as e:
-            print(f"❌ Error connecting to OMERO: {e}")
+            print(f"Error connecting to OMERO: {e}")
             return None
 
     def test_connection(
@@ -346,18 +352,25 @@ class SimpleOMEROConnection:
         username = widget_config.get("username", "").strip()
         password = widget_config.get("password", "").strip()
         group = widget_config.get("group", "").strip() or None
-        secure = widget_config.get("secure", True)
+    secure = widget_config.get("secure", True)
+    port = widget_config.get("port")
         save_password = widget_config.get("save_password", False)
         expire_hours = widget_config.get("expire_hours")
 
         # Validate required fields
         if not host or not username or not password:
-            print("❌ Host, username, and password are required")
+            print("Host, username, and password are required")
             return None
 
         # Create connection first to validate it works
         connection = self.connect(
-            host, username, password, group, secure, verbose=False
+            host,
+            username,
+            password,
+            group,
+            secure,
+            verbose=False,
+            port=port,
         )
 
         if connection:
@@ -457,11 +470,11 @@ class SimpleOMEROConnection:
                 json.dump(connections, f, indent=2)
 
             if verbose:
-                print(f"💾 Connection details saved to history")
+                print(f"Connection details saved to history")
             return True
 
         except Exception as e:
-            print(f"⚠️ Error saving connection details: {e}")
+            print(f"Error saving connection details: {e}")
             return False
 
     def load_connection_history(self) -> List[Dict[str, Any]]:
@@ -485,7 +498,7 @@ class SimpleOMEROConnection:
             return connections
 
         except Exception as e:
-            print(f"⚠️ Error loading connection history: {e}")
+            print(f"Error loading connection history: {e}")
             return []
 
     def delete_connection(self, host: str, username: str) -> bool:
@@ -525,14 +538,14 @@ class SimpleOMEROConnection:
                 # Also delete password from keychain
                 self._delete_password(host, username)
 
-                print(f"🗑️ Connection deleted from history and keychain")
+                print(f"Connection deleted from history and keychain")
                 return True
             else:
-                print(f"⚠️ Connection not found in history")
+                print(f"Connection not found in history")
                 return False
 
         except Exception as e:
-            print(f"⚠️ Error deleting connection: {e}")
+            print(f"Error deleting connection: {e}")
             return False
 
     def get_connection_list(self) -> List[Dict[str, Any]]:
