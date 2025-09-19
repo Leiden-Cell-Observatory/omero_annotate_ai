@@ -110,10 +110,6 @@ class TestOMEROIntegration:
         assert conn.isConnected()
         
         conn.close()
-        assert conn is not None
-        assert conn.isConnected()
-        
-        conn.close()
 
 
 @pytest.mark.omero
