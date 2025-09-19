@@ -28,7 +28,11 @@ class TestRectangleOverlap:
     """Test rectangle overlap detection."""
     
     def test_overlapping_rectangles(self):
-        """Test detection of overlapping rectangles."""
+        """
+        Tests the detection of overlapping rectangles.
+        This test ensures that the `_rectangles_overlap` function correctly identifies
+        when two rectangles overlap.
+        """
         rect1 = (0, 0, 100, 100)
         rect2 = (50, 50, 150, 150)
         
@@ -36,7 +40,11 @@ class TestRectangleOverlap:
         assert _rectangles_overlap(rect2, rect1)  # Commutative
     
     def test_non_overlapping_rectangles(self):
-        """Test detection of non-overlapping rectangles."""
+        """
+        Tests the detection of non-overlapping rectangles.
+        This test ensures that the `_rectangles_overlap` function correctly identifies
+        when two rectangles do not overlap.
+        """
         rect1 = (0, 0, 50, 50)
         rect2 = (60, 60, 110, 110)
         
@@ -44,7 +52,11 @@ class TestRectangleOverlap:
         assert not _rectangles_overlap(rect2, rect1)  # Commutative
     
     def test_adjacent_rectangles(self):
-        """Test that adjacent rectangles are not considered overlapping."""
+        """
+        Tests that adjacent rectangles are not considered overlapping.
+        This test ensures that the `_rectangles_overlap` function correctly identifies
+        that two rectangles that are adjacent but not overlapping do not overlap.
+        """
         rect1 = (0, 0, 50, 50)
         rect2 = (50, 0, 100, 50)  # Adjacent, not overlapping
         
@@ -52,20 +64,32 @@ class TestRectangleOverlap:
         assert not _rectangles_overlap(rect2, rect1)
     
     def test_touching_corner_rectangles(self):
-        """Test rectangles that only touch at a corner."""
+        """
+        Tests rectangles that only touch at a corner.
+        This test ensures that the `_rectangles_overlap` function correctly identifies
+        that two rectangles that only touch at a corner do not overlap.
+        """
         rect1 = (0, 0, 50, 50)
         rect2 = (50, 50, 100, 100)  # Touch at corner (50, 50)
         
         assert not _rectangles_overlap(rect1, rect2)
     
     def test_identical_rectangles(self):
-        """Test that identical rectangles overlap completely."""
+        """
+        Tests that identical rectangles overlap completely.
+        This test ensures that the `_rectangles_overlap` function correctly identifies
+        that two identical rectangles overlap.
+        """
         rect = (10, 10, 60, 60)
         
         assert _rectangles_overlap(rect, rect)
     
     def test_contained_rectangles(self):
-        """Test that contained rectangles overlap."""
+        """
+        Tests that contained rectangles overlap.
+        This test ensures that the `_rectangles_overlap` function correctly identifies
+        that a rectangle that is contained within another rectangle overlaps with it.
+        """
         outer = (0, 0, 100, 100)
         inner = (25, 25, 75, 75)
         
@@ -81,7 +105,11 @@ class TestROICreation:
     """Test ROI creation functions (requires OpenCV)."""
     
     def test_mask_to_contour_simple(self):
-        """Test converting simple mask to contours."""
+        """
+        Tests converting a simple binary mask to contours.
+        This test ensures that the `mask_to_contour` function correctly converts a
+        simple rectangular mask to a single contour with at least 4 points.
+        """
         # Create a simple rectangular mask
         mask = np.zeros((100, 100), dtype=np.uint8)
         mask[25:75, 25:75] = 1
@@ -92,7 +120,11 @@ class TestROICreation:
         assert len(contours[0]) >= 4  # At least 4 points for rectangle
     
     def test_mask_to_contour_multiple_objects(self):
-        """Test converting mask with multiple objects."""
+        """
+        Tests converting a mask with multiple objects to contours.
+        This test ensures that the `mask_to_contour` function correctly converts a
+        mask with two separate objects to two contours.
+        """
         mask = np.zeros((100, 100), dtype=np.uint8)
         mask[10:30, 10:30] = 1  # First object
         mask[60:80, 60:80] = 1  # Second object
@@ -102,7 +134,11 @@ class TestROICreation:
         assert len(contours) == 2
     
     def test_mask_to_contour_empty(self):
-        """Test converting empty mask."""
+        """
+        Tests converting an empty mask to contours.
+        This test ensures that the `mask_to_contour` function correctly handles an
+        empty mask and returns no contours.
+        """
         mask = np.zeros((100, 100), dtype=np.uint8)
         
         contours = mask_to_contour(mask)
@@ -110,7 +146,11 @@ class TestROICreation:
         assert len(contours) == 0
     
     def test_process_label_plane_basic(self):
-        """Test processing a basic label plane."""
+        """
+        Tests processing a basic label plane to generate OMERO shapes.
+        This test ensures that the `process_label_plane` function correctly converts
+        a label plane with two objects to two OMERO shapes with the correct properties.
+        """
         # Create label image with two objects
         labels = np.zeros((100, 100), dtype=np.uint16)
         labels[10:30, 10:30] = 1  # Object 1
@@ -136,7 +176,11 @@ class TestROICreation:
             assert "micro_sam" in shape.label
     
     def test_process_label_plane_with_offset(self):
-        """Test processing label plane with patch offset."""
+        """
+        Tests processing a label plane with a patch offset.
+        This test ensures that the `process_label_plane` function correctly applies
+        the patch offset to the coordinates of the generated OMERO shapes.
+        """
         labels = np.zeros((50, 50), dtype=np.uint16)
         labels[10:30, 10:30] = 1
         
@@ -164,7 +208,11 @@ class TestROICreation:
             assert y >= 200  # Should be offset by patch_offset[1]
     
     def test_label_to_rois_basic(self):
-        """Test converting label image to ROI shapes."""
+        """
+        Tests converting a basic label image to ROI shapes.
+        This test ensures that the `label_to_rois` function correctly converts a
+        simple 3D label image to a single OMERO shape with the correct properties.
+        """
         # Create 3D label image (single plane) with volumetric=True
         label_img = np.zeros((1, 100, 100), dtype=np.uint16)
         label_img[0, 25:75, 25:75] = 1
@@ -188,7 +236,11 @@ class TestROICreation:
         assert "micro_sam" in shape.label
     
     def test_label_to_rois_2d(self):
-        """Test converting 2D label image to ROI shapes."""
+        """
+        Tests converting a 2D label image to ROI shapes.
+        This test ensures that the `label_to_rois` function correctly converts a
+        simple 2D label image to a single OMERO shape.
+        """
         # Create 2D label image
         label_img = np.zeros((100, 100), dtype=np.uint16)
         label_img[25:75, 25:75] = 1
@@ -205,7 +257,11 @@ class TestROICreation:
         assert len(shapes) == 1
     
     def test_label_to_rois_empty(self):
-        """Test converting empty label image."""
+        """
+        Tests converting an empty label image to ROI shapes.
+        This test ensures that the `label_to_rois` function correctly handles an
+        empty label image and returns no shapes.
+        """
         label_img = np.zeros((100, 100), dtype=np.uint16)
         
         shapes = label_to_rois(
@@ -227,7 +283,11 @@ class TestEdgeCases:
     # These used outdated API (random=True/False instead of random_patch=True/False)
     
     def test_rectangle_overlap_invalid_rectangles(self):
-        """Test rectangle overlap with invalid rectangles."""
+        """
+        Tests the rectangle overlap detection with invalid rectangles.
+        This test ensures that the `_rectangles_overlap` function handles invalid
+        rectangles (e.g., with negative dimensions) gracefully and returns a boolean value.
+        """
         # Rectangle with negative dimensions
         rect1 = (0, 0, -10, -10)
         rect2 = (5, 5, 15, 15)

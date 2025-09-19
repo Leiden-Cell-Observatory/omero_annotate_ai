@@ -52,7 +52,11 @@ class TestPrepareTrainingDataFromTable:
     @patch('omero_annotate_ai.processing.training_functions.imwrite')
     def test_prepare_training_data_basic(self, mock_imwrite, mock_ezomero, 
                                         mock_conn, sample_table_data, temp_output_dir):
-        """Test basic functionality of prepare_training_data_from_table."""
+        """
+        Tests the basic functionality of the `prepare_training_data_from_table` function.
+        This test ensures that the function correctly creates the training and validation
+        directories and that it calls the `ezomero` functions to get the data from OMERO.
+        """
         # Mock ezomero functions
         mock_ezomero.get_table.return_value = sample_table_data
         mock_ezomero.get_image.return_value = (None, np.random.randint(0, 255, (256, 256), dtype=np.uint8))
@@ -89,7 +93,11 @@ class TestPrepareTrainingDataFromTable:
 
     @patch('omero_annotate_ai.processing.training_functions.ezomero')
     def test_table_not_found(self, mock_ezomero, mock_conn, temp_output_dir):
-        """Test handling of missing table."""
+        """
+        Tests the handling of a missing table.
+        This test ensures that the `prepare_training_data_from_table` function
+        raises a `ValueError` when the specified table is not found in OMERO.
+        """
         mock_ezomero.get_table.side_effect = Exception("Table not found")
         
         with pytest.raises(ValueError, match="Failed to load table"):
@@ -101,7 +109,11 @@ class TestPrepareTrainingDataFromTable:
 
     @patch('omero_annotate_ai.processing.training_functions.ezomero')
     def test_empty_table(self, mock_ezomero, mock_conn, temp_output_dir):
-        """Test handling of empty table."""
+        """
+        Tests the handling of an empty table.
+        This test ensures that the `prepare_training_data_from_table` function
+        raises a `ValueError` when the specified table is empty.
+        """
         mock_ezomero.get_table.return_value = pd.DataFrame()
         
         with pytest.raises(ValueError, match="Table .* is empty"):
@@ -112,7 +124,12 @@ class TestPrepareTrainingDataFromTable:
             )
 
     def test_invalid_validation_split(self, mock_conn, temp_output_dir):
-        """Test validation of split parameter."""
+        """
+        Tests the validation of the `validation_split` parameter.
+        This test ensures that the `prepare_training_data_from_table` function
+        raises a `ValueError` when the `validation_split` parameter is not
+        between 0.0 and 1.0.
+        """
         with pytest.raises(ValueError, match="validation_split must be between"):
             prepare_training_data_from_table(
                 conn=mock_conn,
@@ -125,7 +142,12 @@ class TestPrepareTrainingDataFromTable:
     @patch('omero_annotate_ai.processing.training_functions.imwrite')
     def test_existing_train_validate_columns(self, mock_imwrite, mock_ezomero,
                                            mock_conn, temp_output_dir):
-        """Test using existing train/validate columns from table."""
+        """
+        Tests the use of existing 'train' and 'validate' columns in the table.
+        This test ensures that the `prepare_training_data_from_table` function
+        correctly uses the existing 'train' and 'validate' columns in the table
+        to split the data, instead of performing an automatic split.
+        """
         # Create table with train/validate columns
         table_data = pd.DataFrame({
             'image_id': [1, 2, 3, 4],
@@ -156,7 +178,11 @@ class TestPrepareTrainingDataFromTable:
 
     @patch('omero_annotate_ai.processing.training_functions.imwrite', None)
     def test_missing_tifffile_dependency(self, mock_conn, temp_output_dir):
-        """Test handling of missing tifffile dependency."""
+        """
+        Tests the handling of a missing `tifffile` dependency.
+        This test ensures that the `prepare_training_data_from_table` function
+        raises an `ImportError` when the `tifffile` package is not available.
+        """
         with pytest.raises(ImportError, match="tifffile package required"):
             prepare_training_data_from_table(
                 conn=mock_conn,
@@ -197,7 +223,11 @@ class TestPrepareDatasetFromTable:
     @patch('omero_annotate_ai.processing.training_functions.shutil')
     def test_prepare_dataset_basic(self, mock_shutil, mock_imwrite, mock_ezomero,
                                   sample_df, temp_output_dir):
-        """Test basic dataset preparation."""
+        """
+        Tests the basic functionality of the `_prepare_dataset_from_table` function.
+        This test ensures that the function correctly creates the input and label
+        directories and that it calls the `ezomero` functions to get the data from OMERO.
+        """
         mock_conn = Mock()
         
         # Mock image data - 5D array from ezomero
@@ -226,7 +256,11 @@ class TestPrepareDatasetFromTable:
 
     @patch('omero_annotate_ai.processing.training_functions.ezomero')  
     def test_missing_ezomero_dependency(self, mock_ezomero, sample_df, temp_output_dir):
-        """Test handling of missing ezomero dependency."""
+        """
+        Tests the handling of a missing `ezomero` dependency.
+        This test ensures that the `_prepare_dataset_from_table` function raises
+        an `ImportError` when the `ezomero` package is not available.
+        """
         mock_ezomero.__bool__ = lambda: False  # Simulate ezomero = None
         mock_conn = Mock()
         
