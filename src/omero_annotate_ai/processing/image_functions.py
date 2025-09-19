@@ -14,7 +14,7 @@ def generate_patch_coordinates(
     patch_size: List[int],
     n_patches: int,
     random_patch: bool = True,
-) -> List[Tuple[int, int]]:
+) -> Tuple[List[Tuple[int, int]], List[int]]:
     """Generate non-overlapping patch coordinates for an image.
 
     CRUCIAL: Ensures patches do not overlap when generating multiple patches.
@@ -26,18 +26,26 @@ def generate_patch_coordinates(
         random_patch: Whether to generate random patches or grid-based patches
 
     Returns:
-        List of (x, y) coordinates for patch top-left corners (non-overlapping)
+        Tuple containing:
+        - List of (x, y) coordinates for patch top-left corners (non-overlapping)
+        - Actual patch size [height, width] to use (adjusted if image smaller than patch)
     """
     height, width = image_shape
     patch_h, patch_w = patch_size
 
+    # Check if image is smaller than patch
+    if width < patch_w or height < patch_h:
+        # Image smaller than patch, return image size as patch size
+        print("⚠️ Image smaller than patch size, using full image")
+        actual_patch_size = [height, width]
+        return [(0, 0)], actual_patch_size
+
+    # Image is large enough for requested patch size
+    actual_patch_size = patch_size.copy()
+    
     # Ensure patches fit within image
     max_x = max(0, width - patch_w)
     max_y = max(0, height - patch_h)
-
-    if max_x <= 0 or max_y <= 0:
-        # Image smaller than patch, return image center
-        return [(0, 0)]
 
     coordinates = []
 
@@ -109,7 +117,7 @@ def generate_patch_coordinates(
             if patch_count >= n_patches:
                 break
 
-    return coordinates
+    return coordinates, actual_patch_size
 
 
 def _rectangles_overlap(
