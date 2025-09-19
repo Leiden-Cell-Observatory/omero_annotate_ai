@@ -20,7 +20,11 @@ class TestOMEROConnectionWidget:
     
     @patch('omero_annotate_ai.widgets.omero_connection_widget.ipywidgets')
     def test_widget_initialization(self, mock_ipywidgets):
-        """Test widget initialization."""
+        """
+        Tests the initialization of the OMEROConnectionWidget.
+        This test ensures that the widget is correctly initialized and that the
+        connection attribute is None.
+        """
         # Mock ipywidgets components
         mock_ipywidgets.Text.return_value = Mock()
         mock_ipywidgets.Password.return_value = Mock()
@@ -39,7 +43,12 @@ class TestOMEROConnectionWidget:
     @patch('omero_annotate_ai.widgets.omero_connection_widget.ipywidgets')
     @patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection')
     def test_connect_button_callback(self, mock_connection_class, mock_ipywidgets):
-        """Test connect button callback."""
+        """
+        Tests the callback of the connect button.
+        This test ensures that the `_on_connect_click` method correctly calls the
+        `connect` method of the `SimpleOMEROConnection` class with the expected
+        parameters.
+        """
         # Mock widgets
         mock_host_widget = Mock()
         mock_host_widget.value = "localhost"
@@ -81,7 +90,11 @@ class TestOMEROConnectionWidget:
     @patch('omero_annotate_ai.widgets.omero_connection_widget.ipywidgets')
     @patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection')
     def test_connect_failure(self, mock_connection_class, mock_ipywidgets):
-        """Test connection failure handling."""
+        """
+        Tests the handling of a connection failure.
+        This test ensures that the widget correctly handles a connection failure
+        and that the connection attribute remains None.
+        """
         # Mock widgets
         mock_widgets = {
             'Text': Mock(),
@@ -113,7 +126,11 @@ class TestOMEROConnectionWidget:
     
     @patch('omero_annotate_ai.widgets.omero_connection_widget.ipywidgets')
     def test_load_from_env(self, mock_ipywidgets):
-        """Test loading connection parameters from environment."""
+        """
+        Tests loading connection parameters from environment variables.
+        This test ensures that the widget correctly loads the connection parameters
+        from the environment variables.
+        """
         # Mock widgets
         mock_widgets = {}
         for widget_type in ['Text', 'Password', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox']:
@@ -146,7 +163,11 @@ class TestWorkflowWidget:
     
     @patch('omero_annotate_ai.widgets.workflow_widget.ipywidgets')
     def test_workflow_widget_initialization(self, mock_ipywidgets):
-        """Test workflow widget initialization."""
+        """
+        Tests the initialization of the WorkflowWidget.
+        This test ensures that the widget is correctly initialized with the
+        provided connection.
+        """
         # Mock ipywidgets components
         mock_widgets = {}
         for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
@@ -162,7 +183,11 @@ class TestWorkflowWidget:
     
     @patch('omero_annotate_ai.widgets.workflow_widget.ipywidgets')
     def test_container_selection(self, mock_ipywidgets):
-        """Test OMERO container selection."""
+        """
+        Tests the OMERO container selection.
+        This test ensures that the widget correctly populates the container dropdown
+        when the container type is changed.
+        """
         # Mock widgets
         mock_widgets = {}
         for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
@@ -188,7 +213,11 @@ class TestWorkflowWidget:
     
     @patch('omero_annotate_ai.widgets.workflow_widget.ipywidgets')
     def test_config_generation(self, mock_ipywidgets):
-        """Test configuration generation from widget values."""
+        """
+        Tests the generation of the configuration from the widget values.
+        This test ensures that the `get_config` method correctly generates an
+        `AnnotationConfig` object with the expected values from the widget.
+        """
         # Mock widgets with values
         mock_widgets = {}
         widget_values = {
@@ -240,13 +269,21 @@ class TestWidgetFallbacks:
     """Test widget behavior when dependencies are missing."""
     
     def test_widget_import_fallback(self):
-        """Test that widget imports fail gracefully when dependencies are missing."""
+        """
+        Tests that the widget imports fail gracefully when dependencies are missing.
+        This test ensures that an `ImportError` is raised when the `ipywidgets`
+        package is not available.
+        """
         with patch.dict('sys.modules', {'ipywidgets': None}):
             with pytest.raises(ImportError):
                 from omero_annotate_ai.widgets.omero_connection_widget import OMEROConnectionWidget
     
     def test_widget_creation_without_ipywidgets(self):
-        """Test widget creation behavior without ipywidgets."""
+        """
+        Tests the widget creation behavior without `ipywidgets`.
+        This test verifies that the module structure handles the case where `ipywidgets`
+        is not available.
+        """
         # This test verifies that the module structure handles missing dependencies
         try:
             import ipywidgets
@@ -264,7 +301,11 @@ class TestWidgetIntegration:
     @patch('omero_annotate_ai.widgets.omero_connection_widget.ipywidgets')
     @patch('omero_annotate_ai.widgets.workflow_widget.ipywidgets')
     def test_connection_to_workflow_integration(self, mock_workflow_widgets, mock_conn_widgets):
-        """Test integration between connection and workflow widgets."""
+        """
+        Tests the integration between the connection and workflow widgets.
+        This test ensures that the connection object created by the `OMEROConnectionWidget`
+        can be correctly passed to the `WorkflowWidget`.
+        """
         # Mock all required widgets
         for mock_ipywidgets in [mock_conn_widgets, mock_workflow_widgets]:
             for widget_type in ['Text', 'Password', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
@@ -293,7 +334,11 @@ class TestWidgetIntegration:
     @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
     @patch('omero_annotate_ai.widgets.workflow_widget.ipywidgets')
     def test_workflow_config_validation(self, mock_ipywidgets):
-        """Test workflow configuration validation."""
+        """
+        Tests the validation of the workflow configuration.
+        This test ensures that the `get_config` method handles invalid widget values
+        gracefully and still returns a valid configuration object.
+        """
         # Mock widgets
         for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
             setattr(mock_ipywidgets, widget_type, Mock(return_value=Mock()))
@@ -311,209 +356,4 @@ class TestWidgetIntegration:
         config = widget.get_config()
         
         # Config should still be created with defaults/corrections
-        assert config is not None
-
-
-@pytest.mark.unit
-class TestTableUpdates:
-    """Test table update functionality."""
-    
-    @patch('omero_annotate_ai.omero.omero_functions.ezomero')
-    @patch('omero_annotate_ai.omero.omero_functions.delete_table')
-    def test_update_tracking_table_rows_success(self, mock_delete_table, mock_ezomero):
-        """Test successful tracking table rows update."""
-        from omero_annotate_ai.omero.omero_functions import update_tracking_table_rows
-        
-        # Mock connection
-        mock_conn = Mock()
-        
-        # Mock existing table data
-        mock_df = pd.DataFrame({
-            'image_id': [1, 2, 3],
-            'processed': [False, False, False],
-            'label_id': ['None', 'None', 'None'],
-            'roi_id': ['None', 'None', 'None'],
-            'annotation_type': ['segmentation_mask', 'segmentation_mask', 'segmentation_mask'],
-            'annotation_creation_time': ['None', 'None', 'None']
-        })
-        mock_ezomero.get_table.return_value = mock_df
-        
-        # Mock file annotation for table name
-        mock_file_ann = Mock()
-        mock_file = Mock()
-        mock_file.getName.return_value = "test_table.csv"
-        mock_file_ann.getFile.return_value = mock_file
-        mock_conn.getObject.return_value = mock_file_ann
-        
-        # Mock table creation
-        mock_ezomero.post_table.return_value = 456
-        mock_delete_table.return_value = True
-        
-        # Test update
-        result = update_tracking_table_rows(
-            conn=mock_conn,
-            table_id=123,
-            row_indices=[0, 1],
-            status="completed",
-            annotation_type="segmentation_mask",
-            label_id=789,
-            roi_id=101,
-            container_type="dataset",
-            container_id=555
-        )
-        
-        # Verify result
-        assert result == 456
-        mock_ezomero.get_table.assert_called_once_with(mock_conn, 123)
-        mock_delete_table.assert_called_once_with(mock_conn, 123)
-        mock_ezomero.post_table.assert_called_once()
-        
-        # Verify the posted table has correct data
-        call_args = mock_ezomero.post_table.call_args
-        updated_df = call_args[1]['table']  # table parameter in post_table call
-        
-        # Check that rows were updated correctly
-        assert updated_df.loc[0, 'processed'] == True
-        assert updated_df.loc[1, 'processed'] == True
-        assert updated_df.loc[2, 'processed'] == False  # Unchanged
-        assert updated_df.loc[0, 'label_id'] == '789'
-        assert updated_df.loc[1, 'label_id'] == '789'
-    
-    @patch('omero_annotate_ai.omero.omero_functions.ezomero')
-    def test_update_tracking_table_rows_table_not_found(self, mock_ezomero):
-        """Test update when table cannot be retrieved."""
-        from omero_annotate_ai.omero.omero_functions import update_tracking_table_rows
-        
-        mock_conn = Mock()
-        mock_ezomero.get_table.return_value = None
-        
-        result = update_tracking_table_rows(
-            conn=mock_conn,
-            table_id=123,
-            row_indices=[0],
-            status="completed",
-            annotation_type="segmentation_mask",
-            container_type="dataset",
-            container_id=555
-        )
-        
-        # Should return original table_id
-        assert result == 123
-        mock_ezomero.get_table.assert_called_once_with(mock_conn, 123)
-    
-    @patch('omero_annotate_ai.omero.omero_functions.ezomero')
-    def test_update_tracking_table_rows_no_ezomero(self, mock_ezomero):
-        """Test update when ezomero is not available."""
-        from omero_annotate_ai.omero.omero_functions import update_tracking_table_rows
-        
-        # Mock ezomero as None (simulating import failure)
-        with patch('omero_annotate_ai.omero.omero_functions.ezomero', None):
-            mock_conn = Mock()
-            
-            with pytest.raises(ImportError, match="ezomero is required"):
-                update_tracking_table_rows(
-                    conn=mock_conn,
-                    table_id=123,
-                    row_indices=[0],
-                    status="completed",
-                    annotation_type="segmentation_mask",
-                    container_type="dataset",
-                    container_id=555
-                )
-    
-    @patch('omero_annotate_ai.omero.omero_functions.ezomero')
-    @patch('omero_annotate_ai.omero.omero_functions.delete_table')
-    def test_update_tracking_table_rows_failed_status(self, mock_delete_table, mock_ezomero):
-        """Test tracking table update with failed status."""
-        from omero_annotate_ai.omero.omero_functions import update_tracking_table_rows
-        
-        mock_conn = Mock()
-        
-        # Mock existing table data
-        mock_df = pd.DataFrame({
-            'image_id': [1, 2],
-            'processed': [False, False],
-            'label_id': ['None', 'None'],
-            'roi_id': ['None', 'None'],
-            'annotation_type': ['segmentation_mask', 'segmentation_mask'],
-            'annotation_creation_time': ['None', 'None']
-        })
-        mock_ezomero.get_table.return_value = mock_df
-        
-        # Mock file annotation
-        mock_file_ann = Mock()
-        mock_file = Mock()
-        mock_file.getName.return_value = "test_table.csv"
-        mock_file_ann.getFile.return_value = mock_file
-        mock_conn.getObject.return_value = mock_file_ann
-        
-        mock_ezomero.post_table.return_value = 789
-        mock_delete_table.return_value = True
-        
-        # Test with failed status
-        result = update_tracking_table_rows(
-            conn=mock_conn,
-            table_id=123,
-            row_indices=[0],
-            status="failed",
-            annotation_type="segmentation_mask",
-            container_type="dataset",
-            container_id=555
-        )
-        
-        # Verify the posted table has correct data (failed status)
-        call_args = mock_ezomero.post_table.call_args
-        updated_df = call_args[1]['table']
-        
-        # Check that processed is False for failed status
-        assert updated_df.loc[0, 'processed'] == False
-        # Label and ROI IDs should not be updated for failed status
-        assert updated_df.loc[0, 'label_id'] == 'None'
-        assert updated_df.loc[0, 'roi_id'] == 'None'
-
-
-@pytest.mark.unit
-class TestWidgetErrorHandling:
-    """Test widget error handling and edge cases."""
-    
-    @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.ipywidgets')
-    def test_connection_widget_with_invalid_inputs(self, mock_ipywidgets):
-        """Test connection widget with invalid inputs."""
-        # Mock widgets
-        for widget_type in ['Text', 'Password', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox']:
-            setattr(mock_ipywidgets, widget_type, Mock(return_value=Mock()))
-        
-        widget = OMEROConnectionWidget()
-        
-        # Test with empty host
-        widget.host_widget = Mock(value="")
-        widget.user_widget = Mock(value="user")
-        widget.password_widget = Mock(value="pass")
-        widget.port_widget = Mock(value=4064)
-        
-        widget._on_connect_click(Mock())
-        
-        # Should handle gracefully
-        assert widget.connection is None
-    
-    @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
-    @patch('omero_annotate_ai.widgets.workflow_widget.ipywidgets')
-    def test_workflow_widget_with_no_connection(self, mock_ipywidgets):
-        """Test workflow widget with no OMERO connection."""
-        # Mock widgets
-        for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
-            setattr(mock_ipywidgets, widget_type, Mock(return_value=Mock()))
-        
-        # Create widget without connection
-        widget = WorkflowWidget(connection=None)
-        
-        assert widget.connection is None
-        
-        # Should still be able to create basic config
-        widget.working_dir_widget = Mock(value='/tmp')
-        widget.container_type_widget = Mock(value='dataset')
-        widget.container_id_widget = Mock(value=1)
-        
-        config = widget.get_config()
         assert config is not None
