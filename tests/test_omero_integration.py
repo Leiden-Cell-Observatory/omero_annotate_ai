@@ -97,6 +97,10 @@ class TestOMEROIntegration:
         Tests creating a connection from the widget's configuration.
         This test ensures that the `SimpleOMEROConnection` class can correctly
         create a connection from the configuration dictionary returned by the
+        connection widget.
+        """
+        conn_manager = SimpleOMEROConnection()
+        
         widget_config = {
             "host": docker_omero_server["host"],
             "username": docker_omero_server["user"], 
