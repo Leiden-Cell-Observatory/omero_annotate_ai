@@ -1,0 +1,172 @@
+/* Custom styling for OMERO Annotate AI documentation */
+
+/* Custom color scheme */
+:root {
+  --md-primary-fg-color: #009688;  /* Teal */
+  --md-primary-fg-color--light: #26a69a;
+  --md-primary-fg-color--dark: #00695c;
+  --md-accent-fg-color: #00bcd4;  /* Cyan */
+  --md-accent-fg-color--transparent: #00bcd41a;
+}
+
+/* Enhanced code blocks */
+.highlight pre {
+  background: #f8f9fa;
+  border-left: 4px solid var(--md-accent-fg-color);
+  border-radius: 0.2rem;
+  box-shadow: 0 0.1rem 0.5rem rgba(0,0,0,.05);
+}
+
+[data-md-color-scheme="slate"] .highlight pre {
+  background: #2e3440;
+  border-left: 4px solid var(--md-accent-fg-color);
+}
+
+/* Enhanced admonition styling */
+.md-typeset .admonition {
+  border-radius: 0.3rem;
+  box-shadow: 0 0.2rem 1rem rgba(0,0,0,.1);
+}
+
+.md-typeset .admonition.note {
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-typeset .admonition.tip {
+  border-color: #4caf50;
+}
+
+.md-typeset .admonition.warning {
+  border-color: #ff9800;
+}
+
+/* Tutorial cards styling */
+.tutorial-card {
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  margin: 1rem 0;
+  transition: box-shadow 0.2s ease;
+  box-shadow: 0 0.1rem 0.5rem rgba(0,0,0,.05);
+}
+
+.tutorial-card:hover {
+  box-shadow: 0 0.2rem 1rem rgba(0,0,0,.1);
+  border-color: var(--md-accent-fg-color);
+}
+
+.tutorial-card h3 {
+  color: var(--md-primary-fg-color);
+  margin-top: 0;
+}
+
+/* Code snippet improvements */
+.md-typeset code {
+  background: var(--md-code-bg-color);
+  border-radius: 0.2rem;
+  padding: 0.1rem 0.3rem;
+  font-weight: 500;
+}
+
+/* Image styling improvements */
+.md-typeset img {
+  border-radius: 0.3rem;
+  box-shadow: 0 0.2rem 1rem rgba(0,0,0,.1);
+  margin: 1rem 0;
+}
+
+/* Navigation improvements */
+.md-nav__item .md-nav__link--active {
+  color: var(--md-primary-fg-color);
+  font-weight: 600;
+}
+
+/* Header improvements */
+.md-header {
+  box-shadow: 0 0.1rem 0.5rem rgba(0,0,0,.1);
+}
+
+/* Table improvements */
+.md-typeset table:not([class]) {
+  border-radius: 0.3rem;
+  overflow: hidden;
+  box-shadow: 0 0.1rem 0.5rem rgba(0,0,0,.05);
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--md-primary-fg-color--light);
+  color: white;
+  font-weight: 600;
+}
+
+/* Footer styling */
+.md-footer {
+  background: var(--md-primary-fg-color--dark);
+}
+
+/* Search box improvements */
+.md-search__input {
+  border-radius: 1.5rem;
+}
+
+/* Button-like links */
+.md-button {
+  background: var(--md-primary-fg-color);
+  color: white !important;
+  border-radius: 0.3rem;
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+  display: inline-block;
+  transition: background 0.2s ease;
+}
+
+.md-button:hover {
+  background: var(--md-primary-fg-color--dark);
+}
+
+/* Enhanced blockquotes */
+.md-typeset blockquote {
+  border-left: 4px solid var(--md-accent-fg-color);
+  background: var(--md-default-bg-color);
+  border-radius: 0 0.3rem 0.3rem 0;
+  box-shadow: 0 0.1rem 0.5rem rgba(0,0,0,.05);
+}
+
+/* Status badges */
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-badge.complete {
+  background: #4caf50;
+  color: white;
+}
+
+.status-badge.in-progress {
+  background: #ff9800;
+  color: white;
+}
+
+.status-badge.planned {
+  background: #9e9e9e;
+  color: white;
+}
+
+/* Responsive improvements */
+@media screen and (max-width: 768px) {
+  .tutorial-card {
+    padding: 1rem;
+  }
+  
+  .md-typeset img {
+    width: 100%;
+    height: auto;
+  }
+}

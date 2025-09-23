@@ -195,3 +195,6 @@ start-omero = {cmd = "cd tests && docker-compose up -d"}
 stop-omero = {cmd = "cd tests && docker-compose down -v"}
 build = { cmd = "python -m build" }
 clean = {cmd = "rm -rf build/ dist/ *.egg-info/ && find . -type d -name __pycache__ -exec rm -rf {} + && find . -type f -name \"*.pyc\" -delete"}
+
+[dependency-groups]
+docs = ["mkdocs-glightbox>=0.5.1,<0.6"]
