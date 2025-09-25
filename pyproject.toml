@@ -196,5 +196,11 @@ stop-omero = {cmd = "cd tests && docker-compose down -v"}
 build = { cmd = "python -m build" }
 clean = {cmd = "rm -rf build/ dist/ *.egg-info/ && find . -type d -name __pycache__ -exec rm -rf {} + && find . -type f -name \"*.pyc\" -delete"}
 
+# Publishing tasks
+check-package = { cmd = "python -m twine check dist/*" }
+upload-test = { cmd = "python -m twine upload --repository testpypi dist/*" }
+upload-prod = { cmd = "python -m twine upload dist/*" }
+verify-build = { cmd = "python -m zipfile -l dist/*.whl && tar -tzf dist/*.tar.gz" }
+
 [dependency-groups]
 docs = ["mkdocs-glightbox>=0.5.1,<0.6"]
