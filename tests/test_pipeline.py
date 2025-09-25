@@ -394,7 +394,7 @@ class TestPipelineIntegration:
     """Test pipeline integration scenarios."""
     
     @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
-    def test_run_full_workflow_basic(self, mock_ezomero):
+    def test_prepare_annotations_basic(self, mock_ezomero):
         """Test running the full workflow with mocked dependencies."""
         mock_ezomero.get_image_ids.return_value = [1, 2]
         
@@ -430,7 +430,8 @@ class TestPipelineIntegration:
                 "annotations_path": Path(tempfile.mkdtemp())
             }
             
-            table_id, result_config = pipeline.run_full_workflow(mock_images)
+            pipeline.prepare_annotations(mock_images)
+            table_id,result_config = pipeline.run_microsam_annotation()
             
             assert table_id == 456
             assert result_config == config
@@ -471,7 +472,8 @@ class TestPipelineIntegration:
             # Mock that all annotations are already processed (resume scenario)
             config.annotations = []  # Start with empty annotations for resume mode
             
-            table_id, result_config = pipeline.run_full_workflow()
+            pipeline.prepare_annotations()
+            table_id, result_config = pipeline.run_microsam_annotation()
             
             assert table_id == 789
             assert pipeline.table_id == 789
