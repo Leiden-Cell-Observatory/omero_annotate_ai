@@ -412,7 +412,7 @@ class TestPipelineIntegration:
                 "metadata": [("ann1", {"image_id": 1}, 0), ("ann2", {"image_id": 2}, 1)],
                 "annotations_path": Path(tempfile.mkdtemp())
             }
-            table_id, result_config = pipeline.run_full_microsam_workflow(mock_images)
+            table_id, result_config = pipeline.run_full_micro_sam_workflow(mock_images)
             assert table_id == 456
             assert result_config == config
             mock_annotate.assert_called()
