@@ -496,15 +496,15 @@ class TestPipelineIntegration:
             if len(processed_flags) == 0:
                 # No schema defined, should raise ValueError
                 with pytest.raises(ValueError):
-                    pipeline.run_microsam_annotation()
+                    pipeline.run_micro_sam_annotation()
             elif expected_unprocessed == 0:
                 # Should print 'All annotations already processed!' and return
-                table_id, result_config = pipeline.run_microsam_annotation()
+                table_id, result_config = pipeline.run_micro_sam_annotation()
                 assert table_id == pipeline.table_id
                 assert result_config == config
                 mock_annotate.assert_not_called()
             else:
-                table_id, result_config = pipeline.run_microsam_annotation()
+                table_id, result_config = pipeline.run_micro_sam_annotation()
                 assert table_id == pipeline.table_id
                 assert result_config == config
                 mock_annotate.assert_called()
