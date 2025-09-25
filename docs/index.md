@@ -1,7 +1,7 @@
 # OMERO Annotate.AI
 
 
-omero-annotate-ai is a Python package that provides tools for reproducible AI workflows (annotation, training and inference) using OMERO (Open Microscopy Environment) data repositories. The package directly connects OMERO datasets with AI dataset annotation using micro-sam assisted annotation of images.
+OMERO annotate.AI is a Python package that provides tools for reproducible AI workflows (annotation, training and inference) using OMERO (Open Microscopy Environment) data repositories. The package directly connects OMERO datasets with AI dataset annotation tools such as micro-sam annotator tool in napari.
 
 ## Key Features
 
