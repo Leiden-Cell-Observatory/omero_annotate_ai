@@ -1160,6 +1160,10 @@ The `tracking_table.csv` file contains detailed information about each annotatio
             self.table_id = -1
         return self.table_id, self.config
 
+    def run_micro_sam_annotation(self) -> Tuple[int, AnnotationConfig]:
+        """Alias for run_microsam_annotation for backward compatibility."""
+        return self.run_microsam_annotation()
+
     def run_cellpose_preparation(self) -> Tuple[int, AnnotationConfig]:
         """Run Cellpose preparation workflow - save images locally for training.
         
@@ -1274,6 +1278,10 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         
         # Step 4: Run micro-SAM annotation
         return self.run_microsam_annotation()
+
+    def run_full_micro_sam_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
+        """Alias for run_full_microsam_workflow for backward compatibility."""
+        return self.run_full_microsam_workflow(images_list)
 
     def run_custom_annotation(self, annotation_func, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
         """Run a custom annotation function with the standard workflow.
