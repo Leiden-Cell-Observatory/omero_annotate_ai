@@ -448,15 +448,15 @@ class TestPipelineIntegration:
             with patch.object(pipeline, '_prepare_processing_units'):
                 config.annotations = []  # Start with empty annotations for resume mode
                 pipeline.initialize_workflow(mock_images)
-                # No schema to define, so run_microsam_annotation should raise ValueError
+                # No schema to define, so run_micro_sam_annotation should raise ValueError
                 with pytest.raises(ValueError):
-                    pipeline.run_microsam_annotation()
+                    pipeline.run_micro_sam_annotation()
             # Now define schema and mark all as processed (do not patch _prepare_processing_units)
             pipeline.define_annotation_schema(mock_images)
             for ann in config.annotations:
                 ann.processed = True
             # Should print 'All annotations already processed!' and return table_id, config
-            table_id, result_config = pipeline.run_microsam_annotation()
+            table_id, result_config = pipeline.run_micro_sam_annotation()
             assert table_id == 789
             assert pipeline.table_id == 789
             assert result_config == config
