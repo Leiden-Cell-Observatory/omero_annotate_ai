@@ -1,0 +1,34 @@
+name: default
+channels:
+- conda-forge
+- nodefaults
+dependencies:
+- python 3.11.*
+- micro_sam >=1.6.1,<2
+- jupyter >=1.1.1,<2
+- napari >=0.6.2,<0.7
+- zeroc-ice >=3.6.4,<3.7
+- kornia <0.7
+- ipykernel >=6.30.1,<7
+- pip >=25.2,<26
+- numpy >=1.21.0,<2.0
+- pytorch >=2.7.1,<3
+- stackview >=0.18.0,<0.19
+- hf-xet <1.1.9
+- pip
+- pip:
+  - -e .
+  - numpy>=1.21.0, <2.0
+  - pandas>=1.3.0
+  - imageio>=2.9.0
+  - zarr>=2.10.0
+  - dask>=2021.6.0
+  - pyyaml>=6.0
+  - pydantic>=2.0.0
+  - typing-extensions>=4.0.0
+  - ipywidgets>=7.6.0
+  - keyring>=23.0.0
+  - ezomero>=3.1.0
+  - ipykernel
+  - pixi-kernel>=0.6.6, <0.7
+  - opencv-python
