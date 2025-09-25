@@ -164,7 +164,7 @@ class WorkflowWidget:
 
         # Directory selection
         self.directory_text = widgets.Text(
-            value=str(Path.cwd() / "omero_annotations"),
+            value=str(Path.home() / "omero_annotate_ai" / "omero_annotations"),
             description="Working Dir:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width="400px"),
