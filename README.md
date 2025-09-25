@@ -1,5 +1,6 @@
 # OMERO Annotate.AI
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/Leiden-Cell-Observatory/omero_annotate_ai/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fannotation%2Fomero-annotate-ai-annotation-widget.ipynb)
 [![CI/CD](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/actions)
 [![Documentation](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/actions/workflows/docs.yml/badge.svg)](https://leiden-cell-observatory.github.io/omero_annotate_ai/)
 [![PyPI version](https://img.shields.io/pypi/v/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
