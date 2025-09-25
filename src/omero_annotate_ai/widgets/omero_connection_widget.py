@@ -386,6 +386,10 @@ class OMEROConnectionWidget:
             else:
                 print("❌ Failed to create connection")
 
+    def _save_and_connect(self, button):
+        """Alias for _connect method for backward compatibility."""
+        return self._connect(button)
+
     def _get_widget_config(self) -> Dict[str, Any]:
         """Get configuration from widget values."""
         return {

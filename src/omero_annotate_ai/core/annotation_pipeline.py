@@ -808,6 +808,15 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         print(f"Loaded {len(images)} images (by ID)")
         return images
 
+    def get_images_from_container(self) -> List[Any]:
+        """Get OMERO image objects from the configured container.
+        
+        Returns:
+            List of OMERO image objects
+        """
+        image_ids = self.get_image_ids_from_container()
+        return self.get_images_by_ids(image_ids)
+
     def _save_local_progress(
         self, completed_row_indices: List[int], metadata: List[Tuple]
     ) -> None:
@@ -1134,8 +1143,9 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         unprocessed_annotations = self.config.get_unprocessed()
         if not unprocessed_annotations:
             print("All annotations already processed!")
-            table_id = self.table_id if self.table_id is not None else -1
-            return table_id, self.config
+            if self.table_id is None:
+                self.table_id = -1
+            return self.table_id, self.config
         
         print(f"Running micro-SAM annotation on {len(unprocessed_annotations)} unprocessed annotations")
         
@@ -1146,8 +1156,9 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         # Finalize workflow
         self._finalize_workflow(processed_count)
         
-        table_id = self.table_id if self.table_id is not None else -1
-        return table_id, self.config
+        if self.table_id is None:
+            self.table_id = -1
+        return self.table_id, self.config
 
     def run_cellpose_preparation(self) -> Tuple[int, AnnotationConfig]:
         """Run Cellpose preparation workflow - save images locally for training.
