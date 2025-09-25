@@ -181,8 +181,8 @@ class AIModelConfig(BaseModel):
 
     name: str = Field(description="Model name/identifier")
     version: str = Field(default="latest", description="Model version")
-    model_type: str = Field(default="vit_b_lm", description="Model type/architecture")
-    framework: str = Field(default="pytorch", description="AI framework")
+    model_type: str = Field(default="sam_vit_b_lm", description="Model type/architecture")
+    framework: str = Field(default="micro_sam", description="AI framework")
 
 
 class ProcessingConfig(BaseModel):
@@ -248,8 +248,8 @@ class OutputConfig(BaseModel):
     output_directory: Path = Field(
         default=Path("./annotations"), description="Output directory"
     )
-    format: Literal["ome_tiff", "png", "numpy"] = Field(
-        default="ome_tiff", description="Output format"
+    format: Literal["tif", "ome_tif", "png", "numpy"] = Field(
+        default="tif", description="Output format"
     )
     compression: Optional[str] = Field(default=None, description="Compression method")
     resume_from_checkpoint: bool = Field(
