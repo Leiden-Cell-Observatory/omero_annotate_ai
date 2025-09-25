@@ -411,7 +411,7 @@ class AnnotationPipeline:
         for image_obj, annotation_id, meta, row_idx in image_list  :
             # Load image data from OMERO
             image_data = self._load_image_data(image_obj, meta)
-            imwrite(output_path / f"{annotation_id}.tiff", image_data)
+            imwrite(output_path / f"{annotation_id}.tif", image_data)
             # Include image_id in metadata for later ROI upload
             meta_with_image_id = meta.copy()
             meta_with_image_id["image_id"] = image_obj.getId()
@@ -600,9 +600,9 @@ class AnnotationPipeline:
                 
                 local_dir = Path(self.config.output.output_directory)
                 local_dir.mkdir(parents=True, exist_ok=True)
-                local_file = local_dir / f"annotation_{annotation_id}.tiff"
+                local_file = local_dir / f"annotation_{annotation_id}.tif"
                 
-                shutil.copy(tiff_file, local_file)
+                shutil.move(tiff_file, local_file)
                 updated_count += 1
                 
             else:
@@ -813,7 +813,7 @@ class AnnotationPipeline:
         
         return table_id
 
-    def run_full_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
+    def prepare_annotations(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
         """Run the complete workflow using the micro-sam series annotator in napari.
         
         Args:
@@ -874,6 +874,16 @@ class AnnotationPipeline:
             print("Read-only mode: Skipping OMERO table creation")
             self.table_id = -1  # Mock table ID for read-only mode
         
+        return self.table_id, self.config
+
+    def run_microsam_annotation(self) -> Tuple[int, AnnotationConfig]:
+        """Run the the micro-sam series annotator in napari on the annotations
+        Returns:
+            Tuple of (table_id, processed_images)
+        """ 
+        #Requires to first run prepare_annotations
+        if not self.config.annotations:
+            raise ValueError("No annotations prepared - run prepare_annotations() first")
         # Get unprocessed annotations from config
         unprocessed_annotations = self.config.get_unprocessed()
         
