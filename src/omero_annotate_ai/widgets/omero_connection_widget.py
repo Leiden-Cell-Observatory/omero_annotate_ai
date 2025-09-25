@@ -76,8 +76,9 @@ class OMEROConnectionWidget:
         # Password saving options
         self.save_password_widget = widgets.Checkbox(
             value=False,
-            description="Remember password",
+            description="Save password to keychain",
             style={"description_width": "initial"},
+            tooltip="When checked, your password will be securely saved and auto-loaded for future connections to this server"
         )
 
         self.expire_widget = widgets.Dropdown(
@@ -107,7 +108,7 @@ class OMEROConnectionWidget:
         )
 
         self.connect_button = widgets.Button(
-            description="Save & Connect", button_style="success", icon="check"
+            description="Connect", button_style="success", icon="check"
         )
 
         self.load_keychain_button = widgets.Button(
@@ -145,7 +146,12 @@ class OMEROConnectionWidget:
         )
 
         password_options = widgets.VBox(
-            [self.save_password_widget, self.expire_widget, self.show_password_widget]
+            [
+                widgets.HTML("<b>Password Options</b><br><i>Note: Passwords are only saved to keychain when explicitly requested</i>"),
+                self.save_password_widget, 
+                self.expire_widget, 
+                self.show_password_widget
+            ]
         )
 
         buttons_row1 = widgets.HBox(
@@ -165,7 +171,7 @@ class OMEROConnectionWidget:
                 self.connection_dropdown,
                 widgets.HTML("<br><b>Connection Settings</b>"),
                 connection_fields,
-                widgets.HTML("<br><b>Password Options</b>"),
+                widgets.HTML("<br>"),
                 password_options,
                 widgets.HTML("<br>"),
                 buttons_row1,
@@ -189,7 +195,7 @@ class OMEROConnectionWidget:
 
         # Button callbacks
         self.test_button.on_click(self._test_connection)
-        self.connect_button.on_click(self._save_and_connect)
+        self.connect_button.on_click(self._connect)
         self.load_keychain_button.on_click(self._load_from_keychain)
         self.save_connection_button.on_click(self._save_connection_only)
         self.delete_connection_button.on_click(self._delete_connection)
@@ -267,7 +273,7 @@ class OMEROConnectionWidget:
                 sources.append("keychain")
 
             self.config_info.value = (
-                f"<i>🔄 Pre-populated from {' + '.join(sources)}</i>"
+                f"<i>Pre-populated from {' + '.join(sources)}</i>"
             )
         else:
             self.config_info.value = "<i>💡 No existing configuration found</i>"
@@ -317,15 +323,15 @@ class OMEROConnectionWidget:
             username = self.username_widget.value.strip()
 
             if not host or not username:
-                print("❌ Please enter host and username first")
+                print("Please enter host and username first")
                 return
 
             password = self.connection_manager.load_password(host, username)
             if password:
                 self.password_widget.value = password
-                print("✅ Password loaded from keychain")
+                print("Password loaded from keychain")
             else:
-                print("❌ No password found in keychain for this host/username")
+                print("No password found in keychain for this host/username")
 
     def _test_connection(self, button):
         """Test the OMERO connection."""
@@ -346,12 +352,12 @@ class OMEROConnectionWidget:
             )
 
             if success:
-                print(f"✅ {message}")
+                print(f"{message}")
             else:
-                print(f"❌ {message}")
+                print(f"{message}")
 
-    def _save_and_connect(self, button):
-        """Save configuration and create connection."""
+    def _connect(self, button):
+        """Create connection and optionally save password if requested."""
         with self.status_output:
             clear_output()
 
@@ -365,11 +371,18 @@ class OMEROConnectionWidget:
             )
 
             if self.connection:
-                print("✅ Connection created and ready to use!")
+                print("Connection created and ready to use!")
                 # Show user info
                 print(f"👤 User: {self.connection.getUser().getName()}")
                 print(f"🏢 Group: {self.connection.getGroupFromContext().getName()}")
                 print("💾 Connection details saved to history")
+                
+                # Show password saving status
+                if config["save_password"]:
+                    expire_text = f" (expires in {config['expire_hours']} hours)" if config['expire_hours'] else " (no expiration)"
+                    print(f"🔐 Password saved to keychain{expire_text}")
+                else:
+                    print("🔓 Password not saved (keychain saving was not requested)")
             else:
                 print("❌ Failed to create connection")
 
@@ -458,6 +471,12 @@ class OMEROConnectionWidget:
                         self.connection_manager.save_password(
                             host, username, password, expire_hours
                         )
+                        expire_text = f" (expires in {expire_hours} hours)" if expire_hours else " (no expiration)"
+                        print(f"🔐 Password saved to keychain{expire_text}")
+                    else:
+                        print("⚠️ Password not saved - password field is empty")
+                else:
+                    print("🔓 Password not saved to keychain (not requested)")
 
                 # Refresh dropdown
                 self._populate_connection_dropdown()

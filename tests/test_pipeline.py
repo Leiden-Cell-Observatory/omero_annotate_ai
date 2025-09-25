@@ -1,7 +1,7 @@
 """Tests for the annotation pipeline."""
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import tempfile
 from pathlib import Path
 
@@ -60,45 +60,33 @@ class TestAnnotationPipeline:
     def test_get_images_from_container_dataset(self, mock_ezomero):
         """Test getting images from dataset."""
         mock_ezomero.get_image_ids.return_value = [1, 2, 3]
-        
         config = create_default_config()
         config.omero.container_type = "dataset"
         config.omero.container_id = 123
-        
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        
-        # Mock getObject calls
+        mock_conn = Mock()
         mock_images = [Mock() for _ in range(3)]
-        pipeline.conn.getObject.side_effect = mock_images
-        
+        mock_conn.getObject = Mock(side_effect=mock_images)
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
         images = pipeline.get_images_from_container()
-        
         assert len(images) == 3
         mock_ezomero.get_image_ids.assert_called_once_with(pipeline.conn, dataset=123)
-    
+
     @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
     def test_get_images_from_container_project(self, mock_ezomero):
         """Test getting images from project (via datasets)."""
-        # Mock dataset IDs in project
         mock_ezomero.get_dataset_ids.return_value = [10, 20]
-        # Mock image IDs in each dataset
         mock_ezomero.get_image_ids.side_effect = [
             [1, 2],    # Images in dataset 10
             [3, 4, 5]  # Images in dataset 20
         ]
-        
         config = create_default_config()
         config.omero.container_type = "project"
         config.omero.container_id = 789
-        
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        
-        # Mock getObject calls
+        mock_conn = Mock()
         mock_images = [Mock() for _ in range(5)]
-        pipeline.conn.getObject.side_effect = mock_images
-        
+        mock_conn.getObject = Mock(side_effect=mock_images)
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
         images = pipeline.get_images_from_container()
-        
         assert len(images) == 5
         mock_ezomero.get_dataset_ids.assert_called_once_with(pipeline.conn, project=789)
         assert mock_ezomero.get_image_ids.call_count == 2
@@ -394,18 +382,15 @@ class TestPipelineIntegration:
     """Test pipeline integration scenarios."""
     
     @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
-    def test_prepare_annotations_basic(self, mock_ezomero):
-        """Test running the full workflow with mocked dependencies."""
+    def test_run_full_microsam_workflow_basic(self, mock_ezomero):
+        """Test running the full micro-SAM workflow with mocked dependencies."""
         mock_ezomero.get_image_ids.return_value = [1, 2]
-        
         config = create_default_config()
         config.omero.container_type = "dataset"
         config.omero.container_id = 123
         config.processing.batch_size = 2
         config.training.train_n = 1
         config.training.validate_n = 1
-        
-        # Mock images
         mock_images = []
         for i in range(2):
             mock_img = Mock()
@@ -414,28 +399,23 @@ class TestPipelineIntegration:
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
-        
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        pipeline.conn.getObject.side_effect = mock_images
-        
+        mock_conn = Mock()
+        mock_conn.getObject = Mock(side_effect=mock_images)
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
         with patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
-             patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=456), \
-             patch.object(pipeline, '_process_annotation_results'), \
-             patch.object(pipeline, '_replace_omero_table_from_config'), \
-             patch.object(pipeline, '_auto_save_config'), \
-             patch.object(pipeline, '_upload_annotation_config_to_omero'):
-            
+            patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=456), \
+            patch.object(pipeline, '_process_annotation_results'), \
+            patch.object(pipeline, '_replace_omero_table_from_config'), \
+            patch.object(pipeline, '_auto_save_config'), \
+            patch.object(pipeline, '_upload_annotation_config_to_omero'):
             mock_annotate.return_value = {
                 "metadata": [("ann1", {"image_id": 1}, 0), ("ann2", {"image_id": 2}, 1)],
                 "annotations_path": Path(tempfile.mkdtemp())
             }
-            
-            pipeline.prepare_annotations(mock_images)
-            table_id,result_config = pipeline.run_microsam_annotation()
-            
+            table_id, result_config = pipeline.run_full_microsam_workflow(mock_images)
             assert table_id == 456
             assert result_config == config
-            mock_annotate.assert_called_once()
+            mock_annotate.assert_called()
     
     def test_run_full_workflow_resume_mode(self):
         """Test running workflow in resume mode."""
@@ -444,7 +424,6 @@ class TestPipelineIntegration:
         config.omero.container_id = 123
         config.training.train_n = 1
         config.training.validate_n = 1
-        
         # Create mock images for the workflow
         mock_images = []
         for i in range(2):
@@ -456,28 +435,79 @@ class TestPipelineIntegration:
             mock_img.getSizeY.return_value = 1000
             mock_img.getSizeX.return_value = 1000
             mock_images.append(mock_img)
-
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
         with patch.object(pipeline, '_find_existing_table', return_value=789), \
-             patch('omero_annotate_ai.core.annotation_pipeline.sync_omero_table_to_config'), \
-             patch.object(pipeline, 'get_images_from_container', return_value=mock_images), \
-             patch.object(pipeline, '_setup_directories', return_value=Path(tempfile.mkdtemp())), \
-             patch.object(pipeline, '_cleanup_embeddings'), \
-             patch.object(pipeline, '_prepare_processing_units'), \
-             patch.object(pipeline, '_auto_save_config'), \
-             patch.object(pipeline, '_upload_annotation_config_to_omero'), \
-             patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=789):
-            
-            # Mock that all annotations are already processed (resume scenario)
-            config.annotations = []  # Start with empty annotations for resume mode
-            
-            pipeline.prepare_annotations()
+            patch('omero_annotate_ai.core.annotation_pipeline.sync_omero_table_to_config'), \
+            patch.object(pipeline, 'get_images_from_container', return_value=mock_images), \
+            patch.object(pipeline, '_setup_directories', return_value=Path(tempfile.mkdtemp())), \
+            patch.object(pipeline, '_cleanup_embeddings'), \
+            patch.object(pipeline, '_auto_save_config'), \
+            patch.object(pipeline, '_upload_annotation_config_to_omero', return_value=789), \
+            patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=789):
+            # Patch _prepare_processing_units only for the first call
+            with patch.object(pipeline, '_prepare_processing_units'):
+                config.annotations = []  # Start with empty annotations for resume mode
+                pipeline.initialize_workflow(mock_images)
+                # No schema to define, so run_microsam_annotation should raise ValueError
+                with pytest.raises(ValueError):
+                    pipeline.run_microsam_annotation()
+            # Now define schema and mark all as processed (do not patch _prepare_processing_units)
+            pipeline.define_annotation_schema(mock_images)
+            for ann in config.annotations:
+                ann.processed = True
+            # Should print 'All annotations already processed!' and return table_id, config
             table_id, result_config = pipeline.run_microsam_annotation()
-            
             assert table_id == 789
             assert pipeline.table_id == 789
             assert result_config == config
+
+    @pytest.mark.parametrize("processed_flags,expected_unprocessed", [
+        ([False, False, False], 3),
+        ([True, True, True], 0),
+        ([True, False, True], 1),
+        ([], 0),
+    ])
+    def test_resume_logic_edge_cases(self, processed_flags, expected_unprocessed):
+        """Test resume logic for all/none/some processed and empty schema."""
+        config = create_default_config()
+        config.omero.container_id = 123
+        config.training.train_n = len(processed_flags)
+        config.training.validate_n = 0
+        # Mock images
+        mock_images = []
+        for i in range(len(processed_flags)):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline.initialize_workflow(mock_images)
+        pipeline.define_annotation_schema(mock_images)
+        # Set processed flags
+        for ann, flag in zip(config.annotations, processed_flags):
+            ann.processed = flag
+        # Patch annotation runner and OMERO table creation to avoid real OMERO logic
+        with patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
+            patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=12345), \
+            patch('omero_annotate_ai.core.annotation_pipeline.upload_annotation_config_to_omero', return_value=12345):
+            mock_annotate.return_value = {"metadata": [], "annotations_path": Path(tempfile.mkdtemp())}
+            if len(processed_flags) == 0:
+                # No schema defined, should raise ValueError
+                with pytest.raises(ValueError):
+                    pipeline.run_microsam_annotation()
+            elif expected_unprocessed == 0:
+                # Should print 'All annotations already processed!' and return
+                table_id, result_config = pipeline.run_microsam_annotation()
+                assert table_id == pipeline.table_id
+                assert result_config == config
+                mock_annotate.assert_not_called()
+            else:
+                table_id, result_config = pipeline.run_microsam_annotation()
+                assert table_id == pipeline.table_id
+                assert result_config == config
+                mock_annotate.assert_called()
 
 
 @pytest.mark.unit
@@ -526,4 +556,3 @@ class TestPipelineUtils:
         
         assert pipeline.config.ai_model.model_type == "vit_l"
         assert pipeline.config.processing.batch_size == 5
-    

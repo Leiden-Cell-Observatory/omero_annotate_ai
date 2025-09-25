@@ -181,7 +181,7 @@ class AIModelConfig(BaseModel):
 
     name: str = Field(description="Model name/identifier")
     version: str = Field(default="latest", description="Model version")
-    model_type: str = Field(default="sam_vit_b_lm", description="Model type/architecture")
+    model_type: str = Field(default="vit_b_lm", description="Model type/architecture")
     framework: str = Field(default="micro_sam", description="AI framework")
 
 
