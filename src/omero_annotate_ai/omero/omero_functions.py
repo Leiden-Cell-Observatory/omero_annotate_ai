@@ -893,7 +893,7 @@ def generate_unique_table_name(
     # Create base name if not provided
     if not base_name:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"micro_sam_{container_name}_{timestamp}"
+        base_name = f"{container_name}_{timestamp}"
 
     # Check if name already exists and make it unique
     existing_tables = list_annotation_tables(conn, container_type, container_id)
