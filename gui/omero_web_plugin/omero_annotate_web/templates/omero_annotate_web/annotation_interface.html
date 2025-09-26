@@ -1,0 +1,39 @@
+{% extends "webgateway/base/base_container.html" %}
+{% load static %}
+
+{% block title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1>🔬 OMERO Annotation Workflow</h1>
+            <p class="lead">Convert your OMERO images into training datasets using micro-SAM</p>
+
+            <!-- React app will mount here -->
+            <div id="annotation-app"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block script %}
+<!-- Load React and our app -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- Our React app -->
+<script type="text/babel" src="{% static 'omero_annotate_web/js/App.jsx' %}"></script>
+
+<script type="text/babel">
+    // Initialize React app
+    const domContainer = document.querySelector('#annotation-app');
+    const root = ReactDOM.createRoot(domContainer);
+    root.render(React.createElement(AnnotationWorkflowApp));
+</script>
+{% endblock %}
+
+{% block style %}
+<link rel="stylesheet" href="{% static 'omero_annotate_web/css/annotation.css' %}">
+{% endblock %}
