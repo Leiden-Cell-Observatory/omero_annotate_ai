@@ -3,26 +3,29 @@ site_description: OMERO integration for AI-powered image annotation and segmenta
 site_url: https://leiden-cell-observatory.github.io/omero_annotate_ai/
 repo_url: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai
 repo_name: Leiden-Cell-Observatory/omero_annotate_ai
+edit_uri: edit/main/docs/
 
 # Fail the build on any warning
 strict: false
 
 theme:
   name: material
+  language: en
+  font: false
   palette:
     # Palette toggle for light mode
     - scheme: default
-      primary: blue
-      accent: blue
+      primary: teal
+      accent: cyan
       toggle:
-        icon: material/brightness-7
+        icon: material/toggle-switch
         name: Switch to dark mode
-    # Palette toggle for dark mode
+    # Palette toggle for dark mode  
     - scheme: slate
-      primary: blue
-      accent: blue
+      primary: teal
+      accent: cyan
       toggle:
-        icon: material/brightness-4
+        icon: material/toggle-switch-off-outline
         name: Switch to light mode
   features:
     - navigation.tabs
@@ -30,19 +33,52 @@ theme:
     - navigation.sections
     - navigation.expand
     - navigation.indexes
+    - navigation.top
+    - navigation.tracking
     - toc.follow
     - search.highlight
     - search.share
+    - search.suggest
     - content.code.copy
     - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - content.action.edit
+    - content.action.view
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
 
 nav:
   - Home: index.md
-  - Installation: installation.md
-  - API Reference: api/index.md
+  - Getting Started:
+    - Installation: installation.md
+    - Configuration Guide: configuration.md
+  - Tutorials:
+    - tutorials/index.md
+    - micro-SAM Pipeline: tutorials/microsam-annotation-pipeline.md
+    - Cellpose Integration: tutorials/cellpose-integration.md
+    - Training Data Prep: tutorials/training-data-prep.md
+    - BiaPy Integration: tutorials/biapy-integration.md
+    - Batch Processing: tutorials/batch-processing.md
+  - API Reference: api/
 
 plugins:
   - search
+  - glightbox:
+      touchNavigation: true
+      loop: false
+      effect: zoom
+      slide_effect: slide
+      width: 100%
+      height: auto
+      zoomable: true
+      draggable: true
+      skip_classes:
+        - custom-skip-class-name
+      auto_caption: false
+      caption_position: bottom
   - gen-files:
       scripts:
         - docs/gen_ref_pages.py
@@ -66,23 +102,62 @@ plugins:
                 schema: true
 
 markdown_extensions:
+  - pymdownx.tabbed:
+      alternate_style: true
+  - abbr
+  - pymdownx.snippets:
+      base_path: ["docs/includes"]
+      auto_append: ["abbreviations.md"]
+  - tables
+  - meta
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - attr_list
+  - md_in_html
+  - footnotes
+  - toc:
+      permalink: "#"
+      toc_depth: 3
+      title: On this page
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
-  - pymdownx.tabbed:
-      alternate_style: true
-  - toc:
-      permalink: true
+  - pymdownx.superfences
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.magiclink
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - def_list
 
 extra:
+  version:
+    provider: mike
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai
+      name: GitHub Repository
+    - icon: fontawesome/solid/tag
+      link: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases
+      name: Releases
+    - icon: fontawesome/solid/bug
+      link: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues
+      name: Issues & Bug Reports
+    - icon: fontawesome/solid/code-branch
+      link: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/commits/main
+      name: Recent Commits
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/omero-annotate-ai/
+      name: PyPI Package
+    - icon: fontawesome/solid/book
+      link: https://leiden-cell-observatory.github.io/omero_annotate_ai/
+      name: Documentation
+  generator: false
+
+extra_css:
+  - stylesheets/extra.css
