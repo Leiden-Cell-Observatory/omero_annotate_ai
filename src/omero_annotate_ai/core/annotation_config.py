@@ -256,8 +256,9 @@ class OutputConfig(BaseModel):
         default=False, description="Resume interrupted workflow"
     )
 
-    class Config:
-        json_encoders = {Path: str}
+
+    from pydantic import ConfigDict
+    model_config = ConfigDict(json_encoders={Path: str})
 
     def model_dump(self, **kwargs):
         """Override model_dump method to convert Path to string"""
