@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import yaml
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, Field, HttpUrl, model_validator, ConfigDict
 from typing_extensions import Literal
 
 
@@ -256,8 +256,6 @@ class OutputConfig(BaseModel):
         default=False, description="Resume interrupted workflow"
     )
 
-
-    from pydantic import ConfigDict
     model_config = ConfigDict(json_encoders={Path: str})
 
     def model_dump(self, **kwargs):
