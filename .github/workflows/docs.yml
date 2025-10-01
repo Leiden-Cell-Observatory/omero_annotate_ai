@@ -26,7 +26,7 @@ jobs:
         lfs: true
 
     - name: Install pixi (docs env)
-      uses: prefix-dev/setup-pixi@v0.9.0
+      uses: prefix-dev/setup-pixi@v0.9.1
       with:
         pixi-version: v0.55.0
         cache: true
