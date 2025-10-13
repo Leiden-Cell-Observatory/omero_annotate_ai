@@ -75,7 +75,7 @@ def generate_patch_coordinates(
 
         if len(coordinates) < n_patches:
             print(
-                f"⚠️ Could only place {len(coordinates)} non-overlapping patches out of {n_patches} requested"
+                f"Could only place {len(coordinates)} non-overlapping patches out of {n_patches} requested"
             )
 
     else:
@@ -87,7 +87,7 @@ def generate_patch_coordinates(
 
         if n_patches > max_grid_patches:
             print(
-                f"⚠️ Requested {n_patches} patches, but only {max_grid_patches} non-overlapping patches fit"
+                f"Requested {n_patches} patches, but only {max_grid_patches} non-overlapping patches fit"
             )
             n_patches = max_grid_patches
 
