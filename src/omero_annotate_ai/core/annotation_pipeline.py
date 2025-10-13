@@ -45,7 +45,7 @@ from ..omero.omero_functions import (
     upload_annotation_config_to_omero,
     upload_rois_and_labels
 )
-from ..omero.omero_utils import get_dask_image_multiple, get_table_by_name
+from ..omero.omero_utils import get_dask_image_single, get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
 
 
@@ -142,12 +142,15 @@ class AnnotationPipeline:
 
     def _get_table_title(self) -> str:
         """Generate table title based on configuration."""
-        # Use the existing trainingset_name from config
+        # Use the existing trainingset_name from config directly
+        # (the name from config already includes proper formatting via generate_unique_table_name)
         if self.config.name:
-            return f"micro_sam_training_{self.config.name}"
+            return self.config.name
         else:
-            # Fallback to container-based naming
-            return f"micro_sam_training_{self.config.omero.container_type}_{self.config.omero.container_id}"
+            # Fallback to container-based naming with timestamp
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            return f"{self.config.omero.container_type}_{self.config.omero.container_id}_{timestamp}"
 
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
         """Initialize tracking table for the annotation process using config-first approach.
@@ -489,29 +492,53 @@ class AnnotationPipeline:
 
             print(f"Loading 3D volume: z_slices {z_start}-{z_end} (length: {z_length})")
 
-            image_data = get_dask_image_multiple(
+            # Use get_dask_image_single for single image loading
+            image_data = get_dask_image_single(
                 conn=self.conn,
-                image_list=[image_obj],
+                image=image_obj,
                 timepoints=[timepoint],
                 channels=[channel],
                 z_slices=z_slices,  # All z-slices for 3D volume
-            )[0]
+            )
 
-            # Result should be 3D: (z, y, x) or 4D: (t, z, y, x)
+            # Ensure we have proper data
+            if image_data is None:
+                raise ValueError(f"Failed to load 3D image data for image {image_obj.getId()}")
+            
             print(f"Loaded 3D data shape: {image_data.shape}")
 
         else:
             # Load single z-slice for 2D processing
             z_slice = metadata["z_slice"]
-            image_data = get_dask_image_multiple(
+            
+            # Use get_dask_image_single for single image loading
+            image_data = get_dask_image_single(
                 conn=self.conn,
-                image_list=[image_obj],
+                image=image_obj,
                 timepoints=[timepoint],
                 channels=[channel],
                 z_slices=[z_slice],
-            )[0]
+            )
 
+            # Ensure we have proper data
+            if image_data is None:
+                raise ValueError(f"Failed to load 2D image data for image {image_obj.getId()}")
+            
             print(f"Loaded 2D data shape: {image_data.shape}")
+            
+        # Ensure image data is properly converted to numpy array and has correct dtype
+        if hasattr(image_data, 'compute'):
+            image_data = image_data.compute()
+        
+        # Convert to numpy array and ensure proper dtype
+        image_data = np.asarray(image_data)
+        
+        # Ensure we have valid pixel values (not all zeros)
+        if np.all(image_data == 0):
+            print(f"Warning: Image data appears to be all zeros for image {image_obj.getId()}")
+            print(f"Image info: {image_obj.getSizeX()}x{image_obj.getSizeY()}, {image_obj.getSizeC()} channels, {image_obj.getSizeZ()} z-slices, {image_obj.getSizeT()} timepoints")
+        else:
+            print(f"Image data range: {np.min(image_data)} - {np.max(image_data)}, dtype: {image_data.dtype}")
 
         # Handle patches if needed (works for both 2D and 3D)
         if self.config.processing.use_patches and "patch_x" in metadata:
@@ -539,10 +566,10 @@ class AnnotationPipeline:
     ) -> None:
         """Process annotation results, upload ROIs to OMERO, and update config annotations."""
         
-        self._debug_print("� Processing annotation results...")
+        self._debug_print("Processing annotation results...")
         
         if not annotation_results:
-            self._debug_print("❌ No annotation results received")
+            self._debug_print("No annotation results received")
             return
 
         # Extract metadata and paths from results
@@ -550,7 +577,7 @@ class AnnotationPipeline:
             metadata = annotation_results["metadata"]
             annotations_path = Path(annotation_results["annotations_path"])
         except KeyError as e:
-            self._debug_print(f"❌ Missing required key: {e}")
+            self._debug_print(f"Missing required key: {e}")
             return
 
         # Get all TIFF files in the annotations directory
@@ -570,13 +597,13 @@ class AnnotationPipeline:
                     break
             
             if not matching_annotation:
-                self._debug_print(f"⚠️ No matching annotation for annotation_id: '{annotation_id}'")
+                self._debug_print(f"No matching annotation for annotation_id: '{annotation_id}'")
                 continue
             
             # Find corresponding TIFF file
             tiff_file = tiff_files[i] if i < len(tiff_files) else None
             if not tiff_file:
-                self._debug_print(f"⚠️ No annotation file for metadata entry {i+1}")
+                self._debug_print(f"No annotation file for metadata entry {i+1}")
                 continue
             
             # Process based on mode
@@ -633,10 +660,10 @@ class AnnotationPipeline:
                     matching_annotation.annotation_type = self.config.annotation_methodology.annotation_type
                     
                     updated_count += 1
-                    self._debug_print(f"✅ Uploaded ROI for annotation_id '{annotation_id}' (label_id: {label_id}, roi_id: {roi_id})")
+                    self._debug_print(f"Uploaded ROI for annotation_id '{annotation_id}' (label_id: {label_id}, roi_id: {roi_id})")
                     
                 except Exception as e:
-                    self._debug_print(f"❌ Error uploading ROI for '{annotation_id}': {e}")
+                    self._debug_print(f"Error uploading ROI for '{annotation_id}': {e}")
                     # Still mark as processed but without OMERO IDs
                     matching_annotation.processed = True
                     matching_annotation.annotation_creation_time = datetime.now().isoformat()
@@ -644,8 +671,8 @@ class AnnotationPipeline:
         
         # Show final results
         processed_count = sum(1 for ann in self.config.annotations if ann.processed)
-        self._debug_print(f"📊 Updated {updated_count}/{len(metadata)} annotations")
-        self._debug_print(f"📈 Config now has {processed_count}/{len(self.config.annotations)} processed annotations")
+        self._debug_print(f"Updated {updated_count}/{len(metadata)} annotations")
+        self._debug_print(f"Config now has {processed_count}/{len(self.config.annotations)} processed annotations")
 
     def _save_original_image_for_annotation(self, meta: dict, annotation_id: str, category: str) -> None:
         """Save the original image used for annotation to organized input folder.
@@ -659,12 +686,12 @@ class AnnotationPipeline:
             # Get image object
             image_id = meta.get("image_id")
             if not image_id:
-                self._debug_print(f"⚠️ No image_id found for annotation {annotation_id}")
+                self._debug_print(f"No image_id found for annotation {annotation_id}")
                 return
                 
             image_obj = self.conn.getObject("Image", image_id)
             if not image_obj:
-                self._debug_print(f"⚠️ Could not load image {image_id} for annotation {annotation_id}")
+                self._debug_print(f"Could not load image {image_id} for annotation {annotation_id}")
                 return
             
             # Load the image data using the same method as annotation
@@ -682,18 +709,18 @@ class AnnotationPipeline:
             try:
                 from imageio import imwrite
                 imwrite(image_file, image_data)
-                self._debug_print(f"✅ Saved original image: {image_file}")
+                self._debug_print(f"Saved original image: {image_file}")
             except ImportError:
                 # Fallback to tifffile if available
                 try:
                     import tifffile
                     tifffile.imwrite(image_file, image_data)
-                    self._debug_print(f"✅ Saved original image: {image_file}")
+                    self._debug_print(f"Saved original image: {image_file}")
                 except ImportError:
-                    self._debug_print("⚠️ Could not save image - imageio and tifffile not available")
+                    self._debug_print("Could not save image - imageio and tifffile not available")
                     
         except Exception as e:
-            self._debug_print(f"❌ Error saving original image for {annotation_id}: {e}")
+            self._debug_print(f"Error saving original image for {annotation_id}: {e}")
 
     def _create_organized_folder_structure(self) -> None:
         """Create organized folder structure for read-only mode data export."""
@@ -742,8 +769,8 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         with open(readme_path, 'w') as f:
             f.write(readme_content)
             
-        print(f"📁 Created organized folder structure at: {base_path}")
-        print("📁 Folders: input_training, output_training, input_validation, output_validation")
+        print(f"Created organized folder structure at: {base_path}")
+        print("Folders: input_training, output_training, input_validation, output_validation")
 
     # def _update_workflow_status_map(self, table_id: int) -> None:
     #     """Update workflow status map annotation after batch completion."""
@@ -902,7 +929,7 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         Returns:
             Updated table ID
         """
-        print("📋 Updating OMERO table...")
+        print("Updating OMERO table...")
         
         config_df = self.config.to_dataframe()
         table_title = self._get_table_title()
@@ -1064,12 +1091,12 @@ The `tracking_table.csv` file contains detailed information about each annotatio
             batch_num = i // batch_size + 1
             total_batches = (len(processing_units) + batch_size - 1) // batch_size
             
-            print(f"\n🔄 Processing batch {batch_num}/{total_batches}")
-            self._debug_print(f"   📦 Batch size: {len(batch)}")
+            print(f"\nProcessing batch {batch_num}/{total_batches}")
+            self._debug_print(f"   Batch size: {len(batch)}")
             
             # Show config state before processing
             processed_before = sum(1 for ann in self.config.annotations if ann.processed)
-            self._debug_print(f"   📊 Config state before: {processed_before}/{len(self.config.annotations)} processed")
+            self._debug_print(f"   Config state before: {processed_before}/{len(self.config.annotations)} processed")
             
             try:
                 # Load image objects for batch
@@ -1081,27 +1108,27 @@ The `tracking_table.csv` file contains detailed information about each annotatio
                     batch_with_images.append((image_obj, seq_val, meta, row_idx))
                 
                 # Run the specific annotation function
-                self._debug_print("   🎨 Running annotation...")
+                self._debug_print("   Running annotation...")
                 annotation_results = annotation_func(batch_with_images)
-                self._debug_print(f"   ✅ Annotation completed, got results: {type(annotation_results)}")
+                self._debug_print(f"   Annotation completed, got results: {type(annotation_results)}")
                 
                 # Process results and update config
-                self._debug_print("   🔄 Processing annotation results...")
+                self._debug_print("   Processing annotation results...")
                 self._process_annotation_results(annotation_results)
                 
                 # Show config state after processing
                 processed_after = sum(1 for ann in self.config.annotations if ann.processed)
-                self._debug_print(f"   📊 Config state after: {processed_after}/{len(self.config.annotations)} processed")
+                self._debug_print(f"   Config state after: {processed_after}/{len(self.config.annotations)} processed")
                 
                 # Update OMERO table and save config
                 if not self.config.workflow.read_only_mode:
-                    self._debug_print("   📋 Updating OMERO table...")
+                    self._debug_print("   Updating OMERO table...")
                     self._replace_omero_table_from_config()
-                    self._debug_print(f"   ✅ OMERO table updated (ID: {self.table_id})")
+                    self._debug_print(f"   OMERO table updated (ID: {self.table_id})")
                 
-                self._debug_print("   💾 Auto-saving config...")
+                self._debug_print("   Auto-saving config...")
                 self._auto_save_config()
-                self._debug_print("   ✅ Config saved")
+                self._debug_print("   Config saved")
                 
                 processed_count += len(batch)
                 
@@ -1208,33 +1235,249 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         output_path = Path(self.config.output.output_directory)
         
         for img_id, annotation_id, meta, row_idx in processing_units:
-            image_obj = self.conn.getObject("Image", img_id)
-            image_data = self._load_image_data(image_obj, meta)
-            
-            # Determine category and create organized folder structure
-            category = meta.get("category", "training")
-            input_dir = f"input_{category}"
-            
-            # Create input folder
-            input_folder = output_path / input_dir
-            input_folder.mkdir(parents=True, exist_ok=True)
-            
-            # Save image with organized naming
-            image_file = input_folder / f"{annotation_id}_image.tif"
-            
-            # Use imageio or tifffile to save
             try:
-                from imageio import imwrite
-                imwrite(image_file, image_data)
-            except ImportError:
+                print(f"Processing image {annotation_id} (ID: {img_id})")
+                
+                image_obj = self.conn.getObject("Image", img_id)
+                if not image_obj:
+                    print(f"Warning: Could not retrieve image {img_id}")
+                    continue
+                
+                # Load image data using the fixed method
+                image_data = self._load_image_data(image_obj, meta)
+                
+                if image_data is None:
+                    print(f"Warning: No image data for {annotation_id}")
+                    continue
+                
+                # Determine category and create organized folder structure
+                category = meta.get("category", "training")
+                input_dir = f"input_{category}"
+                
+                # Create input folder
+                input_folder = output_path / input_dir
+                input_folder.mkdir(parents=True, exist_ok=True)
+                
+                # Save image with organized naming
+                image_file = input_folder / f"{annotation_id}_image.tif"
+                
+                # Validate image data before saving
+                if np.all(image_data == 0):
+                    print(f"Warning: Image {annotation_id} appears to be all black (all zeros)")
+                
+                # Use tifffile preferentially (better for scientific imaging)
                 try:
                     import tifffile
                     tifffile.imwrite(image_file, image_data)
+                    print(f"Saved (tifffile): {image_file} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
                 except ImportError:
-                    print("Warning: Could not save image - imageio and tifffile not available")
-                    continue
+                    try:
+                        from imageio import imwrite
+                        imwrite(image_file, image_data)
+                        print(f"Saved (imageio): {image_file} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
+                    except ImportError:
+                        print("Warning: Could not save image - imageio and tifffile not available")
+                        continue
+                
+            except Exception as e:
+                print(f"Error processing {annotation_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+    def _process_annotation_file(
+        self, annotation_file: Path, annotation_id: str, matching_annotation
+    ) -> bool:
+        """Process a single annotation file - either upload to OMERO or save locally.
+        
+        This is a generalized method that can be reused for any annotation workflow.
+        
+        Args:
+            annotation_file: Path to the annotation mask file
+            annotation_id: Unique annotation identifier
+            matching_annotation: ImageAnnotation object from config
             
-            print(f"Saved: {image_file}")
+        Returns:
+            True if successfully processed, False otherwise
+        """
+        try:
+            if self.config.workflow.read_only_mode:
+                # Read-only mode: organize locally
+                category = matching_annotation.category
+                output_dir = f"output_{category}"
+                
+                local_dir = Path(self.config.output.output_directory) / output_dir
+                local_dir.mkdir(parents=True, exist_ok=True)
+                local_file = local_dir / f"{annotation_id}_mask.tif"
+                
+                # Copy or move file to organized location
+                if annotation_file != local_file:
+                    shutil.copy(annotation_file, local_file)
+                
+                # Mark as processed
+                matching_annotation.processed = True
+                matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                
+                print(f"Processed locally: {annotation_id}")
+                return True
+                
+            else:
+                # Upload mode: Upload ROIs to OMERO
+                image_id = matching_annotation.image_id
+                patch_offset = None
+                
+                if matching_annotation.is_patch:
+                    patch_offset = (matching_annotation.patch_x, matching_annotation.patch_y)
+                
+                # Upload ROIs and labels using the existing function
+                label_id, roi_id = upload_rois_and_labels(
+                    conn=self.conn,
+                    image_id=image_id,
+                    annotation_file=str(annotation_file),
+                    patch_offset=patch_offset,
+                    trainingset_name=self.config.name,
+                    trainingset_description=f"Training set: {self.config.name}",
+                    z_slice=matching_annotation.z_slice,
+                    channel=matching_annotation.channel,
+                    timepoint=matching_annotation.timepoint,
+                    model_type=matching_annotation.model_type,
+                    is_volumetric=matching_annotation.is_volumetric,
+                    z_start=matching_annotation.z_start
+                )
+                
+                # Update config annotation with OMERO IDs
+                matching_annotation.processed = True
+                matching_annotation.label_id = label_id
+                matching_annotation.roi_id = roi_id
+                matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                matching_annotation.annotation_type = self.config.annotation_methodology.annotation_type
+                
+                print(f"Uploaded to OMERO: {annotation_id} (label_id: {label_id}, roi_id: {roi_id})")
+                return True
+                
+        except Exception as e:
+            print(f"Error processing {annotation_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def collect_annotations_from_disk(self, folder_pattern: str = "output_*") -> Tuple[int, AnnotationConfig]:
+        """Collect annotation masks from disk and upload to OMERO.
+        
+        This is a generalized method that scans output folders for annotation masks,
+        matches them with the annotation schema, and processes them (upload or local save).
+        Can be used for CellPose, manual annotations, or any other external annotation tool.
+        
+        Args:
+            folder_pattern: Glob pattern for folders containing annotation masks
+            
+        Returns:
+            Tuple of (number_processed, updated_config)
+        """
+        if not self.config.annotations:
+            raise ValueError("No annotation schema defined")
+        
+        output_path = Path(self.config.output.output_directory)
+        
+        # Find all annotation mask files matching the pattern
+        annotation_files = []
+        for folder in output_path.glob(folder_pattern):
+            if folder.is_dir():
+                # Look for mask files
+                for mask_file in folder.glob("*_mask.tif"):
+                    annotation_files.append(mask_file)
+                for mask_file in folder.glob("*_mask.tiff"):
+                    annotation_files.append(mask_file)
+        
+        if not annotation_files:
+            print(f"No annotation masks found in folders matching '{folder_pattern}'")
+            return 0, self.config
+        
+        print(f"Found {len(annotation_files)} annotation mask files")
+        
+        # Process each annotation file
+        processed_count = 0
+        for mask_file in annotation_files:
+            # Extract annotation_id from filename
+            annotation_id = mask_file.stem.replace("_mask", "")
+            
+            # Find matching annotation in config
+            matching_annotation = None
+            for annotation in self.config.annotations:
+                if annotation.annotation_id == annotation_id:
+                    matching_annotation = annotation
+                    break
+            
+            if not matching_annotation:
+                print(f"Warning: No matching annotation for {annotation_id}, skipping")
+                continue
+            
+            if matching_annotation.processed and matching_annotation.roi_id is not None:
+                print(f"Skipping {annotation_id}: already uploaded (ROI: {matching_annotation.roi_id})")
+                continue
+            
+            # Process the annotation file
+            if self._process_annotation_file(mask_file, annotation_id, matching_annotation):
+                processed_count += 1
+        
+        # Update tracking and save config
+        if processed_count > 0:
+            if not self.config.workflow.read_only_mode:
+                print("Updating OMERO tracking table...")
+                self._replace_omero_table_from_config()
+            
+            print("Saving updated config...")
+            self._auto_save_config()
+            
+            print(f"Successfully processed {processed_count} annotations")
+        else:
+            print("No new annotations to process")
+        
+        return processed_count, self.config
+
+    def get_annotation_status_from_disk(self, folder_pattern: str = "output_*") -> dict:
+        """Check status of annotations available on disk.
+        
+        Returns:
+            Dictionary with status information about available annotations
+        """
+        output_path = Path(self.config.output.output_directory)
+        
+        status = {
+            "total_annotations": len(self.config.annotations),
+            "processed_annotations": len(self.config.get_processed()),
+            "pending_annotations": len(self.config.get_unprocessed()),
+            "available_masks": [],
+            "missing_masks": [],
+        }
+        
+        # Check which annotation files exist
+        for annotation in self.config.annotations:
+            category = annotation.category
+            annotation_id = annotation.annotation_id
+            
+            # Check in output folders
+            mask_file = output_path / f"output_{category}" / f"{annotation_id}_mask.tif"
+            if not mask_file.exists():
+                mask_file = output_path / f"output_{category}" / f"{annotation_id}_mask.tiff"
+            
+            if mask_file.exists():
+                status["available_masks"].append({
+                    "annotation_id": annotation_id,
+                    "image_name": annotation.image_name,
+                    "category": category,
+                    "uploaded": annotation.processed and annotation.roi_id is not None,
+                    "roi_id": annotation.roi_id,
+                    "file_path": str(mask_file),
+                })
+            else:
+                status["missing_masks"].append({
+                    "annotation_id": annotation_id,
+                    "image_name": annotation.image_name,
+                    "category": category,
+                })
+        
+        return status
 
     def run_cp_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
         """Complete Cellpose workflow: setup + schema + table + preparation.
