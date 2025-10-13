@@ -3,218 +3,169 @@
 ## Prerequisites
 
 - **Python 3.8 or higher**
-- **conda** for micro-SAM dependency (AI features)
-- **Git** for development installation
+- **Pixi** (recommended, install pixi following the [official instructions](https://pixi.sh/latest/)
+) or **Conda** for dependency management
 
-## Installation Methods
+## Quick Install (Recommended)
 
-Choose the installation method that best fits your needs:
+Using **Pixi** - automatically handles all dependencies including conda packages:
 
-=== "🚀 Pixi (Recommended)"
+```bash
+# macOS/Linux
+curl -fsSL https://pixi.sh/install.sh | bash
 
-    [Pixi](https://pixi.sh/latest/) automatically handles all dependencies including conda packages and platform-specific wheels.
+# Windows (PowerShell)
+iwr -useb https://pixi.sh/install.ps1 | iex
+```
 
-    **1. Install pixi** (if not already installed):
-    ```bash
-    # Windows (PowerShell)
-    iwr -useb https://pixi.sh/install.ps1 | iex
 
-    # macOS/Linux  
-    curl -fsSL https://pixi.sh/install.sh | bash
-    ```
+```bash
+# Create a new project
+pixi init omero-annotate-ai
+cd omero-annotate-ai
 
-    **2. Clone and install**:
-    ```bash
-    git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
-    cd omero_annotate_ai
-    pixi install
-    ```
+# Add dependencies
+pixi add python=3.12
+pixi add micro-sam                      # AI model
+pixi add --pypi omero-annotate-ai      # Main package
 
-    **3. Activate environment**:
-    ```bash
-    pixi shell
-    ```
+# Activate environment
+pixi shell
+```
 
-    That's it! All dependencies (micro-sam, napari, zeroc-ice, etc.) are automatically configured.
-
-=== "📦 PyPI (Core Only)"
-
-    For basic OMERO functionality without AI features:
-
-    ```bash
-    pip install omero-annotate-ai
-    ```
-
-    !!! warning "Limited Features"
-        This installs core functionality only. For AI annotation features, you'll need micro-SAM which requires conda or pixi installation.
-
-=== "🐍 Conda + Pip"
-
-    If you prefer manual dependency management:
-
-    **1. Create conda environment**:
-    ```bash
-    conda create -n omero_annotate_ai python=3.12
-    conda activate omero_annotate_ai
-    ```
-
-    **2. Install conda-only dependencies**:
-    ```bash
-    conda install -c conda-forge micro-sam napari
-    ```
-
-    **3. Install platform-specific zeroc-ice wheel**:
-
-    === "Linux x86_64"
-
-        ```bash
-        pip install https://github.com/glencoesoftware/zeroc-ice-py-linux-x86_64/releases/download/20240202/zeroc_ice-3.6.5-cp312-cp312-manylinux_2_28_x86_64.whl
-        ```
-
-    === "Windows x86_64"
-
-        ```bash
-        pip install https://github.com/glencoesoftware/zeroc-ice-py-win-x86_64/releases/download/20240325/zeroc_ice-3.6.5-cp312-cp312-win_amd64.whl
-        ```
-
-    === "macOS Universal"
-
-        ```bash
-        pip install https://github.com/glencoesoftware/zeroc-ice-py-macos-universal2/releases/download/20240131/zeroc_ice-3.6.5-cp312-cp312-macosx_11_0_universal2.whl
-        ```
-
-    **4. Install the package**:
-    ```bash
-    # From PyPI 
-    pip install omero-annotate-ai[microsam]
-
-    # Or from source
-    git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
-    cd omero_annotate_ai
-    pip install -e .[microsam]
-    ```
-
-=== "🔧 Development"
-
-    For contributors and developers:
-
-    === "Pixi (Recommended)"
-
-        ```bash
-        git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
-        cd omero_annotate_ai
-        pixi install
-        pixi run pytest  # Run tests
-        ```
-
-        **Development environments:**
-        ```bash
-        pixi shell -e dev     # Development environment
-        pixi shell -e docs    # Documentation environment  
-        pixi shell -e test    # Testing environment
-        ```
-
-    === "Conda"
-
-        ```bash
-        conda create -n omero_annotate_ai-dev python=3.12
-        conda activate omero_annotate_ai-dev  
-        conda install -c conda-forge micro-sam napari
-        pip install -e .[dev,microsam]
-        ```
-
-## Optional Dependencies
-
-The package includes several optional dependency groups:
-
-=== "Feature Sets"
-
-    ```bash
-    # AI annotation features (includes micro-sam)
-    pip install omero-annotate-ai[microsam]
-
-    # Napari integration
-    pip install omero-annotate-ai[napari]
-
-    # Install all optional dependencies
-    pip install omero-annotate-ai[all]
-    ```
-
-=== "Development Tools"
-
-    ```bash
-    # Development tools (testing, linting, formatting)
-    pip install omero-annotate-ai[dev]
-
-    # Testing framework
-    pip install omero-annotate-ai[test]
-
-    # Documentation building
-    pip install omero-annotate-ai[docs]
-    ```
-
-## Quick Start After Installation
-
-Start a Jupyter environment:
-
-=== "Pixi"
-
-    ```bash
-    pixi run jupyter lab
-    ```
-
-=== "Conda/Pip"
-
-    ```bash
-    conda activate omero_annotate_ai
-    jupyter lab
-    ```
-
-## Verification
-
-Test your installation:
+### Verify Installation
+Run `pixi run python`, then:   
 
 ```python
 import omero_annotate_ai
-from omero_annotate_ai.core.annotation_config import create_default_config
-from omero_annotate_ai.widgets import create_omero_connection_widget
+print(f"✅ Version: {omero_annotate_ai.__version__}")
+```
 
-print("✅ omero-annotate-ai installed successfully!")
+## Alternative: Conda + Pip
+
+For users who prefer manual conda environment management:
+
+```bash
+# Create and activate environment
+conda create -n omero-ai python=3.11
+conda activate omero-ai
+
+# Install conda dependencies
+conda install -c conda-forge micro-sam napari zeroc-ice
+
+# Install package from PyPI
+pip install omero-annotate-ai
+```
+
+## Quick Start
+
+After installation, try connecting to OMERO:
+
+```python
+from omero_annotate_ai import create_omero_connection_widget
+
+# Display connection widget in Jupyter
+conn_widget = create_omero_connection_widget()
+conn_widget.display()
+
+# Get connection
+conn = conn_widget.get_connection()
+```
+
+## Development Setup
+
+For contributors who want to modify the code:
+
+### Clone and Install
+
+```bash
+git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
+cd omero_annotate_ai
+pixi install              # Installs dev dependencies + package in editable mode
+```
+
+### Run Tests
+
+```bash
+pixi run pytest           # Run all tests
+pixi run test-unit        # Run unit tests only
+pixi run test-cov         # Run with coverage report
+```
+
+### Development Environments
+
+Pixi provides multiple environments configured in `pyproject.toml`:
+
+```bash
+pixi shell                # Default environment (user)
+pixi shell -e dev         # Development tools (pytest, black, isort)
+pixi shell -e docs        # Documentation building (mkdocs)
+```
+
+### Code Quality
+
+```bash
+pixi run format           # Format code with black and isort
+pixi run lint             # Check code quality
 ```
 
 ## Troubleshooting
 
-=== "Import Errors"
+### Pixi not found
 
-    **micro-SAM not found:**
-    ```bash
-    # Ensure micro-SAM is installed via conda
-    conda install -c conda-forge micro-sam
-    ```
+Install pixi following the [official instructions](https://pixi.sh/latest/):
 
-    **OMERO connection issues:**
-    ```bash
-    pip install omero-py ezomero
-    ```
+```bash
+# macOS/Linux
+curl -fsSL https://pixi.sh/install.sh | bash
 
-=== "Widget Issues"
+# Windows (PowerShell)
+iwr -useb https://pixi.sh/install.ps1 | iex
+```
 
-    **Widgets not displaying:**
-    ```bash
-    pip install ipywidgets
-    jupyter nbextension enable --py widgetsnbextension
-    ```
+### Import Errors
 
-=== "Environment Issues"
+**micro-SAM not found:**
 
-    **Pixi not found:**
-    ```bash
-    # Install pixi
-    curl -fsSL https://pixi.sh/install.sh | bash
-    ```
+```bash
+# With pixi
+pixi add micro-sam
 
-    **Conda environment issues:**
-    ```bash
-    conda clean --all
-    conda update conda
-    ```
+# With conda
+conda install -c conda-forge micro-sam
+```
+
+**OMERO connection issues:**
+
+```bash
+# Ensure OMERO dependencies are installed
+pixi add --pypi omero-py ezomero
+```
+
+### Widget Display Issues
+
+**Widgets not showing in Jupyter:**
+
+```bash
+# Install and enable widget extension
+pip install ipywidgets
+jupyter nbextension enable --py widgetsnbextension
+```
+
+### Platform-Specific Issues
+
+**zeroc-ice installation:**
+
+For pip-only installations (without conda), `zeroc-ice` requires platform-specific wheels:
+
+- **Linux x86_64**: [zeroc-ice-py-linux-x86_64](https://github.com/glencoesoftware/zeroc-ice-py-linux-x86_64/releases)
+- **Windows x86_64**: [zeroc-ice-py-win-x86_64](https://github.com/glencoesoftware/zeroc-ice-py-win-x86_64/releases)
+- **macOS Universal**: [zeroc-ice-py-macos-universal2](https://github.com/glencoesoftware/zeroc-ice-py-macos-universal2/releases)
+
+**Note:** Both pixi and conda handle zeroc-ice automatically - no manual wheel installation needed.
+
+## Next Steps
+
+- 📚 Try the [micro-SAM Tutorial](tutorials/microsam-annotation-pipeline.md)
+- 📖 Read the [Configuration Guide](configuration.md)
+- 💻 Explore [example notebooks](../notebooks/)

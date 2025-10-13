@@ -47,13 +47,6 @@ Our tutorials are designed to take you from beginner to advanced user:
 <p><a href="biapy-integration.md" class="md-button">View Tutorial</a></p>
 </div>
 
-<div class="tutorial-card">
-<h3>Batch Processing Guide</h3>
-<span class="status-badge planned">Coming Soon</span>
-<p>Scale annotation workflows for large datasets and high-throughput scenarios.</p>
-<p><a href="batch-processing.md" class="md-button">View Tutorial</a></p>
-</div>
-
 ## 📖 Learning Path
 
 !!! tip "Recommended Learning Path"
