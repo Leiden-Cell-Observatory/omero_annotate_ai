@@ -216,24 +216,30 @@ class AnnotationPipeline:
 
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
-        
+
         # Clear existing annotations first
         self.config.annotations.clear()
         n_total = len(images_list)
 
         # Determine which images to process
         if self.config.training.segment_all:
+            # Use all images with fraction-based split
             selected_images = images_list
             n_train = int(n_total * self.config.training.train_fraction)
-            n_val = n_total - n_train
-            
+            n_val = int(n_total * self.config.training.validation_fraction)
+            n_test = n_total - n_train - n_val
+
             # Create categories for all images
-            image_categories = (["training"] * n_train + 
-                              ["validation"] * n_val)
+            image_categories = (
+                ["training"] * n_train +
+                ["validation"] * n_val +
+                ["test"] * n_test
+            )
         else:
-            # Select subset for training/validation            
+            # Select subset with specific counts
             n_train = min(self.config.training.train_n, n_total)
             n_val = min(self.config.training.validate_n, n_total - n_train)
+            n_test = min(self.config.training.test_n, n_total - n_train - n_val)
 
             # Randomly select images
             shuffled_indices = list(range(n_total))
@@ -241,9 +247,14 @@ class AnnotationPipeline:
 
             train_indices = shuffled_indices[:n_train]
             val_indices = shuffled_indices[n_train : n_train + n_val]
+            test_indices = shuffled_indices[n_train + n_val : n_train + n_val + n_test]
 
-            selected_images = [images_list[i] for i in train_indices + val_indices]
-            image_categories = ["training"] * n_train + ["validation"] * n_val
+            selected_images = [images_list[i] for i in train_indices + val_indices + test_indices]
+            image_categories = (
+                ["training"] * n_train +
+                ["validation"] * n_val +
+                ["test"] * n_test
+            )
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
@@ -725,19 +736,22 @@ class AnnotationPipeline:
     def _create_organized_folder_structure(self) -> None:
         """Create organized folder structure for read-only mode data export."""
         base_path = Path(self.config.output.output_directory)
-        
-        # Create folders for training and validation
-        folders = [
-            "input_training",   # Original images for training
-            "output_training",  # Annotation masks for training  
-            "input_validation", # Original images for validation
-            "output_validation" # Annotation masks for validation
-        ]
-        
+
+        # Always create training folders
+        folders = ["input_training", "output_training"]
+
+        # Add validation folders only if validation images exist
+        if any(ann.category == "validation" for ann in self.config.annotations):
+            folders.extend(["input_validation", "output_validation"])
+
+        # Add test folders only if test images exist
+        if any(ann.category == "test" for ann in self.config.annotations):
+            folders.extend(["input_test", "output_test"])
+
         for folder in folders:
             folder_path = base_path / folder
             folder_path.mkdir(parents=True, exist_ok=True)
-            
+
         # Create a README file explaining the structure
         readme_content = """# Dataset Organization
 
@@ -746,9 +760,28 @@ This folder contains an organized dataset for training image segmentation models
 ## Folder Structure:
 
 - `input_training/`: Original images used for training
-- `output_training/`: Corresponding annotation masks for training images  
-- `input_validation/`: Original images used for validation
+- `output_training/`: Corresponding annotation masks for training images
+- `input_validation/`: Original images used for validation (if validation_n > 0)
 - `output_validation/`: Corresponding annotation masks for validation images
+- `input_test/`: Original images used for testing (if test_n > 0)
+- `output_test/`: Corresponding annotation masks for test images
+
+## Usage with Different Platforms:
+
+### Cellpose Training:
+Use `input_training/` and `input_test/` directories with:
+```bash
+python -m cellpose --train --dir ./input_training --test_dir ./input_test
+```
+
+### BiaPy Training:
+Organize as:
+- train/raw/ ← copy from input_training
+- train/label/ ← copy from output_training
+- val/raw/ ← copy from input_validation
+- val/label/ ← copy from output_validation
+- test/raw/ ← copy from input_test
+- test/label/ ← copy from output_test
 
 ## File Naming:
 
