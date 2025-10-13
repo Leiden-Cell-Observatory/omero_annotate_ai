@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omero-annotate-ai"
-version = "0.1.1"
+version = "0.1.2"
 description = "OMERO integration for AI-powered image annotation and segmentation workflows"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -65,14 +65,6 @@ dev = [
     "black>=22.0",
     "isort>=5.0",
     "flake8>=4.0",
-]
-omero = [
-    # OMERO functionality is already included in main dependencies
-]
-test = [
-    "pytest>=6.0",
-    "pytest-cov>=2.0",
-    "pytest-mock>=3.0",
 ]
 docs = [
     "mkdocs>=1.5.3",

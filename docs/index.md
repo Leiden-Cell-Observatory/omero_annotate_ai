@@ -35,7 +35,6 @@ OMERO annotate.AI is a Python package that provides tools for reproducible AI wo
 
 ### Training Workflows  
 - **BiaPy integration** for deep learning model training
-- **DL4MicEverywhere compatibility** for cloud-based training
 - **Training data preparation** with automatic train/validation splits
 - **micro-SAM model fine-tuning** on custom datasets
 
@@ -89,10 +88,10 @@ results = pipeline.run_full_workflow()
 ## User Guides
 
 ### Getting Started
-- [Installation Guide](installation.md) - Complete setup instructions and troubleshooting
-- [Widget Tutorial](tutorials/microsam-annotation-pipeline.md) - Interactive widget workflow
-- [YAML Configuration Guide](configuration.md) - Complete YAML configuration reference
-- [YAML Configuration Tutorial](tutorials/batch-processing.md) - Configuration file workflow
+- [Installation Guide](installation) - Complete setup instructions and troubleshooting
+- [Widget Tutorial](tutorials/microsam-annotation-pipeline) - Interactive widget workflow
+- [YAML Configuration Guide](configuration) - Complete YAML configuration reference
+- [YAML Configuration Tutorial](tutorials/batch-processing) - Configuration file workflow
 
 ### Step-by-Step Tutorials
 
@@ -100,44 +99,37 @@ results = pipeline.run_full_workflow()
 <h3>🚀 micro-SAM Annotation Pipeline</h3>
 <span class="status-badge complete">Complete</span>
 <p>Complete workflow tutorial covering OMERO connection, configuration, and micro-SAM annotation execution.</p>
-<p><a href="tutorials/microsam-annotation-pipeline.md" class="md-button">Start Tutorial</a></p>
+<p><a href="tutorials/microsam-annotation-pipeline" class="md-button">Start Tutorial</a></p>
 </div>
 
 <div class="tutorial-card">
 <h3>🔬 Cellpose Integration</h3>
 <span class="status-badge planned">Planned</span>
 <p>Learn to use Cellpose models for cell segmentation workflows within the OMERO framework.</p>
-<p><a href="tutorials/cellpose-integration.md" class="md-button">View Tutorial</a></p>
+<p><a href="tutorials/cellpose-integration" class="md-button">View Tutorial</a></p>
 </div>
 
 <div class="tutorial-card">
 <h3>📊 Training Data Preparation</h3>
 <span class="status-badge planned">Planned</span>
 <p>Prepare high-quality training datasets from OMERO annotations for machine learning model development.</p>
-<p><a href="tutorials/training-data-prep.md" class="md-button">View Tutorial</a></p>
+<p><a href="tutorials/training-data-prep" class="md-button">View Tutorial</a></p>
 </div>
 
 <div class="tutorial-card">
 <h3>🧠 BiaPy Integration</h3>
 <span class="status-badge planned">Planned</span>
 <p>Train custom deep learning models using BiaPy with data prepared from OMERO annotations.</p>
-<p><a href="tutorials/biapy-integration.md" class="md-button">View Tutorial</a></p>
-</div>
-
-<div class="tutorial-card">
-<h3>⚡ Batch Processing Guide</h3>
-<span class="status-badge planned">Planned</span>
-<p>Scale up your annotation workflows for large datasets with efficient batch processing strategies.</p>
-<p><a href="tutorials/batch-processing.md" class="md-button">View Tutorial</a></p>
+<p><a href="tutorials/biapy-integration" class="md-button">View Tutorial</a></p>
 </div>
 
 ### Advanced Workflows
 - [3D Volumetric Annotation](tutorials/microsam-annotation-pipeline.md#3d-volumetric-processing) - Processing z-stack data 
-- [Training with BiaPy](tutorials/biapy-integration.md) - Deep learning model training
-- [DL4MicEverywhere Integration](tutorials/training-data-prep.md) - Cloud training workflows
+- [Training with BiaPy](tutorials/biapy-integration) - Deep learning model training
+- [DL4MicEverywhere Integration](tutorials/training-data-prep) - Cloud training workflows
 
 ### Configuration Reference
-- [YAML Configuration Schema](configuration.md) - Complete configuration options and examples
+- [YAML Configuration Schema](configuration) - Complete configuration options and examples
 
 ## Community & Support
 

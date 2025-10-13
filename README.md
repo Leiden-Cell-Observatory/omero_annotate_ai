@@ -7,7 +7,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
 [![License](https://img.shields.io/github/license/Leiden-Cell-Observatory/omero_annotate_ai)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/LICENSE)
 
-AI-powered image annotation workflows for OMERO data repositories. This Python package provides Jupyter widgets and tools for reproducible annotation, training, and inference using micro-SAM, Cellpose, and other AI models directly with OMERO datasets.
+Package to support reproducible image annotation workflows for AI training using OMERO data repositories. This Python package provides Jupyter widgets and tools for reproducible annotation, training, and inference using micro-SAM, Cellpose, and other AI models directly with OMERO datasets.
 
 ## Key Features
 
@@ -22,15 +22,18 @@ AI-powered image annotation workflows for OMERO data repositories. This Python p
 ### Installation
 
 ```bash
-# Recommended: Using pixi (handles all dependencies)
-git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
-cd omero_annotate_ai
-pixi install && pixi shell
+# Recommended: Using pixi
+pixi init myproject && cd myproject
+pixi add micro-sam
+pixi add --pypi omero-annotate-ai
+pixi shell
 
-# Alternative: Using conda + pip
+# Alternative: Conda + pip
 conda install -c conda-forge micro-sam
 pip install omero-annotate-ai
 ```
+
+📖 See [Installation Guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation/) for detailed instructions and troubleshooting.
 
 ### Basic Usage
 
@@ -102,10 +105,22 @@ See the [YAML Configuration Guide](docs/configuration.md) for complete documenta
 
 ## Contributing
 
-We welcome contributions! See our [development installation guide](docs/installation.md#development-installation) and run tests with `pixi run pytest`.
+We welcome contributions! For development setup:
+
+1. Fork the repository
+2. Clone and set up development environment:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/omero_annotate_ai.git
+   cd omero_annotate_ai
+   pixi install
+   ```
+3. Make changes and run tests: `pixi run pytest`
+4. Submit a pull request
+
+See [Installation Guide - Development Setup](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation#development-setup) for detailed instructions.
 
 ## Contact
 
 **Maarten Paul** - m.w.paul@lacdr.leidenuniv.nl
 
-**Acknowledgments**: Developed with [NL-BioImaging](https://github.com/NL-BioImaging) infrastructure, funded by NWO.
+**Acknowledgments**: Developed within the [NL-BioImaging](https://github.com/NL-BioImaging) infrastructure, funded by NWO.

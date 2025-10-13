@@ -61,7 +61,6 @@ nav:
     - Cellpose Integration: tutorials/cellpose-integration.md
     - Training Data Prep: tutorials/training-data-prep.md
     - BiaPy Integration: tutorials/biapy-integration.md
-    - Batch Processing: tutorials/batch-processing.md
   - API Reference: api/
 
 plugins:
