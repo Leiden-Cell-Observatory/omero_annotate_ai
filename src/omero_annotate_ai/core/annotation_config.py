@@ -21,7 +21,10 @@ class ImageAnnotation(BaseModel):
     annotation_id: str = Field(default="", description="Unique annotation identifier")
     
     # Processing parameters
-    category: str = Field(default="training", description="training or validation")
+    category: Literal["training", "validation", "test"] = Field(
+        default="training",
+        description="Data split category"
+    )
     timepoint: int = Field(default=-1, description="Timepoint index")
     z_slice: int = Field(default=-1, description="Z-slice index")
     channel: int = Field(default=-1, description="Channel index")
@@ -207,20 +210,41 @@ class TrainingConfig(BaseModel):
     validation_strategy: Literal[
         "random_split", "expert_review", "cross_validation"
     ] = "random_split"
+
+    # Fraction-based splits (for segment_all=True)
     train_fraction: float = Field(
-        default=0.7, ge=0.1, le=0.9, description="Training data fraction" #TO DO add function to calculate this
+        default=0.7, ge=0.0, le=1.0, description="Fraction of data for training (used when segment_all=True)"
     )
-    train_n: int = Field(default=3, gt=0, description="Number of training images")
     validation_fraction: float = Field(
-        default=0.3, ge=0.1, le=0.9, description="Validation data fraction"
+        default=0.3, ge=0.0, le=1.0, description="Fraction of data for validation (used when segment_all=True)"
     )
-    validate_n: int = Field(default=3, gt=0, description="Number of validation images")
+    test_fraction: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Fraction of data for testing (used when segment_all=True)"
+    )
+
+    # Count-based splits (for segment_all=False)
+    train_n: int = Field(default=3, ge=1, description="Number of training images (used when segment_all=False)")
+    validate_n: int = Field(default=2, ge=0, description="Number of validation images (0=no validation)")
+    test_n: int = Field(default=0, ge=0, description="Number of test images (0=no test)")
+
     segment_all: bool = Field(
-        default=False, description="Segment all objects vs sample"
+        default=False, description="Process all images vs subset"
     )
     quality_threshold: Optional[float] = Field(
         default=None, description="Minimum quality score"
     )
+
+    @model_validator(mode='after')
+    def validate_splits(self):
+        """Ensure fractions sum to <= 1.0 and at least one training image"""
+        total = self.train_fraction + self.validation_fraction + self.test_fraction
+        if total > 1.0:
+            raise ValueError(
+                f"train + validation + test fractions must sum to ≤ 1.0 (got {total:.2f})"
+            )
+        if self.train_n < 1:
+            raise ValueError("train_n must be at least 1")
+        return self
 
 
 class WorkflowConfig(BaseModel):
