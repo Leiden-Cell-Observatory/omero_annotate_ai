@@ -42,7 +42,7 @@ def create_or_replace_tracking_table(
     """
     # Delete existing table if provided
     if existing_table_id is not None:
-        print(f"🗑️ Deleting table: {table_title}")
+        print(f"Deleting table: {table_title}")
         if not delete_table(conn, existing_table_id):
             print(f"Warning: Could not delete existing table: {existing_table_id}")
     
@@ -58,7 +58,7 @@ def create_or_replace_tracking_table(
     if new_table_id is None:
         raise RuntimeError(f"Failed to create table '{table_title}' in {container_type} {container_id}")
     
-    print(f"📋 Created/replaced tracking table '{table_title}' with {len(config_df)} units")
+    print(f"Created/replaced tracking table '{table_title}' with {len(config_df)} units")
     print(f"   Container: {container_type} {container_id}")
     print(f"   Table ID: {new_table_id}")
     
@@ -321,7 +321,7 @@ def initialize_tracking_table(
         title=table_title,
     )
 
-    print(f"📋 Created tracking table '{table_title}' with {len(df)} units")
+    print(f"Created tracking table '{table_title}' with {len(df)} units")
     print(f"   Container: {container_type} {container_id}")
     print(f"   Table ID: {table_id}")
 
@@ -350,17 +350,17 @@ def get_unprocessed_units(conn, table_id: int) -> List[Tuple]:
     try:
         df = ezomero.get_table(conn, table_id)
     except Exception as e:
-        print(f"❌ Error reading table {table_id}: {e}")
+        print(f"Error reading table {table_id}: {e}")
         return []
 
     # Filter for unprocessed rows
     unprocessed_df = df[~df["processed"]] if "processed" in df.columns else df
 
     if len(unprocessed_df) == 0:
-        print("✅ All units already processed!")
+        print("All units already processed!")
         return []
 
-    print(f"📋 Found {len(unprocessed_df)} unprocessed units")
+    print(f"Found {len(unprocessed_df)} unprocessed units")
 
     # Convert to processing units format
     processing_units = []
@@ -443,7 +443,7 @@ def update_tracking_table_rows(
         # Get current table data
         df = ezomero.get_table(conn, table_id)
         if df is None:
-            print(f"❌ Could not retrieve table {table_id}")
+            print(f"Could not retrieve table {table_id}")
             return table_id
 
         # Get the original table name to preserve it
@@ -555,9 +555,9 @@ def update_tracking_table_rows(
         )
 
         if new_table_id != table_id:
-            print(f"📋 Table updated: {table_id} → {new_table_id}")
+            print(f"Table updated: {table_id} -> {new_table_id}")
         else:
-            print(f"📋 Table updated with ID: {new_table_id}")
+            print(f"Table updated with ID: {new_table_id}")
         return new_table_id
 
     except Exception as e:
@@ -601,16 +601,16 @@ def upload_rois_and_labels(
     """
 
     # Load label image
-    print(f"🔍 Step 1: Loading label image from {annotation_file}")
+    print(f"Step 1: Loading label image from {annotation_file}")
     label_img = imageio.imread(annotation_file)
-    print(f"📋 Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
+    print(f"Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
     unique_labels = np.unique(label_img)
     print(
-        f"🏷️ Found {len(unique_labels)} unique labels: {unique_labels[:10]}..."
+        f"Found {len(unique_labels)} unique labels: {unique_labels[:10]}..."
     )  
 
     # Create ROI shapes from label image
-    print(f"🔍 Step 2: Converting labels to ROI shapes...")
+    print(f"Step 2: Converting labels to ROI shapes...")
     if (is_volumetric):
         shapes = label_to_rois(
             label_img=label_img,
@@ -633,10 +633,10 @@ def upload_rois_and_labels(
         )
     
 
-    print(f"✅ Created {len(shapes)} ROI shapes from labels")
+    print(f"Created {len(shapes)} ROI shapes from labels")
 
     # Upload label file as attachment
-    print(f"🔍 Step 3: Uploading label file as attachment")
+    print(f"Step 3: Uploading label file as attachment")
 
     # Use custom description if provided
     if trainingset_name and trainingset_description:
@@ -655,10 +655,10 @@ def upload_rois_and_labels(
         object_type="Image",
         object_id=image_id,
     )
-    print(f"✅ File annotation uploaded with ID: {file_ann_id}")
+    print(f"File annotation uploaded with ID: {file_ann_id}")
 
     # Upload ROI shapes if any were created
-    print(f"🔍 Step 4: Uploading ROI shapes")
+    print(f"Step 4: Uploading ROI shapes")
     roi_id = None
     if shapes:
         # Use custom name and description for ROI if provided
@@ -679,12 +679,12 @@ def upload_rois_and_labels(
             conn, image_id, shapes, name=roi_name, description=roi_description
         )
         print(
-            f"✅ Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}"
+            f"Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}"
         )
     else:
-        print(f"⚠️ No ROI shapes created from {annotation_file}")
+        print(f"No ROI shapes created from {annotation_file}")
 
-    print(f"☁️ Uploaded annotations from {annotation_file} to image {image_id}")
+    print(f"Uploaded annotations from {annotation_file} to image {image_id}")
     if patch_offset:
         print(f"   Patch offset: {patch_offset}")
     print(f"   File annotation ID: {file_ann_id}")
@@ -770,7 +770,7 @@ def update_workflow_status_map(
         return status_ann_id
 
     except Exception as e:
-        print(f"⚠️ Could not update workflow status: {e}")
+        print(f"Could not update workflow status: {e}")
         return None
 
 
@@ -1008,22 +1008,13 @@ def get_table_progress_summary(conn, table_id: int) -> str:
     progress = analyze_table_completion_status(conn, table_id)
 
     if progress["status"] == "error":
-        return f"❌ Error: {progress.get('error', 'Unknown error')}"
+        return f"Error: {progress.get('error', 'Unknown error')}"
 
     total = progress["total_units"]
     completed = progress["completed_units"]
     percent = progress["progress_percent"]
 
-    status_emoji = {
-        "complete": "✅",
-        "in_progress": "🔄",
-        "not_started": "⏳",
-        "empty": "📋",
-    }
-
-    emoji = status_emoji.get(progress["status"], "❓")
-
-    return f"{emoji} {completed}/{total} units ({percent:.1f}% complete)"
+    return f" {completed}/{total} units ({percent:.1f}% complete)"
 
 
 def create_roi_namespace_for_table(table_name: str) -> str:
@@ -1068,7 +1059,7 @@ def cleanup_project_annotations(
     # Initialize counters
     results = {"tables": 0, "rois": 0, "map_annotations": 0, "images_processed": 0}
 
-    print(f"🧹 Starting cleanup of project {project_id}")
+    print(f"Starting cleanup of project {project_id}")
     if trainingset_name:
         print(f"📋 Filtering by training set: {trainingset_name}")
 
@@ -1088,7 +1079,7 @@ def cleanup_project_annotations(
             all_images.append(image)
 
     print(
-        f"📊 Found {len(all_datasets)} datasets and {len(all_images)} images in project"
+        f"Found {len(all_datasets)} datasets and {len(all_images)} images in project"
     )
 
     # 1. Clean up annotation tables
@@ -1114,7 +1105,7 @@ def cleanup_project_annotations(
             print(f"Error cleaning tables for dataset {dataset.getId()}: {str(e)}")
 
     # 2. Clean up ROIs by name patterns
-    print("🎯 Cleaning up ROIs...")
+    print("Cleaning up ROIs...")
     for image in all_images:
         try:
             image_id = image.getId()
@@ -1153,7 +1144,7 @@ def cleanup_project_annotations(
             if rois_to_delete:
                 conn.deleteObjects("Roi", rois_to_delete, wait=True)
                 results["rois"] += len(rois_to_delete)
-                print(f"✅ Deleted {len(rois_to_delete)} ROIs from image {image_id}")
+                print(f"Deleted {len(rois_to_delete)} ROIs from image {image_id}")
 
             results["images_processed"] += 1
 
@@ -1161,7 +1152,7 @@ def cleanup_project_annotations(
             print(f"Error cleaning ROIs for image {image.getId()}: {str(e)}")
 
     # 3. Clean up map annotations (workflow status)
-    print("🗺️ Cleaning up map annotations...")
+    print("Cleaning up map annotations...")
     workflow_namespace = "openmicroscopy.org/omero/annotate/workflow_status"
 
     try:
@@ -1182,7 +1173,7 @@ def cleanup_project_annotations(
         print(f"Error cleaning map annotations: {str(e)}")
 
     # Print summary
-    print(f"\n📊 Cleanup completed:")
+    print(f"\n Cleanup completed:")
     print(f"   Tables deleted: {results['tables']}")
     print(f"   ROIs deleted: {results['rois']}")
     print(f"   Map annotations deleted: {results['map_annotations']}")

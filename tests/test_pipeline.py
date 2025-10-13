@@ -121,27 +121,100 @@ class TestAnnotationPipeline:
         assert (output_path / "annotations").exists()
     
     def test_get_table_title(self):
-        """Test table title generation."""
+        """Test table title generation - should use config name directly."""
         config = create_default_config()
-        config.name = "test_workflow"
-        
+        config.name = "my_annotation_workflow_20250101_120000"
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         title = pipeline._get_table_title()
-        
-        assert title == "micro_sam_training_test_workflow"
-    
+
+        # Should return config name directly without modification
+        assert title == "my_annotation_workflow_20250101_120000"
+
     def test_get_table_title_fallback(self):
-        """Test table title generation with fallback."""
+        """Test table title generation with fallback when config name is empty."""
         config = create_default_config()
         config.name = ""  # Empty name triggers fallback
         config.omero.container_type = "dataset"
         config.omero.container_id = 123
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         title = pipeline._get_table_title()
-        
-        assert title == "micro_sam_training_dataset_123"
-    
+
+        # Should use clean naming
+        assert title.startswith("dataset_123_")
+        # Should include timestamp
+        assert len(title.split("_")) >= 3  # format: dataset_123_timestamp
+
+    def test_table_naming_consistency_throughout_pipeline(self):
+        """Test that table naming is consistent throughout the pipeline.
+
+        This test ensures that:
+        1. generate_unique_table_name creates names with proper format
+        2. _get_table_title preserves the name from config
+        3. The table title used in create_or_replace_tracking_table matches config.name
+        """
+        from omero_annotate_ai.omero.omero_functions import generate_unique_table_name
+
+        # Setup mock connection and container
+        mock_conn = Mock()
+        mock_container = Mock()
+        mock_container.getName.return_value = "TestDataset"
+        mock_conn.getObject.return_value = mock_container
+
+        # Test 1: generate_unique_table_name with custom name
+        unique_name = generate_unique_table_name(
+            mock_conn,
+            "Dataset",
+            123,
+            base_name="my_custom_name"
+        )
+        assert "my_custom_name" in unique_name
+
+        # Test 2: generate_unique_table_name uses container name when no custom name
+        unique_name_no_custom = generate_unique_table_name(
+            mock_conn,
+            "Dataset",
+            123
+        )
+        # Container name is lowercased by generate_unique_table_name
+        assert unique_name_no_custom.startswith("testdataset_")
+
+        # Test 3: Pipeline uses config name directly without modification
+        config = create_default_config()
+        config.name = unique_name
+
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        title = pipeline._get_table_title()
+
+        # Should be exactly the same as config.name - no prefix added
+        assert title == config.name
+        assert title == unique_name
+
+        # Test 4: Verify create_or_replace_tracking_table receives the exact config name
+        mock_images = []
+        for i in range(2):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline.define_annotation_schema(mock_images)
+
+        with patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table') as mock_create_table:
+            mock_create_table.return_value = 999
+            pipeline.create_tracking_table()
+
+            # Verify the table was created with the exact name from config
+            mock_create_table.assert_called_once()
+            call_args = mock_create_table.call_args
+            table_title_arg = call_args.kwargs.get('table_title')
+
+            assert table_title_arg == unique_name
+            assert table_title_arg == config.name
+
     def test_prepare_processing_units_basic(self):
         """Test preparing processing units from images."""
         config = create_default_config()
@@ -306,40 +379,40 @@ class TestAnnotationPipeline:
         assert categories.count("training") == 2  # 2 images × 1 patches each
         assert categories.count("validation") == 1  # 1 image × 1 patches
     
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_multiple')
-    def test_load_image_data_2d(self, mock_get_dask):
-        """Test loading 2D image data."""
+    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
+    def test_load_image_data_2d_with_single_function(self, mock_get_dask_single):
+        """Test loading 2D image data using get_dask_image_single."""
         import numpy as np
-        
+
         mock_image_data = np.random.rand(100, 100)
-        mock_get_dask.return_value = [mock_image_data]
-        
+        mock_get_dask_single.return_value = mock_image_data
+
         config = create_default_config()
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
+
         mock_image = Mock()
         metadata = {
             "timepoint": 0,
             "z_slice": 5,
             "is_volumetric": False
         }
-        
+
         result = pipeline._load_image_data(mock_image, metadata)
-        
+
         assert result.shape == (100, 100)
-        mock_get_dask.assert_called_once()
-    
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_multiple')
-    def test_load_image_data_3d(self, mock_get_dask):
-        """Test loading 3D volumetric image data."""
+        mock_get_dask_single.assert_called_once()
+
+    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
+    def test_load_image_data_3d_with_single_function(self, mock_get_dask_single):
+        """Test loading 3D volumetric image data using get_dask_image_single."""
         import numpy as np
-        
+
         mock_image_data = np.random.rand(10, 100, 100)  # z, y, x
-        mock_get_dask.return_value = [mock_image_data]
-        
+        mock_get_dask_single.return_value = mock_image_data
+
         config = create_default_config()
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
+
         mock_image = Mock()
         metadata = {
             "timepoint": 0,
@@ -348,11 +421,15 @@ class TestAnnotationPipeline:
             "z_length": 10,
             "is_volumetric": True
         }
-        
+
         result = pipeline._load_image_data(mock_image, metadata)
-        
+
         assert result.shape == (10, 100, 100)
-        mock_get_dask.assert_called_once()
+        mock_get_dask_single.assert_called_once()
+
+    # Keep the old test names for backward compatibility but mark them as aliases
+    test_load_image_data_2d = test_load_image_data_2d_with_single_function
+    test_load_image_data_3d = test_load_image_data_3d_with_single_function
     
     def test_config_annotation_management(self):
         """Test config annotation management methods."""
