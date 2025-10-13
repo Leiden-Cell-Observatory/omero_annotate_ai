@@ -220,8 +220,9 @@ class TestAnnotationPipeline:
         config = create_default_config()
         config.training.train_n = 2
         config.training.validate_n = 1
+        config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images
         mock_images = []
         for i in range(5):
@@ -231,13 +232,13 @@ class TestAnnotationPipeline:
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create annotations for train_n + validate_n images
         assert len(pipeline.config.annotations) == 3
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2
@@ -247,7 +248,9 @@ class TestAnnotationPipeline:
         """Test preparing processing units with segment_all=True."""
         config = create_default_config()
         config.training.segment_all = True
-        config.training.train_fraction = 0.6  # 60% training, 40% validation
+        config.training.train_fraction = 0.6  # 60% training
+        config.training.validation_fraction = 0.4  # 40% validation
+        config.training.test_fraction = 0.0  # No test for this test
         
         # Mock images
         mock_images = []
@@ -277,6 +280,7 @@ class TestAnnotationPipeline:
         config.processing.patches_per_image = 2
         config.training.train_n = 2
         config.training.validate_n = 1
+        config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
         
         # Mock images - create distinct images
@@ -313,6 +317,7 @@ class TestAnnotationPipeline:
         config.training.train_n = 2
         config.processing.patch_size = [512, 512]
         config.training.validate_n = 1
+        config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
         
         # Mock images - create distinct images
@@ -349,6 +354,7 @@ class TestAnnotationPipeline:
         config.training.train_n = 2
         config.processing.patch_size = [512, 512]
         config.training.validate_n = 1
+        config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
         
         # Mock images - create distinct images
@@ -453,8 +459,119 @@ class TestAnnotationPipeline:
         assert unprocessed[0].image_id == 1
         assert processed[0].image_id == 2
 
+    def test_three_way_split_with_counts(self):
+        """Test train/validation/test split with specific counts."""
+        config = create_default_config()
+        config.training.train_n = 3
+        config.training.validate_n = 2
+        config.training.test_n = 1
+        config.training.segment_all = False
 
-@pytest.mark.unit 
+        mock_images = []
+        for i in range(10):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline._prepare_processing_units(mock_images)
+
+        categories = [ann.category for ann in config.annotations]
+        assert categories.count("training") == 3
+        assert categories.count("validation") == 2
+        assert categories.count("test") == 1
+
+    def test_three_way_split_with_fractions(self):
+        """Test train/validation/test split with fractions (segment_all=True)."""
+        config = create_default_config()
+        config.training.train_fraction = 0.5
+        config.training.validation_fraction = 0.3
+        config.training.test_fraction = 0.2
+        config.training.segment_all = True
+
+        mock_images = []
+        for i in range(10):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline._prepare_processing_units(mock_images)
+
+        categories = [ann.category for ann in config.annotations]
+        # 50% train = 5, 30% val = 3, remaining 20% = 2
+        assert categories.count("training") == 5
+        assert categories.count("validation") == 3
+        assert categories.count("test") == 2
+
+    def test_optional_validation_zero(self):
+        """Test that validation can be set to 0."""
+        config = create_default_config()
+        config.training.train_n = 5
+        config.training.validate_n = 0  # No validation
+        config.training.test_n = 2
+        config.training.segment_all = False
+
+        mock_images = []
+        for i in range(10):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline._prepare_processing_units(mock_images)
+
+        categories = [ann.category for ann in config.annotations]
+        assert categories.count("training") == 5
+        assert categories.count("validation") == 0  # No validation images
+        assert categories.count("test") == 2
+
+    def test_optional_test_zero(self):
+        """Test that test can be set to 0."""
+        config = create_default_config()
+        config.training.train_n = 5
+        config.training.validate_n = 2
+        config.training.test_n = 0  # No test
+        config.training.segment_all = False
+
+        mock_images = []
+        for i in range(10):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline._prepare_processing_units(mock_images)
+
+        categories = [ann.category for ann in config.annotations]
+        assert categories.count("training") == 5
+        assert categories.count("validation") == 2
+        assert categories.count("test") == 0  # No test images
+
+    def test_fraction_validation_error(self):
+        """Test that fractions > 1.0 raise validation error."""
+        config = create_default_config()
+        with pytest.raises(ValueError, match="must sum to ≤ 1.0"):
+            config.training.train_fraction = 0.6
+            config.training.validation_fraction = 0.3
+            config.training.test_fraction = 0.3  # Total = 1.2 > 1.0
+            # Trigger validation
+            config.training.validate_splits()
+
+
+@pytest.mark.unit
 class TestPipelineIntegration:
     """Test pipeline integration scenarios."""
     

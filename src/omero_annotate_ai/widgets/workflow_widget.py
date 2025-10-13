@@ -414,6 +414,21 @@ class WorkflowWidget:
 
     def _create_annotation_settings(self):
         """Create annotation settings group."""
+        # Add informative header
+        training_help = widgets.HTML(
+            value="""
+            <div style='background: #f0f8ff; padding: 10px; border-radius: 5px; margin: 10px 0;'>
+                <b>💡 Data Split Guide:</b>
+                <ul style='margin: 5px 0; padding-left: 20px;'>
+                    <li><b>Training:</b> Images to annotate for model training (min: 1)</li>
+                    <li><b>Validation:</b> Images to annotate for model validation during training (0 to skip)</li>
+                    <li><b>Test:</b> Images to annotate for final model evaluation (0 to skip)</li>
+                </ul>
+                <small>For Cellpose: Use training+test. For BiaPy: Use all three splits.</small>
+            </div>
+            """
+        )
+
         # Number of images
         segment_all = widgets.Checkbox(
             value=self.config.training.segment_all, description="Annotate all images"
@@ -425,15 +440,29 @@ class WorkflowWidget:
             min=1,
             max=50,
             description="Training images:",
+            style={'description_width': '150px'},
             disabled=segment_all.value,
+            tooltip="Images to annotate for training the model (required, min: 1)"
         )
 
         self.validate_n_slider = widgets.IntSlider(
             value=self.config.training.validate_n,
-            min=1,
+            min=0,  # Changed from 1
             max=50,
             description="Validation images:",
+            style={'description_width': '150px'},
             disabled=segment_all.value,
+            tooltip="Images to annotate for model validation during training (0 to skip)"
+        )
+
+        self.test_n_slider = widgets.IntSlider(
+            value=self.config.training.test_n,
+            min=0,
+            max=50,
+            description="Test images:",
+            style={'description_width': '150px'},
+            disabled=segment_all.value,
+            tooltip="Images to annotate for final model evaluation (0 to skip)"
         )
 
         # Channel selection
@@ -525,7 +554,7 @@ class WorkflowWidget:
 
         # Setup observers
         segment_all.observe(
-            lambda c: self._toggle_subset_settings(c, self.train_n_slider, self.validate_n_slider),
+            lambda c: self._toggle_subset_settings(c, self.train_n_slider, self.validate_n_slider, self.test_n_slider),
             names="value",
         )
         timepoint_mode.observe(
@@ -546,9 +575,11 @@ class WorkflowWidget:
         return widgets.VBox(
             [
                 widgets.HTML("<h5>🎯 Annotation Settings</h5>"),
+                training_help,  # New: Add help text
                 segment_all,
                 self.train_n_slider,
                 self.validate_n_slider,
+                self.test_n_slider,  # New: Add test slider
                 channel,
                 timepoint_mode,
                 timepoints,
@@ -953,11 +984,12 @@ class WorkflowWidget:
                 clear_output()
                 print(f"❌ Error generating table name: {e}")
 
-    def _toggle_subset_settings(self, change, train_n, validate_n):
+    def _toggle_subset_settings(self, change, train_n, validate_n, test_n):
         """Toggle subset settings based on segment_all."""
         segment_all = change["new"]
         train_n.disabled = segment_all
         validate_n.disabled = segment_all
+        test_n.disabled = segment_all
 
     def _toggle_list_setting(self, change, text_widget):
         """Toggle list input based on mode."""
@@ -1069,6 +1101,8 @@ class WorkflowWidget:
                     annotation_widgets["train_n"] = child
                 elif "Validation images" in child.description:
                     annotation_widgets["validate_n"] = child
+                elif "Test images" in child.description:
+                    annotation_widgets["test_n"] = child
                 elif "Channel" in child.description:
                     annotation_widgets["channel"] = child
                 elif "Timepoints" in child.description and "list" in child.description:
@@ -1101,6 +1135,8 @@ class WorkflowWidget:
             self.config.training.train_n = annotation_widgets["train_n"].value
         if "validate_n" in annotation_widgets:
             self.config.training.validate_n = annotation_widgets["validate_n"].value
+        if "test_n" in annotation_widgets:
+            self.config.training.test_n = annotation_widgets["test_n"].value
         if "channel" in annotation_widgets:
             self.config.spatial_coverage.channels[0] = annotation_widgets[
                 "channel"
@@ -1299,13 +1335,15 @@ class WorkflowWidget:
             self.omero_status.value = extra
 
         # Update sliders' max to the number of available images
-        if hasattr(self, "train_n_slider") and hasattr(self, "validate_n_slider"):
+        if hasattr(self, "train_n_slider") and hasattr(self, "validate_n_slider") and hasattr(self, "test_n_slider"):
             max_imgs = max(1, int(total_images))
             self.train_n_slider.max = max_imgs
             self.validate_n_slider.max = max_imgs
+            self.test_n_slider.max = max_imgs
             # Clamp current values within new range
             self.train_n_slider.value = min(self.train_n_slider.value, max_imgs)
             self.validate_n_slider.value = min(self.validate_n_slider.value, max_imgs)
+            self.test_n_slider.value = min(self.test_n_slider.value, max_imgs)
 
     def _enable_container_widgets(self):
         """Enable container widgets when connection is available."""
