@@ -73,7 +73,9 @@ class AnnotationMethodology(BaseModel):
     annotation_type: Literal[
         "segmentation_mask", "bounding_box", "point", "classification"
     ] = "segmentation_mask"
-    annotation_method: Literal["manual", "semi_automatic", "automatic"] = "automatic"
+    annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = Field(
+        default=None, description="How annotations were produced"
+    )
     annotation_criteria: str = Field(description="Criteria used for annotation")
     annotation_coverage: Literal["all", "representative", "partial"] = "representative"
 
