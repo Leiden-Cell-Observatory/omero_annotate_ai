@@ -267,6 +267,18 @@ class OMEROConfig(BaseModel):
     container_id: int = Field(default=0, description="OMERO container ID")
     source_desc: str = Field(default="", description="Source description for tracking")
 
+    # Well filtering based on key-value pairs (for plate containers)
+    well_filters: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Filter wells by map annotation key-value pairs attached to wells. "
+                    "Example: {'cellline': ['U2OS', 'HeLa'], 'treatment': ['Control']}. "
+                    "All conditions must be met (AND logic). Only applies when container_type='plate'."
+    )
+    well_filter_mode: Literal["include", "exclude"] = Field(
+        default="include",
+        description="Whether to include or exclude wells matching the filters"
+    )
+
 
 class OutputConfig(BaseModel):
     """Output and workflow configuration"""
