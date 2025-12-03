@@ -49,7 +49,8 @@ dependencies = [
     "ezomero>=3.1.0", 
     "ipykernel", 
     "pixi-kernel>=0.6.6,<0.7", 
-    "opencv-python",
+    "opencv-python", 
+    "tifffile",
 ]
 
 [project.optional-dependencies]
