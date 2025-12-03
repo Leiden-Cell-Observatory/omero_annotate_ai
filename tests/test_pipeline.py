@@ -750,3 +750,67 @@ class TestPipelineUtils:
         
         assert pipeline.config.ai_model.model_type == "vit_l"
         assert pipeline.config.processing.batch_size == 5
+
+
+@pytest.mark.unit
+class TestSpatialSampling:
+    """Test spatial sampling with n_slices and n_timepoints."""
+
+    def test_z_slices_random_with_n_slices(self):
+        """Test that n_slices is used for random mode when specified."""
+        config = create_default_config()
+        config.omero.container_id = 1
+        config.spatial_coverage.z_slices = [0]  # Dummy value
+        config.spatial_coverage.z_slice_mode = "random"
+        config.spatial_coverage.n_slices = 3  # Should select 3 random slices
+
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        # Mock image with 10 z-slices
+        mock_image = Mock()
+        mock_image.getSizeZ.return_value = 10
+
+        z_slices = pipeline._get_z_slices_for_image(mock_image)
+
+        assert len(z_slices) == 3
+        assert all(0 <= z < 10 for z in z_slices)
+        assert len(set(z_slices)) == 3  # All unique
+
+    def test_z_slices_random_backward_compatibility(self):
+        """Test backward compatibility: uses list length when n_slices not specified."""
+        config = create_default_config()
+        config.omero.container_id = 1
+        config.spatial_coverage.z_slices = [0, 1, 2, 3, 4]  # Length = 5
+        config.spatial_coverage.z_slice_mode = "random"
+        # n_slices not specified (None)
+
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        mock_image = Mock()
+        mock_image.getSizeZ.return_value = 10
+
+        z_slices = pipeline._get_z_slices_for_image(mock_image)
+
+        assert len(z_slices) == 5  # Should use list length
+
+    def test_timepoints_random_with_n_timepoints(self):
+        """Test that n_timepoints is used for random mode when specified."""
+        config = create_default_config()
+        config.omero.container_id = 1
+        config.spatial_coverage.timepoints = [0]  # Dummy value
+        config.spatial_coverage.timepoint_mode = "random"
+        config.spatial_coverage.n_timepoints = 4  # Should select 4 random timepoints
+
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        mock_image = Mock()
+        mock_image.getSizeT.return_value = 12
+
+        timepoints = pipeline._get_timepoints_for_image(mock_image)
+
+        assert len(timepoints) == 4
+        assert all(0 <= t < 12 for t in timepoints)
+        assert len(set(timepoints)) == 4  # All unique

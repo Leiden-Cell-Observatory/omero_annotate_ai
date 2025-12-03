@@ -384,7 +384,11 @@ class AnnotationPipeline:
         if self.config.spatial_coverage.timepoint_mode == "all":
             return list(range(max_t))
         elif self.config.spatial_coverage.timepoint_mode == "random":
-            n_points = min(len(self.config.spatial_coverage.timepoints), max_t)
+            # Use n_timepoints if specified, otherwise fall back to list length
+            if self.config.spatial_coverage.n_timepoints is not None:
+                n_points = min(self.config.spatial_coverage.n_timepoints, max_t)
+            else:
+                n_points = min(len(self.config.spatial_coverage.timepoints), max_t)
             return random.sample(range(max_t), n_points)
         else: # specific
             return [t for t in self.config.spatial_coverage.timepoints if t < max_t]
@@ -396,7 +400,11 @@ class AnnotationPipeline:
         if self.config.spatial_coverage.z_slice_mode == "all":
             return list(range(max_z))
         elif self.config.spatial_coverage.z_slice_mode == "random":
-            n_slices = min(len(self.config.spatial_coverage.z_slices), max_z)
+            # Use n_slices if specified, otherwise fall back to list length
+            if self.config.spatial_coverage.n_slices is not None:
+                n_slices = min(self.config.spatial_coverage.n_slices, max_z)
+            else:
+                n_slices = min(len(self.config.spatial_coverage.z_slices), max_z)
             return random.sample(range(max_z), n_slices)
         else: # specific
             return [z for z in self.config.spatial_coverage.z_slices if z < max_z]
