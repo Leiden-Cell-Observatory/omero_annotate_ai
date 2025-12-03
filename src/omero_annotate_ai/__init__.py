@@ -1,6 +1,8 @@
 """OMERO Annotate AI: Integration of AI annotation tools with OMERO for automated image segmentation."""
 
-from .core.annotation_config import AnnotationConfig, create_default_config, load_config
+from .core.annotation_config import (
+    AnnotationConfig, create_default_config, load_config, load_config_from_yaml
+)
 from .core.annotation_pipeline import AnnotationPipeline, create_pipeline
 from .widgets.omero_connection_widget import create_omero_connection_widget
 from .widgets.workflow_widget import create_workflow_widget
