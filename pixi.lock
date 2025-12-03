@@ -25015,7 +25015,7 @@ packages:
 - pypi: ./
   name: omero-annotate-ai
   version: 0.1.2
-  sha256: ed731693fe7ec53e840661cb6bca29c480f25bf126464877a87af63464e9c2b9
+  sha256: fd7bde8eda8cd15ad8a6af503c9a3b719af1c5ddaca2a3e53738118ae954fe6c
   requires_dist:
   - numpy>=1.21.0,<2.0
   - pandas>=1.3.0
@@ -25031,6 +25031,7 @@ packages:
   - ipykernel
   - pixi-kernel>=0.6.6,<0.7
   - opencv-python
+  - tifffile
   - napari>=0.4.15 ; extra == 'microsam'
   - pytest>=6.0 ; extra == 'dev'
   - pytest-cov>=2.0 ; extra == 'dev'

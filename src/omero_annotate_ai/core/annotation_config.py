@@ -73,7 +73,9 @@ class AnnotationMethodology(BaseModel):
     annotation_type: Literal[
         "segmentation_mask", "bounding_box", "point", "classification"
     ] = "segmentation_mask"
-    annotation_method: Literal["manual", "semi_automatic", "automatic"] = "automatic"
+    annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = Field(
+        default=None, description="How annotations were produced"
+    )
     annotation_criteria: str = Field(description="Criteria used for annotation")
     annotation_coverage: Literal["all", "representative", "partial"] = "representative"
 
@@ -264,6 +266,18 @@ class OMEROConfig(BaseModel):
     container_type: str = Field(default="dataset", description="OMERO container type")
     container_id: int = Field(default=0, description="OMERO container ID")
     source_desc: str = Field(default="", description="Source description for tracking")
+
+    # Well filtering based on key-value pairs (for plate containers)
+    well_filters: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Filter wells by map annotation key-value pairs attached to wells. "
+                    "Example: {'cellline': ['U2OS', 'HeLa'], 'treatment': ['Control']}. "
+                    "All conditions must be met (AND logic). Only applies when container_type='plate'."
+    )
+    well_filter_mode: Literal["include", "exclude"] = Field(
+        default="include",
+        description="Whether to include or exclude wells matching the filters"
+    )
 
 
 class OutputConfig(BaseModel):
@@ -557,7 +571,7 @@ class AnnotationConfig(BaseModel):
         """Export MIFA-compatible metadata"""
         return {
             "annotation_type": self.annotation_methodology.annotation_type,
-            "annotation_method": self.annotation_methodology.annotation_method,
+            "annotation_method": self.annotation_methodology.annotation_method or "unknown",
             "annotation_criteria": self.annotation_methodology.annotation_criteria,
             "spatial_coverage": self.spatial_coverage.model_dump(),
             "study_context": self.study.model_dump(),
