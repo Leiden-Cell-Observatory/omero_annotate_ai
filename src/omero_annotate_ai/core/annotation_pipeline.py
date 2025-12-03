@@ -14,7 +14,7 @@ import shutil
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Third-party imports
 import numpy as np
@@ -833,8 +833,59 @@ The `tracking_table.csv` file contains detailed information about each annotatio
     #         print(f"Could not get workflow status: {e}")
     #         return None
 
+    def _get_well_map_annotations(self, well_id: int) -> dict:
+        """Get map annotations from a well as a dictionary.
+
+        Args:
+            well_id: OMERO well ID
+
+        Returns:
+            Dictionary with all key-value pairs from well map annotations
+        """
+        well_obj = self.conn.getObject("Well", well_id)
+        if not well_obj:
+            return {}
+
+        # Collect all map annotations into a single dict
+        kv_pairs = {}
+        for ann in well_obj.listAnnotations():
+            if hasattr(ann, 'OMERO_TYPE') and ann.OMERO_TYPE.__name__ == 'MapAnnotationI':
+                # Get key-value pairs from this map annotation
+                for kv in ann.getMapValue():
+                    kv_pairs[kv.name] = kv.value
+
+        return kv_pairs
+
+    def _check_well_filter(self, well_kv_pairs: dict, filters: Dict[str, List[str]]) -> bool:
+        """Check if well key-value pairs match filter criteria.
+
+        Uses AND logic: ALL filter conditions must be met for a match.
+
+        Args:
+            well_kv_pairs: Key-value pairs from well map annotations
+            filters: Filter criteria from config (key -> list of acceptable values)
+
+        Returns:
+            True if ALL filter conditions are met
+        """
+        for filter_key, filter_values in filters.items():
+            # Check if the key exists in well metadata
+            if filter_key not in well_kv_pairs:
+                return False
+
+            # Check if the well's value matches any of the acceptable values
+            well_value = well_kv_pairs[filter_key]
+            if well_value not in filter_values:
+                return False
+
+        # All conditions met
+        return True
+
     def get_image_ids_from_container(self) -> List[int]:
-        """Get image IDs from the configured OMERO container."""
+        """Get image IDs from the configured OMERO container.
+
+        For plate containers, applies well filtering if well_filters are configured.
+        """
         container_type = self.config.omero.container_type
         container_id = self.config.omero.container_id
         print(f"Loading image IDs from {container_type} {container_id}")
@@ -846,7 +897,45 @@ The `tracking_table.csv` file contains detailed information about each annotatio
             for ds_id in dataset_ids:
                 image_ids.extend(ezomero.get_image_ids(self.conn, dataset=ds_id))
         elif container_type == "plate":
-            image_ids = list(ezomero.get_image_ids(self.conn, plate=container_id))
+            # Check if well filtering is enabled
+            if self.config.omero.well_filters:
+                print(f"Applying well filters: {self.config.omero.well_filters}")
+                print(f"Filter mode: {self.config.omero.well_filter_mode}")
+
+                # Get all wells in the plate
+                well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
+                print(f"Found {len(well_ids)} wells in plate {container_id}")
+
+                filtered_image_ids = []
+                matched_wells = 0
+
+                for well_id in well_ids:
+                    # Get map annotations from the well
+                    well_kv_pairs = self._get_well_map_annotations(well_id)
+
+                    # Check if well matches filter criteria
+                    matches_filter = self._check_well_filter(well_kv_pairs, self.config.omero.well_filters)
+
+                    # Apply include/exclude logic
+                    should_include = (
+                        (self.config.omero.well_filter_mode == "include" and matches_filter) or
+                        (self.config.omero.well_filter_mode == "exclude" and not matches_filter)
+                    )
+
+                    if should_include:
+                        matched_wells += 1
+                        # Get all images from this well
+                        well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
+                        filtered_image_ids.extend(well_image_ids)
+                        self._debug_print(f"  Well {well_id}: matched filter, adding {len(well_image_ids)} images")
+                    else:
+                        self._debug_print(f"  Well {well_id}: filtered out")
+
+                image_ids = filtered_image_ids
+                print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(image_ids)} images selected")
+            else:
+                # No filters - get all images from plate
+                image_ids = list(ezomero.get_image_ids(self.conn, plate=container_id))
         elif container_type == "screen":
             plate_ids = ezomero.get_plate_ids(self.conn, screen=container_id)
             image_ids = []
