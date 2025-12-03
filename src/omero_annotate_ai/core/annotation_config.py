@@ -85,8 +85,19 @@ class SpatialCoverage(BaseModel):
 
     channels: List[int] = Field(description="Channel indices processed")
     timepoints: List[int] = Field(description="Timepoints as list")
+    n_timepoints: Optional[int] = Field(
+        default=None,
+        description="Number of timepoints to randomly select (used when timepoint_mode='random'). "
+                    "If not specified, uses the length of timepoints list for backward compatibility."
+    )
     timepoint_mode: Literal["all", "random", "specific"] = "specific"
     z_slices: List[int] = Field(description="Z-slices as list")
+    # Number of slices/timepoints for random mode (optional, defaults to list length)
+    n_slices: Optional[int] = Field(
+        default=None,
+        description="Number of z-slices to randomly select (used when z_slice_mode='random'). "
+                    "If not specified, uses the length of z_slices list for backward compatibility."
+    )
     z_slice_mode: Literal["all", "random", "specific"] = "specific"
     spatial_units: str = Field(
         default="pixels", description="Spatial measurement units"
@@ -100,6 +111,9 @@ class SpatialCoverage(BaseModel):
     z_range_end: Optional[int] = Field(
         default=None, description="Ending z-slice for 3D volumes (when three_d=True)"
     )
+
+
+
 
     @property
     def primary_channel(self) -> int:
