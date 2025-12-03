@@ -559,7 +559,7 @@ class AnnotationConfig(BaseModel):
         """Export MIFA-compatible metadata"""
         return {
             "annotation_type": self.annotation_methodology.annotation_type,
-            "annotation_method": self.annotation_methodology.annotation_method,
+            "annotation_method": self.annotation_methodology.annotation_method or "unknown",
             "annotation_criteria": self.annotation_methodology.annotation_criteria,
             "spatial_coverage": self.spatial_coverage.model_dump(),
             "study_context": self.study.model_dump(),
