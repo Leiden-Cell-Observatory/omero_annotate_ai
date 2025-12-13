@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         lfs: true
 
     - name: Install pixi (docs env)
-      uses: prefix-dev/setup-pixi@v0.9.1
+      uses: prefix-dev/setup-pixi@v0.9.3
       with:
         pixi-version: v0.55.0
         cache: true
@@ -39,7 +39,7 @@ jobs:
 
     - name: Upload site artifact (PR preview)
       if: github.event_name == 'pull_request'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: mkdocs-site
         path: site
