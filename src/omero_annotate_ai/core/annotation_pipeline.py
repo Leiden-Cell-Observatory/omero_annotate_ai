@@ -1283,9 +1283,10 @@ The `tracking_table.csv` file contains detailed information about each annotatio
                     print(f"Warning: No image data for {annotation_id}")
                     continue
                 
-                # Determine category and create organized folder structure
-                category = meta.get("category", "training")
-                input_dir = f"input_{category}"
+                ## Determine category and create organized folder structure
+                #category = meta.get("category", "training")
+                # We store all images in a single folder for Cellpose
+                input_dir = f"input_training"
                 
                 # Create input folder
                 input_folder = output_path / input_dir
