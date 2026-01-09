@@ -85,6 +85,14 @@ class TestFractionModeValidation:
         )
         assert config.train_fraction == 0.0
 
+    def test_train_n_negative_raises_pydantic_error_fraction_mode(self):
+        """Negative train_n should be caught by Pydantic even in fraction mode."""
+        with pytest.raises(ValidationError):
+            TrainingConfig(
+                segment_all=True,
+                train_n=-1,
+            )
+
 
 class TestCountModeValidation:
     """Test validation when segment_all=False (count-based mode)."""

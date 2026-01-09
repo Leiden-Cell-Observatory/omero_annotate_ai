@@ -239,6 +239,8 @@ class TrainingConfig(BaseModel):
     )
 
     # Count-based splits (for segment_all=False)
+    # Note: ge=0 allows train_n=0 at field level; the model_validator enforces
+    # train_n >= 1 only when segment_all=False (count mode)
     train_n: int = Field(default=3, ge=0, description="Number of training images (used when segment_all=False)")
     validate_n: int = Field(default=2, ge=0, description="Number of validation images (0=no validation)")
     test_n: int = Field(default=0, ge=0, description="Number of test images (0=no test)")
