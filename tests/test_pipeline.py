@@ -561,14 +561,16 @@ class TestAnnotationPipeline:
         assert categories.count("test") == 0  # No test images
 
     def test_fraction_validation_error(self):
-        """Test that fractions > 1.0 raise validation error."""
-        config = create_default_config()
-        with pytest.raises(ValueError, match="must sum to ≤ 1.0"):
-            config.training.train_fraction = 0.6
-            config.training.validation_fraction = 0.3
-            config.training.test_fraction = 0.3  # Total = 1.2 > 1.0
-            # Trigger validation
-            config.training.validate_splits()
+        """Test that fractions > 1.0 raise validation error when segment_all=True."""
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        with pytest.raises(ValueError, match="must sum to <= 1.0"):
+            # Validation happens at construction time when segment_all=True
+            TrainingConfig(
+                segment_all=True,
+                train_fraction=0.6,
+                validation_fraction=0.3,
+                test_fraction=0.3,  # Total = 1.2 > 1.0
+            )
 
 
 @pytest.mark.unit
