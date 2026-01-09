@@ -3,7 +3,7 @@
 import shutil
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import ezomero
 import numpy as np
@@ -12,6 +12,7 @@ from tifffile import imwrite
 from tqdm import tqdm
 
 from ..utils.logging import create_training_logger
+from ..omero.omero_functions import upload_label_input_image
 
 
 def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
@@ -70,15 +71,18 @@ def prepare_training_data_from_table(
     validation_split: float = 0.2,
     clean_existing: bool = True,
     tmp_dir: Optional[Union[str, Path]] = None,
-    verbose: bool = False
+    verbose: bool = False,
+    label_channel: Optional[int] = None,
+    training_channels: Optional[List[int]] = None,
+    upload_label_input: bool = False,
 ) -> Dict[str, Any]:
     """
     Prepare training data from OMERO annotation table.
-    
+
     Downloads images and labels from OMERO based on annotation table data,
     splits into training/validation sets, and organizes into directory structure
     suitable for micro-SAM training.
-    
+
     Args:
         conn: OMERO connection object
         table_id: ID of the annotation table in OMERO
@@ -88,18 +92,28 @@ def prepare_training_data_from_table(
         clean_existing: Whether to clean existing output directories
         tmp_dir: Temporary directory for downloads (optional)
         verbose: If True, show detailed debug information in console output
-        
+        label_channel: Optional channel index for label/segmentation images. If provided
+            and different from training_channels, downloads label channel images to
+            *_label_input directories alongside the training data.
+        training_channels: Optional list of channel indices for training input images.
+            If different from label_channel, downloads from these channels for
+            training_input and val_input. Currently uses first channel if multiple specified.
+        upload_label_input: If True and using separate channels, uploads the label_input
+            images back to OMERO as file annotations. Default is False.
+
     Returns:
         Dictionary with paths to created directories:
         {
             'base_dir': Path to base output directory,
             'training_input': Path to training images,
-            'training_label': Path to training labels,
-            'val_input': Path to validation images, 
-            'val_label': Path to validation labels,
+            'training_label': Path to training labels (segmentation masks),
+            'training_label_input': Path to label channel images (only if separate channels),
+            'val_input': Path to validation images,
+            'val_label': Path to validation labels (segmentation masks),
+            'val_label_input': Path to label channel images for validation (only if separate channels),
             'stats': Statistics about the prepared data
         }
-        
+
     Raises:
         ValueError: If table not found or invalid parameters
         ImportError: If required dependencies missing
@@ -170,14 +184,30 @@ def prepare_training_data_from_table(
     validate_table_schema(table, logger)
     logger.info("Table schema validated for processing")
     
+    # Determine if we're using separate channels for labeling and training
+    uses_separate_channels = (
+        label_channel is not None and
+        training_channels is not None and
+        label_channel not in training_channels
+    )
+
+    if uses_separate_channels:
+        logger.info(f"Using separate channels: label_channel={label_channel}, training_channels={training_channels}")
+
+    # Determine the effective training channel to use
+    effective_train_channel = training_channels[0] if training_channels else None
+
     # Clean existing directories if requested
     if clean_existing:
         folders = ["training_input", "training_label", "val_input", "val_label"]
+        # Add label_input directories if using separate channels
+        if uses_separate_channels:
+            folders.extend(["training_label_input", "val_label_input"])
         for folder in folders:
             folder_path = output_dir / folder
             if folder_path.exists():
                 shutil.rmtree(folder_path)
-                
+
     # Split data based on existing 'train'/'validate' columns or automatic split
     if 'train' in table.columns and 'validate' in table.columns:
         # Use existing split from table
@@ -196,22 +226,72 @@ def prepare_training_data_from_table(
         logger.info(f"Applied automatic split with validation_split={validation_split}")
     
     logger.info(f"Using {len(train_images)} training images and {len(val_images)} validation images")
-    
-    # Prepare training data
+
+    # Prepare training data (uses training channel if specified)
     training_input_dir, training_label_dir = _prepare_dataset_from_table(
-        conn, train_images, output_dir, subset_type="training", tmp_dir=tmp_dir, logger=logger, verbose=verbose
+        conn, train_images, output_dir, subset_type="training", tmp_dir=tmp_dir,
+        train_channel=effective_train_channel, logger=logger, verbose=verbose
     )
-    
-    # Prepare validation data
+
+    # Prepare validation data (uses training channel if specified)
     val_input_dir, val_label_dir = _prepare_dataset_from_table(
-        conn, val_images, output_dir, subset_type="val", tmp_dir=tmp_dir, logger=logger, verbose=verbose
+        conn, val_images, output_dir, subset_type="val", tmp_dir=tmp_dir,
+        train_channel=effective_train_channel, logger=logger, verbose=verbose
     )
-    
+
+    # If using separate channels, also prepare label channel images
+    training_label_input_dir = None
+    val_label_input_dir = None
+    label_input_upload_ids = []
+    if uses_separate_channels:
+        logger.info(f"Preparing label channel ({label_channel}) images for separate channel workflow")
+        training_label_input_dir, _ = _prepare_dataset_from_table(
+            conn, train_images, output_dir, subset_type="training_label",
+            tmp_dir=tmp_dir, train_channel=label_channel, logger=logger, verbose=verbose
+        )
+        val_label_input_dir, _ = _prepare_dataset_from_table(
+            conn, val_images, output_dir, subset_type="val_label",
+            tmp_dir=tmp_dir, train_channel=label_channel, logger=logger, verbose=verbose
+        )
+
+        # Upload label_input images to OMERO if requested
+        if upload_label_input:
+            logger.info("Uploading label_input images to OMERO...")
+            all_images = pd.concat([train_images, val_images])
+            all_label_input_dirs = [training_label_input_dir, val_label_input_dir]
+
+            for label_input_dir in all_label_input_dirs:
+                if label_input_dir and label_input_dir.exists():
+                    for tif_file in sorted(label_input_dir.glob('*.tif')):
+                        # Extract index from filename (e.g., input_00001.tif -> 1)
+                        try:
+                            file_idx = int(tif_file.stem.split('_')[-1])
+                            if file_idx < len(all_images):
+                                row = all_images.iloc[file_idx]
+                                image_id = int(row['image_id'])
+                                timepoint = int(row['timepoint']) if pd.notna(row.get('timepoint')) else None
+                                z_slice = int(row['z_slice']) if pd.notna(row.get('z_slice')) else None
+
+                                file_ann_id = upload_label_input_image(
+                                    conn,
+                                    image_id=image_id,
+                                    label_input_file=str(tif_file),
+                                    trainingset_name=training_name,
+                                    channel=label_channel,
+                                    timepoint=timepoint,
+                                    z_slice=z_slice,
+                                )
+                                label_input_upload_ids.append(file_ann_id)
+                        except (ValueError, IndexError) as e:
+                            logger.warning(f"Could not upload {tif_file}: {e}")
+
+            logger.info(f"Uploaded {len(label_input_upload_ids)} label_input images to OMERO")
+
     # Clean up temporary directory
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
         logger.debug(f"Cleaned up temporary directory: {tmp_dir}")
-    
+
     # Collect statistics
     stats = {
         'n_training_images': len(list(training_input_dir.glob('*.tif'))),
@@ -220,7 +300,14 @@ def prepare_training_data_from_table(
         'n_val_labels': len(list(val_label_dir.glob('*.tif'))),
         'total_rows_processed': len(table)
     }
-    
+
+    # Add label input stats if using separate channels
+    if uses_separate_channels:
+        stats['n_training_label_input'] = len(list(training_label_input_dir.glob('*.tif')))
+        stats['n_val_label_input'] = len(list(val_label_input_dir.glob('*.tif')))
+        if label_input_upload_ids:
+            stats['n_label_input_uploaded'] = len(label_input_upload_ids)
+
     result = {
         'base_dir': output_dir,
         'training_input': training_input_dir,
@@ -229,7 +316,14 @@ def prepare_training_data_from_table(
         'val_label': val_label_dir,
         'stats': stats
     }
-    
+
+    # Add label_input directories to result if using separate channels
+    if uses_separate_channels:
+        result['training_label_input'] = training_label_input_dir
+        result['val_label_input'] = val_label_input_dir
+        if label_input_upload_ids:
+            result['label_input_upload_ids'] = label_input_upload_ids
+
     # Check if preparation actually succeeded
     if stats['n_training_images'] == 0 and stats['n_val_images'] == 0:
         logger.error(f"Training data preparation FAILED in: {output_dir}")
@@ -238,7 +332,7 @@ def prepare_training_data_from_table(
     else:
         logger.info(f"Training data prepared successfully in: {output_dir}")
         logger.info(f"Statistics: {stats}")
-    
+
     return result
 
 

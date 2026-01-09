@@ -52,7 +52,8 @@ class ImageAnnotation(BaseModel):
     
     # OMERO annotation IDs (None until uploaded)
     roi_id: Optional[int] = Field(default=None, description="OMERO ROI ID")
-    label_id: Optional[int] = Field(default=None, description="OMERO label file annotation ID") 
+    label_id: Optional[int] = Field(default=None, description="OMERO label file annotation ID")
+    label_input_id: Optional[int] = Field(default=None, description="OMERO file annotation ID for label input image")
     schema_attachment_id: Optional[int] = Field(default=None, description="OMERO schema attachment ID")
 
 
@@ -112,6 +113,19 @@ class SpatialCoverage(BaseModel):
         default=None, description="Ending z-slice for 3D volumes (when three_d=True)"
     )
 
+    # Multi-channel support for separate labeling and training channels
+    label_channel: Optional[int] = Field(
+        default=None,
+        description="Channel index used for segmentation/labeling (e.g., fluorescence nuclei). "
+                    "If not specified, defaults to channels[0] for backward compatibility."
+    )
+    training_channels: Optional[List[int]] = Field(
+        default=None,
+        description="Channel index(es) used for model training input (e.g., brightfield). "
+                    "If not specified, defaults to [label_channel] for backward compatibility. "
+                    "Multiple channels supported if the training model permits."
+    )
+
 
 
 
@@ -124,6 +138,30 @@ class SpatialCoverage(BaseModel):
     def is_single_channel(self) -> bool:
         """Check if only one channel is configured"""
         return len(self.channels) == 1
+
+    def get_label_channel(self) -> int:
+        """Get the channel to use for labeling/segmentation.
+
+        Returns label_channel if explicitly set, otherwise falls back to primary_channel (channels[0]).
+        """
+        return self.label_channel if self.label_channel is not None else self.primary_channel
+
+    def get_training_channels(self) -> List[int]:
+        """Get the channel(s) to use for training input.
+
+        Returns training_channels if explicitly set, otherwise falls back to [get_label_channel()]
+        for backward compatibility (same channel for both labeling and training).
+        """
+        return self.training_channels if self.training_channels is not None else [self.get_label_channel()]
+
+    def uses_separate_channels(self) -> bool:
+        """Check if separate channels are configured for labeling and training.
+
+        Returns True if label_channel differs from all training_channels.
+        """
+        if self.label_channel is None and self.training_channels is None:
+            return False
+        return self.get_label_channel() not in self.get_training_channels()
 
     @property
     def is_volumetric(self) -> bool:
@@ -166,6 +204,32 @@ class SpatialCoverage(BaseModel):
                 self.z_range_end = max(self.z_slices)
             elif self.z_range_start > self.z_range_end:
                 raise ValueError("z_range_start must be <= z_range_end")
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_channel_settings(self):
+        """Validate channel configuration consistency.
+
+        Ensures that label_channel and training_channels are valid indices
+        that exist in the channels list.
+        """
+        all_channels = set(self.channels)
+
+        # Validate label_channel is in channels list
+        if self.label_channel is not None:
+            if self.label_channel not in all_channels:
+                raise ValueError(
+                    f"label_channel ({self.label_channel}) must be in channels list ({self.channels})"
+                )
+
+        # Validate training_channels are in channels list
+        if self.training_channels is not None:
+            for tc in self.training_channels:
+                if tc not in all_channels:
+                    raise ValueError(
+                        f"training_channel ({tc}) must be in channels list ({self.channels})"
+                    )
 
         return self
 

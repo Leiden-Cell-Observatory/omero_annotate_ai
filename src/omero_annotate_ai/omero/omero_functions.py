@@ -694,6 +694,61 @@ def upload_rois_and_labels(
     return file_ann_id, roi_id
 
 
+def upload_label_input_image(
+    conn,
+    image_id: int,
+    label_input_file: str,
+    trainingset_name: Optional[str] = None,
+    channel: Optional[int] = None,
+    timepoint: Optional[int] = None,
+    z_slice: Optional[int] = None,
+) -> int:
+    """Upload label input channel image as file annotation to OMERO.
+
+    This function uploads the raw image data from the label channel
+    (used for segmentation) as a file annotation. This is useful when
+    using separate channels for labeling vs training, allowing the
+    label channel images to be stored alongside the segmentation masks.
+
+    Args:
+        conn: OMERO connection
+        image_id: ID of OMERO image to attach annotation to
+        label_input_file: Path to the label input image file (TIFF)
+        trainingset_name: Optional training set name for description
+        channel: Optional channel index for description
+        timepoint: Optional timepoint for description
+        z_slice: Optional z-slice for description
+
+    Returns:
+        file_ann_id: OMERO file annotation ID
+    """
+    # Build description with available metadata
+    desc_parts = ["Label input image"]
+    if channel is not None:
+        desc_parts.append(f"channel={channel}")
+    if timepoint is not None:
+        desc_parts.append(f"t={timepoint}")
+    if z_slice is not None:
+        desc_parts.append(f"z={z_slice}")
+    if trainingset_name:
+        desc_parts.append(f"trainingset={trainingset_name}")
+
+    description = " | ".join(desc_parts)
+
+    file_ann_id = ezomero.post_file_annotation(
+        conn,
+        file_path=label_input_file,
+        description=description,
+        ns="openmicroscopy.org/omero/annotate/label_input",
+        object_type="Image",
+        object_id=image_id,
+    )
+
+    print(f"Uploaded label input image to OMERO image {image_id}, annotation ID: {file_ann_id}")
+
+    return file_ann_id
+
+
 # =============================================================================
 # Workflow Status Tracking Functions
 # =============================================================================
