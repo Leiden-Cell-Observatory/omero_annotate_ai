@@ -228,7 +228,7 @@ class SpatialCoverage(BaseModel):
             for tc in self.training_channels:
                 if tc not in all_channels:
                     raise ValueError(
-                        f"training_channel ({tc}) must be in channels list ({self.channels})"
+                        f"training_channels ({tc}) must be in channels list ({self.channels})"
                     )
 
         return self
