@@ -239,7 +239,7 @@ class TrainingConfig(BaseModel):
     )
 
     # Count-based splits (for segment_all=False)
-    train_n: int = Field(default=3, ge=1, description="Number of training images (used when segment_all=False)")
+    train_n: int = Field(default=3, ge=0, description="Number of training images (used when segment_all=False)")
     validate_n: int = Field(default=2, ge=0, description="Number of validation images (0=no validation)")
     test_n: int = Field(default=0, ge=0, description="Number of test images (0=no test)")
 
@@ -252,14 +252,19 @@ class TrainingConfig(BaseModel):
 
     @model_validator(mode='after')
     def validate_splits(self):
-        """Ensure fractions sum to <= 1.0 and at least one training image"""
-        total = self.train_fraction + self.validation_fraction + self.test_fraction
-        if total > 1.0:
-            raise ValueError(
-                f"train + validation + test fractions must sum to ≤ 1.0 (got {total:.2f})"
-            )
-        if self.train_n < 1:
-            raise ValueError("train_n must be at least 1")
+        """Validate splits based on segment_all mode."""
+        if self.segment_all:
+            # Fraction-based mode: validate fractions sum to <= 1.0
+            total = self.train_fraction + self.validation_fraction + self.test_fraction
+            if total > 1.0:
+                raise ValueError(
+                    f"train + validation + test fractions must sum to <= 1.0 (got {total:.2f})"
+                )
+            # Note: train_fraction=0 is allowed (inference-only workflows)
+        else:
+            # Count-based mode: validate counts
+            if self.train_n < 1:
+                raise ValueError("train_n must be at least 1 when segment_all=False")
         return self
 
 
