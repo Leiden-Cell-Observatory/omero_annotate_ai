@@ -299,7 +299,7 @@ class AnnotationPipeline:
                                 patch_height=patch_h,
                                 category=category,
                                 model_type=self.config.ai_model.model_type,
-                                channel=self.config.spatial_coverage.primary_channel,
+                                channel=self.config.spatial_coverage.get_label_channel(),
                                 is_volumetric=True,
                             )
                             self.config.add_annotation(annotation)
@@ -316,7 +316,7 @@ class AnnotationPipeline:
                             z_length=z_length,
                             category=category,
                             model_type=self.config.ai_model.model_type,
-                            channel=self.config.spatial_coverage.primary_channel,
+                            channel=self.config.spatial_coverage.get_label_channel(),
                             is_volumetric=True,
                         )
                         self.config.add_annotation(annotation)
@@ -344,7 +344,7 @@ class AnnotationPipeline:
                                     patch_height=patch_h,
                                     category=category,
                                     model_type=self.config.ai_model.model_type,
-                                    channel=self.config.spatial_coverage.primary_channel,
+                                    channel=self.config.spatial_coverage.get_label_channel(),
                                     is_volumetric=False,
                                 )
                                 self.config.add_annotation(annotation)
@@ -361,7 +361,7 @@ class AnnotationPipeline:
                                 z_length=1,
                                 category=category,
                                 model_type=self.config.ai_model.model_type,
-                                channel=self.config.spatial_coverage.primary_channel,
+                                channel=self.config.spatial_coverage.get_label_channel(),
                                 is_volumetric=False,
                             )
                             self.config.add_annotation(annotation)
@@ -497,7 +497,7 @@ class AnnotationPipeline:
         """Load image data from OMERO based on metadata."""
 
         timepoint = metadata["timepoint"]
-        channel = self.config.spatial_coverage.primary_channel
+        channel = self.config.spatial_coverage.get_label_channel()
         is_volumetric = metadata.get("is_volumetric", False)
 
         if is_volumetric:

@@ -216,15 +216,177 @@ class TestConfigEdgeCases:
         config = create_default_config()
         config.omero.container_id = 999
         config.name = "test_roundtrip"
-        
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             config.save_yaml(f.name)
-            
+
             # Load it back
             loaded_config = AnnotationConfig.from_yaml(f.name)
-            
+
             assert loaded_config.omero.container_id == 999
             assert loaded_config.name == "test_roundtrip"
-        
+
         # Clean up
         Path(f.name).unlink()
+
+
+@pytest.mark.unit
+class TestMultiChannelSupport:
+    """Test multi-channel support with separate label and training channels."""
+
+    def test_get_label_channel_default(self):
+        """Test that get_label_channel() defaults to primary_channel (channels[0])."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+
+        # No label_channel set, should default to channels[0]
+        assert config.spatial_coverage.get_label_channel() == 0
+        assert config.spatial_coverage.get_label_channel() == config.spatial_coverage.primary_channel
+
+    def test_get_label_channel_explicit(self):
+        """Test that explicit label_channel is used when set."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.label_channel = 1
+
+        assert config.spatial_coverage.get_label_channel() == 1
+
+    def test_get_training_channels_default(self):
+        """Test that get_training_channels() defaults to [get_label_channel()]."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+
+        # No training_channels set, should default to [get_label_channel()] = [0]
+        assert config.spatial_coverage.get_training_channels() == [0]
+
+    def test_get_training_channels_explicit(self):
+        """Test that explicit training_channels is used when set."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.training_channels = [1, 2]
+
+        assert config.spatial_coverage.get_training_channels() == [1, 2]
+
+    def test_uses_separate_channels_false_by_default(self):
+        """Test that uses_separate_channels() is False when neither field is configured."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+    def test_uses_separate_channels_true_when_different(self):
+        """Test that uses_separate_channels() is True when label and training channels differ."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1]
+
+        assert config.spatial_coverage.uses_separate_channels() is True
+
+    def test_uses_separate_channels_false_when_same(self):
+        """Test that uses_separate_channels() is False when label channel is in training channels."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [0, 1]
+
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+
+@pytest.mark.unit
+class TestMultiChannelValidation:
+    """Test validation of channel configuration."""
+
+    def test_label_channel_must_be_in_channels(self):
+        """Test that label_channel must be in channels list."""
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
+        with pytest.raises(ValueError, match="label_channel"):
+            SpatialCoverage(
+                channels=[0, 1],
+                label_channel=2,  # Not in channels list
+                timepoints=[0],
+                z_slices=[0]
+            )
+
+    def test_training_channels_must_be_in_channels(self):
+        """Test that training_channels must be in channels list."""
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
+        with pytest.raises(ValueError, match="training_channel"):
+            SpatialCoverage(
+                channels=[0, 1],
+                training_channels=[2],  # Not in channels list
+                timepoints=[0],
+                z_slices=[0]
+            )
+
+    def test_valid_channel_configuration(self):
+        """Test that valid channel configuration passes validation."""
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
+        coverage = SpatialCoverage(
+            channels=[0, 1, 2],
+            label_channel=0,
+            training_channels=[1, 2],
+            timepoints=[0],
+            z_slices=[0]
+        )
+        assert coverage.label_channel == 0
+        assert coverage.training_channels == [1, 2]
+
+
+@pytest.mark.unit
+class TestMultiChannelYamlSerialization:
+    """Test YAML serialization with channel fields."""
+
+    def test_yaml_roundtrip_with_channels(self):
+        """Test that channel fields survive YAML roundtrip."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1, 2]
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            config.save_yaml(f.name)
+            loaded = AnnotationConfig.from_yaml(f.name)
+
+            assert loaded.spatial_coverage.channels == [0, 1, 2]
+            assert loaded.spatial_coverage.label_channel == 0
+            assert loaded.spatial_coverage.training_channels == [1, 2]
+
+        Path(f.name).unlink()
+
+    def test_yaml_backward_compatibility(self):
+        """Test that old YAML configs without new fields still work."""
+        yaml_str = """
+        name: test
+        spatial_coverage:
+          channels: [0]
+          timepoints: [0]
+          z_slices: [0]
+        """
+
+        config = AnnotationConfig.from_yaml(yaml_str)
+
+        # New methods should work with defaults
+        assert config.spatial_coverage.get_label_channel() == 0
+        assert config.spatial_coverage.get_training_channels() == [0]
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+    def test_channels_without_explicit_roles(self):
+        """Test that channels list without explicit roles uses channels[0] for both."""
+        yaml_str = """
+        name: test
+        spatial_coverage:
+          channels: [0, 1]
+          timepoints: [0]
+          z_slices: [0]
+        """
+
+        config = AnnotationConfig.from_yaml(yaml_str)
+
+        # Should use channels[0] for both label and training
+        assert config.spatial_coverage.get_label_channel() == 0
+        assert config.spatial_coverage.get_training_channels() == [0]
+        assert config.spatial_coverage.uses_separate_channels() is False
