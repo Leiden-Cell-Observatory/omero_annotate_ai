@@ -40,8 +40,6 @@ from .annotation_config import AnnotationConfig, ImageAnnotation
 from ..omero.omero_functions import (
     create_or_replace_tracking_table,
     sync_omero_table_to_config,
-   # update_workflow_status_map,
-   # get_workflow_status_map,
     upload_annotation_config_to_omero,
     upload_rois_and_labels
 )
@@ -111,22 +109,27 @@ class AnnotationPipeline:
             raise ValueError("OMERO connection is required")
 
     def _setup_directories(self):
-        """Create necessary output directories."""
+        """Create output directories for annotation workflow.
+
+        Creates a unified folder structure:
+        - input/: Source images for annotation
+        - output/: Annotation masks
+        - embed/: Embeddings (micro-SAM)
+
+        Category metadata (training/validation/test) is tracked in config.yaml,
+        not in the folder structure.
+        """
         output_path = Path(self.config.output.output_directory)
 
-        if self.config.workflow.read_only_mode:
-            # Create organized folder structure for read-only mode
-            self._create_organized_folder_structure()
-        else:
-            # Create main directories - everything under the single output folder
-            dirs = [
-                output_path,
-                output_path / "embed",
-                output_path / "annotations",  # Final annotations go here
-            ]
+        dirs = [
+            output_path,
+            output_path / "input",       # Source images for annotation
+            output_path / "output",      # Annotation masks
+            output_path / "embed",       # Embeddings (micro-SAM)
+        ]
 
-            for dir_path in dirs:
-                dir_path.mkdir(parents=True, exist_ok=True)
+        for dir_path in dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
 
         return output_path
 
@@ -627,23 +630,20 @@ class AnnotationPipeline:
             
             # Process based on mode
             if self.config.workflow.read_only_mode:
-                # Read-only mode: save locally in organized folders
+                # Read-only mode: save locally (category tracked in config, not folders)
                 matching_annotation.processed = True
                 matching_annotation.annotation_creation_time = datetime.now().isoformat()
-                
-                # Determine category and create organized folder structure
-                category = meta.get("category", "training")
-                output_dir = f"output_{category}"
-                
-                local_dir = Path(self.config.output.output_directory) / output_dir
-                local_dir.mkdir(parents=True, exist_ok=True)
-                local_file = local_dir / f"{annotation_id}_mask.tif"
-                
+
+                # Save mask to output folder
+                output_dir = Path(self.config.output.output_directory) / "output"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                local_file = output_dir / f"{annotation_id}_mask.tif"
+
                 shutil.move(tiff_file, local_file)
-                
+
                 # Also save the original image to input folder
-                self._save_original_image_for_annotation(meta, annotation_id, category)
-                
+                self._save_original_image_for_annotation(meta, annotation_id)
+
                 updated_count += 1
                 
             else:
@@ -693,125 +693,99 @@ class AnnotationPipeline:
         self._debug_print(f"Updated {updated_count}/{len(metadata)} annotations")
         self._debug_print(f"Config now has {processed_count}/{len(self.config.annotations)} processed annotations")
 
-    def _save_original_image_for_annotation(self, meta: dict, annotation_id: str, category: str) -> None:
-        """Save the original image used for annotation to organized input folder.
-        
+    def _save_original_image_for_annotation(self, meta: dict, annotation_id: str) -> None:
+        """Save the original image used for annotation to input folder.
+
+        All images are saved to a single 'input' folder. Category metadata
+        is tracked in the config.yaml, not in folder structure.
+
         Args:
             meta: Metadata dictionary containing image information
             annotation_id: Unique annotation identifier
-            category: Category (training/validation) for folder organization
+        """
+        image_id = meta.get("image_id")
+        if not image_id:
+            self._debug_print(f"No image_id found for annotation {annotation_id}")
+            return
+
+        image_obj = self.conn.getObject("Image", image_id)
+        output_path = Path(self.config.output.output_directory)
+        input_folder = output_path / "input"
+
+        saved_path = self._save_training_image(image_obj, meta, annotation_id, input_folder)
+        if saved_path is None:
+            self._debug_print(f"Could not save original image for {annotation_id}")
+
+    def _save_image_to_disk(self, image_data: np.ndarray, file_path: Path) -> bool:
+        """Save image data to disk using tifffile (preferred) or imageio fallback.
+
+        Args:
+            image_data: NumPy array of image data to save
+            file_path: Path where the image should be saved
+
+        Returns:
+            True if saved successfully, False otherwise
         """
         try:
-            # Get image object
-            image_id = meta.get("image_id")
-            if not image_id:
-                self._debug_print(f"No image_id found for annotation {annotation_id}")
-                return
-                
-            image_obj = self.conn.getObject("Image", image_id)
-            if not image_obj:
-                self._debug_print(f"Could not load image {image_id} for annotation {annotation_id}")
-                return
-            
-            # Load the image data using the same method as annotation
-            image_data = self._load_image_data(image_obj, meta)
-            
-            # Create input folder structure
-            input_dir = f"input_{category}"
-            local_dir = Path(self.config.output.output_directory) / input_dir
-            local_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Save original image
-            image_file = local_dir / f"{annotation_id}_image.tif"
-            
-            # Import imwrite here to handle optional dependency
+            import tifffile
+            tifffile.imwrite(file_path, image_data)
+            self._debug_print(f"Saved (tifffile): {file_path} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
+            return True
+        except ImportError:
             try:
                 from imageio import imwrite
-                imwrite(image_file, image_data)
-                self._debug_print(f"Saved original image: {image_file}")
+                imwrite(file_path, image_data)
+                self._debug_print(f"Saved (imageio): {file_path} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
+                return True
             except ImportError:
-                # Fallback to tifffile if available
-                try:
-                    import tifffile
-                    tifffile.imwrite(image_file, image_data)
-                    self._debug_print(f"Saved original image: {image_file}")
-                except ImportError:
-                    self._debug_print("Could not save image - imageio and tifffile not available")
-                    
+                self._debug_print("Could not save image - tifffile and imageio not available")
+                return False
         except Exception as e:
-            self._debug_print(f"Error saving original image for {annotation_id}: {e}")
+            self._debug_print(f"Error saving image to {file_path}: {e}")
+            return False
 
-    def _create_organized_folder_structure(self) -> None:
-        """Create organized folder structure for read-only mode data export."""
-        base_path = Path(self.config.output.output_directory)
+    def _save_training_image(
+        self,
+        image_obj,
+        meta: dict,
+        annotation_id: str,
+        output_folder: Path
+    ) -> Optional[Path]:
+        """Save an image for training/annotation purposes.
 
-        # Always create training folders
-        folders = ["input_training", "output_training"]
+        Args:
+            image_obj: OMERO image object
+            meta: Metadata dict with timepoint, z_slice, channel, etc.
+            annotation_id: Unique identifier for the annotation
+            output_folder: Directory to save the image
 
-        # Add validation folders only if validation images exist
-        if any(ann.category == "validation" for ann in self.config.annotations):
-            folders.extend(["input_validation", "output_validation"])
+        Returns:
+            Path to saved file, or None on failure
+        """
+        try:
+            if not image_obj:
+                self._debug_print(f"No image object for annotation {annotation_id}")
+                return None
 
-        # Add test folders only if test images exist
-        if any(ann.category == "test" for ann in self.config.annotations):
-            folders.extend(["input_test", "output_test"])
+            image_data = self._load_image_data(image_obj, meta)
+            if image_data is None:
+                self._debug_print(f"No image data for annotation {annotation_id}")
+                return None
 
-        for folder in folders:
-            folder_path = base_path / folder
-            folder_path.mkdir(parents=True, exist_ok=True)
+            # Validate image data
+            if np.all(image_data == 0):
+                self._debug_print(f"Warning: Image {annotation_id} appears to be all black (all zeros)")
 
-        # Create a README file explaining the structure
-        readme_content = """# Dataset Organization
+            output_folder.mkdir(parents=True, exist_ok=True)
+            image_file = output_folder / f"{annotation_id}.tif"
 
-This folder contains an organized dataset for training image segmentation models.
+            if self._save_image_to_disk(image_data, image_file):
+                return image_file
+            return None
 
-## Folder Structure:
-
-- `input_training/`: Original images used for training
-- `output_training/`: Corresponding annotation masks for training images
-- `input_validation/`: Original images used for validation (if validation_n > 0)
-- `output_validation/`: Corresponding annotation masks for validation images
-- `input_test/`: Original images used for testing (if test_n > 0)
-- `output_test/`: Corresponding annotation masks for test images
-
-## Usage with Different Platforms:
-
-### Cellpose Training:
-Use `input_training/` and `input_test/` directories with:
-```bash
-python -m cellpose --train --dir ./input_training --test_dir ./input_test
-```
-
-### BiaPy Training:
-Organize as:
-- train/raw/ ← copy from input_training
-- train/label/ ← copy from output_training
-- val/raw/ ← copy from input_validation
-- val/label/ ← copy from output_validation
-- test/raw/ ← copy from input_test
-- test/label/ ← copy from output_test
-
-## File Naming:
-
-Each image and its corresponding mask share the same annotation ID:
-- Original image: `{annotation_id}_image.tif`
-- Annotation mask: `{annotation_id}_mask.tif`
-
-## Configuration:
-
-The `annotation_config.yaml` file contains all the parameters used to generate this dataset.
-
-## Tracking:
-
-The `tracking_table.csv` file contains detailed information about each annotation unit processed.
-"""
-        
-        readme_path = base_path / "README.md"
-        with open(readme_path, 'w') as f:
-            f.write(readme_content)
-            
-        print(f"Created organized folder structure at: {base_path}")
-        print("Folders: input_training, output_training, input_validation, output_validation")
+        except Exception as e:
+            self._debug_print(f"Error saving training image for {annotation_id}: {e}")
+            return None
 
     # def _update_workflow_status_map(self, table_id: int) -> None:
     #     """Update workflow status map annotation after batch completion."""
@@ -1359,62 +1333,25 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         return table_id, self.config
 
     def _save_images_for_cellpose(self, processing_units: List[Tuple]) -> None:
-        """Save images locally for Cellpose training in organized folders."""
+        """Save images locally for Cellpose training.
+
+        All images are saved to a single 'input' folder. Category metadata
+        is tracked in the config.yaml, not in folder structure.
+        """
         if self.conn is None:
             raise ValueError("OMERO connection is not set.")
+
         output_path = Path(self.config.output.output_directory)
-        
+        input_folder = output_path / "input"
+
         for img_id, annotation_id, meta, row_idx in processing_units:
-            try:
-                print(f"Processing image {annotation_id} (ID: {img_id})")
-                
-                image_obj = self.conn.getObject("Image", img_id)
-                if not image_obj:
-                    print(f"Warning: Could not retrieve image {img_id}")
-                    continue
-                
-                # Load image data using the fixed method
-                image_data = self._load_image_data(image_obj, meta)
-                
-                if image_data is None:
-                    print(f"Warning: No image data for {annotation_id}")
-                    continue
-                
-                ## Determine category and create organized folder structure
-                #category = meta.get("category", "training")
-                # We store all images in a single folder for Cellpose
-                input_dir = f"input_training"
-                
-                # Create input folder
-                input_folder = output_path / input_dir
-                input_folder.mkdir(parents=True, exist_ok=True)
-                
-                # Save image with organized naming
-                image_file = input_folder / f"{annotation_id}_image.tif"
-                
-                # Validate image data before saving
-                if np.all(image_data == 0):
-                    print(f"Warning: Image {annotation_id} appears to be all black (all zeros)")
-                
-                # Use tifffile preferentially (better for scientific imaging)
-                try:
-                    import tifffile
-                    tifffile.imwrite(image_file, image_data)
-                    print(f"Saved (tifffile): {image_file} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
-                except ImportError:
-                    try:
-                        from imageio import imwrite
-                        imwrite(image_file, image_data)
-                        print(f"Saved (imageio): {image_file} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
-                    except ImportError:
-                        print("Warning: Could not save image - imageio and tifffile not available")
-                        continue
-                
-            except Exception as e:
-                print(f"Error processing {annotation_id}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+            print(f"Processing image {annotation_id} (ID: {img_id})")
+
+            image_obj = self.conn.getObject("Image", img_id)
+            saved_path = self._save_training_image(image_obj, meta, annotation_id, input_folder)
+
+            if saved_path is None:
+                print(f"Warning: Could not save image {annotation_id}")
 
     def _process_annotation_file(
         self, annotation_file: Path, annotation_id: str, matching_annotation
@@ -1433,25 +1370,22 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         """
         try:
             if self.config.workflow.read_only_mode:
-                # Read-only mode: organize locally
-                category = matching_annotation.category
-                output_dir = f"output_{category}"
-                
-                local_dir = Path(self.config.output.output_directory) / output_dir
-                local_dir.mkdir(parents=True, exist_ok=True)
-                local_file = local_dir / f"{annotation_id}_mask.tif"
-                
-                # Copy or move file to organized location
+                # Read-only mode: save locally (category tracked in config, not folders)
+                output_dir = Path(self.config.output.output_directory) / "output"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                local_file = output_dir / f"{annotation_id}_mask.tif"
+
+                # Copy file to output location if not already there
                 if annotation_file != local_file:
                     shutil.copy(annotation_file, local_file)
-                
+
                 # Mark as processed
                 matching_annotation.processed = True
                 matching_annotation.annotation_creation_time = datetime.now().isoformat()
-                
+
                 print(f"Processed locally: {annotation_id}")
                 return True
-                
+
             else:
                 # Upload mode: Upload ROIs to OMERO
                 image_id = matching_annotation.image_id
@@ -1492,36 +1426,48 @@ The `tracking_table.csv` file contains detailed information about each annotatio
             traceback.print_exc()
             return False
 
-    def collect_annotations_from_disk(self, folder_pattern: str = "output_*") -> Tuple[int, AnnotationConfig]:
+    def collect_annotations_from_disk(self, folder_pattern: str = "output") -> Tuple[int, AnnotationConfig]:
         """Collect annotation masks from disk and upload to OMERO.
-        
-        This is a generalized method that scans output folders for annotation masks,
-        matches them with the annotation schema, and processes them (upload or local save).
+
+        This method scans output folder(s) for annotation masks, matches them with
+        the annotation schema, and processes them (upload to OMERO or local save).
         Can be used for CellPose, manual annotations, or any other external annotation tool.
-        
+
         Args:
-            folder_pattern: Glob pattern for folders containing annotation masks
-            
+            folder_pattern: Folder name or glob pattern for folders containing annotation masks.
+                           Default is "output" (the standard output folder).
+
         Returns:
             Tuple of (number_processed, updated_config)
         """
         if not self.config.annotations:
             raise ValueError("No annotation schema defined")
-        
+
         output_path = Path(self.config.output.output_directory)
-        
+
         # Find all annotation mask files matching the pattern
         annotation_files = []
-        for folder in output_path.glob(folder_pattern):
+
+        # Check if it's a direct folder name or a glob pattern
+        if "*" in folder_pattern:
+            # Glob pattern - search multiple folders
+            for folder in output_path.glob(folder_pattern):
+                if folder.is_dir():
+                    for mask_file in folder.glob("*_mask.tif"):
+                        annotation_files.append(mask_file)
+                    for mask_file in folder.glob("*_mask.tiff"):
+                        annotation_files.append(mask_file)
+        else:
+            # Direct folder name
+            folder = output_path / folder_pattern
             if folder.is_dir():
-                # Look for mask files
                 for mask_file in folder.glob("*_mask.tif"):
                     annotation_files.append(mask_file)
                 for mask_file in folder.glob("*_mask.tiff"):
                     annotation_files.append(mask_file)
-        
+
         if not annotation_files:
-            print(f"No annotation masks found in folders matching '{folder_pattern}'")
+            print(f"No annotation masks found in '{folder_pattern}'")
             return 0, self.config
         
         print(f"Found {len(annotation_files)} annotation mask files")
@@ -1566,14 +1512,18 @@ The `tracking_table.csv` file contains detailed information about each annotatio
         
         return processed_count, self.config
 
-    def get_annotation_status_from_disk(self, folder_pattern: str = "output_*") -> dict:
+    def get_annotation_status_from_disk(self, folder_name: str = "output") -> dict:
         """Check status of annotations available on disk.
-        
+
+        Args:
+            folder_name: Name of the output folder to check. Default is "output".
+
         Returns:
             Dictionary with status information about available annotations
         """
         output_path = Path(self.config.output.output_directory)
-        
+        output_folder = output_path / folder_name
+
         status = {
             "total_annotations": len(self.config.annotations),
             "processed_annotations": len(self.config.get_processed()),
@@ -1581,22 +1531,21 @@ The `tracking_table.csv` file contains detailed information about each annotatio
             "available_masks": [],
             "missing_masks": [],
         }
-        
+
         # Check which annotation files exist
         for annotation in self.config.annotations:
-            category = annotation.category
             annotation_id = annotation.annotation_id
-            
-            # Check in output folders
-            mask_file = output_path / f"output_{category}" / f"{annotation_id}_mask.tif"
+
+            # Check in output folder (category is tracked in config, not folder structure)
+            mask_file = output_folder / f"{annotation_id}_mask.tif"
             if not mask_file.exists():
-                mask_file = output_path / f"output_{category}" / f"{annotation_id}_mask.tiff"
-            
+                mask_file = output_folder / f"{annotation_id}_mask.tiff"
+
             if mask_file.exists():
                 status["available_masks"].append({
                     "annotation_id": annotation_id,
                     "image_name": annotation.image_name,
-                    "category": category,
+                    "category": annotation.category,
                     "uploaded": annotation.processed and annotation.roi_id is not None,
                     "roi_id": annotation.roi_id,
                     "file_path": str(mask_file),
@@ -1605,9 +1554,9 @@ The `tracking_table.csv` file contains detailed information about each annotatio
                 status["missing_masks"].append({
                     "annotation_id": annotation_id,
                     "image_name": annotation.image_name,
-                    "category": category,
+                    "category": annotation.category,
                 })
-        
+
         return status
 
     def run_cp_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:

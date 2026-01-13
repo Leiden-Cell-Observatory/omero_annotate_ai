@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import yaml
-from pydantic import BaseModel, Field, HttpUrl, model_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from typing_extensions import Literal
 
 
@@ -125,9 +125,6 @@ class SpatialCoverage(BaseModel):
                     "If not specified, defaults to [label_channel] for backward compatibility. "
                     "Multiple channels supported if the training model permits."
     )
-
-
-
 
     @property
     def primary_channel(self) -> int:
@@ -412,7 +409,7 @@ class AnnotationConfig(BaseModel):
         default_factory=datetime.now, description="Creation timestamp"
     )
 
-    # Study context (MIFA emphasis)
+    # Study context
     study: StudyContext = Field(
         default_factory=lambda: StudyContext(title="", description="")
     )
@@ -420,7 +417,7 @@ class AnnotationConfig(BaseModel):
         default_factory=lambda: DatasetInfo(source_description="")
     )
 
-    # Annotation specifics (MIFA requirement)
+    # Annotation specifics
     annotation_methodology: AnnotationMethodology = Field(
         default_factory=lambda: AnnotationMethodology(annotation_criteria="")
     )
@@ -438,12 +435,12 @@ class AnnotationConfig(BaseModel):
     output: OutputConfig = Field(default_factory=lambda: OutputConfig())
     omero: OMEROConfig = Field(default_factory=lambda: OMEROConfig())
 
-    # NEW: Annotation tracking
+    # Annotation tracking
     annotations: List[ImageAnnotation] = Field(
         default_factory=list, description="List of image annotations for tracking processing state"
     )
 
-    # Workflow metadata (bioimage.io style)
+    # Workflow metadata
     documentation: Optional[HttpUrl] = Field(
         default=None, description="Documentation URL"
     )
@@ -650,7 +647,7 @@ class AnnotationConfig(BaseModel):
             if creation_time_str != "None":
                 annotation_data["annotation_creation_time"] = creation_time_str
             
-            self.add_annotation(**annotation_data)
+            self.add_annotation(ImageAnnotation(**annotation_data))
 
     def to_mifa_metadata(self) -> dict:
         """Export MIFA-compatible metadata"""
@@ -726,7 +723,7 @@ class AnnotationConfig(BaseModel):
         # Remember where we saved it
         self.config_file_path = file_path
         
-        print(f"✅ Configuration saved to: {file_path}")
+        print(f"Configuration saved to: {file_path}")
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "AnnotationConfig":
@@ -780,14 +777,10 @@ def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationCo
     """Load configuration from various sources."""
     if isinstance(config_source, dict):
         return AnnotationConfig.from_dict(config_source)
-    elif isinstance(config_source, (str, Path)):
-        if Path(config_source).exists():
-            return AnnotationConfig.from_yaml(config_source)
-        else:
-            # Assume it's a YAML string
-            return AnnotationConfig.from_yaml(config_source)
-    else:
-        raise ValueError("config_source must be a dict, file path, or YAML string")
+    if isinstance(config_source, (str, Path)):
+        # from_yaml handles both file paths and YAML strings
+        return AnnotationConfig.from_yaml(config_source)
+    raise ValueError("config_source must be a dict, file path, or YAML string")
 
 
 def load_config_from_yaml(yaml_path: str) -> AnnotationConfig:
