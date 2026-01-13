@@ -271,7 +271,7 @@ class AnnotationPipeline:
             z_slices = self._get_z_slices_for_image(image)
             
             # Check if we're doing volumetric 3D processing
-            is_volumetric = self.config.spatial_coverage.is_volumetric
+            is_volumetric = self.config.spatial_coverage.three_d
 
             # Create annotations based on processing mode
             for t in timepoints:
