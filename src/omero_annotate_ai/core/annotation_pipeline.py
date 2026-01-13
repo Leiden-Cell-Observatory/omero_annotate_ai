@@ -63,13 +63,15 @@ class AnnotationPipeline:
         """
         self.config = config
         self.conn = conn
-        self.table_id = None  # Track current table ID
+        # Initialize table_id from config if available, otherwise None
+        self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
         self._validate_setup()
 
     def set_table_id(self, table_id: int) -> None:
-        """Update the current table ID."""
+        """Update the current table ID and sync to config."""
         self.table_id = table_id
+        self.config.omero.table_id = table_id
 
     def get_table_id(self) -> Optional[int]:
         """Get the current table ID."""
@@ -1047,10 +1049,11 @@ class AnnotationPipeline:
             existing_table_id=self.table_id
         )
         
-        # Update internal table ID
+        # Update internal table ID and sync to config for persistence
         self.table_id = table_id
+        self.config.omero.table_id = table_id
         print(f"OMERO table updated successfully (ID: {table_id})")
-        
+
         return table_id
 
     def initialize_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, List[Any]]:
@@ -1110,11 +1113,14 @@ class AnnotationPipeline:
         Returns:
             Updated AnnotationConfig with populated annotations
         """
-        # Prepare processing units (populate config.annotations)
-        if not self.config.annotations or not self.config.workflow.resume_from_table:
-            print("Defining annotation schema...")
-            self._prepare_processing_units(images_list)
-        
+        # Preserve existing annotations if already present in config
+        if self.config.annotations:
+            print(f"Using existing {len(self.config.annotations)} annotations from config")
+            return self.config
+
+        # Generate new annotation schema
+        print("Defining annotation schema...")
+        self._prepare_processing_units(images_list)
         print(f"Schema defined: {len(self.config.annotations)} annotations")
         return self.config
 
@@ -1145,8 +1151,9 @@ class AnnotationPipeline:
                 container_id=self.config.omero.container_id,
             )
             self.table_id = table_id
+            self.config.omero.table_id = table_id  # Sync to config for persistence
             print(f"Created OMERO table with ID: {table_id}")
-        
+
         return self.table_id
 
     def _convert_annotations_to_processing_units(self, annotations: List) -> List[Tuple]:

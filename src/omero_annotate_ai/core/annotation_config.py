@@ -10,6 +10,21 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from typing_extensions import Literal
 
 
+# Helper functions for OMERO table serialization
+
+
+def _optional_int_to_str(value: Optional[int]) -> str:
+    """Convert optional int to string for OMERO table storage."""
+    return str(value) if value is not None else "None"
+
+
+def _str_to_optional_int(value: str) -> Optional[int]:
+    """Parse string back to optional int from OMERO table."""
+    if value != "None" and value.isdigit():
+        return int(value)
+    return None
+
+
 # Sub-models for the configuration
 
 class ImageAnnotation(BaseModel):
@@ -160,15 +175,10 @@ class SpatialCoverage(BaseModel):
             return False
         return self.get_label_channel() not in self.get_training_channels()
 
-    @property
-    def is_volumetric(self) -> bool:
-        """Check if 3D volumetric processing is enabled"""
-        return self.three_d
-
     def get_z_range(self) -> Tuple[int, int]:
         """Get the z-range for volumetric processing"""
         if (
-            self.is_volumetric
+            self.three_d
             and self.z_range_start is not None
             and self.z_range_end is not None
         ):
@@ -180,7 +190,7 @@ class SpatialCoverage(BaseModel):
 
     def get_z_length(self) -> int:
         """Get the number of z-slices for volumetric processing"""
-        if self.is_volumetric:
+        if self.three_d:
             z_start, z_end = self.get_z_range()
             return z_end - z_start + 1
         else:
@@ -361,6 +371,12 @@ class OMEROConfig(BaseModel):
         description="Whether to include or exclude wells matching the filters"
     )
 
+    # Table tracking
+    table_id: Optional[int] = Field(
+        default=None,
+        description="OMERO tracking table ID (updated automatically when table is replaced)"
+    )
+
 
 class OutputConfig(BaseModel):
     """Output and workflow configuration"""
@@ -379,7 +395,7 @@ class OutputConfig(BaseModel):
     model_config = ConfigDict(json_encoders={Path: str})
 
     def model_dump(self, **kwargs):
-        """Override model_dump method to convert Path to string"""
+        """Override to convert Path to string for JSON serialization."""
         data = super().model_dump(**kwargs)
         if isinstance(data.get("output_directory"), Path):
             data["output_directory"] = str(data["output_directory"])
@@ -426,14 +442,14 @@ class AnnotationConfig(BaseModel):
             channels=[0], timepoints=[0], z_slices=[0]
         )
     )
-    training: TrainingConfig = Field(default_factory=lambda: TrainingConfig())
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
 
     # Technical configuration
     ai_model: AIModelConfig = Field(default_factory=lambda: AIModelConfig(name=""))
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
-    output: OutputConfig = Field(default_factory=lambda: OutputConfig())
-    omero: OMEROConfig = Field(default_factory=lambda: OMEROConfig())
+    output: OutputConfig = Field(default_factory=OutputConfig)
+    omero: OMEROConfig = Field(default_factory=OMEROConfig)
 
     # Annotation tracking
     annotations: List[ImageAnnotation] = Field(
@@ -556,8 +572,8 @@ class AnnotationConfig(BaseModel):
                 "z_slice": annotation.z_slice,
                 "timepoint": annotation.timepoint,
                 "sam_model": annotation.model_type,
-                "label_id": str(annotation.label_id) if annotation.label_id is not None else "None",
-                "roi_id": str(annotation.roi_id) if annotation.roi_id is not None else "None",
+                "label_id": _optional_int_to_str(annotation.label_id),
+                "roi_id": _optional_int_to_str(annotation.roi_id),
                 "is_volumetric": annotation.is_volumetric,
                 "processed": annotation.processed,
                 "is_patch": annotation.is_patch,
@@ -567,7 +583,7 @@ class AnnotationConfig(BaseModel):
                 "patch_height": annotation.patch_height,
                 "annotation_type": annotation.annotation_type,
                 "annotation_creation_time": annotation.annotation_creation_time or "None",
-                "schema_attachment_id": str(annotation.schema_attachment_id) if annotation.schema_attachment_id is not None else "None",
+                "schema_attachment_id": _optional_int_to_str(annotation.schema_attachment_id),
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
@@ -629,18 +645,18 @@ class AnnotationConfig(BaseModel):
                 "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
             }
             
-            # Handle optional fields
-            roi_id_str = str(row.get("roi_id", "None"))
-            if roi_id_str != "None" and roi_id_str.isdigit():
-                annotation_data["roi_id"] = int(roi_id_str)
-                
-            label_id_str = str(row.get("label_id", "None"))  
-            if label_id_str != "None" and label_id_str.isdigit():
-                annotation_data["label_id"] = int(label_id_str)
-                
-            schema_id_str = str(row.get("schema_attachment_id", "None"))
-            if schema_id_str != "None" and schema_id_str.isdigit():
-                annotation_data["schema_attachment_id"] = int(schema_id_str)
+            # Handle optional ID fields
+            roi_id = _str_to_optional_int(str(row.get("roi_id", "None")))
+            if roi_id is not None:
+                annotation_data["roi_id"] = roi_id
+
+            label_id = _str_to_optional_int(str(row.get("label_id", "None")))
+            if label_id is not None:
+                annotation_data["label_id"] = label_id
+
+            schema_id = _str_to_optional_int(str(row.get("schema_attachment_id", "None")))
+            if schema_id is not None:
+                annotation_data["schema_attachment_id"] = schema_id
                 
             # Handle timestamp - keep as string
             creation_time_str = str(row.get("annotation_creation_time", "None"))
@@ -733,28 +749,18 @@ class AnnotationConfig(BaseModel):
     @classmethod
     def from_yaml(cls, yaml_source: Union[str, Path]) -> "AnnotationConfig":
         """Create configuration from YAML string or file path."""
-        config_dict = None
-        source_path = None
-        
-        if isinstance(yaml_source, (str, Path)):
-            yaml_path = Path(yaml_source)
-            if yaml_path.exists():
-                with open(yaml_path, "r") as f:
-                    config_dict = yaml.safe_load(f)
-                source_path = yaml_path
-            else:
-                # Assume it's a YAML string
-                config_dict = yaml.safe_load(str(yaml_source))
-        else:
-            config_dict = yaml.safe_load(yaml_source)
+        yaml_path = Path(yaml_source)
 
-        config = cls.from_dict(config_dict)
-        
-        # Remember source path if loaded from file
-        if source_path:
-            config.config_file_path = source_path
-        
-        return config
+        if yaml_path.exists():
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                config_dict = yaml.safe_load(f)
+            config = cls.from_dict(config_dict)
+            config.config_file_path = yaml_path
+            return config
+
+        # Not a file path - treat as YAML string
+        config_dict = yaml.safe_load(str(yaml_source))
+        return cls.from_dict(config_dict)
 
 
 def parse_sequence(value: Union[str, List[int]]) -> List[int]:
@@ -786,25 +792,18 @@ def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationCo
 def load_config_from_yaml(yaml_path: str) -> AnnotationConfig:
     """Load AnnotationConfig from a YAML file.
 
-    This is a simple drop-in replacement for workflow_widget.get_config()
-    to enable easy testing of the pipeline with YAML configuration files.
+    Convenience function for loading configuration from YAML files.
 
     Args:
         yaml_path: Path to YAML configuration file
 
     Returns:
         AnnotationConfig object
-
-    Example:
-        # Instead of: config = workflow_widget.get_config()
-        config = load_config_from_yaml('test_config.yaml')
     """
-
-    config_path = Path(yaml_path)
-    if not config_path.exists():
+    path = Path(yaml_path)
+    if not path.exists():
         raise FileNotFoundError(f"Config file not found: {yaml_path}")
-
-    return AnnotationConfig.from_yaml(config_path)
+    return AnnotationConfig.from_yaml(path)
 
 
 def create_default_config() -> AnnotationConfig:
