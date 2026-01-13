@@ -229,6 +229,31 @@ class TestConfigEdgeCases:
         # Clean up
         Path(f.name).unlink()
 
+    def test_path_serialization_in_model_dump(self):
+        """
+        Tests that Path objects are serialized to strings in model_dump.
+        This ensures OutputConfig and AnnotationConfig correctly handle
+        Path to string conversion for JSON/YAML serialization.
+        """
+        from omero_annotate_ai.core.annotation_config import OutputConfig
+
+        # Test OutputConfig standalone
+        output = OutputConfig(output_directory=Path("/tmp/test_output"))
+        output_dict = output.model_dump()
+        assert isinstance(output_dict["output_directory"], str)
+        assert output_dict["output_directory"] == "/tmp/test_output"
+
+        # Test AnnotationConfig with nested OutputConfig
+        config = create_default_config()
+        config.output.output_directory = Path("/tmp/test_config_output")
+        config_dict = config.model_dump()
+        assert isinstance(config_dict["output"]["output_directory"], str)
+        assert config_dict["output"]["output_directory"] == "/tmp/test_config_output"
+
+        # Test to_dict (which uses model_dump)
+        config_dict = config.to_dict()
+        assert isinstance(config_dict["output"]["output_directory"], str)
+
 
 @pytest.mark.unit
 class TestMultiChannelSupport:
