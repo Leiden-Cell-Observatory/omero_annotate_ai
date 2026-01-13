@@ -112,13 +112,14 @@ class TestAnnotationPipeline:
         """Test directory setup."""
         config = create_default_config()
         config.output.output_directory = Path(tempfile.mkdtemp())
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         output_path = pipeline._setup_directories()
-        
+
         assert output_path.exists()
+        assert (output_path / "input").exists()
+        assert (output_path / "output").exists()
         assert (output_path / "embed").exists()
-        assert (output_path / "annotations").exists()
     
     def test_get_table_title(self):
         """Test table title generation - should use config name directly."""
