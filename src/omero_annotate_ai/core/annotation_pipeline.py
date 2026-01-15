@@ -155,7 +155,12 @@ class AnnotationPipeline:
             # Fallback to container-based naming with timestamp
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            return f"{self.config.omero.container_type}_{self.config.omero.container_id}_{timestamp}"
+            container_ids = self.config.omero.get_all_container_ids()
+            if len(container_ids) > 1:
+                return f"{self.config.omero.container_type}_multi_{len(container_ids)}_{timestamp}"
+            else:
+                container_id = container_ids[0] if container_ids else 0
+                return f"{self.config.omero.container_type}_{container_id}_{timestamp}"
 
     def _initialize_tracking_table(self, images_list: List[Any]) -> int:
         """Initialize tracking table for the annotation process using config-first approach.
@@ -180,7 +185,7 @@ class AnnotationPipeline:
             config_df=config_df,
             table_title=table_title,
             container_type=self.config.omero.container_type,
-            container_id=self.config.omero.container_id,
+            container_ids=self.config.omero.get_all_container_ids(),
         )
 
         # Store configuration in OMERO
@@ -865,72 +870,117 @@ class AnnotationPipeline:
         # All conditions met
         return True
 
-    def get_image_ids_from_container(self) -> List[int]:
-        """Get image IDs from the configured OMERO container.
+    def _get_image_ids_from_plate(self, container_id: int) -> List[int]:
+        """Get image IDs from a single plate, applying well filters if configured.
 
-        For plate containers, applies well filtering if well_filters are configured.
+        Args:
+            container_id: The plate ID to get images from.
+
+        Returns:
+            List of image IDs from the plate (filtered if well_filters configured).
         """
-        container_type = self.config.omero.container_type
-        container_id = self.config.omero.container_id
-        print(f"Loading image IDs from {container_type} {container_id}")
+        if self.config.omero.well_filters:
+            print(f"Applying well filters: {self.config.omero.well_filters}")
+            print(f"Filter mode: {self.config.omero.well_filter_mode}")
+
+            # Get all wells in the plate
+            well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
+            print(f"Found {len(well_ids)} wells in plate {container_id}")
+
+            filtered_image_ids = []
+            matched_wells = 0
+
+            for well_id in well_ids:
+                # Get map annotations from the well
+                well_kv_pairs = self._get_well_map_annotations(well_id)
+
+                # Check if well matches filter criteria
+                matches_filter = self._check_well_filter(well_kv_pairs, self.config.omero.well_filters)
+
+                # Apply include/exclude logic
+                should_include = (
+                    (self.config.omero.well_filter_mode == "include" and matches_filter) or
+                    (self.config.omero.well_filter_mode == "exclude" and not matches_filter)
+                )
+
+                if should_include:
+                    matched_wells += 1
+                    # Get all images from this well
+                    well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
+                    filtered_image_ids.extend(well_image_ids)
+                    self._debug_print(f"  Well {well_id}: matched filter, adding {len(well_image_ids)} images")
+                else:
+                    self._debug_print(f"  Well {well_id}: filtered out")
+
+            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(filtered_image_ids)} images selected")
+            return filtered_image_ids
+        else:
+            # No filters - get all images from plate
+            return list(ezomero.get_image_ids(self.conn, plate=container_id))
+
+    def _get_image_ids_from_single_container(self, container_type: str, container_id: int) -> List[int]:
+        """Get image IDs from a single OMERO container.
+
+        Args:
+            container_type: Type of container (dataset, project, plate, screen, image).
+            container_id: The container ID.
+
+        Returns:
+            List of image IDs from the container.
+        """
         if container_type == "dataset":
-            image_ids = list(ezomero.get_image_ids(self.conn, dataset=container_id))
+            return list(ezomero.get_image_ids(self.conn, dataset=container_id))
         elif container_type == "project":
             dataset_ids = ezomero.get_dataset_ids(self.conn, project=container_id)
             image_ids = []
             for ds_id in dataset_ids:
                 image_ids.extend(ezomero.get_image_ids(self.conn, dataset=ds_id))
+            return image_ids
         elif container_type == "plate":
-            # Check if well filtering is enabled
-            if self.config.omero.well_filters:
-                print(f"Applying well filters: {self.config.omero.well_filters}")
-                print(f"Filter mode: {self.config.omero.well_filter_mode}")
-
-                # Get all wells in the plate
-                well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
-                print(f"Found {len(well_ids)} wells in plate {container_id}")
-
-                filtered_image_ids = []
-                matched_wells = 0
-
-                for well_id in well_ids:
-                    # Get map annotations from the well
-                    well_kv_pairs = self._get_well_map_annotations(well_id)
-
-                    # Check if well matches filter criteria
-                    matches_filter = self._check_well_filter(well_kv_pairs, self.config.omero.well_filters)
-
-                    # Apply include/exclude logic
-                    should_include = (
-                        (self.config.omero.well_filter_mode == "include" and matches_filter) or
-                        (self.config.omero.well_filter_mode == "exclude" and not matches_filter)
-                    )
-
-                    if should_include:
-                        matched_wells += 1
-                        # Get all images from this well
-                        well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
-                        filtered_image_ids.extend(well_image_ids)
-                        self._debug_print(f"  Well {well_id}: matched filter, adding {len(well_image_ids)} images")
-                    else:
-                        self._debug_print(f"  Well {well_id}: filtered out")
-
-                image_ids = filtered_image_ids
-                print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(image_ids)} images selected")
-            else:
-                # No filters - get all images from plate
-                image_ids = list(ezomero.get_image_ids(self.conn, plate=container_id))
+            return self._get_image_ids_from_plate(container_id)
         elif container_type == "screen":
             plate_ids = ezomero.get_plate_ids(self.conn, screen=container_id)
             image_ids = []
             for plate_id in plate_ids:
                 image_ids.extend(ezomero.get_image_ids(self.conn, plate=plate_id))
+            return image_ids
         elif container_type == "image":
             return [container_id]
         else:
             raise ValueError(f"Unsupported container type: {container_type}")
-        print(f"Found {len(image_ids)} image IDs")
-        return image_ids
+
+    def get_image_ids_from_container(self) -> List[int]:
+        """Get image IDs from the configured OMERO container(s).
+
+        Supports multiple containers of the same type via container_ids.
+        For plate containers, applies well filtering if well_filters are configured.
+
+        Returns:
+            List of unique image IDs from all configured containers.
+        """
+        container_type = self.config.omero.container_type
+        container_ids = self.config.omero.get_all_container_ids()
+
+        if not container_ids:
+            raise ValueError("No container IDs configured")
+
+        all_image_ids = []
+
+        for container_id in container_ids:
+            print(f"Loading image IDs from {container_type} {container_id}")
+            image_ids = self._get_image_ids_from_single_container(container_type, container_id)
+            print(f"  Found {len(image_ids)} image IDs from container {container_id}")
+            all_image_ids.extend(image_ids)
+
+        # Remove duplicates while preserving order
+        unique_image_ids = list(dict.fromkeys(all_image_ids))
+
+        if len(container_ids) > 1:
+            print(f"Total: {len(unique_image_ids)} unique image IDs from {len(container_ids)} containers")
+        else:
+            print(f"Found {len(unique_image_ids)} image IDs")
+
+        return unique_image_ids
 
     def get_images_by_ids(self, image_ids: List[int]) -> List[Any]:
         """Get OMERO image objects for the given image IDs."""
@@ -1045,7 +1095,7 @@ class AnnotationPipeline:
             config_df=config_df,
             table_title=table_title,
             container_type=self.config.omero.container_type,
-            container_id=self.config.omero.container_id,
+            container_ids=self.config.omero.get_all_container_ids(),
             existing_table_id=self.table_id
         )
         
@@ -1148,7 +1198,7 @@ class AnnotationPipeline:
                 config_df=config_df,
                 table_title=self._get_table_title(),
                 container_type=self.config.omero.container_type,
-                container_id=self.config.omero.container_id,
+                container_ids=self.config.omero.get_all_container_ids(),
             )
             self.table_id = table_id
             self.config.omero.table_id = table_id  # Sync to config for persistence
