@@ -27,49 +27,61 @@ def _str_to_optional_int(value: str) -> Optional[int]:
 
 # Sub-models for the configuration
 
+
 class ImageAnnotation(BaseModel):
     """Individual image annotation record for tracking processing state"""
-    
+
     # Image identification
     image_id: int = Field(description="OMERO image ID")
     image_name: str = Field(description="OMERO image name")
     annotation_id: str = Field(default="", description="Unique annotation identifier")
-    
+
     # Processing parameters
     category: Literal["training", "validation", "test"] = Field(
-        default="training",
-        description="Data split category"
+        default="training", description="Data split category"
     )
     timepoint: int = Field(default=-1, description="Timepoint index")
     z_slice: int = Field(default=-1, description="Z-slice index")
     channel: int = Field(default=-1, description="Channel index")
-    
+
     # 3D/volumetric processing
-    is_volumetric: bool = Field(default=False, description="3D volumetric processing mode")
+    is_volumetric: bool = Field(
+        default=False, description="3D volumetric processing mode"
+    )
     z_start: int = Field(default=-1, description="Starting z-slice for 3D volumes")
-    z_end: int = Field(default=-1, description="Ending z-slice for 3D volumes") 
+    z_end: int = Field(default=-1, description="Ending z-slice for 3D volumes")
     z_length: int = Field(default=1, description="Number of z-slices")
-    
+
     # Patch processing
     is_patch: bool = Field(default=False, description="Whether this is a patch")
     patch_x: int = Field(default=0, description="Patch X coordinate")
     patch_y: int = Field(default=0, description="Patch Y coordinate")
     patch_width: int = Field(default=0, description="Patch width")
     patch_height: int = Field(default=0, description="Patch height")
-    
+
     # AI model info
     model_type: str = Field(default="vit_b_lm", description="SAM model type")
-    
+
     # Processing status
     processed: bool = Field(default=False, description="Whether processing is complete")
-    annotation_creation_time: Optional[str] = Field(default=None, description="Completion timestamp in ISO format")
-    annotation_type: str = Field(default="segmentation_mask", description="Type of annotation")
-    
+    annotation_creation_time: Optional[str] = Field(
+        default=None, description="Completion timestamp in ISO format"
+    )
+    annotation_type: str = Field(
+        default="segmentation_mask", description="Type of annotation"
+    )
+
     # OMERO annotation IDs (None until uploaded)
     roi_id: Optional[int] = Field(default=None, description="OMERO ROI ID")
-    label_id: Optional[int] = Field(default=None, description="OMERO label file annotation ID")
-    label_input_id: Optional[int] = Field(default=None, description="OMERO file annotation ID for label input image")
-    schema_attachment_id: Optional[int] = Field(default=None, description="OMERO schema attachment ID")
+    label_id: Optional[int] = Field(
+        default=None, description="OMERO label file annotation ID"
+    )
+    label_input_id: Optional[int] = Field(
+        default=None, description="OMERO file annotation ID for label input image"
+    )
+    schema_attachment_id: Optional[int] = Field(
+        default=None, description="OMERO schema attachment ID"
+    )
 
 
 class AuthorInfo(BaseModel):
@@ -89,8 +101,8 @@ class AnnotationMethodology(BaseModel):
     annotation_type: Literal[
         "segmentation_mask", "bounding_box", "point", "classification"
     ] = "segmentation_mask"
-    annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = Field(
-        default=None, description="How annotations were produced"
+    annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = (
+        Field(default=None, description="How annotations were produced")
     )
     annotation_criteria: str = Field(description="Criteria used for annotation")
     annotation_coverage: Literal["all", "representative", "partial"] = "representative"
@@ -104,7 +116,7 @@ class SpatialCoverage(BaseModel):
     n_timepoints: Optional[int] = Field(
         default=None,
         description="Number of timepoints to randomly select (used when timepoint_mode='random'). "
-                    "If not specified, uses the length of timepoints list for backward compatibility."
+        "If not specified, uses the length of timepoints list for backward compatibility.",
     )
     timepoint_mode: Literal["all", "random", "specific"] = "specific"
     z_slices: List[int] = Field(description="Z-slices as list")
@@ -112,7 +124,7 @@ class SpatialCoverage(BaseModel):
     n_slices: Optional[int] = Field(
         default=None,
         description="Number of z-slices to randomly select (used when z_slice_mode='random'). "
-                    "If not specified, uses the length of z_slices list for backward compatibility."
+        "If not specified, uses the length of z_slices list for backward compatibility.",
     )
     z_slice_mode: Literal["all", "random", "specific"] = "specific"
     spatial_units: str = Field(
@@ -132,13 +144,13 @@ class SpatialCoverage(BaseModel):
     label_channel: Optional[int] = Field(
         default=None,
         description="Channel index used for segmentation/labeling (e.g., fluorescence nuclei). "
-                    "If not specified, defaults to channels[0] for backward compatibility."
+        "If not specified, defaults to channels[0] for backward compatibility.",
     )
     training_channels: Optional[List[int]] = Field(
         default=None,
         description="Channel index(es) used for model training input (e.g., brightfield). "
-                    "If not specified, defaults to [label_channel] for backward compatibility. "
-                    "Multiple channels supported if the training model permits."
+        "If not specified, defaults to [label_channel] for backward compatibility. "
+        "Multiple channels supported if the training model permits.",
     )
 
     @property
@@ -156,7 +168,11 @@ class SpatialCoverage(BaseModel):
 
         Returns label_channel if explicitly set, otherwise falls back to primary_channel (channels[0]).
         """
-        return self.label_channel if self.label_channel is not None else self.primary_channel
+        return (
+            self.label_channel
+            if self.label_channel is not None
+            else self.primary_channel
+        )
 
     def get_training_channels(self) -> List[int]:
         """Get the channel(s) to use for training input.
@@ -164,7 +180,11 @@ class SpatialCoverage(BaseModel):
         Returns training_channels if explicitly set, otherwise falls back to [get_label_channel()]
         for backward compatibility (same channel for both labeling and training).
         """
-        return self.training_channels if self.training_channels is not None else [self.get_label_channel()]
+        return (
+            self.training_channels
+            if self.training_channels is not None
+            else [self.get_label_channel()]
+        )
 
     def uses_separate_channels(self) -> bool:
         """Check if separate channels are configured for labeling and training.
@@ -183,18 +203,19 @@ class SpatialCoverage(BaseModel):
             and self.z_range_end is not None
         ):
             return (self.z_range_start, self.z_range_end)
-        elif self.z_slices:
+
+        # Fallback to z_slices if 3D mode is not enabled or range is not specified
+        if self.z_slices:
             return (min(self.z_slices), max(self.z_slices))
-        else:
-            return (0, 0)
+
+        return (0, 0)
 
     def get_z_length(self) -> int:
         """Get the number of z-slices for volumetric processing"""
         if self.three_d:
             z_start, z_end = self.get_z_range()
             return z_end - z_start + 1
-        else:
-            return 1
+        return 1
 
     @model_validator(mode="after")
     def validate_3d_settings(self):
@@ -211,6 +232,32 @@ class SpatialCoverage(BaseModel):
                 self.z_range_end = max(self.z_slices)
             elif self.z_range_start > self.z_range_end:
                 raise ValueError("z_range_start must be <= z_range_end")
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_channel_settings(self):
+        """Validate channel configuration consistency.
+
+        Ensures that label_channel and training_channels are valid indices
+        that exist in the channels list.
+        """
+        all_channels = set(self.channels)
+
+        # Validate label_channel is in channels list
+        if self.label_channel is not None:
+            if self.label_channel not in all_channels:
+                raise ValueError(
+                    f"label_channel ({self.label_channel}) must be in channels list ({self.channels})"
+                )
+
+        # Validate training_channels are in channels list
+        if self.training_channels is not None:
+            for tc in self.training_channels:
+                if tc not in all_channels:
+                    raise ValueError(
+                        f"training_channels ({tc}) must be in channels list ({self.channels})"
+                    )
 
         return self
 
@@ -300,30 +347,45 @@ class TrainingConfig(BaseModel):
 
     # Fraction-based splits (for segment_all=True)
     train_fraction: float = Field(
-        default=0.7, ge=0.0, le=1.0, description="Fraction of data for training (used when segment_all=True)"
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of data for training (used when segment_all=True)",
     )
     validation_fraction: float = Field(
-        default=0.3, ge=0.0, le=1.0, description="Fraction of data for validation (used when segment_all=True)"
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of data for validation (used when segment_all=True)",
     )
     test_fraction: float = Field(
-        default=0.0, ge=0.0, le=1.0, description="Fraction of data for testing (used when segment_all=True)"
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of data for testing (used when segment_all=True)",
     )
 
     # Count-based splits (for segment_all=False)
     # Note: ge=0 allows train_n=0 at field level; the model_validator enforces
     # train_n >= 1 only when segment_all=False (count mode)
-    train_n: int = Field(default=3, ge=0, description="Number of training images (used when segment_all=False)")
-    validate_n: int = Field(default=2, ge=0, description="Number of validation images (0=no validation)")
-    test_n: int = Field(default=0, ge=0, description="Number of test images (0=no test)")
-
-    segment_all: bool = Field(
-        default=False, description="Process all images vs subset"
+    train_n: int = Field(
+        default=3,
+        ge=0,
+        description="Number of training images (used when segment_all=False)",
     )
+    validate_n: int = Field(
+        default=2, ge=0, description="Number of validation images (0=no validation)"
+    )
+    test_n: int = Field(
+        default=0, ge=0, description="Number of test images (0=no test)"
+    )
+
+    segment_all: bool = Field(default=False, description="Process all images vs subset")
     quality_threshold: Optional[float] = Field(
         default=None, description="Minimum quality score"
     )
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_splits(self):
         """Validate splits based on segment_all mode."""
         if self.segment_all:
@@ -356,26 +418,62 @@ class OMEROConfig(BaseModel):
     """OMERO connection and data selection configuration"""
 
     container_type: str = Field(default="dataset", description="OMERO container type")
-    container_id: int = Field(default=0, description="OMERO container ID")
+    container_id: int = Field(default=0, description="OMERO container ID (single container)")
+    container_ids: Optional[List[int]] = Field(
+        default=None,
+        description="List of OMERO container IDs of the same type. "
+        "Takes precedence over container_id when set.",
+    )
     source_desc: str = Field(default="", description="Source description for tracking")
 
     # Well filtering based on key-value pairs (for plate containers)
     well_filters: Optional[Dict[str, List[str]]] = Field(
         default=None,
-        description="Filter wells by map annotation key-value pairs attached to wells. "
-                    "Example: {'cellline': ['U2OS', 'HeLa'], 'treatment': ['Control']}. "
-                    "All conditions must be met (AND logic). Only applies when container_type='plate'."
+        description="Filter wells by map annotation key-value pairs. "
+        "Example: {'cellline': ['U2OS', 'HeLa'], 'treatment': ['Control']}. "
+        "All conditions must be met (AND logic). Only applies when container_type='plate'.",
     )
     well_filter_mode: Literal["include", "exclude"] = Field(
         default="include",
-        description="Whether to include or exclude wells matching the filters"
+        description="Whether to include or exclude wells matching the filters",
     )
 
     # Table tracking
     table_id: Optional[int] = Field(
         default=None,
-        description="OMERO tracking table ID (updated automatically when table is replaced)"
+        description="OMERO tracking table ID (updated automatically when table is replaced)",
     )
+
+    def get_all_container_ids(self) -> List[int]:
+        """Get all container IDs, with container_ids taking precedence over container_id.
+
+        Returns:
+            List of container IDs. Returns container_ids if set and non-empty,
+            otherwise returns [container_id] if container_id is non-zero,
+            otherwise returns empty list.
+        """
+        if self.container_ids is not None and len(self.container_ids) > 0:
+            return self.container_ids
+        if self.container_id != 0:
+            return [self.container_id]
+        return []
+
+    def get_primary_container_id(self) -> int:
+        """Get the primary (first) container ID.
+
+        Returns:
+            The first container ID from the list, or 0 if no containers configured.
+        """
+        ids = self.get_all_container_ids()
+        return ids[0] if ids else 0
+
+    def is_multi_container(self) -> bool:
+        """Check if multiple containers are configured.
+
+        Returns:
+            True if more than one container ID is configured.
+        """
+        return len(self.get_all_container_ids()) > 1
 
 
 class OutputConfig(BaseModel):
@@ -453,7 +551,8 @@ class AnnotationConfig(BaseModel):
 
     # Annotation tracking
     annotations: List[ImageAnnotation] = Field(
-        default_factory=list, description="List of image annotations for tracking processing state"
+        default_factory=list,
+        description="List of image annotations for tracking processing state",
     )
 
     # Workflow metadata
@@ -498,24 +597,29 @@ class AnnotationConfig(BaseModel):
 
     def get_unprocessed(self) -> List[ImageAnnotation]:
         """Get annotations where processed=False.
-        
+
         Returns:
             List of unprocessed ImageAnnotation objects
         """
         return [ann for ann in self.annotations if not ann.processed]
-    
+
     def get_processed(self) -> List[ImageAnnotation]:
         """Get annotations where processed=True.
-        
+
         Returns:
             List of processed ImageAnnotation objects
         """
         return [ann for ann in self.annotations if ann.processed]
 
-    def mark_completed(self, image_id: int, roi_id: Optional[int] = None, 
-                      label_id: Optional[int] = None, **kwargs):
+    def mark_completed(
+        self,
+        image_id: int,
+        roi_id: Optional[int] = None,
+        label_id: Optional[int] = None,
+        **kwargs,
+    ):
         """Mark annotation as completed with OMERO IDs.
-        
+
         Args:
             image_id: OMERO image ID to update
             roi_id: OMERO ROI ID (optional)
@@ -537,7 +641,7 @@ class AnnotationConfig(BaseModel):
 
     def get_progress_summary(self) -> Dict[str, Union[int, float]]:
         """Get completion statistics.
-        
+
         Returns:
             Dictionary with progress information
         """
@@ -547,18 +651,18 @@ class AnnotationConfig(BaseModel):
             "total_units": total,
             "completed_units": completed,
             "pending_units": total - completed,
-            "progress_percent": round(100 * completed / total, 1) if total > 0 else 0
+            "progress_percent": round(100 * completed / total, 1) if total > 0 else 0,
         }
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert annotations to OMERO-compatible DataFrame.
-        
+
         Returns:
             DataFrame matching OMERO table schema
         """
         if not self.annotations:
             return pd.DataFrame()
-            
+
         # Convert annotations to list of dicts
         rows = []
         for annotation in self.annotations:
@@ -582,46 +686,84 @@ class AnnotationConfig(BaseModel):
                 "patch_width": annotation.patch_width,
                 "patch_height": annotation.patch_height,
                 "annotation_type": annotation.annotation_type,
-                "annotation_creation_time": annotation.annotation_creation_time or "None",
-                "schema_attachment_id": _optional_int_to_str(annotation.schema_attachment_id),
+                "annotation_creation_time": annotation.annotation_creation_time
+                or "None",
+                "schema_attachment_id": _optional_int_to_str(
+                    annotation.schema_attachment_id
+                ),
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
             }
             rows.append(row)
-        
+
         # Create DataFrame with proper column order
         columns = [
-            "image_id", "image_name", "train", "validate", "channel", "z_slice", "timepoint",
-            "sam_model", "label_id", "roi_id", "is_volumetric", "processed", "is_patch",
-            "patch_x", "patch_y", "patch_width", "patch_height", "annotation_type",
-            "annotation_creation_time", "schema_attachment_id", "z_start", "z_end", "z_length"
+            "image_id",
+            "image_name",
+            "train",
+            "validate",
+            "channel",
+            "z_slice",
+            "timepoint",
+            "sam_model",
+            "label_id",
+            "roi_id",
+            "is_volumetric",
+            "processed",
+            "is_patch",
+            "patch_x",
+            "patch_y",
+            "patch_width",
+            "patch_height",
+            "annotation_type",
+            "annotation_creation_time",
+            "schema_attachment_id",
+            "z_start",
+            "z_end",
+            "z_length",
         ]
-        
+
         df = pd.DataFrame(rows, columns=columns)
-        
+
         # Ensure proper data types for OMERO compatibility
-        numeric_columns = ["image_id", "patch_x", "patch_y", "patch_width", "patch_height",
-                          "z_slice", "timepoint", "z_start", "z_end", "z_length"]
+        numeric_columns = [
+            "image_id",
+            "patch_x",
+            "patch_y",
+            "patch_width",
+            "patch_height",
+            "z_slice",
+            "timepoint",
+            "z_start",
+            "z_end",
+            "z_length",
+        ]
         for col in numeric_columns:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-1).astype(int)
-        
-        boolean_columns = ["train", "validate", "processed", "is_patch", "is_volumetric"]
+
+        boolean_columns = [
+            "train",
+            "validate",
+            "processed",
+            "is_patch",
+            "is_volumetric",
+        ]
         for col in boolean_columns:
             if col in df.columns:
                 df[col] = df[col].astype(bool)
-                
+
         return df
 
     def from_dataframe(self, df: pd.DataFrame):
         """Load annotations from existing OMERO table DataFrame.
-        
+
         Args:
             df: DataFrame from OMERO table
         """
         self.annotations.clear()
-        
+
         for _, row in df.iterrows():
             # Map OMERO table columns back to ImageAnnotation fields
             annotation_data = {
@@ -644,7 +786,7 @@ class AnnotationConfig(BaseModel):
                 "processed": bool(row.get("processed", False)),
                 "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
             }
-            
+
             # Handle optional ID fields
             roi_id = _str_to_optional_int(str(row.get("roi_id", "None")))
             if roi_id is not None:
@@ -654,22 +796,25 @@ class AnnotationConfig(BaseModel):
             if label_id is not None:
                 annotation_data["label_id"] = label_id
 
-            schema_id = _str_to_optional_int(str(row.get("schema_attachment_id", "None")))
+            schema_id = _str_to_optional_int(
+                str(row.get("schema_attachment_id", "None"))
+            )
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
-                
+
             # Handle timestamp - keep as string
             creation_time_str = str(row.get("annotation_creation_time", "None"))
             if creation_time_str != "None":
                 annotation_data["annotation_creation_time"] = creation_time_str
-            
+
             self.add_annotation(ImageAnnotation(**annotation_data))
 
     def to_mifa_metadata(self) -> dict:
         """Export MIFA-compatible metadata"""
         return {
             "annotation_type": self.annotation_methodology.annotation_type,
-            "annotation_method": self.annotation_methodology.annotation_method or "unknown",
+            "annotation_method": self.annotation_methodology.annotation_method
+            or "unknown",
             "annotation_criteria": self.annotation_methodology.annotation_criteria,
             "spatial_coverage": self.spatial_coverage.model_dump(),
             "study_context": self.study.model_dump(),
@@ -727,18 +872,20 @@ class AnnotationConfig(BaseModel):
             allow_unicode=True,
         )
 
-    def save_yaml(self, file_path: Union[str, Path], *, sort_keys: bool = False) -> None:
+    def save_yaml(
+        self, file_path: Union[str, Path], *, sort_keys: bool = False
+    ) -> None:
         """Save configuration to YAML file and remember the path."""
         file_path = Path(file_path)
-        
+
         # Save the config using the same serialization as to_yaml to keep ordering consistent
         yaml_str = self.to_yaml(sort_keys=sort_keys)
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(yaml_str)
-        
+
         # Remember where we saved it
         self.config_file_path = file_path
-        
+
         print(f"Configuration saved to: {file_path}")
 
     @classmethod
@@ -859,9 +1006,9 @@ training:
   train_n: 3
   validation_fraction: 0.3
   validate_n: 3
-  segment_all: false  # NEW
+  segment_all: false 
 
-workflow:  # NEW SECTION
+workflow: 
   resume_from_table: false
   read_only_mode: false
 
@@ -875,7 +1022,7 @@ processing:
   use_patches: true
   patch_size: [512, 512]
   patches_per_image: 4
-  random_patches: true  # NEW
+  random_patches: true  
   
 output:
   output_directory: "./annotations"

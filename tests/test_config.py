@@ -415,3 +415,135 @@ class TestMultiChannelYamlSerialization:
         assert config.spatial_coverage.get_label_channel() == 0
         assert config.spatial_coverage.get_training_channels() == [0]
         assert config.spatial_coverage.uses_separate_channels() is False
+
+
+@pytest.mark.unit
+class TestOMEROConfigMultiContainer:
+    """Test OMEROConfig multi-container fields and methods."""
+
+    def test_get_all_container_ids_single(self):
+        """Test get_all_container_ids with single container_id."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 123}
+        )
+        assert config.omero.get_all_container_ids() == [123]
+
+    def test_get_all_container_ids_multiple(self):
+        """Test get_all_container_ids with container_ids list."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [1, 2, 3]}
+        )
+        assert config.omero.get_all_container_ids() == [1, 2, 3]
+
+    def test_container_ids_precedence(self):
+        """Test that container_ids takes precedence over container_id."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_id": 999,  # Should be ignored
+                "container_ids": [1, 2, 3]
+            }
+        )
+        assert config.omero.get_all_container_ids() == [1, 2, 3]
+
+    def test_get_all_container_ids_empty_list(self):
+        """Test that empty container_ids falls back to container_id."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_id": 456,
+                "container_ids": []
+            }
+        )
+        assert config.omero.get_all_container_ids() == [456]
+
+    def test_get_all_container_ids_no_container(self):
+        """Test get_all_container_ids with no containers configured."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 0}
+        )
+        assert config.omero.get_all_container_ids() == []
+
+    def test_get_primary_container_id_single(self):
+        """Test get_primary_container_id with single container."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 123}
+        )
+        assert config.omero.get_primary_container_id() == 123
+
+    def test_get_primary_container_id_multiple(self):
+        """Test get_primary_container_id with multiple containers."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [10, 20, 30]}
+        )
+        assert config.omero.get_primary_container_id() == 10
+
+    def test_get_primary_container_id_empty(self):
+        """Test get_primary_container_id with no containers."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 0}
+        )
+        assert config.omero.get_primary_container_id() == 0
+
+    def test_is_multi_container_false_single(self):
+        """Test is_multi_container returns False for single container."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 123}
+        )
+        assert config.omero.is_multi_container() is False
+
+    def test_is_multi_container_false_one_in_list(self):
+        """Test is_multi_container returns False for single item in list."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [123]}
+        )
+        assert config.omero.is_multi_container() is False
+
+    def test_is_multi_container_true(self):
+        """Test is_multi_container returns True for multiple containers."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [1, 2]}
+        )
+        assert config.omero.is_multi_container() is True
+
+    def test_yaml_roundtrip_with_container_ids(self):
+        """Test that container_ids survives YAML roundtrip."""
+        config = AnnotationConfig(
+            name="test_multi",
+            omero={
+                "container_type": "plate",
+                "container_ids": [1, 2, 3]
+            }
+        )
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            config.save_yaml(f.name)
+            loaded = AnnotationConfig.from_yaml(f.name)
+
+            assert loaded.omero.container_ids == [1, 2, 3]
+            assert loaded.omero.get_all_container_ids() == [1, 2, 3]
+
+        Path(f.name).unlink()
+
+    def test_backward_compatible_single_container_yaml(self):
+        """Test backward compatibility with existing single container configs."""
+        yaml_str = """
+        name: test
+        omero:
+          container_type: dataset
+          container_id: 456
+        """
+        config = AnnotationConfig.from_yaml(yaml_str)
+        assert config.omero.container_id == 456
+        assert config.omero.get_all_container_ids() == [456]

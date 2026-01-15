@@ -19,49 +19,133 @@ from ..processing.image_functions import label_to_rois
 # =============================================================================
 
 
+def link_table_to_containers(
+    conn,
+    table_id: int,
+    container_type: str,
+    container_ids: List[int],
+) -> Dict[int, Optional[int]]:
+    """Link an existing table (FileAnnotation) to multiple containers.
+
+    Uses OMERO AnnotationLink objects (e.g., PlateAnnotationLinkI) to attach
+    the same FileAnnotation to multiple containers. This allows a single table
+    to appear in multiple containers without duplicating the underlying data.
+
+    Note: table_id IS the FileAnnotation ID (ezomero.post_table returns FileAnnotation ID)
+
+    Args:
+        conn: OMERO connection
+        table_id: The table/FileAnnotation ID to link
+        container_type: Type of containers ('dataset', 'plate', 'project', 'screen')
+        container_ids: List of container IDs to link the table to
+
+    Returns:
+        Dict mapping container_id to link_id (None if linking failed for that container)
+    """
+    import omero.model as model
+
+    link_classes = {
+        'dataset': (model.DatasetAnnotationLinkI, model.DatasetI),
+        'plate': (model.PlateAnnotationLinkI, model.PlateI),
+        'project': (model.ProjectAnnotationLinkI, model.ProjectI),
+        'screen': (model.ScreenAnnotationLinkI, model.ScreenI),
+    }
+
+    container_type_lower = container_type.lower()
+    if container_type_lower not in link_classes:
+        print(f"Warning: Cannot link annotation to container type '{container_type}'")
+        return {cid: None for cid in container_ids}
+
+    # table_id is the FileAnnotation ID - get the wrapper object
+    file_ann = conn.getObject("FileAnnotation", table_id)
+    if not file_ann:
+        raise ValueError(f"FileAnnotation {table_id} not found")
+
+    LinkClass, ContainerClass = link_classes[container_type_lower]
+    results = {}
+    update_service = conn.getUpdateService()
+
+    for container_id in container_ids:
+        try:
+            link = LinkClass()
+            link.setParent(ContainerClass(container_id, False))
+            link.setChild(file_ann._obj)  # Access underlying OMERO model object
+            saved_link = update_service.saveAndReturnObject(link)
+            link_id = saved_link.getId().getValue()
+            results[container_id] = link_id
+            print(f"  Linked table to {container_type} {container_id} (link ID: {link_id})")
+        except Exception as e:
+            print(f"  Warning: Could not link table to {container_type} {container_id}: {e}")
+            results[container_id] = None
+
+    return results
+
+
 def create_or_replace_tracking_table(
     conn,
     config_df: pd.DataFrame,
     table_title: str,
     container_type: str,
-    container_id: int,
+    container_id: Optional[int] = None,
+    container_ids: Optional[List[int]] = None,
     existing_table_id: Optional[int] = None,
 ) -> int:
     """Create new tracking table or replace existing one (delete + recreate pattern).
-    
+
+    Supports attaching the table to multiple containers. The table is created
+    attached to the primary container, then linked to additional containers
+    using OMERO AnnotationLink objects.
+
     Args:
         conn: OMERO connection
         config_df: DataFrame from config.to_dataframe()
         table_title: Name for the tracking table
         container_type: Type of OMERO container
-        container_id: ID of container
+        container_id: ID of primary container (legacy, use container_ids for multiple)
+        container_ids: List of container IDs to attach the table to
         existing_table_id: Optional existing table to replace
-        
+
     Returns:
         New table ID
     """
+    # Resolve container IDs - container_ids takes precedence
+    if container_ids is not None and len(container_ids) > 0:
+        all_container_ids = container_ids
+    elif container_id is not None and container_id != 0:
+        all_container_ids = [container_id]
+    else:
+        raise ValueError("Either container_id or container_ids must be provided")
+
+    primary_container_id = all_container_ids[0]
+
     # Delete existing table if provided
     if existing_table_id is not None:
         print(f"Deleting table: {table_title}")
         if not delete_table(conn, existing_table_id):
             print(f"Warning: Could not delete existing table: {existing_table_id}")
-    
-    # Create new table with the DataFrame
+
+    # Create new table attached to primary container
     new_table_id = ezomero.post_table(
         conn,
         object_type=container_type.capitalize(),
-        object_id=container_id,
+        object_id=primary_container_id,
         table=config_df,
         title=table_title,
     )
-    
+
     if new_table_id is None:
-        raise RuntimeError(f"Failed to create table '{table_title}' in {container_type} {container_id}")
-    
+        raise RuntimeError(f"Failed to create table '{table_title}' in {container_type} {primary_container_id}")
+
     print(f"Created/replaced tracking table '{table_title}' with {len(config_df)} units")
-    print(f"   Container: {container_type} {container_id}")
+    print(f"   Primary container: {container_type} {primary_container_id}")
     print(f"   Table ID: {new_table_id}")
-    
+
+    # Link to additional containers if multiple are specified
+    if len(all_container_ids) > 1:
+        additional_ids = all_container_ids[1:]
+        print(f"Linking table to {len(additional_ids)} additional container(s)...")
+        link_table_to_containers(conn, new_table_id, container_type, additional_ids)
+
     return new_table_id
 
 
@@ -70,29 +154,33 @@ def sync_config_to_omero_table(
     config,  # AnnotationConfig object
     table_title: str,
     container_type: str,
-    container_id: int,
+    container_id: Optional[int] = None,
+    container_ids: Optional[List[int]] = None,
     existing_table_id: Optional[int] = None,
 ) -> int:
     """High-level sync: config.annotations → OMERO table.
-    
+
+    Supports attaching the table to multiple containers.
+
     Args:
         conn: OMERO connection
         config: AnnotationConfig object with annotations
         table_title: Name for the tracking table
         container_type: Type of OMERO container
-        container_id: ID of container
+        container_id: ID of primary container (legacy, use container_ids for multiple)
+        container_ids: List of container IDs to attach the table to
         existing_table_id: Optional existing table to replace
-        
+
     Returns:
         New table ID
     """
     # Convert config annotations to DataFrame
     config_df = config.to_dataframe()
-    
+
     if config_df.empty:
         print("Warning: No annotations in config to sync")
         return existing_table_id if existing_table_id else -1
-    
+
     # Create or replace table
     return create_or_replace_tracking_table(
         conn=conn,
@@ -100,6 +188,7 @@ def sync_config_to_omero_table(
         table_title=table_title,
         container_type=container_type,
         container_id=container_id,
+        container_ids=container_ids,
         existing_table_id=existing_table_id,
     )
 
