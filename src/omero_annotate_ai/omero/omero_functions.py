@@ -909,7 +909,7 @@ def update_workflow_status_map(
         )
 
         print(
-            f"📊 Workflow status updated: {completed_units}/{total_units} ({status_map['progress_percent']}%) - {status}"
+            f"Workflow status updated: {completed_units}/{total_units} ({status_map['progress_percent']}%) - {status}"
         )
         return status_ann_id
 
@@ -986,7 +986,7 @@ def list_annotation_tables(
             progress_info = analyze_table_completion_status(conn, table_info["id"])
             table_info.update(progress_info)
         except Exception as e:
-            print(f"⚠️ Could not analyze table {table_name}: {e}")
+            print(f"Could not analyze table {table_name}: {e}")
             table_info.update(
                 {
                     "total_units": 0,
@@ -1205,7 +1205,7 @@ def cleanup_project_annotations(
 
     print(f"Starting cleanup of project {project_id}")
     if trainingset_name:
-        print(f"📋 Filtering by training set: {trainingset_name}")
+        print(f"Filtering by training set: {trainingset_name}")
 
     # Get project and all its datasets and images
     project = conn.getObject("Project", project_id)

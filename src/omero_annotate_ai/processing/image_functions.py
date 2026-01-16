@@ -36,7 +36,7 @@ def generate_patch_coordinates(
     # Check if image is smaller than patch
     if width < patch_w or height < patch_h:
         # Image smaller than patch, return image size as patch size
-        print("⚠️ Image smaller than patch size, using full image")
+        print("Image smaller than patch size, using full image")
         actual_patch_size = (height, width)
         return [(0, 0)], actual_patch_size
 
