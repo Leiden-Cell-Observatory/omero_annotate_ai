@@ -515,12 +515,12 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
         config.spatial_coverage.z_slices = parse_int_list(z_slices)
         config.spatial_coverage.three_d = three_d
 
-        config.processing.use_patches = use_patches
-        config.processing.patches_per_image = patches_per_image
-        config.processing.patch_size = parse_patch_size(patch_size)
-        config.processing.batch_size = batch_size
+        config.spatial_coverage.use_patches = use_patches
+        config.spatial_coverage.patches_per_image = patches_per_image
+        config.spatial_coverage.patch_size = parse_patch_size(patch_size)
+        config.workflow.batch_size = batch_size
 
-        config.ai_model.model_type = model_type
+        config.ai_model.pretrained_from = model_type
 
         config.workflow.read_only_mode = read_only_mode
 
