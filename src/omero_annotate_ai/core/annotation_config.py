@@ -235,31 +235,6 @@ class SpatialCoverage(BaseModel):
 
         return self
 
-    @model_validator(mode="after")
-    def validate_channel_settings(self):
-        """Validate channel configuration consistency.
-
-        Ensures that label_channel and training_channels are valid indices
-        that exist in the channels list.
-        """
-        all_channels = set(self.channels)
-
-        # Validate label_channel is in channels list
-        if self.label_channel is not None:
-            if self.label_channel not in all_channels:
-                raise ValueError(
-                    f"label_channel ({self.label_channel}) must be in channels list ({self.channels})"
-                )
-
-        # Validate training_channels are in channels list
-        if self.training_channels is not None:
-            for tc in self.training_channels:
-                if tc not in all_channels:
-                    raise ValueError(
-                        f"training_channels ({tc}) must be in channels list ({self.channels})"
-                    )
-
-        return self
 
     @model_validator(mode="after")
     def validate_channel_settings(self):
