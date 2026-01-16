@@ -15,6 +15,53 @@ from ..processing.image_functions import label_to_rois
 
 
 # =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepare DataFrame with proper types for OMERO table storage.
+
+    Args:
+        df: DataFrame to prepare
+
+    Returns:
+        DataFrame with properly typed columns for OMERO
+    """
+    df = df.copy()
+
+    numeric_columns = [
+        "image_id", "patch_x", "patch_y", "patch_width", "patch_height",
+        "z_slice", "timepoint", "z_start", "z_end", "z_length", "channel",
+    ]
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-1).astype(int)
+
+    boolean_columns = ["train", "validate", "processed", "is_patch", "is_volumetric"]
+    for col in boolean_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna(False).astype(bool)
+
+    id_columns = ["label_id", "roi_id", "schema_attachment_id"]
+    for col in id_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna("None").astype(str)
+
+    string_columns = ["annotation_type"]
+    for col in string_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna("segmentation_mask").astype(str)
+
+    datetime_columns = ["annotation_creation_time"]
+    for col in datetime_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna("None").astype(str)
+
+    return df
+
+
+# =============================================================================
 # Config-First Table Management Functions
 # =============================================================================
 
@@ -24,7 +71,7 @@ def link_table_to_containers(
     table_id: int,
     container_type: str,
     container_ids: List[int],
-) -> Dict[int, Optional[int]]:
+) -> Dict[int, int]:
     """Link an existing table (FileAnnotation) to multiple containers.
 
     Uses OMERO AnnotationLink objects (e.g., PlateAnnotationLinkI) to attach
@@ -40,7 +87,10 @@ def link_table_to_containers(
         container_ids: List of container IDs to link the table to
 
     Returns:
-        Dict mapping container_id to link_id (None if linking failed for that container)
+        Dict mapping container_id to link_id
+
+    Raises:
+        Exception: If linking fails for any container
     """
     import omero.model as model
 
@@ -66,17 +116,13 @@ def link_table_to_containers(
     update_service = conn.getUpdateService()
 
     for container_id in container_ids:
-        try:
-            link = LinkClass()
-            link.setParent(ContainerClass(container_id, False))
-            link.setChild(file_ann._obj)  # Access underlying OMERO model object
-            saved_link = update_service.saveAndReturnObject(link)
-            link_id = saved_link.getId().getValue()
-            results[container_id] = link_id
-            print(f"  Linked table to {container_type} {container_id} (link ID: {link_id})")
-        except Exception as e:
-            print(f"  Warning: Could not link table to {container_type} {container_id}: {e}")
-            results[container_id] = None
+        link = LinkClass()
+        link.setParent(ContainerClass(container_id, False))
+        link.setChild(file_ann._obj)  # Access underlying OMERO model object
+        saved_link = update_service.saveAndReturnObject(link)
+        link_id = saved_link.getId().getValue()
+        results[container_id] = link_id
+        print(f"  Linked table to {container_type} {container_id} (link ID: {link_id})")
 
     return results
 
@@ -239,419 +285,6 @@ def upload_annotation_config_to_omero(
                                       object_type=object_type,
                                       object_id=object_id)
     return id
-# =============================================================================
-# Original Table Management Functions (LEGACY - for backwards compatibility)
-# =============================================================================
-
-
-def initialize_tracking_table(
-    conn,
-    table_title: str,
-    processing_units: List[Tuple],
-    container_type: str,
-    container_id: int,
-    source_desc: str,
-) -> int:
-    """Initialize tracking table for annotation process.
-
-    Args:
-        conn: OMERO connection
-        table_title: Name for the tracking table
-        processing_units: List of (image_id, sequence_val, metadata) tuples
-        container_type: Type of OMERO container
-        container_id: ID of container
-        source_desc: Description
-
-    Returns:
-        Table ID
-    """
-    # Create DataFrame from processing units
-    df = pd.DataFrame(
-        columns=[
-            "image_id",
-            "image_name",
-            "train",
-            "validate",
-            "channel",
-            "z_slice",
-            "timepoint",
-            "sam_model",
-            "label_id",
-            "roi_id",
-            "is_volumetric",
-            "processed",
-            "is_patch",
-            "patch_x",
-            "patch_y",
-            "patch_width",
-            "patch_height",
-            "annotation_type",
-            "annotation_creation_time",
-            "schema_attachment_id",
-            "z_start",
-            "z_end", 
-            "z_length",
-        ]
-    )
-
-    for img_id, seq_val, metadata in processing_units:
-        # Get image object to get name and dimensions
-        image = conn.getObject("Image", img_id)
-        if not image:
-            continue
-
-        # Determine if this is training or validation
-        is_train = metadata.get("category", "training") == "training"
-        is_validate = not is_train
-
-        # Handle patch information
-        is_patch = "patch_x" in metadata
-        patch_x = metadata.get("patch_x", 0)
-        patch_y = metadata.get("patch_y", 0)
-
-        if is_patch:
-            # Use patch dimensions from config if available
-            patch_width = metadata.get("patch_width", 512)
-            patch_height = metadata.get("patch_height", 512)
-        else:
-            # Use full image dimensions
-            patch_width = image.getSizeX()
-            patch_height = image.getSizeY()
-
-        model_type = metadata.get("model_type", "vit_l")
-        
-        # Handle 3D fields
-        is_volumetric = metadata.get("is_volumetric", metadata.get("three_d", False))
-        z_start = metadata.get("z_start", metadata.get("z_slice", -1))
-        z_end = metadata.get("z_end", metadata.get("z_slice", -1))
-        z_length = metadata.get("z_length", 1)
-
-        new_row = pd.DataFrame(
-            [
-                {
-                    "image_id": int(img_id),
-                    "image_name": image.getName(),
-                    "train": is_train,
-                    "validate": is_validate,
-                    "channel": metadata.get("channel", -1),
-                    "z_slice": metadata.get("z_slice", -1),
-                    "timepoint": metadata.get("timepoint", -1),
-                    "sam_model": model_type,
-                    "label_id": -1,
-                    "roi_id": -1,
-                    "is_volumetric": is_volumetric,
-                    "processed": False,
-                    "is_patch": is_patch,
-                    "patch_x": int(patch_x),
-                    "patch_y": int(patch_y),
-                    "patch_width": int(patch_width),
-                    "patch_height": int(patch_height),
-                    "annotation_type": "segmentation_mask",
-                    "annotation_creation_time": None,
-                    "schema_attachment_id": -1,
-                    # New 3D fields
-                    "z_start": int(z_start),
-                    "z_end": int(z_end),
-                    "z_length": int(z_length),
-                }
-            ]
-        )
-        df = pd.concat([df, new_row], ignore_index=True)
-
-    # Ensure proper types for OMERO table
-    numeric_columns = [
-        "image_id",
-        "patch_x",
-        "patch_y",
-        "patch_width",
-        "patch_height",
-        "z_slice",
-        "timepoint",
-        "z_start",
-        "z_end", 
-        "z_length",
-    ]
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-1).astype(int)
-
-    boolean_columns = ["train", "validate", "processed", "is_patch", "is_volumetric"]
-    for col in boolean_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna(False).astype(bool)
-
-    id_columns = ["label_id", "roi_id", "schema_attachment_id"]
-    for col in id_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("None").astype(str)
-
-    # Handle string columns
-    string_columns = ["annotation_type"]
-    for col in string_columns:
-        if col in df.columns:
-            df[col] = (
-                df[col]
-                .fillna("segmentation_mask")
-                .astype(str)
-            )
-
-    # Handle datetime columns
-    datetime_columns = ["annotation_creation_time"]
-    for col in datetime_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("None").astype(str)
-
-    # Create the table
-    table_id = ezomero.post_table(
-        conn,
-        object_type=container_type.capitalize(),
-        object_id=container_id,
-        table=df,
-        title=table_title,
-    )
-
-    print(f"Created tracking table '{table_title}' with {len(df)} units")
-    print(f"   Container: {container_type} {container_id}")
-    print(f"   Table ID: {table_id}")
-
-    return table_id
-
-
-def get_annotation_configurations(conn):
-    """Get stored annotation configurations."""
-    # Stub implementation
-    return {}
-
-
-def get_unprocessed_units(conn, table_id: int) -> List[Tuple]:
-    """Get unprocessed units from tracking table.
-
-    Args:
-        conn: OMERO connection
-        table_id: ID of tracking table
-
-    Returns:
-        List of tuples: (image_id, sequence_val, metadata_dict, row_index)
-    """
-    print(f"[TABLE] Getting unprocessed units from table {table_id}")
-
-    # Get the table data
-    try:
-        df = ezomero.get_table(conn, table_id)
-    except Exception as e:
-        print(f"Error reading table {table_id}: {e}")
-        return []
-
-    # Filter for unprocessed rows
-    unprocessed_df = df[~df["processed"]] if "processed" in df.columns else df
-
-    if len(unprocessed_df) == 0:
-        print("All units already processed!")
-        return []
-
-    print(f"Found {len(unprocessed_df)} unprocessed units")
-
-    # Convert to processing units format
-    processing_units = []
-    for idx, row in unprocessed_df.iterrows():
-        image_id = int(row["image_id"])
-        sequence_val = 0 if row.get("train", True) else 1
-
-        # Build metadata dict
-        is_volumetric = bool(row.get("is_volumetric", False))
-        
-        metadata = {
-            "timepoint": int(row.get("timepoint", -1)),
-            "z_slice": int(row.get("z_slice", -1)),
-            "channel": int(row.get("channel", -1)),
-            "three_d": is_volumetric,  # For backward compatibility
-            "is_volumetric": is_volumetric,
-            "model_type": str(row.get("sam_model", "")),
-            "category": "training" if row.get("train", True) else "validation",
-        }
-        
-        # Add 3D fields if available (backward compatibility with old tables)
-        if "z_start" in row and row.get("z_start") is not None and row.get("z_start") != -1:
-            metadata.update({
-                "z_start": int(row.get("z_start", -1)),
-                "z_end": int(row.get("z_end", -1)),
-                "z_length": int(row.get("z_length", 1)),
-            })
-
-        # Add patch info if it's a patch
-        if row.get("is_patch", False):
-            metadata.update(
-                {
-                    "patch_x": int(row.get("patch_x", 0)),
-                    "patch_y": int(row.get("patch_y", 0)),
-                    "patch_width": int(row.get("patch_width", 512)),
-                    "patch_height": int(row.get("patch_height", 512)),
-                }
-            )
-
-        processing_units.append((image_id, sequence_val, metadata, idx))
-
-    return processing_units
-
-
-def update_tracking_table_rows(
-    conn,
-    table_id: int,
-    row_indices: List[int],
-    status: str,
-    annotation_type: str,
-    label_id: Optional[int] = None,
-    roi_id: Optional[int] = None,
-    label_ids: Optional[List[Optional[int]]] = None,
-    roi_ids: Optional[List[Optional[int]]] = None,
-    container_type: str = "",
-    container_id: int = 0,
-) -> Optional[int]:
-    """Update tracking table rows with processing status and annotation IDs.
-
-    This implementation updates the table by replacing it with a new one.
-    Supports both single annotation IDs (legacy) and lists of IDs (batch mode).
-
-    Args:
-        conn: OMERO connection
-        table_id: ID of tracking table
-        row_indices: List of row indices to update
-        status: Status to set ('completed', 'failed', etc.)
-        label_id: Single label file annotation ID (legacy, optional)
-        roi_id: Single ROI collection ID (legacy, optional)
-        label_ids: List of label file annotation IDs, one per row (optional)
-        roi_ids: List of ROI collection IDs, one per row (optional)
-        annotation_type: Type of annotation
-        container_type: Type of OMERO container (e.g. 'dataset', 'project')
-        container_id: ID of the container
-
-    Returns:
-        New table ID if successful, else original table_id.
-    """
-    try:
-        # Get current table data
-        df = ezomero.get_table(conn, table_id)
-        if df is None:
-            print(f"Could not retrieve table {table_id}")
-            return table_id
-
-        # Get the original table name to preserve it
-        file_ann = conn.getObject("FileAnnotation", table_id)
-        if file_ann and file_ann.getFile():
-            table_title = file_ann.getFile().getName()
-        else:
-            # Fallback to original naming with timestamp (should rarely happen)
-            table_title = f"micro_sam_training_{container_type}_{container_id}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-        print(f"Using table title: {table_title}")
-
-        # Update the rows in our DataFrame
-        from datetime import datetime
-
-        current_time = datetime.now().isoformat()
-
-        for i, idx in enumerate(row_indices):
-            if idx < len(df):
-                df.loc[idx, "processed"] = status == "completed"
-                if status == "completed":
-                    # Only update these fields when successfully completed
-                    
-                    # Handle label IDs: use list if provided, otherwise single value for all rows
-                    current_label_id = None
-                    if label_ids is not None and i < len(label_ids):
-                        current_label_id = label_ids[i]
-                    elif label_id is not None:
-                        current_label_id = label_id
-                    
-                    if current_label_id is not None:
-                        df.loc[idx, "label_id"] = str(current_label_id)
-                    
-                    # Handle ROI IDs: use list if provided, otherwise single value for all rows  
-                    current_roi_id = None
-                    if roi_ids is not None and i < len(roi_ids):
-                        current_roi_id = roi_ids[i]
-                    elif roi_id is not None:
-                        current_roi_id = roi_id
-                    
-                    if current_roi_id is not None:
-                        df.loc[idx, "roi_id"] = str(current_roi_id)
-                    
-                    df.loc[idx, "annotation_type"] = annotation_type
-                    df.loc[idx, "annotation_creation_time"] = current_time
-
-        # Prepare DataFrame for OMERO: Handle all columns properly
-        df_for_omero = df.copy()
-        numeric_columns = [
-            "image_id",
-            "patch_x",
-            "patch_y",
-            "patch_width",
-            "patch_height",
-            "z_slice",
-            "timepoint",
-            "z_start",
-            "z_end", 
-            "z_length",
-        ]
-        for col in numeric_columns:
-            if col in df_for_omero.columns:
-                df_for_omero[col] = (
-                    pd.to_numeric(df_for_omero[col], errors="coerce")
-                    .fillna(-1)
-                    .astype(int)
-                )
-
-        boolean_columns = [
-            "train",
-            "validate",
-            "processed",
-            "is_patch",
-            "is_volumetric",
-        ]
-        for col in boolean_columns:
-            if col in df_for_omero.columns:
-                df_for_omero[col] = df_for_omero[col].fillna(False).astype(bool)
-
-        id_columns = ["label_id", "roi_id", "schema_attachment_id"]
-        for col in id_columns:
-            if col in df_for_omero.columns:
-                df_for_omero[col] = df_for_omero[col].fillna("None").astype(str)
-
-        # Handle string columns
-        string_columns = ["annotation_type"]
-        for col in string_columns:
-            if col in df_for_omero.columns:
-                df_for_omero[col] = (
-                    df_for_omero[col].fillna("segmentation_mask").astype(str)
-                )
-
-        # Handle datetime columns
-        datetime_columns = ["annotation_creation_time"]
-        for col in datetime_columns:
-            if col in df_for_omero.columns:
-                df_for_omero[col] = df_for_omero[col].fillna("None").astype(str)
-
-        # Try to delete the existing table
-        if not delete_table(conn, table_id):
-            print(f"Warning: Could not delete existing table: {table_id}")
-
-        # Create a new table with the updated data using the provided container info
-        new_table_id = ezomero.post_table(
-            conn,
-            object_type=container_type.capitalize(),
-            object_id=container_id,
-            table=df_for_omero,
-            title=table_title,
-        )
-
-        if new_table_id != table_id:
-            print(f"Table updated: {table_id} -> {new_table_id}")
-        else:
-            print(f"Table updated with ID: {new_table_id}")
-        return new_table_id
-
-    except Exception as e:
-        print(f"Error creating updated table: {e}")
-        return table_id  # Return original values on error
 
 
 def upload_rois_and_labels(
@@ -664,7 +297,7 @@ def upload_rois_and_labels(
     timepoint: Optional[int] = None,
     z_slice: Optional[int] = None,
     channel: Optional[int] = None,
-    model_type: Optional[str] = "vit_b_lm",
+    model_type: Optional[str] = None,
     is_volumetric: Optional[bool] = False,
     z_start: Optional[int] = 0,
 ):
@@ -676,65 +309,46 @@ def upload_rois_and_labels(
         annotation_file: Path to annotation file (TIFF with labels)
         patch_offset: Optional (x,y) offset for patch placement
         trainingset_name: Optional training set name for custom annotation naming
-        trainingset_description: Optional training set description for custom annotation description
+        trainingset_description: Optional training set description for annotation
         timepoint: Optional timepoint for positioning the roi properly in OMERO
         z_slice: Optional z_slice for positioning the roi properly in OMERO
         channel: Optional channel for positioning the roi properly in OMERO
-        model_type: Optional model type for setting description in OMERO
+        model_type: Optional model type for ROI labeling
         is_volumetric: check if we need to handle roi as 3D
         z_start: use for volumetric to use z_start as offset in the stack
-
 
     Returns:
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
     """
-
     # Load label image
     print(f"Step 1: Loading label image from {annotation_file}")
     label_img = imageio.imread(annotation_file)
     print(f"Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
     unique_labels = np.unique(label_img)
-    print(
-        f"Found {len(unique_labels)} unique labels: {unique_labels[:10]}..."
-    )  
+    print(f"Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")
 
     # Create ROI shapes from label image
-    print(f"Step 2: Converting labels to ROI shapes...")
-    if (is_volumetric):
-        shapes = label_to_rois(
-            label_img=label_img,
-            z_slice=z_start,
-            channel=channel,
-            timepoint=timepoint,
-            model_type=model_type,
-            is_volumetric=is_volumetric,
-            patch_offset=patch_offset,
-        ) 
-    else:
-        shapes = label_to_rois(
-            label_img=label_img,
-            z_slice=z_slice,
-            channel=channel,
-            timepoint=timepoint,
-            model_type=model_type,
-            is_volumetric=is_volumetric,
-            patch_offset=patch_offset,
-        )
-    
-
+    print("Step 2: Converting labels to ROI shapes...")
+    effective_z = z_start if is_volumetric else z_slice
+    shapes = label_to_rois(
+        label_img=label_img,
+        z_slice=effective_z,
+        channel=channel,
+        timepoint=timepoint,
+        model_type=model_type,
+        is_volumetric=is_volumetric,
+        patch_offset=patch_offset,
+    )
     print(f"Created {len(shapes)} ROI shapes from labels")
 
     # Upload label file as attachment
-    print(f"Step 3: Uploading label file as attachment")
+    print("Step 3: Uploading label file as attachment")
 
-    # Use custom description if provided
-    if trainingset_name and trainingset_description:
-        label_desc = trainingset_description
-    else:
-        # Default description
-        label_desc = f"Micro-SAM segmentation ({model_type})"
-        if patch_offset:
-            label_desc += f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
+    # Build description
+    label_desc = trainingset_description or ""
+    if patch_offset:
+        separator = " | " if label_desc else ""
+        label_desc += f"{separator}Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
 
     file_ann_id = ezomero.post_file_annotation(
         conn,
@@ -747,29 +361,16 @@ def upload_rois_and_labels(
     print(f"File annotation uploaded with ID: {file_ann_id}")
 
     # Upload ROI shapes if any were created
-    print(f"Step 4: Uploading ROI shapes")
+    print("Step 4: Uploading ROI shapes")
     roi_id = None
     if shapes:
-        # Use custom name and description for ROI if provided
-        if trainingset_name and trainingset_description:
-            roi_name = f"{trainingset_name}_ROIs"
-            roi_description = trainingset_description
-        else:
-            roi_name = f"Micro-SAM ROIs ({model_type})"
-            roi_description = (
-                f"ROI collection for Micro-SAM segmentation ({model_type})"
-            )
-            if patch_offset:
-                roi_description += (
-                    f", Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
-                )
+        roi_name = f"{trainingset_name}_ROIs" if trainingset_name else "ROIs"
+        roi_description = label_desc  # Use same description as label file
 
         roi_id = ezomero.post_roi(
             conn, image_id, shapes, name=roi_name, description=roi_description
         )
-        print(
-            f"Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}"
-        )
+        print(f"Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}")
     else:
         print(f"No ROI shapes created from {annotation_file}")
 
@@ -887,7 +488,7 @@ def update_workflow_status_map(
             "last_updated": datetime.now().isoformat(),
         }
 
-        # Remove any existing workflow status annotation
+        # Remove any existing workflow status annotation (best-effort cleanup)
         try:
             existing_annotations = ezomero.get_map_annotation(
                 conn, container_type.capitalize(), container_id
@@ -896,7 +497,7 @@ def update_workflow_status_map(
                 if isinstance(ann_data, dict) and ann_data.get("workflow_status"):
                     ezomero.delete_annotation(conn, ann_id)
                     break
-        except:
+        except Exception:
             pass  # No existing annotation to remove
 
         # Create new status map annotation
@@ -1031,7 +632,8 @@ def generate_unique_table_name(
         container_name = "".join(
             c for c in container_name if c.isalnum() or c in "_-"
         ).lower()
-    except:
+    except Exception as e:
+        print(f"Warning: Could not get container name: {e}")
         container_name = f"{container_type}_{container_id}"
 
     # Create base name if not provided
@@ -1247,6 +849,7 @@ def cleanup_project_annotations(
                     print(f"Failed to delete table: {table_name} (ID: {table_id})")
         except Exception as e:
             print(f"Error cleaning tables for dataset {dataset.getId()}: {str(e)}")
+            raise
 
     # 2. Clean up ROIs by name patterns
     print("Cleaning up ROIs...")
@@ -1294,6 +897,7 @@ def cleanup_project_annotations(
 
         except Exception as e:
             print(f"Error cleaning ROIs for image {image.getId()}: {str(e)}")
+            raise
 
     # 3. Clean up map annotations (workflow status)
     print("Cleaning up map annotations...")
@@ -1315,6 +919,7 @@ def cleanup_project_annotations(
 
     except Exception as e:
         print(f"Error cleaning map annotations: {str(e)}")
+        raise
 
     # Print summary
     print(f"\n Cleanup completed:")
