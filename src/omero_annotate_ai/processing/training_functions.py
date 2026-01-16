@@ -12,7 +12,6 @@ from tifffile import imwrite
 from tqdm import tqdm
 
 from ..utils.logging import create_training_logger
-from ..omero.omero_functions import upload_label_input_image
 
 
 def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
@@ -272,6 +271,8 @@ def prepare_training_data_from_table(
                                 timepoint = int(row['timepoint']) if pd.notna(row.get('timepoint')) else None
                                 z_slice = int(row['z_slice']) if pd.notna(row.get('z_slice')) else None
 
+                                # Lazy import to avoid circular dependency
+                                from ..omero.omero_functions import upload_label_input_image
                                 file_ann_id = upload_label_input_image(
                                     conn,
                                     image_id=image_id,
