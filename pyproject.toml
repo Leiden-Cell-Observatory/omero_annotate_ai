@@ -50,7 +50,9 @@ dependencies = [
     "ipykernel", 
     "pixi-kernel>=0.6.6,<0.7", 
     "opencv-python", 
-    "tifffile", "marimo>=0.19.2,<0.20", "ty>=0.0.12,<0.0.13",
+    "tifffile",
+    "marimo>=0.19.2,<0.20",  # Dependencies for marimo-based notebook UI
+    "ty>=0.0.12,<0.0.13",
 ]
 
 [project.optional-dependencies]
