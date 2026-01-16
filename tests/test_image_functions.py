@@ -161,18 +161,16 @@ class TestROICreation:
             z_slice=0,
             channel=0,
             timepoint=0,
-            model_type="vit_b_lm"
         )
-        
+
         assert len(shapes) == 2  # Two objects
-        
+
         # Check shape properties
         for shape in shapes:
             assert hasattr(shape, 'points')
             assert shape.z == 0
             assert shape.c == 0
             assert shape.t == 0
-            assert "vit_b_lm" in shape.label
             assert "micro_sam" in shape.label
     
     def test_process_label_plane_with_offset(self):
@@ -191,17 +189,16 @@ class TestROICreation:
             z_slice=0,
             channel=0,
             timepoint=0,
-            model_type="vit_b_lm",
             x_offset=patch_offset[0],
             y_offset=patch_offset[1]
         )
-        
+
         assert len(shapes) == 1
-        
+
         # Check that coordinates are offset
         shape = shapes[0]
         points = shape.points
-        
+
         # All points should be offset by patch_offset
         for x, y in points:
             assert x >= 100  # Should be offset by patch_offset[0]
@@ -222,17 +219,15 @@ class TestROICreation:
             z_slice=0,
             channel=0,
             timepoint=0,
-            model_type="vit_b_lm",
             is_volumetric=True  # Changed to True since it's 3D
         )
-        
+
         assert len(shapes) == 1
-        
+
         shape = shapes[0]
         assert shape.z == 0
         assert shape.c == 0
         assert shape.t == 0
-        assert "vit_b_lm" in shape.label
         assert "micro_sam" in shape.label
     
     def test_label_to_rois_2d(self):
@@ -244,18 +239,17 @@ class TestROICreation:
         # Create 2D label image
         label_img = np.zeros((100, 100), dtype=np.uint16)
         label_img[25:75, 25:75] = 1
-        
+
         shapes = label_to_rois(
             label_img=label_img,
             z_slice=0,
             channel=0,
             timepoint=0,
-            model_type="vit_b_lm",
             is_volumetric=False
         )
-        
+
         assert len(shapes) == 1
-    
+
     def test_label_to_rois_empty(self):
         """
         Tests converting an empty label image to ROI shapes.
@@ -263,16 +257,15 @@ class TestROICreation:
         empty label image and returns no shapes.
         """
         label_img = np.zeros((100, 100), dtype=np.uint16)
-        
+
         shapes = label_to_rois(
             label_img=label_img,
             z_slice=0,
             channel=0,
             timepoint=0,
-            model_type="vit_b_lm",
             is_volumetric=False
         )
-        
+
         assert len(shapes) == 0
 
 

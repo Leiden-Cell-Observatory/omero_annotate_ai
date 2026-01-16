@@ -59,13 +59,13 @@ class ImageAnnotation(BaseModel):
     patch_width: int = Field(default=0, description="Patch width")
     patch_height: int = Field(default=0, description="Patch height")
 
-    # AI model info
-    model_type: str = Field(default="vit_b_lm", description="SAM model type")
-
     # Processing status
     processed: bool = Field(default=False, description="Whether processing is complete")
-    annotation_creation_time: Optional[str] = Field(
-        default=None, description="Completion timestamp in ISO format"
+    annotation_created_at: Optional[str] = Field(
+        default=None, description="Creation timestamp in ISO format"
+    )
+    annotation_updated_at: Optional[str] = Field(
+        default=None, description="Last update timestamp in ISO format"
     )
     annotation_type: str = Field(
         default="segmentation_mask", description="Type of annotation"
@@ -95,6 +95,19 @@ class AuthorInfo(BaseModel):
     orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
 
 
+class AnnotationTool(BaseModel):
+    """Tool configuration for annotation workflows"""
+
+    name: str = Field(description="Tool name (e.g., 'micro-sam', 'cellpose')")
+    version: Optional[str] = Field(default=None, description="Tool version")
+    mode: Literal["automatic", "interactive", "human_in_the_loop"] = Field(
+        default="interactive", description="Annotation mode"
+    )
+    parameters: Optional[Dict[str, Any]] = Field(
+        default=None, description="Tool-specific parameters"
+    )
+
+
 class AnnotationMethodology(BaseModel):
     """MIFA-compatible annotation methodology"""
 
@@ -106,6 +119,9 @@ class AnnotationMethodology(BaseModel):
     )
     annotation_criteria: str = Field(description="Criteria used for annotation")
     annotation_coverage: Literal["all", "representative", "partial"] = "representative"
+    annotation_tool: Optional[AnnotationTool] = Field(
+        default=None, description="Tool used for annotation"
+    )
 
 
 class SpatialCoverage(BaseModel):
@@ -127,9 +143,6 @@ class SpatialCoverage(BaseModel):
         "If not specified, uses the length of z_slices list for backward compatibility.",
     )
     z_slice_mode: Literal["all", "random", "specific"] = "specific"
-    spatial_units: str = Field(
-        default="pixels", description="Spatial measurement units"
-    )
     three_d: bool = Field(default=False, description="3D volumetric processing mode")
 
     # 3D volumetric processing fields (used when three_d=True)
@@ -151,6 +164,18 @@ class SpatialCoverage(BaseModel):
         description="Channel index(es) used for model training input (e.g., brightfield). "
         "If not specified, defaults to [label_channel] for backward compatibility. "
         "Multiple channels supported if the training model permits.",
+    )
+
+    # Patch processing settings (moved from ProcessingConfig)
+    use_patches: bool = Field(
+        default=False, description="Extract patches vs full images"
+    )
+    patch_size: List[int] = Field(
+        default=[512, 512], description="Patch dimensions [width, height]"
+    )
+    patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
+    random_patches: bool = Field(
+        default=True, description="Use random patch extraction"
     )
 
     @property
@@ -291,26 +316,33 @@ class StudyContext(BaseModel):
 class AIModelConfig(BaseModel):
     """AI model configuration (bioimage.io compatible)"""
 
-    name: str = Field(description="Model name/identifier")
-    version: str = Field(default="latest", description="Model version")
-    model_type: str = Field(default="vit_b_lm", description="Model type/architecture")
-    framework: str = Field(default="micro_sam", description="AI framework")
+    # Framework information
+    framework: str = Field(
+        default="micro_sam", description="AI framework (e.g., micro_sam, cellpose)"
+    )
+    framework_version: Optional[str] = Field(
+        default=None, description="Framework version"
+    )
+
+    # Model information
+    model_name: str = Field(default="", description="Model name/identifier")
+    model_version: str = Field(default="latest", description="Model version")
+    model_url: Optional[HttpUrl] = Field(
+        default=None, description="URL to model weights/repository"
+    )
+    model_doi: Optional[str] = Field(
+        default=None, description="DOI for model citation"
+    )
+
+    # Training configuration
+    training_mode: Literal["inference", "finetuning", "from_scratch"] = Field(
+        default="inference", description="Training mode"
+    )
+    pretrained_from: Optional[str] = Field(
+        default="vit_b_lm", description="Base model for finetuning (e.g., 'vit_b_lm')"
+    )
 
 
-class ProcessingConfig(BaseModel):
-    """Processing parameters"""
-
-    batch_size: int = Field(default=0, ge=0, description="Batch size (0 = all)")
-    use_patches: bool = Field(
-        default=False, description="Extract patches vs full images"
-    )
-    patch_size: List[int] = Field(
-        default=[512, 512], description="Patch dimensions [width, height]"
-    )
-    patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
-    random_patches: bool = Field(
-        default=True, description="Use random patch extraction"
-    )
 
 
 class TrainingConfig(BaseModel):
@@ -387,6 +419,7 @@ class WorkflowConfig(BaseModel):
     read_only_mode: bool = Field(
         default=False, description="Read-only mode for viewing results"
     )
+    batch_size: int = Field(default=0, ge=0, description="Batch size (0 = all)")
 
 
 class OMEROConfig(BaseModel):
@@ -452,17 +485,10 @@ class OMEROConfig(BaseModel):
 
 
 class OutputConfig(BaseModel):
-    """Output and workflow configuration"""
+    """Output configuration"""
 
     output_directory: Path = Field(
         default=Path("./annotations"), description="Output directory"
-    )
-    format: Literal["tif", "ome_tif", "png", "numpy"] = Field(
-        default="tif", description="Output format"
-    )
-    compression: Optional[str] = Field(default=None, description="Compression method")
-    resume_from_checkpoint: bool = Field(
-        default=False, description="Resume interrupted workflow"
     )
 
     model_config = ConfigDict(json_encoders={Path: str})
@@ -480,7 +506,7 @@ class AnnotationConfig(BaseModel):
 
     # Schema identification
     schema_version: str = Field(
-        default="1.0.0", description="Configuration schema version"
+        default="2.0.0", description="Configuration schema version"
     )
 
     # Config file tracking for persistence
@@ -518,8 +544,7 @@ class AnnotationConfig(BaseModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
 
     # Technical configuration
-    ai_model: AIModelConfig = Field(default_factory=lambda: AIModelConfig(name=""))
-    processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    ai_model: AIModelConfig = Field(default_factory=AIModelConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
@@ -604,7 +629,9 @@ class AnnotationConfig(BaseModel):
         for annotation in self.annotations:
             if annotation.image_id == image_id:
                 annotation.processed = True
-                annotation.annotation_creation_time = datetime.now().isoformat()
+                annotation.annotation_updated_at = datetime.now().isoformat()
+                if annotation.annotation_created_at is None:
+                    annotation.annotation_created_at = annotation.annotation_updated_at
                 if roi_id is not None:
                     annotation.roi_id = roi_id
                 if label_id is not None:
@@ -650,7 +677,6 @@ class AnnotationConfig(BaseModel):
                 "channel": annotation.channel,
                 "z_slice": annotation.z_slice,
                 "timepoint": annotation.timepoint,
-                "sam_model": annotation.model_type,
                 "label_id": _optional_int_to_str(annotation.label_id),
                 "roi_id": _optional_int_to_str(annotation.roi_id),
                 "is_volumetric": annotation.is_volumetric,
@@ -661,8 +687,8 @@ class AnnotationConfig(BaseModel):
                 "patch_width": annotation.patch_width,
                 "patch_height": annotation.patch_height,
                 "annotation_type": annotation.annotation_type,
-                "annotation_creation_time": annotation.annotation_creation_time
-                or "None",
+                "annotation_created_at": annotation.annotation_created_at or "None",
+                "annotation_updated_at": annotation.annotation_updated_at or "None",
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
@@ -681,7 +707,6 @@ class AnnotationConfig(BaseModel):
             "channel",
             "z_slice",
             "timepoint",
-            "sam_model",
             "label_id",
             "roi_id",
             "is_volumetric",
@@ -692,7 +717,8 @@ class AnnotationConfig(BaseModel):
             "patch_width",
             "patch_height",
             "annotation_type",
-            "annotation_creation_time",
+            "annotation_created_at",
+            "annotation_updated_at",
             "schema_attachment_id",
             "z_start",
             "z_end",
@@ -757,7 +783,6 @@ class AnnotationConfig(BaseModel):
                 "patch_y": int(row.get("patch_y", 0)),
                 "patch_width": int(row.get("patch_width", 0)),
                 "patch_height": int(row.get("patch_height", 0)),
-                "model_type": str(row.get("sam_model", "vit_b_lm")),
                 "processed": bool(row.get("processed", False)),
                 "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
             }
@@ -777,10 +802,14 @@ class AnnotationConfig(BaseModel):
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
 
-            # Handle timestamp - keep as string
-            creation_time_str = str(row.get("annotation_creation_time", "None"))
-            if creation_time_str != "None":
-                annotation_data["annotation_creation_time"] = creation_time_str
+            # Handle timestamps - keep as string
+            created_at_str = str(row.get("annotation_created_at", "None"))
+            if created_at_str != "None":
+                annotation_data["annotation_created_at"] = created_at_str
+
+            updated_at_str = str(row.get("annotation_updated_at", "None"))
+            if updated_at_str != "None":
+                annotation_data["annotation_updated_at"] = updated_at_str
 
             self.add_annotation(ImageAnnotation(**annotation_data))
 
@@ -935,9 +964,9 @@ def create_default_config() -> AnnotationConfig:
 
 def get_config_template() -> str:
     """Get a YAML template with comments for all configuration options."""
-    template = """# OMERO micro-SAM Configuration Template v1.0.0
+    template = """# OMERO micro-SAM Configuration Template v2.0.0
 
-schema_version: "1.0.0"
+schema_version: "2.0.0"
 
 name: "micro_sam_nuclei_segmentation"
 version: "1.0.0"
@@ -962,6 +991,11 @@ annotation_methodology:
   annotation_method: "automatic"
   annotation_criteria: "Complete nuclei boundaries based on DAPI staining"
   annotation_coverage: "representative"
+  annotation_tool:
+    name: "micro-sam"
+    version: "1.0.0"
+    mode: "interactive"
+    parameters: null
 
 spatial_coverage:
   channels: [0]
@@ -969,40 +1003,41 @@ spatial_coverage:
   timepoint_mode: "specific"
   z_slices: [0]
   z_slice_mode: "specific"
-  spatial_units: "pixels"
   three_d: false
-  # 3D volumetric processing settings  
+  # 3D volumetric processing settings
   z_range_start: null          # starting z-slice for 3D volumes
   z_range_end: null            # ending z-slice for 3D volumes
-  
+  # Patch processing settings
+  use_patches: true
+  patch_size: [512, 512]
+  patches_per_image: 4
+  random_patches: true
+
 training:
   validation_strategy: "random_split"
   train_fraction: 0.7
   train_n: 3
   validation_fraction: 0.3
   validate_n: 3
-  segment_all: false 
+  segment_all: false
 
-workflow: 
+workflow:
   resume_from_table: false
   read_only_mode: false
+  batch_size: 8
 
 ai_model:
-  name: "micro-sam"
-  model_type: "vit_b_lm"
-  framework: "pytorch"
+  framework: "micro_sam"
+  framework_version: null
+  model_name: ""
+  model_version: "latest"
+  model_url: null
+  model_doi: null
+  training_mode: "inference"
+  pretrained_from: "vit_b_lm"
 
-processing:
-  batch_size: 8
-  use_patches: true
-  patch_size: [512, 512]
-  patches_per_image: 4
-  random_patches: true  
-  
 output:
   output_directory: "./annotations"
-  format: "ome_tiff"
-  resume_from_checkpoint: false
 
 tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """

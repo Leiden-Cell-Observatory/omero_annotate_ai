@@ -534,11 +534,11 @@ class WorkflowWidget:
 
         # Patches settings
         use_patches = widgets.Checkbox(
-            value=self.config.processing.use_patches, description="Use patches"
+            value=self.config.spatial_coverage.use_patches, description="Use patches"
         )
 
         patches_per_image = widgets.IntSlider(
-            value=self.config.processing.patches_per_image,
+            value=self.config.spatial_coverage.patches_per_image,
             min=1,
             max=20,
             description="Patches per image:",
@@ -546,7 +546,7 @@ class WorkflowWidget:
         )
 
         patch_size = widgets.Text(
-            value=f"{self.config.processing.patch_size[0]}, {self.config.processing.patch_size[1]}",
+            value=f"{self.config.spatial_coverage.patch_size[0]}, {self.config.spatial_coverage.patch_size[1]}",
             description="Patch size:",
             placeholder="512, 512",
             disabled=not use_patches.value,
@@ -599,7 +599,7 @@ class WorkflowWidget:
         """Create technical settings group."""
         # Batch processing
         batch_size = widgets.IntSlider(
-            value=self.config.processing.batch_size,
+            value=self.config.workflow.batch_size,
             min=0,
             max=10,
             description="Batch size:",
@@ -618,7 +618,7 @@ class WorkflowWidget:
                 ("vit_l", "vit_l"),
                 ("vit_h", "vit_h"),
             ],
-            value=self.config.ai_model.model_type,
+            value=self.config.ai_model.pretrained_from,
             description="SAM Model:",
             style={"description_width": "initial"},
         )
@@ -1082,7 +1082,7 @@ class WorkflowWidget:
                     f"📊 Container: {self.config.omero.container_type} (ID: {self.config.omero.container_id})"
                 )
                 print(f"🎯 Training Set: {self.config.name}")
-                print(f"🔬 Model: {self.config.ai_model.model_type}")
+                print(f"🔬 Model: {self.config.ai_model.pretrained_from}")
 
         except Exception as e:
             with self.status_output:
@@ -1177,9 +1177,9 @@ class WorkflowWidget:
                 "z_range_end"
             ].value
         if "use_patches" in annotation_widgets:
-            self.config.processing.use_patches = annotation_widgets["use_patches"].value
+            self.config.spatial_coverage.use_patches = annotation_widgets["use_patches"].value
         if "patches_per_image" in annotation_widgets:
-            self.config.processing.patches_per_image = annotation_widgets[
+            self.config.spatial_coverage.patches_per_image = annotation_widgets[
                 "patches_per_image"
             ].value
         if "patch_size" in annotation_widgets:
@@ -1187,7 +1187,7 @@ class WorkflowWidget:
             try:
                 sizes = [int(x.strip()) for x in patch_size_str.split(",") if x.strip()]
                 if len(sizes) == 2:
-                    self.config.processing.patch_size = list(sizes)
+                    self.config.spatial_coverage.patch_size = list(sizes)
             except Exception:
                 pass
 
@@ -1206,9 +1206,9 @@ class WorkflowWidget:
 
         # Update configuration from widgets
         if "batch_size" in technical_widgets:
-            self.config.processing.batch_size = technical_widgets["batch_size"].value
+            self.config.workflow.batch_size = technical_widgets["batch_size"].value
         if "model_type" in technical_widgets:
-            self.config.ai_model.model_type = technical_widgets["model_type"].value
+            self.config.ai_model.pretrained_from = technical_widgets["model_type"].value
         if "output_folder" in technical_widgets:
             self.config.output.output_directory = technical_widgets[
                 "output_folder"
