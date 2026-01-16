@@ -151,7 +151,7 @@ def prepare_training_data_from_table(
         
     logger.info(f"Loaded table with {len(table)} rows")
     
-    # Save the table locally for inspection (without debug in name)
+    # Save the table locally for inspection 
     table_path = output_dir / f"table_{table_id}.csv"
     try:
         table.to_csv(table_path, index=True)
@@ -484,10 +484,17 @@ def _prepare_dataset_from_table(
                             print(f"  Extracted slice shape: {img_slice.shape}")
                     else:
                         # Get full plane for this z-slice
+                        # Get image dimensions if not already obtained
+                        if 'size_x' not in locals():
+                            omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+                            size_x = omero_image.getSizeX()
+                            size_y = omero_image.getSizeY()
+                        
                         _, img_slice = ezomero.get_image(
                             conn,
                             image_id,
                             start_coords=(0, 0, z_val, channel, timepoint),
+                            axis_lengths=(size_x, size_y, 1, 1, 1),
                             xyzct=True  # Use XYZCT ordering
                         )
                         # Check shape of returned array
@@ -571,16 +578,22 @@ def _prepare_dataset_from_table(
                     # Get full plane
                     z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
                     
+                    # Get image dimensions to specify exact plane size
+                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+                    size_x = omero_image.getSizeX()
+                    size_y = omero_image.getSizeY()
+                    
                     # Debug start_coords
                     if logger:
-                        logger.debug(f"2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint})")
+                        logger.debug(f"2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}")
                     else:
-                        print(f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint})")
+                        print(f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}")
                     
                     _, img_data = ezomero.get_image(
                         conn,
                         image_id,
                         start_coords=(0, 0, int(z_val), channel, timepoint),
+                        axis_lengths=(size_x, size_y, 1, 1, 1),
                         xyzct=True
                     )
                     
@@ -601,6 +614,7 @@ def _prepare_dataset_from_table(
                         print(f"  Extracted 2D shape: {img_data.shape}")
                 
                 # Normalize to 8-bit
+                #TODO make this optional; not always need 8-bit I guess
                 max_val = img_data.max()
                 if max_val > 0:
                     img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
