@@ -70,6 +70,7 @@ class TestAnnotationConfig:
         keys_in_yaml = [ln.split(':', 1)[0] for ln in lines]
 
         # Expected order follows field declaration order of AnnotationConfig
+        # Note: processing was removed in schema v2.0.0
         expected_prefix_order = [
             'schema_version',
             'config_file_path',
@@ -83,7 +84,6 @@ class TestAnnotationConfig:
             'spatial_coverage',
             'training',
             'ai_model',
-            'processing',
             'workflow',
             'output',
             'omero',

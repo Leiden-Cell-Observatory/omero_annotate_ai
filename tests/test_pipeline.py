@@ -46,15 +46,15 @@ class TestAnnotationPipeline:
     def test_config_pydantic_validation(self):
         """Test that Pydantic validates config fields properly."""
         config = create_default_config()
-        
+
         # Test valid assignment
         config.omero.container_id = 123
         assert config.omero.container_id == 123
-        
+
         # Test that certain fields have expected defaults/validation
         assert config.training.train_fraction >= 0.1
         assert config.training.train_fraction <= 0.9
-        assert config.processing.batch_size >= 0
+        assert config.workflow.batch_size >= 0
     
     @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
     def test_get_images_from_container_dataset(self, mock_ezomero):
@@ -277,13 +277,13 @@ class TestAnnotationPipeline:
     def test_prepare_processing_units_with_patches(self):
         """Test preparing processing units with patch processing."""
         config = create_default_config()
-        config.processing.use_patches = True
-        config.processing.patches_per_image = 2
+        config.spatial_coverage.use_patches = True
+        config.spatial_coverage.patches_per_image = 2
         config.training.train_n = 2
         config.training.validate_n = 1
         config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images - create distinct images
         mock_images = []
         for i in range(5):  # Provide more images than needed so selection works
@@ -295,16 +295,16 @@ class TestAnnotationPipeline:
             mock_img.getSizeY.return_value = 2000
             mock_img.getSizeX.return_value = 2000
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 6
-        
+
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 4  # 2 images × 2 patches each
@@ -313,14 +313,14 @@ class TestAnnotationPipeline:
     def test_prepare_processing_units_with_patches_too_many(self):
         """Test preparing processing units with patch processing. Test when patches too many patches to fit the image."""
         config = create_default_config()
-        config.processing.use_patches = True
-        config.processing.patches_per_image = 2
+        config.spatial_coverage.use_patches = True
+        config.spatial_coverage.patches_per_image = 2
         config.training.train_n = 2
-        config.processing.patch_size = [512, 512]
+        config.spatial_coverage.patch_size = [512, 512]
         config.training.validate_n = 1
         config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images - create distinct images
         mock_images = []
         for i in range(5):  # Provide more images than needed so selection works
@@ -332,16 +332,16 @@ class TestAnnotationPipeline:
             mock_img.getSizeY.return_value = 1000
             mock_img.getSizeX.return_value = 1000
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 3
-        
+
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2  # 2 images × 1 patches each
@@ -350,14 +350,14 @@ class TestAnnotationPipeline:
     def test_prepare_processing_units_with_patches_small_image(self):
         """Test preparing processing units with patch processing. Test when patches are larger than image."""
         config = create_default_config()
-        config.processing.use_patches = True
-        config.processing.patches_per_image = 2
+        config.spatial_coverage.use_patches = True
+        config.spatial_coverage.patches_per_image = 2
         config.training.train_n = 2
-        config.processing.patch_size = [512, 512]
+        config.spatial_coverage.patch_size = [512, 512]
         config.training.validate_n = 1
         config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images - create distinct images
         mock_images = []
         for i in range(5):  # Provide more images than needed so selection works
@@ -369,10 +369,10 @@ class TestAnnotationPipeline:
             mock_img.getSizeY.return_value = 400
             mock_img.getSizeX.return_value = 500
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 3
         assert all(ann.patch_width == 500 for ann in pipeline.config.annotations)
@@ -380,7 +380,7 @@ class TestAnnotationPipeline:
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
         #TODO actually they are not patches because patch size > image size
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2  # 2 images × 1 patches each
@@ -585,7 +585,7 @@ class TestPipelineIntegration:
         config = create_default_config()
         config.omero.container_type = "dataset"
         config.omero.container_id = 123
-        config.processing.batch_size = 2
+        config.workflow.batch_size = 2
         config.training.train_n = 1
         config.training.validate_n = 1
         mock_images = []
@@ -726,33 +726,33 @@ class TestPipelineUtils:
     def test_pipeline_config_access(self):
         """Test accessing pipeline configuration."""
         config = create_default_config()
-        config.ai_model.model_type = "vit_h"
-        config.processing.batch_size = 5
-        
+        config.ai_model.pretrained_from = "vit_h"
+        config.workflow.batch_size = 5
+
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
-        assert pipeline.config.ai_model.model_type == "vit_h"
-        assert pipeline.config.processing.batch_size == 5
+
+        assert pipeline.config.ai_model.pretrained_from == "vit_h"
+        assert pipeline.config.workflow.batch_size == 5
     
     def test_pipeline_with_custom_config(self):
         """Test pipeline with custom configuration."""
         config = create_default_config()
         config.omero.container_type = "plate"
         config.omero.container_id = 999
-        config.ai_model.model_type = "vit_l"
+        config.ai_model.pretrained_from = "vit_l"
         config.spatial_coverage.three_d = True
         config.name = "custom_training_set"
-        config.processing.batch_size = 5
-        
+        config.workflow.batch_size = 5
+
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
+
         assert pipeline.config.omero.container_type == "plate"
         assert pipeline.config.spatial_coverage.three_d is True
         assert pipeline.config.name == "custom_training_set"
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
-        assert pipeline.config.ai_model.model_type == "vit_l"
-        assert pipeline.config.processing.batch_size == 5
+
+        assert pipeline.config.ai_model.pretrained_from == "vit_l"
+        assert pipeline.config.workflow.batch_size == 5
 
 
 @pytest.mark.unit

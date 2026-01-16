@@ -288,7 +288,7 @@ class AnnotationPipeline:
                     z_end = max(z_slices) if z_slices else 0 
                     z_length = len(z_slices) if z_slices else 1
                     
-                    if self.config.processing.use_patches:
+                    if self.config.spatial_coverage.use_patches:
                         # Create multiple annotations for 3D patches
                         patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
                         patch_h, patch_w = actual_patch_size
@@ -308,7 +308,6 @@ class AnnotationPipeline:
                                 patch_width=patch_w,
                                 patch_height=patch_h,
                                 category=category,
-                                model_type=self.config.ai_model.model_type,
                                 channel=self.config.spatial_coverage.get_label_channel(),
                                 is_volumetric=True,
                             )
@@ -325,7 +324,6 @@ class AnnotationPipeline:
                             z_end=z_end,
                             z_length=z_length,
                             category=category,
-                            model_type=self.config.ai_model.model_type,
                             channel=self.config.spatial_coverage.get_label_channel(),
                             is_volumetric=True,
                         )
@@ -333,7 +331,7 @@ class AnnotationPipeline:
                 else:
                     # 2D mode: create annotations per z-slice (existing behavior)
                     for z in z_slices:
-                        if self.config.processing.use_patches:
+                        if self.config.spatial_coverage.use_patches:
                             # Create multiple annotations for 2D patches
                             patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
                             patch_h, patch_w = actual_patch_size
@@ -353,7 +351,6 @@ class AnnotationPipeline:
                                     patch_width=patch_w,
                                     patch_height=patch_h,
                                     category=category,
-                                    model_type=self.config.ai_model.model_type,
                                     channel=self.config.spatial_coverage.get_label_channel(),
                                     is_volumetric=False,
                                 )
@@ -370,7 +367,6 @@ class AnnotationPipeline:
                                 z_end=z,
                                 z_length=1,
                                 category=category,
-                                model_type=self.config.ai_model.model_type,
                                 channel=self.config.spatial_coverage.get_label_channel(),
                                 is_volumetric=False,
                             )
@@ -421,9 +417,9 @@ class AnnotationPipeline:
 
     def _generate_patch_coordinates(self, image) -> Tuple[List[Tuple[int, int]], List[int]]:
         """Generate patch coordinates for an image and return actual patch size."""
-        patch_size = self.config.processing.patch_size
-        patches_per_image = self.config.processing.patches_per_image
-        random_patches = self.config.processing.random_patches
+        patch_size = self.config.spatial_coverage.patch_size
+        patches_per_image = self.config.spatial_coverage.patches_per_image
+        random_patches = self.config.spatial_coverage.random_patches
 
         image_shape = (image.getSizeY(), image.getSizeX())
 
@@ -475,7 +471,7 @@ class AnnotationPipeline:
             annotations_path.mkdir(exist_ok=True)
             # print("DEBUG: Ready to run micro_sam annotations")
             # Run micro-SAM annotation
-            model_type = self.config.ai_model.model_type
+            model_type = self.config.ai_model.pretrained_from
 
     
             # Run image series annotator with explicit napari.run() call
@@ -570,12 +566,12 @@ class AnnotationPipeline:
             print(f"Image data range: {np.min(image_data)} - {np.max(image_data)}, dtype: {image_data.dtype}")
 
         # Handle patches if needed (works for both 2D and 3D)
-        if self.config.processing.use_patches and "patch_x" in metadata:
+        if self.config.spatial_coverage.use_patches and "patch_x" in metadata:
             patch_x = metadata["patch_x"]
             patch_y = metadata["patch_y"]
             # Use the actual patch dimensions from metadata instead of config
-            patch_h = metadata.get("patch_height", self.config.processing.patch_size[0])
-            patch_w = metadata.get("patch_width", self.config.processing.patch_size[1])
+            patch_h = metadata.get("patch_height", self.config.spatial_coverage.patch_size[0])
+            patch_w = metadata.get("patch_width", self.config.spatial_coverage.patch_size[1])
 
             if is_volumetric:
                 # Extract 3D patch: (z, y, x)
@@ -659,7 +655,7 @@ class AnnotationPipeline:
                     image_id = meta.get("image_id")
                     patch_offset = None
                     
-                    if self.config.processing.use_patches:
+                    if self.config.spatial_coverage.use_patches:
                         patch_offset = (meta.get("patch_x", 0), meta.get("patch_y", 0))
                     
                     # Upload ROIs and labels using the existing function
@@ -673,16 +669,18 @@ class AnnotationPipeline:
                         z_slice=meta.get("z_slice"),
                         channel=meta.get("channel"),
                         timepoint=meta.get("timepoint"),
-                        model_type=meta.get("model_type"),
                         is_volumetric=meta.get("is_volumetric"),
                         z_start=meta.get("z_start")
                     )
-                    
+
                     # Update config annotation with OMERO IDs
                     matching_annotation.processed = True
                     matching_annotation.label_id = label_id
                     matching_annotation.roi_id = roi_id
-                    matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                    now = datetime.now().isoformat()
+                    matching_annotation.annotation_updated_at = now
+                    if matching_annotation.annotation_created_at is None:
+                        matching_annotation.annotation_created_at = now
                     matching_annotation.annotation_type = self.config.annotation_methodology.annotation_type
                     
                     updated_count += 1
@@ -692,7 +690,10 @@ class AnnotationPipeline:
                     self._debug_print(f"Error uploading ROI for '{annotation_id}': {e}")
                     # Still mark as processed but without OMERO IDs
                     matching_annotation.processed = True
-                    matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                    now = datetime.now().isoformat()
+                    matching_annotation.annotation_updated_at = now
+                    if matching_annotation.annotation_created_at is None:
+                        matching_annotation.annotation_created_at = now
                     updated_count += 1
         
         # Show final results
@@ -1020,7 +1021,7 @@ class AnnotationPipeline:
                         "timepoint": meta.get("timepoint", -1),
                         "z_slice": meta.get("z_slice", -1),
                         "channel": meta.get("channel", -1),
-                        "model_type": meta.get("model_type", "vit_b_lm"),
+                        "pretrained_from": self.config.ai_model.pretrained_from or "vit_b_lm",
                         "processed": False,
                         "completed_timestamp": "",
                     }
@@ -1227,7 +1228,6 @@ class AnnotationPipeline:
                 "patch_x": annotation.patch_x,
                 "patch_y": annotation.patch_y,
                 "category": annotation.category,
-                "model_type": annotation.model_type,
                 "channel": annotation.channel,
                 "is_volumetric": annotation.is_volumetric,
             }
@@ -1244,7 +1244,7 @@ class AnnotationPipeline:
         Returns:
             Number of successfully processed units
         """
-        batch_size = self.config.processing.batch_size or len(processing_units)
+        batch_size = self.config.workflow.batch_size or len(processing_units)
         processed_count = 0
         
         for i in range(0, len(processing_units), batch_size):
@@ -1438,7 +1438,10 @@ class AnnotationPipeline:
 
                 # Mark as processed
                 matching_annotation.processed = True
-                matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                now = datetime.now().isoformat()
+                matching_annotation.annotation_updated_at = now
+                if matching_annotation.annotation_created_at is None:
+                    matching_annotation.annotation_created_at = now
 
                 print(f"Processed locally: {annotation_id}")
                 return True
@@ -1447,10 +1450,10 @@ class AnnotationPipeline:
                 # Upload mode: Upload ROIs to OMERO
                 image_id = matching_annotation.image_id
                 patch_offset = None
-                
+
                 if matching_annotation.is_patch:
                     patch_offset = (matching_annotation.patch_x, matching_annotation.patch_y)
-                
+
                 # Upload ROIs and labels using the existing function
                 label_id, roi_id = upload_rois_and_labels(
                     conn=self.conn,
@@ -1462,18 +1465,20 @@ class AnnotationPipeline:
                     z_slice=matching_annotation.z_slice,
                     channel=matching_annotation.channel,
                     timepoint=matching_annotation.timepoint,
-                    model_type=matching_annotation.model_type,
                     is_volumetric=matching_annotation.is_volumetric,
                     z_start=matching_annotation.z_start
                 )
-                
+
                 # Update config annotation with OMERO IDs
                 matching_annotation.processed = True
                 matching_annotation.label_id = label_id
                 matching_annotation.roi_id = roi_id
-                matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                now = datetime.now().isoformat()
+                matching_annotation.annotation_updated_at = now
+                if matching_annotation.annotation_created_at is None:
+                    matching_annotation.annotation_created_at = now
                 matching_annotation.annotation_type = self.config.annotation_methodology.annotation_type
-                
+
                 print(f"Uploaded to OMERO: {annotation_id} (label_id: {label_id}, roi_id: {roi_id})")
                 return True
                 

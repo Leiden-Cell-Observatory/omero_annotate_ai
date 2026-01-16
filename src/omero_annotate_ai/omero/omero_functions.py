@@ -53,7 +53,7 @@ def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].fillna("segmentation_mask").astype(str)
 
-    datetime_columns = ["annotation_creation_time"]
+    datetime_columns = ["annotation_created_at", "annotation_updated_at"]
     for col in datetime_columns:
         if col in df.columns:
             df[col] = df[col].fillna("None").astype(str)
@@ -297,7 +297,6 @@ def upload_rois_and_labels(
     timepoint: Optional[int] = None,
     z_slice: Optional[int] = None,
     channel: Optional[int] = None,
-    model_type: Optional[str] = None,
     is_volumetric: Optional[bool] = False,
     z_start: Optional[int] = 0,
 ):
@@ -313,7 +312,6 @@ def upload_rois_and_labels(
         timepoint: Optional timepoint for positioning the roi properly in OMERO
         z_slice: Optional z_slice for positioning the roi properly in OMERO
         channel: Optional channel for positioning the roi properly in OMERO
-        model_type: Optional model type for ROI labeling
         is_volumetric: check if we need to handle roi as 3D
         z_start: use for volumetric to use z_start as offset in the stack
 
@@ -335,7 +333,6 @@ def upload_rois_and_labels(
         z_slice=effective_z,
         channel=channel,
         timepoint=timepoint,
-        model_type=model_type,
         is_volumetric=is_volumetric,
         patch_offset=patch_offset,
     )

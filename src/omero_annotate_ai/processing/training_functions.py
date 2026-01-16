@@ -3,7 +3,7 @@
 import shutil
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import ezomero
 import numpy as np
@@ -12,6 +12,9 @@ from tifffile import imwrite
 from tqdm import tqdm
 
 from ..utils.logging import create_training_logger
+
+if TYPE_CHECKING:
+    from ..core.annotation_config import AnnotationConfig
 
 
 def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
@@ -334,6 +337,167 @@ def prepare_training_data_from_table(
         logger.info(f"Training data prepared successfully in: {output_dir}")
         logger.info(f"Statistics: {stats}")
 
+    return result
+
+
+def prepare_training_data_from_config(
+    conn: Any,
+    config: "AnnotationConfig",  # Forward reference to avoid circular import
+    output_dir: Union[str, Path],
+    training_name: str = "micro_sam_training",
+    clean_existing: bool = True,
+    tmp_dir: Optional[Union[str, Path]] = None,
+    verbose: bool = False,
+) -> Dict[str, Any]:
+    """
+    Prepare training data directly from an AnnotationConfig object.
+
+    This function allows preparing training data from a config that has been
+    loaded from a YAML file with annotations already populated from a previous
+    workflow. It avoids the need to have an OMERO table.
+
+    Args:
+        conn: OMERO connection object (required for downloading images/labels)
+        config: AnnotationConfig with populated annotations list
+        output_dir: Directory to store training data
+        training_name: Name for the training session (used in directory naming)
+        clean_existing: Whether to clean existing output directories
+        tmp_dir: Temporary directory for downloads (optional)
+        verbose: If True, show detailed debug information
+
+    Returns:
+        Dictionary with paths to created directories:
+        {
+            'base_dir': Path to base output directory,
+            'training_input': Path to training images,
+            'training_label': Path to training labels,
+            'val_input': Path to validation images,
+            'val_label': Path to validation labels,
+            'stats': Statistics about the prepared data
+        }
+
+    Raises:
+        ValueError: If config has no annotations or no processed annotations
+    """
+    # Validate config has annotations
+    if not config.annotations:
+        raise ValueError("Config has no annotations. Run annotation workflow first.")
+
+    # Convert config annotations to DataFrame
+    df = config.to_dataframe()
+
+    if df.empty:
+        raise ValueError("Config annotations converted to empty DataFrame")
+
+    # Convert paths
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set up logger
+    logger = create_training_logger(output_dir, verbose=verbose)
+    logger.info(f"Preparing training data from config with {len(df)} annotations")
+
+    if tmp_dir is None:
+        tmp_dir = output_dir / "tmp"
+    tmp_dir = Path(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Validate the DataFrame schema
+    validate_table_schema(df, logger)
+    logger.info("Config DataFrame schema validated")
+
+    # Check if 'processed' column exists and filter to only processed rows
+    if 'processed' in df.columns:
+        initial_count = len(df)
+        df = df[df['processed']].copy()
+        if len(df) == 0:
+            raise ValueError("No processed annotations found in config")
+        logger.info(f"Using {len(df)} processed annotations out of {initial_count} total")
+
+    # Determine if using separate channels
+    uses_separate_channels = config.spatial_coverage.uses_separate_channels()
+    label_channel = config.spatial_coverage.get_label_channel() if uses_separate_channels else None
+    training_channels = config.spatial_coverage.get_training_channels() if uses_separate_channels else None
+    effective_train_channel = training_channels[0] if training_channels else None
+
+    if uses_separate_channels:
+        logger.info(f"Using separate channels: label={label_channel}, training={training_channels}")
+
+    # Clean existing directories if requested
+    if clean_existing:
+        folders = ["training_input", "training_label", "val_input", "val_label"]
+        if uses_separate_channels:
+            folders.extend(["training_label_input", "val_label_input"])
+        for folder in folders:
+            folder_path = output_dir / folder
+            if folder_path.exists():
+                shutil.rmtree(folder_path)
+
+    # Split data based on 'train'/'validate' columns
+    if 'train' in df.columns and 'validate' in df.columns:
+        train_images = df[df['train']]
+        val_images = df[df['validate']]
+        logger.info(f"Using train/validate split from config: {len(train_images)} train, {len(val_images)} val")
+    else:
+        # All data is training data if no split info
+        train_images = df
+        val_images = pd.DataFrame()
+        logger.warning("No train/validate columns - using all data for training")
+
+    logger.info(f"Preparing {len(train_images)} training and {len(val_images)} validation images")
+
+    # Prepare datasets using existing internal function
+    training_input_dir, training_label_dir = _prepare_dataset_from_table(
+        conn, train_images, output_dir, subset_type="training", tmp_dir=tmp_dir,
+        train_channel=effective_train_channel, logger=logger, verbose=verbose
+    )
+
+    val_input_dir, val_label_dir = _prepare_dataset_from_table(
+        conn, val_images, output_dir, subset_type="val", tmp_dir=tmp_dir,
+        train_channel=effective_train_channel, logger=logger, verbose=verbose
+    ) if len(val_images) > 0 else (None, None)
+
+    # Handle separate channel workflow if needed
+    training_label_input_dir = None
+    val_label_input_dir = None
+    if uses_separate_channels:
+        logger.info(f"Preparing label channel ({label_channel}) images")
+        training_label_input_dir, _ = _prepare_dataset_from_table(
+            conn, train_images, output_dir, subset_type="training_label",
+            tmp_dir=tmp_dir, train_channel=label_channel, logger=logger, verbose=verbose
+        )
+        if len(val_images) > 0:
+            val_label_input_dir, _ = _prepare_dataset_from_table(
+                conn, val_images, output_dir, subset_type="val_label",
+                tmp_dir=tmp_dir, train_channel=label_channel, logger=logger, verbose=verbose
+            )
+
+    # Compute statistics
+    stats = {
+        'n_training_images': len(list(training_input_dir.glob('*.tif'))) if training_input_dir else 0,
+        'n_training_labels': len(list(training_label_dir.glob('*.tif'))) if training_label_dir else 0,
+        'n_val_images': len(list(val_input_dir.glob('*.tif'))) if val_input_dir else 0,
+        'n_val_labels': len(list(val_label_dir.glob('*.tif'))) if val_label_dir else 0,
+    }
+
+    result = {
+        'base_dir': output_dir,
+        'training_input': training_input_dir,
+        'training_label': training_label_dir,
+        'val_input': val_input_dir,
+        'val_label': val_label_dir,
+        'stats': stats
+    }
+
+    if uses_separate_channels:
+        result['training_label_input'] = training_label_input_dir
+        result['val_label_input'] = val_label_input_dir
+
+    if stats['n_training_images'] == 0:
+        logger.error("Training data preparation FAILED - no images processed")
+        raise ValueError("Training data preparation failed - no images were processed")
+
+    logger.info(f"Training data prepared successfully from config: {stats}")
     return result
 
 
