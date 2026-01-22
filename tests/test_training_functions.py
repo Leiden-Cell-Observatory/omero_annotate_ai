@@ -29,20 +29,22 @@ class TestPrepareTrainingDataFromTable:
     @pytest.fixture
     def sample_table_data(self):
         """Sample annotation table data."""
-        return pd.DataFrame({
-            'image_id': [1, 2, 3, 4, 5],
-            'z_slice': [0, 0, 1, 0, 0],
-            'channel': [0, 0, 0, 1, 0],
-            'timepoint': [0, 0, 0, 0, 0],
-            'is_patch': [False, True, False, True, False],
-            'train': [True, True, False, False, True],
-            'validate': [False, False, True, True, False],
-            'patch_x': [0, 100, 0, 50, 0],
-            'patch_y': [0, 100, 0, 50, 0],
-            'patch_width': [0, 256, 0, 256, 0],
-            'patch_height': [0, 256, 0, 256, 0],
-            'label_id': [101, 102, 103, 104, 105],
-        })
+        return pd.DataFrame(
+            {
+                "image_id": [1, 2, 3, 4, 5],
+                "z_slice": [0, 0, 1, 0, 0],
+                "channel": [0, 0, 0, 1, 0],
+                "timepoint": [0, 0, 0, 0, 0],
+                "is_patch": [False, True, False, True, False],
+                "train": [True, True, False, False, True],
+                "validate": [False, False, True, True, False],
+                "patch_x": [0, 100, 0, 50, 0],
+                "patch_y": [0, 100, 0, 50, 0],
+                "patch_width": [0, 256, 0, 256, 0],
+                "patch_height": [0, 256, 0, 256, 0],
+                "label_id": [101, 102, 103, 104, 105],
+            }
+        )
 
     @pytest.fixture
     def temp_output_dir(self):
@@ -56,7 +58,7 @@ class TestPrepareTrainingDataFromTable:
     # @patch('omero_annotate_ai.processing.training_functions.ezomero')
     # @patch('omero_annotate_ai.processing.training_functions.imwrite')
     # @patch('omero_annotate_ai.processing.training_functions.shutil.move')
-    # def test_prepare_training_data_basic(self, mock_download, mock_move, mock_imwrite, mock_ezomero, 
+    # def test_prepare_training_data_basic(self, mock_download, mock_move, mock_imwrite, mock_ezomero,
     #                                     mock_conn, sample_table_data, temp_output_dir):
     #     """
     #     Tests the basic functionality of the `prepare_training_data_from_table` function.
@@ -66,26 +68,26 @@ class TestPrepareTrainingDataFromTable:
     #     # Mock ezomero functions
     #     mock_ezomero.get_table.return_value = sample_table_data
     #     mock_ezomero.get_image.return_value = (None, np.random.randint(0, 255, (256, 256), dtype=np.uint8))
-        
+
     #     # Mock file annotation
     #     mock_file_ann = Mock()
     #     mock_file_ann.getFile.return_value.getName.return_value = "label.tif"
     #     mock_file_ann.getFile.return_value.getSize.return_value = 1024
     #     mock_ezomero.get_file_annotation.return_value = str(temp_output_dir / "temp_label.tif")
-        
+
     #     # Create mock connection with proper getObject method
     #     mock_conn.getObject.return_value = mock_file_ann
-        
+
     #     # Mock file operations
     #     mock_download.return_value = str(temp_output_dir / "temp_label.tif")
     #     mock_move.return_value = None
     #     mock_imwrite.return_value = None
-        
+
     #     # Create actual temp files to avoid file not found errors
     #     for i in range(len(sample_table_data)):
     #         temp_file = temp_output_dir / f"temp_label_{i}.tif"
     #         temp_file.touch()
-        
+
     #     # Run function
     #     result = prepare_training_data_from_table(
     #         conn=mock_conn,
@@ -94,7 +96,7 @@ class TestPrepareTrainingDataFromTable:
     #         validation_split=0.2,
     #         clean_existing=True
     #     )
-        
+
     #     # Verify result structure
     #     assert 'base_dir' in result
     #     assert 'training_input' in result
@@ -102,13 +104,13 @@ class TestPrepareTrainingDataFromTable:
     #     assert 'val_input' in result
     #     assert 'val_label' in result
     #     assert 'stats' in result
-        
+
     #     # Verify directories were created
     #     assert result['training_input'].exists()
     #     assert result['training_label'].exists()
     #     assert result['val_input'].exists()
     #     assert result['val_label'].exists()
-        
+
     #     # Verify ezomero was called correctly
     #     mock_ezomero.get_table.assert_called_once_with(mock_conn, 123)
 
@@ -120,7 +122,7 @@ class TestPrepareTrainingDataFromTable:
     #     raises a `ValueError` when the specified table is not found in OMERO.
     #     """
     #     mock_ezomero.get_table.side_effect = Exception("Table not found")
-        
+
     #     with pytest.raises(ValueError, match="Failed to load table"):
     #         prepare_training_data_from_table(
     #             conn=mock_conn,
@@ -136,7 +138,7 @@ class TestPrepareTrainingDataFromTable:
     #     raises a `ValueError` when the specified table is empty.
     #     """
     #     mock_ezomero.get_table.return_value = pd.DataFrame()
-        
+
     #     with pytest.raises(ValueError, match="Table .* is empty"):
     #         prepare_training_data_from_table(
     #             conn=mock_conn,
@@ -156,9 +158,10 @@ class TestPrepareTrainingDataFromTable:
                 conn=mock_conn,
                 table_id=123,
                 output_dir=temp_output_dir,
-                validation_split=1.5
+                validation_split=1.5,
             )
-    #FAILED tests/test_training_functions.py::TestPrepareTrainingDataFromTable::test_existing_train_validate_columns - ValueError: Training data preparation failed - no images were processed successfully. Check the error messages above.
+
+    # FAILED tests/test_training_functions.py::TestPrepareTrainingDataFromTable::test_existing_train_validate_columns - ValueError: Training data preparation failed - no images were processed successfully. Check the error messages above.
     # @patch('omero_annotate_ai.processing.training_functions.ezomero')
     # @patch('omero_annotate_ai.processing.training_functions.imwrite')
     # def test_existing_train_validate_columns(self, mock_imwrite, mock_ezomero,
@@ -171,19 +174,19 @@ class TestPrepareTrainingDataFromTable:
     #     """
     #     # Create table with train/validate columns
     #     table_data = sample_table_data
-        
+
     #     mock_ezomero.get_table.return_value = table_data
     #     mock_ezomero.get_image.return_value = (None, np.random.randint(0, 255, (256, 256), dtype=np.uint8))
     #     mock_ezomero.get_file_annotation.return_value = "/fake/path/label.tif"
     #     mock_imwrite.return_value = None
-        
+
     #     result = prepare_training_data_from_table(
     #         conn=mock_conn,
     #         table_id=123,
     #         output_dir=temp_output_dir,
     #         validation_split=0.5  # Should be ignored due to existing columns
     #     )
-        
+
     #     # Should use existing split (2 train, 2 validate)
     #     assert result['stats']['n_training_images'] >= 0  # Will be 0 in mocked test
     #     assert result['stats']['n_val_images'] >= 0
@@ -209,18 +212,20 @@ class TestPrepareDatasetFromTable:
     @pytest.fixture
     def sample_df(self):
         """Sample DataFrame for testing."""
-        return pd.DataFrame({
-            'image_id': [1, 2],
-            'z_slice': [0, '[0, 1]'],  # Test different z_slice formats
-            'channel': [0, 0],
-            'timepoint': [0, 0],
-            'is_patch': [False, True],
-            'patch_x': [0, 100],
-            'patch_y': [0, 100],
-            'patch_width': [0, 256],
-            'patch_height': [0, 256],
-            'label_id': [101, 102],
-        })
+        return pd.DataFrame(
+            {
+                "image_id": [1, 2],
+                "z_slice": [0, "[0, 1]"],  # Test different z_slice formats
+                "channel": [0, 0],
+                "timepoint": [0, 0],
+                "is_patch": [False, True],
+                "patch_x": [0, 100],
+                "patch_y": [0, 100],
+                "patch_width": [0, 256],
+                "patch_height": [0, 256],
+                "label_id": [101, 102],
+            }
+        )
 
     @pytest.fixture
     def temp_output_dir(self):
@@ -242,51 +247,51 @@ class TestPrepareDatasetFromTable:
     #     directories and that it calls the `ezomero` functions to get the data from OMERO.
     #     """
     #     mock_conn = Mock()
-        
+
     #     # Mock image data - 5D array from ezomero
     #     mock_image_data = np.random.randint(0, 255, (256, 256, 1, 1, 1), dtype=np.uint8)
     #     mock_ezomero.get_image.return_value = (None, mock_image_data)
-        
+
     #     # Mock file annotation
     #     mock_file_ann = Mock()
     #     mock_file_ann.getFile.return_value.getName.return_value = "label.tif"
     #     mock_file_ann.getFile.return_value.getSize.return_value = 1024
     #     mock_ezomero.get_file_annotation.return_value = mock_file_ann
-        
+
     #     # Mock file operations - create actual temp files to avoid file not found errors
     #     temp_label_files = []
     #     for i in range(len(sample_df)):
     #         temp_file = temp_output_dir / f"temp_label_{i}.tif"
     #         temp_file.touch()  # Create empty file
     #         temp_label_files.append(str(temp_file))
-        
+
     #     mock_download.side_effect = temp_label_files
     #     mock_exists.return_value = True
     #     mock_move.return_value = None
     #     mock_imwrite.return_value = None
-        
+
     #     input_dir, label_dir = _prepare_dataset_from_table(
     #         conn=mock_conn,
     #         df=sample_df,
     #         output_dir=temp_output_dir,
     #         subset_type="training"
     #     )
-        
+
     #     # Verify directories were created
     #     assert input_dir.exists()
     #     assert label_dir.exists()
     #     assert input_dir.name == "training_input"
     #     assert label_dir.name == "training_label"
-        
+
     #     # Verify ezomero calls
     #     assert mock_ezomero.get_image.call_count == len(sample_df)
     #     assert mock_ezomero.get_file_annotation.call_count == len(sample_df)
-        
+
     #     # Verify download and move calls
     #     assert mock_download.call_count == len(sample_df)
     #     assert mock_move.call_count == len(sample_df)
 
-    # @patch('omero_annotate_ai.processing.training_functions.ezomero')  
+    # @patch('omero_annotate_ai.processing.training_functions.ezomero')
     # def test_missing_ezomero_dependency(self, mock_ezomero, sample_df, temp_output_dir):
     #     """
     #     Tests the handling of a missing `ezomero` dependency.
@@ -295,7 +300,7 @@ class TestPrepareDatasetFromTable:
     #     """
     #     mock_ezomero.__bool__ = lambda: False  # Simulate ezomero = None
     #     mock_conn = Mock()
-        
+
     #     with pytest.raises(ImportError, match="ezomero required"):
     #         _prepare_dataset_from_table(
     #             conn=mock_conn,
@@ -440,7 +445,9 @@ class TestReorganizeLocalDataForTraining:
 
         return annotation_dir
 
-    def test_reorganize_creates_training_structure(self, populated_annotation_dir, mock_config):
+    def test_reorganize_creates_training_structure(
+        self, populated_annotation_dir, mock_config
+    ):
         """Test that reorganization creates correct folder structure."""
         result = reorganize_local_data_for_training(
             config=mock_config,
@@ -462,7 +469,9 @@ class TestReorganizeLocalDataForTraining:
         assert stats["n_val_images"] == 2
         assert stats["n_val_labels"] == 2
 
-    def test_reorganize_copy_mode_preserves_originals(self, populated_annotation_dir, mock_config):
+    def test_reorganize_copy_mode_preserves_originals(
+        self, populated_annotation_dir, mock_config
+    ):
         """Test that copy mode preserves original files."""
         result = reorganize_local_data_for_training(
             config=mock_config,
@@ -475,7 +484,9 @@ class TestReorganizeLocalDataForTraining:
         for ann in mock_config.annotations:
             assert (input_dir / f"{ann.annotation_id}.tif").exists()
 
-    def test_reorganize_move_mode_removes_originals(self, populated_annotation_dir, mock_config):
+    def test_reorganize_move_mode_removes_originals(
+        self, populated_annotation_dir, mock_config
+    ):
         """Test that move mode removes original files."""
         result = reorganize_local_data_for_training(
             config=mock_config,
@@ -668,3 +679,171 @@ class TestReorganizeLocalDataForTraining:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.unit
+class TestConsistentFolderStructure:
+    """Test that all training data preparation functions use consistent folder structure."""
+
+    def test_standard_folder_structure_keys(self):
+        """Test that _get_standard_folder_structure returns expected keys."""
+        from omero_annotate_ai.processing.training_functions import (
+            _get_standard_folder_structure,
+        )
+
+        # Without separate channels, without test
+        structure = _get_standard_folder_structure(
+            uses_separate_channels=False, include_test=False
+        )
+        assert "training_input" in structure
+        assert "training_label" in structure
+        assert "validation_input" in structure
+        assert "validation_label" in structure
+        assert structure["training_input"] == "training_input"
+        assert structure["validation_input"] == "val_input"
+
+    def test_standard_folder_structure_with_separate_channels(self):
+        """Test that standard folder structure includes label_input folders."""
+        from omero_annotate_ai.processing.training_functions import (
+            _get_standard_folder_structure,
+        )
+
+        structure = _get_standard_folder_structure(
+            uses_separate_channels=True, include_test=False
+        )
+        assert "training_label_input" in structure
+        assert "validation_label_input" in structure
+        assert structure["training_label_input"] == "training_label_input"
+        assert structure["validation_label_input"] == "val_label_input"
+
+    def test_standard_folder_structure_with_test(self):
+        """Test that standard folder structure includes test folders."""
+        from omero_annotate_ai.processing.training_functions import (
+            _get_standard_folder_structure,
+        )
+
+        structure = _get_standard_folder_structure(
+            uses_separate_channels=False, include_test=True
+        )
+        assert "test_input" in structure
+        assert "test_label" in structure
+        assert structure["test_input"] == "test_input"
+        assert structure["test_label"] == "test_label"
+
+    def test_standard_folder_structure_complete(self):
+        """Test complete folder structure with all options."""
+        from omero_annotate_ai.processing.training_functions import (
+            _get_standard_folder_structure,
+        )
+
+        structure = _get_standard_folder_structure(
+            uses_separate_channels=True, include_test=True
+        )
+        expected_keys = {
+            "training_input",
+            "training_label",
+            "training_label_input",
+            "validation_input",
+            "validation_label",
+            "validation_label_input",
+            "test_input",
+            "test_label",
+            "test_label_input",
+        }
+        assert set(structure.keys()) == expected_keys
+
+    def test_create_training_directories(self):
+        """Test that _create_training_directories creates correct directories."""
+        import tempfile
+        from pathlib import Path
+        import shutil
+
+        from omero_annotate_ai.processing.training_functions import (
+            _create_training_directories,
+        )
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            created = _create_training_directories(
+                output_dir=temp_dir,
+                uses_separate_channels=False,
+                include_test=False,
+                clean_existing=False,
+            )
+
+            # Check directories exist
+            assert (temp_dir / "training_input").exists()
+            assert (temp_dir / "training_label").exists()
+            assert (temp_dir / "val_input").exists()
+            assert (temp_dir / "val_label").exists()
+
+            # Check created_dirs keys
+            assert "training_input" in created
+            assert "validation_input" in created
+            assert created["training_input"] == temp_dir / "training_input"
+            assert created["validation_input"] == temp_dir / "val_input"
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_all_functions_return_consistent_keys(self):
+        """Test that all three main functions return consistent result keys."""
+        from omero_annotate_ai.processing.training_functions import (
+            _get_standard_folder_structure,
+            _build_standard_result,
+        )
+        from pathlib import Path
+        import tempfile
+        import shutil
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            base_dir = temp_dir / "base"
+            base_dir.mkdir()
+
+            # Create some mock directories
+            folders = _get_standard_folder_structure(
+                uses_separate_channels=True, include_test=True
+            )
+            created_dirs = {}
+            for key, folder_name in folders.items():
+                folder_path = base_dir / folder_name
+                folder_path.mkdir(parents=True, exist_ok=True)
+                created_dirs[key] = folder_path
+
+            stats = {
+                "n_training_images": 10,
+                "n_training_labels": 10,
+                "n_val_images": 5,
+                "n_val_labels": 5,
+            }
+
+            # Build result with extra fields (like reorganize does)
+            result = _build_standard_result(
+                base_dir=base_dir,
+                created_dirs=created_dirs,
+                stats=stats,
+                file_mapping={"key": "value"},
+            )
+
+            # Check required keys are present
+            required_keys = {
+                "base_dir",
+                "stats",
+                "training_input",
+                "training_label",
+                "validation_input",
+                "validation_label",
+                "training_label_input",
+                "validation_label_input",
+                "test_input",
+                "test_label",
+                "test_label_input",
+            }
+            assert required_keys.issubset(result.keys()), (
+                f"Missing keys: {required_keys - set(result.keys())}"
+            )
+
+            # Check file_mapping was added
+            assert "file_mapping" in result
+        finally:
+            shutil.rmtree(temp_dir)

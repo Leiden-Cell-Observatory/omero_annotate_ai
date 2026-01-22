@@ -817,3 +817,81 @@ class TestSpatialSampling:
         assert len(timepoints) == 4
         assert all(0 <= t < 12 for t in timepoints)
         assert len(set(timepoints)) == 4  # All unique
+
+
+@pytest.mark.unit
+class TestAnnotationTimestamps:
+    """Tests for annotation timestamp field handling via mark_processed() method."""
+
+    def test_mark_processed_sets_timestamps(self):
+        """Test that mark_processed sets both timestamp fields correctly."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+        assert annotation.annotation_created_at is None
+        assert annotation.annotation_updated_at is None
+        assert annotation.processed is False
+
+        annotation.mark_processed()
+
+        assert annotation.processed is True
+        assert annotation.annotation_created_at is not None
+        assert annotation.annotation_updated_at is not None
+        # Both should be the same on first processing
+        assert annotation.annotation_created_at == annotation.annotation_updated_at
+
+    def test_mark_processed_preserves_created_at(self):
+        """Test that mark_processed preserves existing created_at timestamp."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(
+            image_id=1,
+            image_name="test.tif",
+            annotation_created_at="2024-01-01T00:00:00",
+        )
+        original_created = annotation.annotation_created_at
+
+        annotation.mark_processed()
+
+        assert annotation.annotation_created_at == original_created
+        assert annotation.annotation_updated_at != original_created
+
+    def test_mark_processed_with_omero_ids(self):
+        """Test that mark_processed correctly sets OMERO IDs."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+
+        annotation.mark_processed(
+            annotation_type="custom_type",
+            roi_id=123,
+            label_id=456,
+        )
+
+        assert annotation.roi_id == 123
+        assert annotation.label_id == 456
+        assert annotation.annotation_type == "custom_type"
+
+    def test_mark_processed_default_annotation_type(self):
+        """Test that mark_processed uses default annotation_type."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+
+        annotation.mark_processed()
+
+        assert annotation.annotation_type == "segmentation_mask"
+
+    def test_mark_processed_without_optional_ids(self):
+        """Test that mark_processed does not set IDs when not provided."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+        assert annotation.roi_id is None
+        assert annotation.label_id is None
+
+        annotation.mark_processed()
+
+        # IDs should remain None when not provided
+        assert annotation.roi_id is None
+        assert annotation.label_id is None

@@ -83,6 +83,33 @@ class ImageAnnotation(BaseModel):
         default=None, description="OMERO schema attachment ID"
     )
 
+    def mark_processed(
+        self,
+        annotation_type: str = "segmentation_mask",
+        roi_id: Optional[int] = None,
+        label_id: Optional[int] = None,
+    ) -> None:
+        """Mark this annotation as processed with proper timestamp handling.
+
+        Sets processed=True, updates annotation_updated_at, and sets
+        annotation_created_at if not already set.
+
+        Args:
+            annotation_type: Type of annotation (default: segmentation_mask)
+            roi_id: Optional OMERO ROI ID
+            label_id: Optional OMERO label file annotation ID
+        """
+        now = datetime.now().isoformat()
+        self.processed = True
+        self.annotation_updated_at = now
+        if self.annotation_created_at is None:
+            self.annotation_created_at = now
+        self.annotation_type = annotation_type
+        if roi_id is not None:
+            self.roi_id = roi_id
+        if label_id is not None:
+            self.label_id = label_id
+
 
 class AuthorInfo(BaseModel):
     """Author information compatible with bioimage.io"""
