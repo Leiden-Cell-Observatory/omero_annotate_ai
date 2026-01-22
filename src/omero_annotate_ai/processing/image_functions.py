@@ -1,4 +1,4 @@
-"""Image processing functions for micro-SAM workflows."""
+"""Image processing functions for annotation workflows."""
 
 import random as rnd
 from typing import List, Tuple

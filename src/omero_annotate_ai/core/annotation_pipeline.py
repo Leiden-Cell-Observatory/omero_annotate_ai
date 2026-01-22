@@ -634,8 +634,7 @@ class AnnotationPipeline:
             # Process based on mode
             if self.config.workflow.read_only_mode:
                 # Read-only mode: save locally (category tracked in config, not folders)
-                matching_annotation.processed = True
-                matching_annotation.created = datetime.now().isoformat()
+                matching_annotation.mark_processed()
 
                 # Save mask to output folder
                 output_dir = Path(self.config.output.output_directory) / "output"
@@ -674,26 +673,19 @@ class AnnotationPipeline:
                     )
 
                     # Update config annotation with OMERO IDs
-                    matching_annotation.processed = True
-                    matching_annotation.label_id = label_id
-                    matching_annotation.roi_id = roi_id
-                    now = datetime.now().isoformat()
-                    matching_annotation.annotation_updated_at = now
-                    if matching_annotation.annotation_created_at is None:
-                        matching_annotation.annotation_created_at = now
-                    matching_annotation.annotation_type = self.config.annotation_methodology.annotation_type
-                    
+                    matching_annotation.mark_processed(
+                        annotation_type=self.config.annotation_methodology.annotation_type,
+                        roi_id=roi_id,
+                        label_id=label_id,
+                    )
+
                     updated_count += 1
                     self._debug_print(f"Uploaded ROI for annotation_id '{annotation_id}' (label_id: {label_id}, roi_id: {roi_id})")
                     
                 except Exception as e:
                     self._debug_print(f"Error uploading ROI for '{annotation_id}': {e}")
                     # Still mark as processed but without OMERO IDs
-                    matching_annotation.processed = True
-                    now = datetime.now().isoformat()
-                    matching_annotation.annotation_updated_at = now
-                    if matching_annotation.annotation_created_at is None:
-                        matching_annotation.annotation_created_at = now
+                    matching_annotation.mark_processed()
                     updated_count += 1
         
         # Show final results
@@ -1050,7 +1042,7 @@ class AnnotationPipeline:
         for annotation in completed_annotations:
             mask = df["annotation_id"] == annotation.annotation_id
             df.loc[mask, "processed"] = True
-            df.loc[mask, "completed_timestamp"] = annotation.annotation_creation_time
+            df.loc[mask, "completed_timestamp"] = annotation.annotation_created_at
 
         df.to_csv(table_file, index=False)
         completed_count = df["processed"].sum()
@@ -1376,8 +1368,7 @@ class AnnotationPipeline:
         
         # Mark all as processed (since we just saved them)
         for annotation in unprocessed_annotations:
-            annotation.processed = True
-            annotation.annotation_creation_time = datetime.now().isoformat()
+            annotation.mark_processed()
         
         # Update tracking
         if not self.config.workflow.read_only_mode:

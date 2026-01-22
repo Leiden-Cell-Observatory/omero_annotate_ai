@@ -199,3 +199,4 @@ verify-build = { cmd = "python -m zipfile -l dist/*.whl && tar -tzf dist/*.tar.g
 
 [dependency-groups]
 docs = ["mkdocs-glightbox>=0.5.1,<0.6"]
+dev = ["ty>=0.0.12,<0.0.13"]
