@@ -430,6 +430,11 @@ def prepare_training_data_from_table(
         shutil.rmtree(tmp_dir)
         logger.debug(f"Cleaned up temporary directory: {tmp_dir}")
 
+    # Close logger handlers to release file locks (important for Windows)
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
+
     # Collect statistics
     stats = {
         "n_training_images": len(list(training_input_dir.glob("*.tif"))),
@@ -467,6 +472,11 @@ def prepare_training_data_from_table(
     else:
         logger.info(f"Training data prepared successfully in: {output_dir}")
         logger.info(f"Statistics: {stats}")
+
+    # Close logger handlers to release file locks (important for Windows)
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
 
     return result
 
@@ -677,6 +687,12 @@ def prepare_training_data_from_config(
         raise ValueError("Training data preparation failed - no images were processed")
 
     logger.info(f"Training data prepared successfully from config: {stats}")
+
+    # Close logger handlers to release file locks (important for Windows)
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
+
     return result
 
 
@@ -1386,5 +1402,10 @@ def reorganize_local_data_for_training(
             f"  Missing files: {stats['n_missing_input']} inputs, {stats['n_missing_label']} labels"
         )
     logger.info(f"  File operations: {stats['file_operations']}")
+
+    # Close logger handlers to release file locks (important for Windows)
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
 
     return result
