@@ -1668,13 +1668,64 @@ class AnnotationPipeline:
         """Alias for run_full_microsam_workflow for backward compatibility."""
         return self.run_full_microsam_workflow(images_list)
 
+    def prepare_training_data_from_local(
+        self,
+        output_dir: Optional[Union[str, Path]] = None,
+        file_mode: str = "copy",
+        clean_existing: bool = True,
+        include_test: bool = False,
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """Reorganize locally-stored annotation data into training folder structure.
+
+        This is a convenience method that wraps reorganize_local_data_for_training().
+        It uses the pipeline's config and output directory settings.
+
+        Works entirely offline - no OMERO connection required.
+
+        Args:
+            output_dir: Target directory for training structure (default: config.output.output_directory)
+            file_mode: How to handle files:
+                - "copy": Copy files (keeps originals) - default
+                - "move": Move files (removes originals)
+                - "symlink": Create symbolic links (falls back to copy on Windows)
+            clean_existing: Remove existing training folders before reorganization
+            include_test: If True, also create test_input/test_label folders
+            verbose: Show detailed progress
+
+        Returns:
+            Dictionary with paths to created directories and statistics
+
+        Raises:
+            ValueError: If config has no annotations or no processed annotations
+            FileNotFoundError: If annotation directory doesn't exist
+        """
+        from ..processing.training_functions import reorganize_local_data_for_training
+
+        # Use config's output directory as the annotation source
+        annotation_dir = Path(self.config.output.output_directory)
+
+        # Default output_dir to same as annotation_dir if not specified
+        if output_dir is None:
+            output_dir = annotation_dir
+
+        return reorganize_local_data_for_training(
+            config=self.config,
+            annotation_dir=annotation_dir,
+            output_dir=output_dir,
+            file_mode=file_mode,  # type: ignore
+            clean_existing=clean_existing,
+            include_test=include_test,
+            verbose=verbose,
+        )
+
     def run_custom_annotation(self, annotation_func, images_list: Optional[List[Any]] = None) -> Tuple[int, AnnotationConfig]:
         """Run a custom annotation function with the standard workflow.
-        
+
         Args:
             annotation_func: Custom annotation function to use
             images_list: Optional list of OMERO image objects
-            
+
         Returns:
             Tuple of (table_id, config)
         """
