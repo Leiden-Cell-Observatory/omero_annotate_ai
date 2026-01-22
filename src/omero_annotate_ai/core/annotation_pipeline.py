@@ -635,7 +635,7 @@ class AnnotationPipeline:
             if self.config.workflow.read_only_mode:
                 # Read-only mode: save locally (category tracked in config, not folders)
                 matching_annotation.processed = True
-                matching_annotation.annotation_creation_time = datetime.now().isoformat()
+                matching_annotation.created = datetime.now().isoformat()
 
                 # Save mask to output folder
                 output_dir = Path(self.config.output.output_directory) / "output"
