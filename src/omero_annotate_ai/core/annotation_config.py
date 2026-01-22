@@ -316,6 +316,8 @@ class StudyContext(BaseModel):
 class AIModelConfig(BaseModel):
     """AI model configuration (bioimage.io compatible)"""
 
+    model_config = ConfigDict(protected_namespaces=())
+
     # Framework information
     framework: str = Field(
         default="micro_sam", description="AI framework (e.g., micro_sam, cellpose)"
