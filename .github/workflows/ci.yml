@@ -78,6 +78,16 @@ jobs:
       with:
         name: dist
         path: dist/
+    
+    - name: Verify package contents
+      run: |
+        echo "Package contents:"
+        ls -la dist/
+        python -m zipfile -l dist/*.whl || echo "No wheel found"
+        tar -tzf dist/*.tar.gz || echo "No tarball found"
         
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        print-hash: true
+        verbose: true
