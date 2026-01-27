@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omero-annotate-ai"
-version = "0.1.3"
+version = "0.2.0"
 description = "OMERO integration for AI-powered image annotation and segmentation workflows"
 readme = "README.md"
 license = {file = "LICENSE"}
