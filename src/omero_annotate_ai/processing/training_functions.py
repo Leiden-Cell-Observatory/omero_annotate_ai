@@ -1245,13 +1245,21 @@ def reorganize_local_data_for_training(
     logger.info("Reorganizing local annotation data for training")
     logger.info(f"Source: {annotation_dir}, Target: {output_dir}, Mode: {file_mode}")
 
+    # Helper to close logger handlers (important for Windows file locks)
+    def _close_logger_handlers():
+        for handler in logger.handlers[:]:
+            handler.close()
+            logger.removeHandler(handler)
+
     # Validate config has annotations
     if not config.annotations:
+        _close_logger_handlers()
         raise ValueError("Config has no annotations. Run annotation workflow first.")
 
     # Filter to processed annotations only
     processed_annotations = [ann for ann in config.annotations if ann.processed]
     if not processed_annotations:
+        _close_logger_handlers()
         raise ValueError("No processed annotations found in config")
 
     logger.info(
@@ -1422,9 +1430,6 @@ def reorganize_local_data_for_training(
         )
     logger.info(f"  File operations: {stats['file_operations']}")
 
-    # Close logger handlers to release file locks (important for Windows)
-    for handler in logger.handlers[:]:
-        handler.close()
-        logger.removeHandler(handler)
+    _close_logger_handlers()
 
     return result
