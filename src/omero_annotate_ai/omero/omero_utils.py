@@ -30,7 +30,7 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
         List of dictionaries with table information
     """
     if conn is None:
-        print("❌ Cannot list tables: OMERO connection is None")
+        print("Cannot list tables: OMERO connection is None")
         return []
 
     tables = []
@@ -65,10 +65,10 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
         else:
             # More complex search across user's space would go here
             # For now, we'll return empty list and recommend specifying container
-            print("💡 Tip: Specify container_type and container_id for more efficient search")
+            print("Tip: Specify container_type and container_id for more efficient search")
             
     except Exception as e:
-        print(f"❌ Error listing tables: {e}")
+        print(f"Error listing tables: {e}")
     
     return tables
 
@@ -89,10 +89,10 @@ def find_table_by_pattern(conn, container_type: str, container_id: int, pattern:
     
     for table in tables:
         if pattern.lower() in table['name'].lower():
-            print(f"🔍 Found matching table: {table['name']} (ID: {table['id']})")
+            print(f"Found matching table: {table['name']} (ID: {table['id']})")
             return table
     
-    print(f"🔍 No table found matching pattern: {pattern}")
+    print(f"No table found matching pattern: {pattern}")
     return None
 
 
@@ -107,26 +107,26 @@ def delete_table(conn, table_id: int) -> bool:
         True if successful, False otherwise
     """
     if conn is None:
-        print("❌ Cannot delete table: OMERO connection is None")
+        print("Cannot delete table: OMERO connection is None")
         return False
 
     try:
         # Get table info first
         file_ann = conn.getObject("FileAnnotation", table_id)
         if not file_ann:
-            print(f"❌ Table {table_id} not found")
+            print(f"Table {table_id} not found")
             return False
         
         table_name = file_ann.getFile().getName() if file_ann.getFile() else f"ID:{table_id}"
-        print(f"🗑️ Deleting table: {table_name}")
+        print(f"Deleting table: {table_name}")
         
         # Delete the file annotation
         conn.deleteObjects("FileAnnotation", [table_id], wait=True)
-        print(f"✅ Successfully deleted table {table_id}")
+        print(f"Successfully deleted table {table_id}")
         return True
         
     except Exception as e:
-        print(f"❌ Error deleting table {table_id}: {e}")
+        print(f"Error deleting table {table_id}: {e}")
         return False
 
 
@@ -151,12 +151,12 @@ def backup_table(conn, table_id: int, backup_path: str) -> bool:
         # Save to CSV
         df.to_csv(backup_path, index=False)
         
-        print(f"💾 Table {table_id} backed up to: {backup_path}")
+        print(f"Table {table_id} backed up to: {backup_path}")
         print(f"   Rows: {len(df)}, Columns: {len(df.columns)}")
         return True
         
     except Exception as e:
-        print(f"❌ Error backing up table {table_id}: {e}")
+        print(f"Error backing up table {table_id}: {e}")
         return False
 
 
@@ -182,17 +182,17 @@ def validate_table_schema(conn, table_id: int, expected_columns: List[str]) -> T
         is_valid = len(missing_columns) == 0
         
         if is_valid:
-            print(f"✅ Table {table_id} schema is valid")
+            print(f"Table {table_id} schema is valid")
             if extra_columns:
                 print(f"   Extra columns: {extra_columns}")
         else:
-            print(f"❌ Table {table_id} schema is invalid")
+            print(f"Table {table_id} schema is invalid")
             print(f"   Missing columns: {missing_columns}")
         
         return is_valid, missing_columns
         
     except Exception as e:
-        print(f"❌ Error validating table {table_id}: {e}")
+        print(f"Error validating table {table_id}: {e}")
         return False, expected_columns
 
 
@@ -218,12 +218,12 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
                 df = ezomero.get_table(conn, table_id)
                 df['source_table_id'] = table_id  # Track source
                 dfs.append(df)
-                print(f"📊 Loaded table {table_id}: {len(df)} rows")
+                print(f"Loaded table {table_id}: {len(df)} rows")
             except Exception as e:
-                print(f"⚠️ Could not load table {table_id}: {e}")
+                print(f"Could not load table {table_id}: {e}")
         
         if not dfs:
-            print("❌ No tables could be loaded")
+            print("No tables could be loaded")
             return None
         
         # Merge dataframes
@@ -239,7 +239,7 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
             final_rows = len(merged_df)
             
             if initial_rows != final_rows:
-                print(f"🔄 Removed {initial_rows - final_rows} duplicate rows")
+                print(f"Removed {initial_rows - final_rows} duplicate rows")
         
         # Create new table
         new_table_id = ezomero.post_table(
@@ -250,13 +250,13 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
             title=new_title
         )
         
-        print(f"✅ Created merged table '{new_title}' with {len(merged_df)} rows")
+        print(f"Created merged table '{new_title}' with {len(merged_df)} rows")
         print(f"   New table ID: {new_table_id}")
         
         return new_table_id
         
     except Exception as e:
-        print(f"❌ Error merging tables: {e}")
+        print(f"Error merging tables: {e}")
         return None
 
 
@@ -297,10 +297,10 @@ def list_annotations_by_namespace(conn, object_type: str, object_id: int,
             except Exception:
                 continue
         
-        print(f"🔍 Found {len(annotations)} annotations with namespace '{namespace}'")
+        print(f"Found {len(annotations)} annotations with namespace '{namespace}'")
         
     except Exception as e:
-        print(f"❌ Error listing annotations: {e}")
+        print(f"Error listing annotations: {e}")
     
     return annotations
 
@@ -322,18 +322,18 @@ def delete_annotations_by_namespace(conn, object_type: str, object_id: int,
         annotations = list_annotations_by_namespace(conn, object_type, object_id, namespace)
         
         if not annotations:
-            print(f"🔍 No annotations found with namespace '{namespace}'")
+            print(f"No annotations found with namespace '{namespace}'")
             return 0
         
         # Delete annotations
         ann_ids = [ann['id'] for ann in annotations]
         conn.deleteObjects("FileAnnotation", ann_ids, wait=True)
         
-        print(f"🗑️ Deleted {len(ann_ids)} annotations with namespace '{namespace}'")
+        print(f"Deleted {len(ann_ids)} annotations with namespace '{namespace}'")
         return len(ann_ids)
         
     except Exception as e:
-        print(f"❌ Error deleting annotations: {e}")
+        print(f"Error deleting annotations: {e}")
         return 0
 
 
@@ -387,7 +387,7 @@ def validate_roi_integrity(conn, image_id: int) -> Dict[str, Any]:
                     results['issues'].append(f"Invalid shape properties: {e}")
                     results['is_valid'] = False
         
-        print(f"🔍 ROI integrity check for image {image_id}:")
+        print(f"ROI integrity check for image {image_id}:")
         print(f"   Total ROIs: {results['total_rois']}")
         print(f"   Total shapes: {results['total_shapes']}")
         print(f"   Shape types: {results['roi_types']}")
@@ -396,12 +396,12 @@ def validate_roi_integrity(conn, image_id: int) -> Dict[str, Any]:
             print(f"   Issues found: {len(results['issues'])}")
             results['is_valid'] = False
         else:
-            print("   ✅ No issues found")
+            print("   No issues found")
         
     except Exception as e:
         results['issues'].append(f"Error during integrity check: {e}")
         results['is_valid'] = False
-        print(f"❌ Error checking ROI integrity: {e}")
+        print(f"Error checking ROI integrity: {e}")
     
     return results
 
@@ -460,7 +460,7 @@ def get_server_info(conn) -> Dict[str, Any]:
             info['connection_status'] = 'Disconnected'
         
     except Exception as e:
-        print(f"⚠️ Error getting server info: {e}")
+        print(f"Error getting server info: {e}")
         info['connection_status'] = f'Error: {e}'
     
     return info
@@ -582,7 +582,7 @@ def get_table_by_name(conn, table_name: str, container_type: str = None, contain
     Returns:
         Table object if found, None otherwise
     """
-    print(f"🔍 Searching for table: {table_name}")
+    print(f"Searching for table: {table_name}")
     
     try:
         # Search strategy: Look through file annotations for tables
@@ -609,7 +609,7 @@ def get_table_by_name(conn, table_name: str, container_type: str = None, contain
                                     try:
                                         table = conn.getSharedResources().openTable(original_file)
                                         if table:
-                                            print(f"✅ Found table: {file_name} (ID: {ann_id})")
+                                            print(f"Found table: {file_name} (ID: {ann_id})")
                                             return table
                                     except Exception:
                                         continue
@@ -617,14 +617,14 @@ def get_table_by_name(conn, table_name: str, container_type: str = None, contain
                         continue
                         
             except Exception as e:
-                print(f"⚠️ Error searching in container {container_type} {container_id}: {e}")
+                print(f"Error searching in container {container_type} {container_id}: {e}")
         
         # For now, we'll return None to trigger new table creation
-        print(f"🔍 Table '{table_name}' not found, will create new table")
+        print(f"Table '{table_name}' not found, will create new table")
         return None
         
     except Exception as e:
-        print(f"❌ Error searching for table {table_name}: {e}")
+        print(f"Error searching for table {table_name}: {e}")
         return None
 
 
@@ -664,7 +664,7 @@ def get_dask_image_multiple(conn, image_list: List, timepoints: List[int],
             dask_arrays.append(dask_array)
             
         except Exception as e:
-            print(f"⚠️ Could not create dask array for image {image.getId()}: {e}")
+            print(f"Could not create dask array for image {image.getId()}: {e}")
             # Fallback: create zeros array
             height = image.getSizeY()
             width = image.getSizeX()
@@ -727,7 +727,7 @@ def get_dask_image_single(conn, image, timepoints: List[int],
             return dask_array
             
     except Exception as e:
-        print(f"⚠️ Error with dask loading for image {image.getId()}: {e}")
+        print(f"Error with dask loading for image {image.getId()}: {e}")
         # Direct loading fallback
         if not image:
             return None
@@ -743,7 +743,7 @@ def get_dask_image_single(conn, image, timepoints: List[int],
             plane_data = pixels.getPlane(z, c, t)
             return plane_data
         except Exception as e2:
-            print(f"⚠️ Could not load plane for image {image.getId()}: {e2}")
+            print(f"Could not load plane for image {image.getId()}: {e2}")
             # Fallback to zeros array
             height = image.getSizeY()
             width = image.getSizeX()
@@ -790,7 +790,7 @@ def _create_dask_array_for_image(conn, image, timepoints: List[int],
             return plane_data
             
         except Exception as e:
-            print(f"⚠️ Error loading plane {z_idx},{c_idx},{t_idx} for image {image_id}: {e}")
+            print(f"Error loading plane {z_idx},{c_idx},{t_idx} for image {image_id}: {e}")
             return np.zeros((height, width), dtype=np.uint16)
     
     # Create delayed loading task

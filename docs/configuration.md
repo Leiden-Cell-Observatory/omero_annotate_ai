@@ -72,7 +72,25 @@ omero:
   container_type: "dataset"    # "dataset", "project", or "plate"
   container_id: 123           # OMERO container ID
   source_desc: "Description"  # Human-readable description
+  table_id: null              # OMERO tracking table ID (auto-managed)
 ```
+
+#### Well Filtering (Plates Only)
+
+When working with plate containers, you can filter wells based on map annotation key-value pairs attached to wells:
+
+```yaml
+omero:
+  container_type: "plate"
+  container_id: 456
+  well_filters:                 # Filter by well metadata (AND logic)
+    cellline: ["U2OS", "HeLa"]  # Include wells with cellline U2OS OR HeLa
+    treatment: ["Control"]      # AND treatment = Control
+  well_filter_mode: "include"   # "include" or "exclude" matching wells
+```
+
+- **`well_filters`**: Dictionary mapping metadata keys to lists of acceptable values. All conditions must be met (AND logic between keys, OR logic within values).
+- **`well_filter_mode`**: Set to `"include"` to process only matching wells, or `"exclude"` to skip matching wells.
 
 ### Study Context (MIFA Compatible)
 
@@ -133,6 +151,42 @@ spatial_coverage:
   z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 ```
 
+#### Multi-Channel Workflows (Separate Label and Training Channels)
+
+For workflows where you want to segment/label on one channel (e.g., fluorescence) but train a model to predict from different channels (e.g., brightfield):
+
+```yaml
+spatial_coverage:
+  channels: [0, 1, 2]           # All channels available
+  label_channel: 0              # Channel for segmentation labels (e.g., DAPI)
+  training_channels: [1, 2]     # Channel(s) for model training input (e.g., brightfield)
+```
+
+- **`label_channel`**: Channel index used for creating segmentation labels. Defaults to `channels[0]` if not specified.
+- **`training_channels`**: Channel index(es) used as model training input. Supports multiple channels. Defaults to `[label_channel]` if not specified.
+
+This enables workflows like:
+- Segment nuclei using DAPI fluorescence (`label_channel: 0`)
+- Train a model to predict nuclei from brightfield images (`training_channels: [1]`)
+
+#### Random Selection with Fixed Count
+
+When using `random` mode for timepoints or z-slices, you can specify exactly how many to randomly select:
+
+```yaml
+spatial_coverage:
+  timepoints: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  timepoint_mode: "random"
+  n_timepoints: 5              # Randomly select exactly 5 timepoints
+
+  z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  z_slice_mode: "random"
+  n_slices: 3                  # Randomly select exactly 3 z-slices
+```
+
+- **`n_timepoints`**: Number of timepoints to randomly select when `timepoint_mode: "random"`. If not specified, uses the length of the `timepoints` list.
+- **`n_slices`**: Number of z-slices to randomly select when `z_slice_mode: "random"`. If not specified, uses the length of the `z_slices` list.
+
 ### Annotation Methodology
 
 ```yaml
@@ -169,30 +223,63 @@ processing:
 ```yaml
 training:
   validation_strategy: "random_split"    # "random_split", "expert_review", "cross_validation"
-  train_fraction: 0.7                   # Training data fraction (auto-calculated if train_n specified)
-  train_n: 10                          # Explicit number of training images
-  validation_fraction: 0.3              # Validation data fraction  
-  validate_n: 5                        # Explicit number of validation images
-  segment_all: false                   # Segment all objects vs sample
-  quality_threshold: 0.8               # Minimum quality score (optional)
+  segment_all: false                     # Processing mode (see below)
+
+  # Count-based splits (when segment_all: false)
+  train_n: 10                           # Number of training images
+  validate_n: 5                         # Number of validation images
+  test_n: 0                             # Number of test images
+
+  # Fraction-based splits (when segment_all: true)
+  train_fraction: 0.7                   # Training data fraction
+  validation_fraction: 0.2              # Validation data fraction
+  test_fraction: 0.1                    # Test data fraction
+
+  quality_threshold: 0.8                # Minimum quality score (optional)
+```
+
+#### Training Split Modes
+
+The `segment_all` field controls how training/validation/test splits are determined:
+
+**Count-based mode** (`segment_all: false`, default):
+```yaml
+training:
+  segment_all: false
+  train_n: 10        # Process exactly 10 training images
+  validate_n: 5      # Process exactly 5 validation images
+  test_n: 2          # Process exactly 2 test images
+```
+
+**Fraction-based mode** (`segment_all: true`):
+```yaml
+training:
+  segment_all: true
+  train_fraction: 0.7       # 70% for training
+  validation_fraction: 0.2  # 20% for validation
+  test_fraction: 0.1        # 10% for testing
+  # Fractions must sum to <= 1.0
 ```
 
 ### Workflow Control
 
 ```yaml
 workflow:
-  resume_from_table: false      # Resume from existing annotation table
-  read_only_mode: false         # Read-only mode for viewing results
+  resume_from_table: false      # Resume from existing OMERO annotation table
+  read_only_mode: false         # View results without uploading changes
 ```
+
+- **`resume_from_table`**: When `true`, loads existing annotations from an OMERO table and resumes processing from where it left off. Useful for continuing interrupted workflows.
+- **`read_only_mode`**: When `true`, prevents any uploads to OMERO. Use this to review existing results without modifications.
 
 ### Output Configuration
 
 ```yaml
 output:
   output_directory: "./annotations"    # Output directory path
-  format: "ome_tiff"                  # "ome_tiff", "png", "numpy"
-  compression: null                   # Compression method (optional)
-  resume_from_checkpoint: false       # Resume interrupted workflow
+  format: "ome_tif"                    # "tif", "ome_tif", "png", "numpy"
+  compression: null                    # Compression method (optional)
+  resume_from_checkpoint: false        # Resume interrupted workflow
 ```
 
 ### Metadata and Tracking
@@ -302,6 +389,76 @@ spatial_coverage:
 processing:
   batch_size: 50              # Process in batches
   use_patches: false          # Full images only
+```
+
+### Plate with Well Filtering
+
+Filter wells based on metadata annotations (e.g., cell line and treatment conditions):
+
+```yaml
+name: "filtered_plate_workflow"
+omero:
+  container_type: "plate"
+  container_id: 789
+  well_filters:
+    cellline:
+      - MDA_iRFP
+      - HCC_iRFP
+    treatment:
+      - DMSO
+  well_filter_mode: include   # Only process matching wells
+spatial_coverage:
+  channels: [0]
+  timepoints: [0]
+  z_slices: [0]
+```
+
+### Multi-Channel Label-Free Prediction
+
+Train a model to predict segmentation from brightfield using fluorescence labels:
+
+```yaml
+name: "label_free_prediction"
+spatial_coverage:
+  channels: [0, 1]            # Both channels available
+  label_channel: 0            # Use DAPI fluorescence for labeling
+  training_channels: [1]      # Train model on brightfield input
+  timepoints: [0]
+  z_slices: [0]
+training:
+  train_n: 50
+  validate_n: 10
+```
+
+### Random Sampling with Fixed Count
+
+Randomly sample a fixed number of timepoints and z-slices from larger ranges:
+
+```yaml
+name: "random_sampling_workflow"
+spatial_coverage:
+  channels: [0]
+  timepoints: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  timepoint_mode: "random"
+  n_timepoints: 4             # Randomly select 4 timepoints
+  z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  z_slice_mode: "random"
+  n_slices: 3                 # Randomly select 3 z-slices
+```
+
+### Resume from Existing Annotation Table
+
+Continue an interrupted workflow by resuming from an OMERO annotation table:
+
+```yaml
+name: "resumed_workflow"
+omero:
+  container_type: "dataset"
+  container_id: 123
+  table_id: 456               # Existing annotation table ID
+workflow:
+  resume_from_table: true     # Resume from existing progress
+  read_only_mode: false
 ```
 
 ## Configuration Validation

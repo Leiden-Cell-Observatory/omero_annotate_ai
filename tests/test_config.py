@@ -70,6 +70,7 @@ class TestAnnotationConfig:
         keys_in_yaml = [ln.split(':', 1)[0] for ln in lines]
 
         # Expected order follows field declaration order of AnnotationConfig
+        # Note: processing was removed in schema v2.0.0
         expected_prefix_order = [
             'schema_version',
             'config_file_path',
@@ -83,7 +84,6 @@ class TestAnnotationConfig:
             'spatial_coverage',
             'training',
             'ai_model',
-            'processing',
             'workflow',
             'output',
             'omero',
@@ -216,15 +216,338 @@ class TestConfigEdgeCases:
         config = create_default_config()
         config.omero.container_id = 999
         config.name = "test_roundtrip"
-        
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             config.save_yaml(f.name)
-            
+
             # Load it back
             loaded_config = AnnotationConfig.from_yaml(f.name)
-            
+
             assert loaded_config.omero.container_id == 999
             assert loaded_config.name == "test_roundtrip"
-        
+
         # Clean up
         Path(f.name).unlink()
+
+    def test_path_serialization_in_model_dump(self):
+        """
+        Tests that Path objects are serialized to strings in model_dump.
+        This ensures OutputConfig and AnnotationConfig correctly handle
+        Path to string conversion for JSON/YAML serialization.
+        """
+        from omero_annotate_ai.core.annotation_config import OutputConfig
+
+        # Test OutputConfig standalone
+        test_path = Path("/tmp/test_output")
+        output = OutputConfig(output_directory=test_path)
+        output_dict = output.model_dump()
+        assert isinstance(output_dict["output_directory"], str)
+        # Compare as Path objects to handle cross-platform path separators
+        assert Path(output_dict["output_directory"]) == test_path
+
+        # Test AnnotationConfig with nested OutputConfig
+        config = create_default_config()
+        config_path = Path("/tmp/test_config_output")
+        config.output.output_directory = config_path
+        config_dict = config.model_dump()
+        assert isinstance(config_dict["output"]["output_directory"], str)
+        # Compare as Path objects to handle cross-platform path separators
+        assert Path(config_dict["output"]["output_directory"]) == config_path
+
+        # Test to_dict (which uses model_dump)
+        config_dict = config.to_dict()
+        assert isinstance(config_dict["output"]["output_directory"], str)
+
+
+@pytest.mark.unit
+class TestMultiChannelSupport:
+    """Test multi-channel support with separate label and training channels."""
+
+    def test_get_label_channel_default(self):
+        """Test that get_label_channel() defaults to primary_channel (channels[0])."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+
+        # No label_channel set, should default to channels[0]
+        assert config.spatial_coverage.get_label_channel() == 0
+        assert config.spatial_coverage.get_label_channel() == config.spatial_coverage.primary_channel
+
+    def test_get_label_channel_explicit(self):
+        """Test that explicit label_channel is used when set."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.label_channel = 1
+
+        assert config.spatial_coverage.get_label_channel() == 1
+
+    def test_get_training_channels_default(self):
+        """Test that get_training_channels() defaults to [get_label_channel()]."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+
+        # No training_channels set, should default to [get_label_channel()] = [0]
+        assert config.spatial_coverage.get_training_channels() == [0]
+
+    def test_get_training_channels_explicit(self):
+        """Test that explicit training_channels is used when set."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.training_channels = [1, 2]
+
+        assert config.spatial_coverage.get_training_channels() == [1, 2]
+
+    def test_uses_separate_channels_false_by_default(self):
+        """Test that uses_separate_channels() is False when neither field is configured."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+    def test_uses_separate_channels_true_when_different(self):
+        """Test that uses_separate_channels() is True when label and training channels differ."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1]
+
+        assert config.spatial_coverage.uses_separate_channels() is True
+
+    def test_uses_separate_channels_false_when_same(self):
+        """Test that uses_separate_channels() is False when label channel is in training channels."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [0, 1]
+
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+
+@pytest.mark.unit
+class TestMultiChannelValidation:
+    """Test validation of channel configuration."""
+
+    def test_label_channel_must_be_in_channels(self):
+        """Test that label_channel must be in channels list."""
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
+        with pytest.raises(ValueError, match="label_channel"):
+            SpatialCoverage(
+                channels=[0, 1],
+                label_channel=2,  # Not in channels list
+                timepoints=[0],
+                z_slices=[0]
+            )
+
+    def test_training_channels_must_be_in_channels(self):
+        """Test that training_channels must be in channels list."""
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
+        with pytest.raises(ValueError, match="training_channel"):
+            SpatialCoverage(
+                channels=[0, 1],
+                training_channels=[2],  # Not in channels list
+                timepoints=[0],
+                z_slices=[0]
+            )
+
+    def test_valid_channel_configuration(self):
+        """Test that valid channel configuration passes validation."""
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
+        coverage = SpatialCoverage(
+            channels=[0, 1, 2],
+            label_channel=0,
+            training_channels=[1, 2],
+            timepoints=[0],
+            z_slices=[0]
+        )
+        assert coverage.label_channel == 0
+        assert coverage.training_channels == [1, 2]
+
+
+@pytest.mark.unit
+class TestMultiChannelYamlSerialization:
+    """Test YAML serialization with channel fields."""
+
+    def test_yaml_roundtrip_with_channels(self):
+        """Test that channel fields survive YAML roundtrip."""
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1, 2]
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            config.save_yaml(f.name)
+            loaded = AnnotationConfig.from_yaml(f.name)
+
+            assert loaded.spatial_coverage.channels == [0, 1, 2]
+            assert loaded.spatial_coverage.label_channel == 0
+            assert loaded.spatial_coverage.training_channels == [1, 2]
+
+        Path(f.name).unlink()
+
+    def test_yaml_backward_compatibility(self):
+        """Test that old YAML configs without new fields still work."""
+        yaml_str = """
+        name: test
+        spatial_coverage:
+          channels: [0]
+          timepoints: [0]
+          z_slices: [0]
+        """
+
+        config = AnnotationConfig.from_yaml(yaml_str)
+
+        # New methods should work with defaults
+        assert config.spatial_coverage.get_label_channel() == 0
+        assert config.spatial_coverage.get_training_channels() == [0]
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+    def test_channels_without_explicit_roles(self):
+        """Test that channels list without explicit roles uses channels[0] for both."""
+        yaml_str = """
+        name: test
+        spatial_coverage:
+          channels: [0, 1]
+          timepoints: [0]
+          z_slices: [0]
+        """
+
+        config = AnnotationConfig.from_yaml(yaml_str)
+
+        # Should use channels[0] for both label and training
+        assert config.spatial_coverage.get_label_channel() == 0
+        assert config.spatial_coverage.get_training_channels() == [0]
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+
+@pytest.mark.unit
+class TestOMEROConfigMultiContainer:
+    """Test OMEROConfig multi-container fields and methods."""
+
+    def test_get_all_container_ids_single(self):
+        """Test get_all_container_ids with single container_id."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 123}
+        )
+        assert config.omero.get_all_container_ids() == [123]
+
+    def test_get_all_container_ids_multiple(self):
+        """Test get_all_container_ids with container_ids list."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [1, 2, 3]}
+        )
+        assert config.omero.get_all_container_ids() == [1, 2, 3]
+
+    def test_container_ids_precedence(self):
+        """Test that container_ids takes precedence over container_id."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_id": 999,  # Should be ignored
+                "container_ids": [1, 2, 3]
+            }
+        )
+        assert config.omero.get_all_container_ids() == [1, 2, 3]
+
+    def test_get_all_container_ids_empty_list(self):
+        """Test that empty container_ids falls back to container_id."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_id": 456,
+                "container_ids": []
+            }
+        )
+        assert config.omero.get_all_container_ids() == [456]
+
+    def test_get_all_container_ids_no_container(self):
+        """Test get_all_container_ids with no containers configured."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 0}
+        )
+        assert config.omero.get_all_container_ids() == []
+
+    def test_get_primary_container_id_single(self):
+        """Test get_primary_container_id with single container."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 123}
+        )
+        assert config.omero.get_primary_container_id() == 123
+
+    def test_get_primary_container_id_multiple(self):
+        """Test get_primary_container_id with multiple containers."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [10, 20, 30]}
+        )
+        assert config.omero.get_primary_container_id() == 10
+
+    def test_get_primary_container_id_empty(self):
+        """Test get_primary_container_id with no containers."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 0}
+        )
+        assert config.omero.get_primary_container_id() == 0
+
+    def test_is_multi_container_false_single(self):
+        """Test is_multi_container returns False for single container."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 123}
+        )
+        assert config.omero.is_multi_container() is False
+
+    def test_is_multi_container_false_one_in_list(self):
+        """Test is_multi_container returns False for single item in list."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [123]}
+        )
+        assert config.omero.is_multi_container() is False
+
+    def test_is_multi_container_true(self):
+        """Test is_multi_container returns True for multiple containers."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_ids": [1, 2]}
+        )
+        assert config.omero.is_multi_container() is True
+
+    def test_yaml_roundtrip_with_container_ids(self):
+        """Test that container_ids survives YAML roundtrip."""
+        config = AnnotationConfig(
+            name="test_multi",
+            omero={
+                "container_type": "plate",
+                "container_ids": [1, 2, 3]
+            }
+        )
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            config.save_yaml(f.name)
+            loaded = AnnotationConfig.from_yaml(f.name)
+
+            assert loaded.omero.container_ids == [1, 2, 3]
+            assert loaded.omero.get_all_container_ids() == [1, 2, 3]
+
+        Path(f.name).unlink()
+
+    def test_backward_compatible_single_container_yaml(self):
+        """Test backward compatibility with existing single container configs."""
+        yaml_str = """
+        name: test
+        omero:
+          container_type: dataset
+          container_id: 456
+        """
+        config = AnnotationConfig.from_yaml(yaml_str)
+        assert config.omero.container_id == 456
+        assert config.omero.get_all_container_ids() == [456]

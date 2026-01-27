@@ -9,7 +9,7 @@ from .widgets.workflow_widget import create_workflow_widget
 from .widgets.training_data_widget import create_training_data_widget
 
 # Processing functions
-from .processing.training_functions import prepare_training_data_from_table
+from .processing.training_functions import prepare_training_data_from_table, reorganize_local_data_for_training
 from .processing.training_utils import setup_training, run_training
 
 # OMERO utilities
@@ -33,4 +33,5 @@ __all__ = [
     "setup_training",
     "run_training",
     "omero_utils",
+    "reorganize_local_data_for_training",
 ]

@@ -274,11 +274,11 @@ class TestWorkflowWidget:
             'working_dir': '/tmp/test',
             'container_type': 'dataset',
             'container_id': 123,
-            'model_type': 'vit_b_lm',
+            'pretrained_from': 'vit_b_lm',
             'batch_size': 5,
             'use_patches': False
         }
-        
+
         for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
             mock_widget = Mock()
             if widget_type in ['Text', 'Dropdown']:
@@ -287,37 +287,37 @@ class TestWorkflowWidget:
                 mock_widget.value = widget_values.get('batch_size', 0)
             elif widget_type == 'Checkbox':
                 mock_widget.value = widget_values.get('use_patches', False)
-            
+
             widget_mocks[widget_type] = mock_widget
             setattr(mock_widgets, widget_type, Mock(return_value=mock_widget))
-        
+
         mock_connection = Mock()
-        
+
         widget = WorkflowWidget(connection=mock_connection)
-        
+
         # Mock working directory
         widget.working_directory = '/tmp/test'
-        
+
         # Mock container widgets
         widget.container_widgets = {
             'container': Mock(value=123),
             'type': Mock(value='dataset')
         }
-        
+
         # Mock technical widgets container with child widgets
         batch_size_widget = Mock(description="Batch size", value=5)
         model_type_widget = Mock(description="SAM Model", value='vit_b_lm')
         output_folder_widget = Mock(description="Output folder", value=Path('/tmp/test'))
-        
+
         widget.technical_widgets = Mock()
         widget.technical_widgets.children = [batch_size_widget, model_type_widget, output_folder_widget]
-        
-        # Mock annotation widgets container with child widgets 
+
+        # Mock annotation widgets container with child widgets
         use_patches_widget = Mock(description="Use patches", value=False)
-        
+
         widget.annotation_widgets = Mock()
         widget.annotation_widgets.children = [use_patches_widget]
-        
+
         # Mock other required attributes to prevent errors
         widget.selected_table_id = None
         widget.new_table_name = Mock(value="test_training")
@@ -326,21 +326,21 @@ class TestWorkflowWidget:
         widget.status_output = Mock()
         widget.status_output.__enter__ = Mock(return_value=widget.status_output)
         widget.status_output.__exit__ = Mock(return_value=None)
-        
+
         # Call update config to populate self.config from widget values
         with patch('builtins.print'):  # Suppress print output
             with patch('IPython.display.clear_output'):  # Suppress clear_output
                 widget._on_update_config(None)
-        
+
         config = widget.get_config()
-        
+
         assert config is not None
         assert config.output.output_directory == Path('/tmp/test')
         assert config.omero.container_type == 'dataset'
         assert config.omero.container_id == 123
-        assert config.ai_model.model_type == 'vit_b_lm'
-        assert config.processing.batch_size == 5
-        assert config.processing.use_patches is False
+        assert config.ai_model.pretrained_from == 'vit_b_lm'
+        assert config.workflow.batch_size == 5
+        assert config.spatial_coverage.use_patches is False
 
 
 @pytest.mark.unit

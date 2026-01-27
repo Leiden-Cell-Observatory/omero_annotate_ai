@@ -1,4 +1,4 @@
-"""Image processing functions for micro-SAM workflows."""
+"""Image processing functions for annotation workflows."""
 
 import random as rnd
 from typing import List, Tuple
@@ -36,7 +36,7 @@ def generate_patch_coordinates(
     # Check if image is smaller than patch
     if width < patch_w or height < patch_h:
         # Image smaller than patch, return image size as patch size
-        print("⚠️ Image smaller than patch size, using full image")
+        print("Image smaller than patch size, using full image")
         actual_patch_size = (height, width)
         return [(0, 0)], actual_patch_size
 
@@ -158,7 +158,7 @@ def mask_to_contour(mask):
 
 
 def process_label_plane(
-    label_plane, z_slice, channel, timepoint, model_type, x_offset=0, y_offset=0
+    label_plane, z_slice, channel, timepoint, x_offset=0, y_offset=0
 ):
     """
     Process a single 2D label plane to generate OMERO shapes with optional offset
@@ -168,7 +168,6 @@ def process_label_plane(
         z_slice: Z-slice index
         channel: Channel index
         timepoint: Time point index
-        model_type: SAM model type identifier
         x_offset: X offset for contour coordinates (default: 0)
         y_offset: Y offset for contour coordinates (default: 0)
 
@@ -196,12 +195,13 @@ def process_label_plane(
                 contour = contour + np.array([x_offset, y_offset])
 
             # Create polygon without text parameter
+            segmentation_type = "volumetric" if isinstance(z_slice, (list, range)) or z_slice > 0 else "manual"
             poly = ezomero.rois.Polygon(
                 points=contour,  # explicitly name the points parameter
                 z=z_slice,
                 c=channel,
                 t=timepoint,
-                label=f'micro_sam.{"volumetric" if isinstance(z_slice, (list, range)) or z_slice > 0 else "manual"}_instance_segmentation.{model_type}',
+                label=f"micro_sam.{segmentation_type}_instance_segmentation",
             )
             shapes.append(poly)
 
@@ -213,7 +213,6 @@ def label_to_rois(
     z_slice,
     channel,
     timepoint,
-    model_type,
     is_volumetric=False,
     patch_offset=None,
 ):
@@ -225,7 +224,6 @@ def label_to_rois(
         z_slice (int or list): Z-slice index or list/range of Z indices
         channel (int): Channel index
         timepoint (int): Time point index
-        model_type (str): SAM model type used
         is_volumetric (bool): Whether the label image is 3D volumetric data
         patch_offset: Optional (x,y) offset for placing ROIs in a larger image
 
@@ -255,7 +253,6 @@ def label_to_rois(
                     actual_z,
                     channel,
                     timepoint,
-                    model_type,
                     x_offset,
                     y_offset,
                 )
@@ -264,7 +261,7 @@ def label_to_rois(
         # 2D data - process single plane
         shapes.extend(
             process_label_plane(
-                label_img, z_slice, channel, timepoint, model_type, x_offset, y_offset
+                label_img, z_slice, channel, timepoint, x_offset, y_offset
             )
         )
 

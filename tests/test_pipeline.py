@@ -46,15 +46,15 @@ class TestAnnotationPipeline:
     def test_config_pydantic_validation(self):
         """Test that Pydantic validates config fields properly."""
         config = create_default_config()
-        
+
         # Test valid assignment
         config.omero.container_id = 123
         assert config.omero.container_id == 123
-        
+
         # Test that certain fields have expected defaults/validation
         assert config.training.train_fraction >= 0.1
         assert config.training.train_fraction <= 0.9
-        assert config.processing.batch_size >= 0
+        assert config.workflow.batch_size >= 0
     
     @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
     def test_get_images_from_container_dataset(self, mock_ezomero):
@@ -112,13 +112,14 @@ class TestAnnotationPipeline:
         """Test directory setup."""
         config = create_default_config()
         config.output.output_directory = Path(tempfile.mkdtemp())
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         output_path = pipeline._setup_directories()
-        
+
         assert output_path.exists()
+        assert (output_path / "input").exists()
+        assert (output_path / "output").exists()
         assert (output_path / "embed").exists()
-        assert (output_path / "annotations").exists()
     
     def test_get_table_title(self):
         """Test table title generation - should use config name directly."""
@@ -276,13 +277,13 @@ class TestAnnotationPipeline:
     def test_prepare_processing_units_with_patches(self):
         """Test preparing processing units with patch processing."""
         config = create_default_config()
-        config.processing.use_patches = True
-        config.processing.patches_per_image = 2
+        config.spatial_coverage.use_patches = True
+        config.spatial_coverage.patches_per_image = 2
         config.training.train_n = 2
         config.training.validate_n = 1
         config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images - create distinct images
         mock_images = []
         for i in range(5):  # Provide more images than needed so selection works
@@ -294,16 +295,16 @@ class TestAnnotationPipeline:
             mock_img.getSizeY.return_value = 2000
             mock_img.getSizeX.return_value = 2000
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 6
-        
+
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 4  # 2 images × 2 patches each
@@ -312,14 +313,14 @@ class TestAnnotationPipeline:
     def test_prepare_processing_units_with_patches_too_many(self):
         """Test preparing processing units with patch processing. Test when patches too many patches to fit the image."""
         config = create_default_config()
-        config.processing.use_patches = True
-        config.processing.patches_per_image = 2
+        config.spatial_coverage.use_patches = True
+        config.spatial_coverage.patches_per_image = 2
         config.training.train_n = 2
-        config.processing.patch_size = [512, 512]
+        config.spatial_coverage.patch_size = [512, 512]
         config.training.validate_n = 1
         config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images - create distinct images
         mock_images = []
         for i in range(5):  # Provide more images than needed so selection works
@@ -331,16 +332,16 @@ class TestAnnotationPipeline:
             mock_img.getSizeY.return_value = 1000
             mock_img.getSizeX.return_value = 1000
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 3
-        
+
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2  # 2 images × 1 patches each
@@ -349,14 +350,14 @@ class TestAnnotationPipeline:
     def test_prepare_processing_units_with_patches_small_image(self):
         """Test preparing processing units with patch processing. Test when patches are larger than image."""
         config = create_default_config()
-        config.processing.use_patches = True
-        config.processing.patches_per_image = 2
+        config.spatial_coverage.use_patches = True
+        config.spatial_coverage.patches_per_image = 2
         config.training.train_n = 2
-        config.processing.patch_size = [512, 512]
+        config.spatial_coverage.patch_size = [512, 512]
         config.training.validate_n = 1
         config.training.test_n = 0  # No test images for this test
         config.training.segment_all = False
-        
+
         # Mock images - create distinct images
         mock_images = []
         for i in range(5):  # Provide more images than needed so selection works
@@ -368,10 +369,10 @@ class TestAnnotationPipeline:
             mock_img.getSizeY.return_value = 400
             mock_img.getSizeX.return_value = 500
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create 2 patches per image × 3 selected images (2 train + 1 val) = 6 annotations
         assert len(pipeline.config.annotations) == 3
         assert all(ann.patch_width == 500 for ann in pipeline.config.annotations)
@@ -379,7 +380,7 @@ class TestAnnotationPipeline:
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
         #TODO actually they are not patches because patch size > image size
-        
+
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2  # 2 images × 1 patches each
@@ -510,6 +511,45 @@ class TestAnnotationPipeline:
         assert categories.count("validation") == 3
         assert categories.count("test") == 2
 
+    def test_zero_test_fraction_with_rounding_remainder(self):
+        """Test that test_fraction=0.0 creates no test annotations even with rounding.
+
+        Regression test for bug where n_test was calculated as remainder instead
+        of using test_fraction, causing test annotations when test_fraction=0.0
+        with non-divisible image counts (e.g., 11 images with 0.7/0.3 split).
+        """
+        config = create_default_config()
+        config.training.train_fraction = 0.7
+        config.training.validation_fraction = 0.3
+        config.training.test_fraction = 0.0  # Explicitly no test
+        config.training.segment_all = True
+
+        # Use 11 images to trigger rounding remainder:
+        # int(11 * 0.7) = 7, int(11 * 0.3) = 3, remainder = 1
+        # Bug: remainder went to test instead of respecting test_fraction=0.0
+        mock_images = []
+        for i in range(11):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline._prepare_processing_units(mock_images)
+
+        categories = [ann.category for ann in config.annotations]
+        # With test_fraction=0.0, there should be NO test annotations
+        assert categories.count("test") == 0, (
+            f"Expected 0 test annotations with test_fraction=0.0, got {categories.count('test')}"
+        )
+        # Remainder should go to training (7 + 1 = 8)
+        assert categories.count("training") == 8
+        assert categories.count("validation") == 3
+        # Total should equal number of images
+        assert len(categories) == 11
+
     def test_optional_validation_zero(self):
         """Test that validation can be set to 0."""
         config = create_default_config()
@@ -561,14 +601,16 @@ class TestAnnotationPipeline:
         assert categories.count("test") == 0  # No test images
 
     def test_fraction_validation_error(self):
-        """Test that fractions > 1.0 raise validation error."""
-        config = create_default_config()
-        with pytest.raises(ValueError, match="must sum to ≤ 1.0"):
-            config.training.train_fraction = 0.6
-            config.training.validation_fraction = 0.3
-            config.training.test_fraction = 0.3  # Total = 1.2 > 1.0
-            # Trigger validation
-            config.training.validate_splits()
+        """Test that fractions > 1.0 raise validation error when segment_all=True."""
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        with pytest.raises(ValueError, match="must sum to <= 1.0"):
+            # Validation happens at construction time when segment_all=True
+            TrainingConfig(
+                segment_all=True,
+                train_fraction=0.6,
+                validation_fraction=0.3,
+                test_fraction=0.3,  # Total = 1.2 > 1.0
+            )
 
 
 @pytest.mark.unit
@@ -582,7 +624,7 @@ class TestPipelineIntegration:
         config = create_default_config()
         config.omero.container_type = "dataset"
         config.omero.container_id = 123
-        config.processing.batch_size = 2
+        config.workflow.batch_size = 2
         config.training.train_n = 1
         config.training.validate_n = 1
         mock_images = []
@@ -723,33 +765,33 @@ class TestPipelineUtils:
     def test_pipeline_config_access(self):
         """Test accessing pipeline configuration."""
         config = create_default_config()
-        config.ai_model.model_type = "vit_h"
-        config.processing.batch_size = 5
-        
+        config.ai_model.pretrained_from = "vit_h"
+        config.workflow.batch_size = 5
+
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
-        assert pipeline.config.ai_model.model_type == "vit_h"
-        assert pipeline.config.processing.batch_size == 5
+
+        assert pipeline.config.ai_model.pretrained_from == "vit_h"
+        assert pipeline.config.workflow.batch_size == 5
     
     def test_pipeline_with_custom_config(self):
         """Test pipeline with custom configuration."""
         config = create_default_config()
         config.omero.container_type = "plate"
         config.omero.container_id = 999
-        config.ai_model.model_type = "vit_l"
+        config.ai_model.pretrained_from = "vit_l"
         config.spatial_coverage.three_d = True
         config.name = "custom_training_set"
-        config.processing.batch_size = 5
-        
+        config.workflow.batch_size = 5
+
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
+
         assert pipeline.config.omero.container_type == "plate"
         assert pipeline.config.spatial_coverage.three_d is True
         assert pipeline.config.name == "custom_training_set"
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
-        assert pipeline.config.ai_model.model_type == "vit_l"
-        assert pipeline.config.processing.batch_size == 5
+
+        assert pipeline.config.ai_model.pretrained_from == "vit_l"
+        assert pipeline.config.workflow.batch_size == 5
 
 
 @pytest.mark.unit
@@ -814,3 +856,81 @@ class TestSpatialSampling:
         assert len(timepoints) == 4
         assert all(0 <= t < 12 for t in timepoints)
         assert len(set(timepoints)) == 4  # All unique
+
+
+@pytest.mark.unit
+class TestAnnotationTimestamps:
+    """Tests for annotation timestamp field handling via mark_processed() method."""
+
+    def test_mark_processed_sets_timestamps(self):
+        """Test that mark_processed sets both timestamp fields correctly."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+        assert annotation.annotation_created_at is None
+        assert annotation.annotation_updated_at is None
+        assert annotation.processed is False
+
+        annotation.mark_processed()
+
+        assert annotation.processed is True
+        assert annotation.annotation_created_at is not None
+        assert annotation.annotation_updated_at is not None
+        # Both should be the same on first processing
+        assert annotation.annotation_created_at == annotation.annotation_updated_at
+
+    def test_mark_processed_preserves_created_at(self):
+        """Test that mark_processed preserves existing created_at timestamp."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(
+            image_id=1,
+            image_name="test.tif",
+            annotation_created_at="2024-01-01T00:00:00",
+        )
+        original_created = annotation.annotation_created_at
+
+        annotation.mark_processed()
+
+        assert annotation.annotation_created_at == original_created
+        assert annotation.annotation_updated_at != original_created
+
+    def test_mark_processed_with_omero_ids(self):
+        """Test that mark_processed correctly sets OMERO IDs."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+
+        annotation.mark_processed(
+            annotation_type="custom_type",
+            roi_id=123,
+            label_id=456,
+        )
+
+        assert annotation.roi_id == 123
+        assert annotation.label_id == 456
+        assert annotation.annotation_type == "custom_type"
+
+    def test_mark_processed_default_annotation_type(self):
+        """Test that mark_processed uses default annotation_type."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+
+        annotation.mark_processed()
+
+        assert annotation.annotation_type == "segmentation_mask"
+
+    def test_mark_processed_without_optional_ids(self):
+        """Test that mark_processed does not set IDs when not provided."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        annotation = ImageAnnotation(image_id=1, image_name="test.tif")
+        assert annotation.roi_id is None
+        assert annotation.label_id is None
+
+        annotation.mark_processed()
+
+        # IDs should remain None when not provided
+        assert annotation.roi_id is None
+        assert annotation.label_id is None

@@ -236,3 +236,207 @@ class TestWellFilteringIntegration:
 
             # Should include all images
             assert image_ids == [1, 2, 3, 4, 5, 6]
+
+
+@pytest.mark.unit
+class TestMultiContainerImageRetrieval:
+    """Test multi-container image retrieval functionality."""
+
+    def test_get_image_ids_multiple_datasets(self):
+        """Test getting image IDs from multiple datasets."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_ids": [1, 2]
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
+            def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
+                if dataset == 1:
+                    return [101, 102]
+                elif dataset == 2:
+                    return [201, 202]
+                return []
+
+            mock_ezomero.get_image_ids.side_effect = mock_get_image_ids
+
+            image_ids = pipeline.get_image_ids_from_container()
+
+            assert set(image_ids) == {101, 102, 201, 202}
+            assert len(image_ids) == 4
+
+    def test_get_image_ids_removes_duplicates(self):
+        """Test that duplicate image IDs are removed."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_ids": [1, 2]
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
+            def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
+                if dataset == 1:
+                    return [101, 102, 103]
+                elif dataset == 2:
+                    return [102, 103, 104]  # 102, 103 are duplicates
+                return []
+
+            mock_ezomero.get_image_ids.side_effect = mock_get_image_ids
+
+            image_ids = pipeline.get_image_ids_from_container()
+
+            # Should have 4 unique IDs: 101, 102, 103, 104
+            assert len(image_ids) == 4
+            assert set(image_ids) == {101, 102, 103, 104}
+            # Order preserved: first occurrence wins
+            assert image_ids == [101, 102, 103, 104]
+
+    def test_get_image_ids_single_container_backward_compatible(self):
+        """Test that single container_id still works (backward compatibility)."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_id": 123
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
+            mock_ezomero.get_image_ids.return_value = [1001, 1002, 1003]
+
+            image_ids = pipeline.get_image_ids_from_container()
+
+            assert image_ids == [1001, 1002, 1003]
+            mock_ezomero.get_image_ids.assert_called_once_with(mock_conn, dataset=123)
+
+    def test_get_image_ids_no_container_raises(self):
+        """Test that no container configured raises ValueError."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "dataset",
+                "container_id": 0
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        with pytest.raises(ValueError, match="No container IDs configured"):
+            pipeline.get_image_ids_from_container()
+
+    def test_get_image_ids_multiple_plates_with_well_filtering(self):
+        """Test that well filters apply across multiple plates."""
+        config = AnnotationConfig(
+            name="test",
+            omero={
+                "container_type": "plate",
+                "container_ids": [1, 2],
+                "well_filters": {"cellline": ["U2OS"]},
+                "well_filter_mode": "include"
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
+            # Mock well IDs for each plate
+            def mock_get_well_ids(conn, plate=None):
+                if plate == 1:
+                    return [101, 102]  # Plate 1 wells
+                elif plate == 2:
+                    return [201, 202]  # Plate 2 wells
+                return []
+
+            mock_ezomero.get_well_ids.side_effect = mock_get_well_ids
+
+            # Mock image IDs for each well
+            def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
+                well_images = {
+                    101: [1001],  # U2OS
+                    102: [1002],  # HeLa
+                    201: [2001],  # U2OS
+                    202: [2002],  # HeLa
+                }
+                return well_images.get(well, [])
+
+            mock_ezomero.get_image_ids.side_effect = mock_get_image_ids
+
+            # Mock map annotations for wells
+            def mock_annotations(well_id):
+                annotations = {
+                    101: {"cellline": "U2OS"},
+                    102: {"cellline": "HeLa"},
+                    201: {"cellline": "U2OS"},
+                    202: {"cellline": "HeLa"},
+                }
+                return annotations.get(well_id, {})
+
+            pipeline._get_well_map_annotations = mock_annotations
+
+            image_ids = pipeline.get_image_ids_from_container()
+
+            # Should only include U2OS wells from both plates
+            assert set(image_ids) == {1001, 2001}
+
+
+@pytest.mark.unit
+class TestMultiContainerTableTitle:
+    """Test table title generation for multi-container scenarios."""
+
+    def test_table_title_single_container(self):
+        """Test table title generation for single container."""
+        config = AnnotationConfig(
+            name="",  # Empty name triggers auto-generation
+            omero={
+                "container_type": "dataset",
+                "container_id": 123
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        title = pipeline._get_table_title()
+
+        assert "dataset_123" in title
+
+    def test_table_title_multiple_containers(self):
+        """Test table title generation for multiple containers."""
+        config = AnnotationConfig(
+            name="",  # Empty name triggers auto-generation
+            omero={
+                "container_type": "plate",
+                "container_ids": [1, 2, 3]
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        title = pipeline._get_table_title()
+
+        assert "plate_multi_3" in title
+
+    def test_table_title_uses_config_name(self):
+        """Test that explicit config name takes precedence."""
+        config = AnnotationConfig(
+            name="my_custom_table",
+            omero={
+                "container_type": "plate",
+                "container_ids": [1, 2, 3]
+            }
+        )
+        mock_conn = Mock()
+        pipeline = AnnotationPipeline(config, conn=mock_conn)
+
+        title = pipeline._get_table_title()
+
+        assert title == "my_custom_table"
