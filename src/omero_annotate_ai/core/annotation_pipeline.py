@@ -237,7 +237,11 @@ class AnnotationPipeline:
             selected_images = images_list
             n_train = int(n_total * self.config.training.train_fraction)
             n_val = int(n_total * self.config.training.validation_fraction)
-            n_test = n_total - n_train - n_val
+            n_test = int(n_total * self.config.training.test_fraction)
+
+            # Handle rounding remainder: assign to training (largest category typically)
+            remainder = n_total - n_train - n_val - n_test
+            n_train += remainder
 
             # Create categories for all images
             image_categories = (

@@ -823,6 +823,11 @@ def _prepare_dataset_from_table(
                 # Create empty 3D array to hold all z-slices
                 img_3d = []
 
+                # Pre-fetch image dimensions for non-patch full plane extraction
+                # (avoids repeated fetches and unreliable locals() check in loop)
+                size_x = None
+                size_y = None
+
                 # Load each z-slice using ezomero.get_image
                 for z in z_slices:
                     z_val = int(z)
@@ -867,7 +872,7 @@ def _prepare_dataset_from_table(
                     else:
                         # Get full plane for this z-slice
                         # Get image dimensions if not already obtained
-                        if "size_x" not in locals():
+                        if size_x is None:
                             omero_image, _ = ezomero.get_image(
                                 conn, image_id, no_pixels=True
                             )
@@ -1172,7 +1177,7 @@ def reorganize_local_data_for_training(
     output_dir: Optional[Union[str, Path]] = None,
     file_mode: Literal["copy", "move", "symlink"] = "copy",
     clean_existing: bool = True,
-    include_test: bool = False,
+    include_test: Optional[bool] = None,
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1192,7 +1197,10 @@ def reorganize_local_data_for_training(
             - "move": Move files (removes originals)
             - "symlink": Create symbolic links (falls back to copy on Windows if symlinks fail)
         clean_existing: Remove existing training folders before reorganization
-        include_test: If True, also create test_input/test_label folders for test category
+        include_test: Whether to create test_input/test_label folders for test category.
+            - None (default): Auto-detect - include if test annotations exist
+            - True: Always include test folders
+            - False: Never include test folders (skip test annotations)
         verbose: Show detailed progress
 
     Returns:
@@ -1249,6 +1257,17 @@ def reorganize_local_data_for_training(
     logger.info(
         f"Found {len(processed_annotations)} processed annotations out of {len(config.annotations)} total"
     )
+
+    # Auto-detect test annotations if include_test is None
+    if include_test is None:
+        has_test_annotations = any(
+            ann.category == "test" for ann in processed_annotations
+        )
+        include_test = has_test_annotations
+        if has_test_annotations:
+            logger.info(
+                "Auto-detected test annotations - will create test_input/test_label folders"
+            )
 
     # Check if using separate channels
     uses_separate_channels = config.spatial_coverage.uses_separate_channels()

@@ -20,9 +20,12 @@ def _optional_int_to_str(value: Optional[int]) -> str:
 
 def _str_to_optional_int(value: str) -> Optional[int]:
     """Parse string back to optional int from OMERO table."""
-    if value != "None" and value.isdigit():
+    if value == "None":
+        return None
+    try:
         return int(value)
-    return None
+    except ValueError:
+        return None
 
 
 # Sub-models for the configuration

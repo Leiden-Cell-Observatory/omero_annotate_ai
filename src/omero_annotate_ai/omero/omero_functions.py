@@ -486,6 +486,9 @@ def update_workflow_status_map(
         }
 
         # Remove any existing workflow status annotation (best-effort cleanup)
+        # This may fail if no annotations exist, permissions are missing, or
+        # connection issues occur. We intentionally ignore these failures since
+        # the new annotation will be created regardless.
         try:
             existing_annotations = ezomero.get_map_annotation(
                 conn, container_type.capitalize(), container_id
@@ -494,8 +497,10 @@ def update_workflow_status_map(
                 if isinstance(ann_data, dict) and ann_data.get("workflow_status"):
                     ezomero.delete_annotation(conn, ann_id)
                     break
+        except (KeyError, ValueError, TypeError):
+            pass  # Expected: no existing annotation or malformed data
         except Exception:
-            pass  # No existing annotation to remove
+            pass  # Connection/permission issues - proceed with creating new annotation
 
         # Create new status map annotation
         status_ann_id = ezomero.post_map_annotation(

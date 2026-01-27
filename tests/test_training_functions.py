@@ -599,6 +599,59 @@ class TestReorganizeLocalDataForTraining:
         assert result_with_test["stats"]["n_test_images"] == 2
         assert result_with_test["stats"]["n_test_labels"] == 2
 
+    def test_reorganize_auto_detects_test_annotations(self, annotation_dir):
+        """Test that include_test=None auto-detects test annotations."""
+        config = AnnotationConfig(name="test_set")
+
+        # Add mixed annotations: training, validation, and test
+        for i, category in enumerate(["training", "validation", "test"]):
+            ann = ImageAnnotation(
+                image_id=400 + i,
+                image_name=f"{category}_image_{i}",
+                annotation_id=f"400_{0}_{i}",
+                timepoint=0,
+                z_slice=i,
+                category=category,
+                channel=0,
+            )
+            ann.processed = True
+            config.annotations.append(ann)
+
+        # Create files
+        input_dir = annotation_dir / "input"
+        output_dir = annotation_dir / "output"
+        for ann in config.annotations:
+            (input_dir / f"{ann.annotation_id}.tif").write_text("data")
+            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask")
+
+        # With include_test=None (default), test files should be auto-detected
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            file_mode="copy",
+            # include_test not specified, defaults to None (auto-detect)
+        )
+        assert result["stats"]["n_training_images"] == 1
+        assert result["stats"]["n_val_images"] == 1
+        assert result["stats"]["n_test_images"] == 1
+        assert result["stats"]["n_test_labels"] == 1
+        assert "test_input" in result
+
+    def test_reorganize_auto_detect_no_test_annotations(
+        self, populated_annotation_dir, mock_config
+    ):
+        """Test that include_test=None doesn't create test folders when no test annotations."""
+        # mock_config has only training/validation annotations, no test
+        result = reorganize_local_data_for_training(
+            config=mock_config,
+            annotation_dir=populated_annotation_dir,
+            file_mode="copy",
+            # include_test not specified, defaults to None (auto-detect)
+        )
+        # No test folders should be created since no test annotations exist
+        assert result["stats"]["n_test_images"] == 0
+        assert "test_input" not in result
+
     def test_reorganize_clean_existing(self, populated_annotation_dir, mock_config):
         """Test that clean_existing removes previous training folders."""
         training_input = populated_annotation_dir / "training_input"
