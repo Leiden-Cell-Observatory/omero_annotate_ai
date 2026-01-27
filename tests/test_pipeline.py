@@ -511,6 +511,45 @@ class TestAnnotationPipeline:
         assert categories.count("validation") == 3
         assert categories.count("test") == 2
 
+    def test_zero_test_fraction_with_rounding_remainder(self):
+        """Test that test_fraction=0.0 creates no test annotations even with rounding.
+
+        Regression test for bug where n_test was calculated as remainder instead
+        of using test_fraction, causing test annotations when test_fraction=0.0
+        with non-divisible image counts (e.g., 11 images with 0.7/0.3 split).
+        """
+        config = create_default_config()
+        config.training.train_fraction = 0.7
+        config.training.validation_fraction = 0.3
+        config.training.test_fraction = 0.0  # Explicitly no test
+        config.training.segment_all = True
+
+        # Use 11 images to trigger rounding remainder:
+        # int(11 * 0.7) = 7, int(11 * 0.3) = 3, remainder = 1
+        # Bug: remainder went to test instead of respecting test_fraction=0.0
+        mock_images = []
+        for i in range(11):
+            mock_img = Mock()
+            mock_img.getId.return_value = i + 1
+            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getSizeT.return_value = 1
+            mock_img.getSizeZ.return_value = 1
+            mock_images.append(mock_img)
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline._prepare_processing_units(mock_images)
+
+        categories = [ann.category for ann in config.annotations]
+        # With test_fraction=0.0, there should be NO test annotations
+        assert categories.count("test") == 0, (
+            f"Expected 0 test annotations with test_fraction=0.0, got {categories.count('test')}"
+        )
+        # Remainder should go to training (7 + 1 = 8)
+        assert categories.count("training") == 8
+        assert categories.count("validation") == 3
+        # Total should equal number of images
+        assert len(categories) == 11
+
     def test_optional_validation_zero(self):
         """Test that validation can be set to 0."""
         config = create_default_config()
