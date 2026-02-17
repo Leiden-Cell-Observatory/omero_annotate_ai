@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omero-annotate-ai"
-version = "0.2.0"
+version = "0.2.1"
 description = "OMERO integration for AI-powered image annotation and segmentation workflows"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -52,7 +52,6 @@ dependencies = [
     "opencv-python", 
     "tifffile",
     "marimo>=0.19.2,<0.20",  # Dependencies for marimo-based notebook UI
-    "ty>=0.0.12,<0.0.13",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +67,7 @@ dev = [
     "black>=22.0",
     "isort>=5.0",
     "flake8>=4.0",
+    "ty>=0.0.12,<0.0.13",
 ]
 docs = [
     "mkdocs>=1.5.3",
