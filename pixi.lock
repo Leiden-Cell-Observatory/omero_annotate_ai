@@ -20610,7 +20610,7 @@ packages:
 - pypi: ./
   name: omero-annotate-ai
   version: 0.2.1
-  sha256: 5fa4618680908703131e211f2f4d0061ff76c99cb737bddf2d54f802b7211f5f
+  sha256: cf03d8d22a449c717d267de05840f32c753ad16681491c0fdc113ed0ffc96db3
   requires_dist:
   - numpy>=1.21.0,<2.0
   - pandas>=1.3.0
