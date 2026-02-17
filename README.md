@@ -1,10 +1,11 @@
 # OMERO Annotate.AI
 
+[![Pixi Badge](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
+[![PyPI version](https://img.shields.io/pypi/v/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
+[![Python versions](https://img.shields.io/pypi/pyversions/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/Leiden-Cell-Observatory/omero_annotate_ai/HEAD?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fannotation%2Fomero-annotate-ai-annotation-widget.ipynb)
 [![CI/CD](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/actions)
 [![Documentation](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/actions/workflows/docs.yml/badge.svg)](https://leiden-cell-observatory.github.io/omero_annotate_ai/)
-[![PyPI version](https://img.shields.io/pypi/v/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
-[![Python versions](https://img.shields.io/pypi/pyversions/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
 [![License](https://img.shields.io/github/license/Leiden-Cell-Observatory/omero_annotate_ai)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/LICENSE)
 
 Package to support reproducible image annotation workflows for AI training using OMERO data repositories. This Python package provides Jupyter widgets and tools for reproducible annotation, training, and inference using micro-SAM, Cellpose, and other AI models directly with OMERO datasets.
