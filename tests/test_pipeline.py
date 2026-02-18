@@ -119,7 +119,7 @@ class TestAnnotationPipeline:
         assert output_path.exists()
         assert (output_path / "input").exists()
         assert (output_path / "output").exists()
-        assert (output_path / "embed").exists()
+        assert (output_path / "sam_embeddings").exists()
     
     def test_get_table_title(self):
         """Test table title generation - should use config name directly."""
