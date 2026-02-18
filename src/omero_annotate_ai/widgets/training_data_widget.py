@@ -183,20 +183,21 @@ class TrainingDataWidget:
                         table_id = table.get('id', 'Unknown')
                         created = table.get('created', 'Unknown')
                         print(f"  {i + 1}. {name} (ID: {table_id}) - Created: {created}")
-
-                    # Update table dropdown options
-                    options = [("Select a table...", None)]
-                    for table in self.annotation_tables:
-                        table_name = table.get("name", "Unknown")
-                        table_id = table.get("id")
-                        options.append((f"{table_name} (ID: {table_id})", table_id))
-
-                    self.table_dropdown.options = options
-                    self.table_dropdown.disabled = False
                 else:
                     print("❌ No annotation tables found in this container")
-                    self.table_dropdown.options = [("No tables found", None)]
-                    self.table_dropdown.disabled = True
+
+            # Update table dropdown options outside the output context
+            if self.annotation_tables:
+                options = [("Select a table...", None)]
+                for table in self.annotation_tables:
+                    table_name = table.get("name", "Unknown")
+                    table_id = table.get("id")
+                    options.append((f"{table_name} (ID: {table_id})", table_id))
+                self.table_dropdown.options = options
+                self.table_dropdown.disabled = False
+            else:
+                self.table_dropdown.options = [("No tables found", None)]
+                self.table_dropdown.disabled = True
 
             with self.status_output:
                 clear_output()
