@@ -14,7 +14,6 @@ try:
     from omero_annotate_ai.omero.omero_utils import (
         get_table_by_name,
         list_user_tables,
-        validate_omero_permissions
     )
     OMERO_AVAILABLE = True
 except ImportError:

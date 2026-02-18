@@ -1,17 +1,29 @@
 """OMERO integration functions for micro-SAM workflows."""
 
+import tempfile
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import omero.model as omero_model
 import pandas as pd
 
-from .omero_utils import delete_table
+from .omero_utils import (
+    delete_table,
+    delete_annotations_by_namespace,
+    list_annotations_by_namespace,
+    list_user_tables,
+)
 
 import ezomero
 
 import imageio.v3 as imageio
 
 from ..processing.image_functions import label_to_rois
+from ..core.annotation_config import AnnotationConfig
+
+# Namespace for annotation config file annotations
+CONFIG_NS = "openmicroscopy.org/omero/annotate/config"
 
 
 # =============================================================================
@@ -92,13 +104,11 @@ def link_table_to_containers(
     Raises:
         Exception: If linking fails for any container
     """
-    import omero.model as model
-
     link_classes = {
-        'dataset': (model.DatasetAnnotationLinkI, model.DatasetI),
-        'plate': (model.PlateAnnotationLinkI, model.PlateI),
-        'project': (model.ProjectAnnotationLinkI, model.ProjectI),
-        'screen': (model.ScreenAnnotationLinkI, model.ScreenI),
+        'dataset': (omero_model.DatasetAnnotationLinkI, omero_model.DatasetI),
+        'plate': (omero_model.PlateAnnotationLinkI, omero_model.PlateI),
+        'project': (omero_model.ProjectAnnotationLinkI, omero_model.ProjectI),
+        'screen': (omero_model.ScreenAnnotationLinkI, omero_model.ScreenI),
     }
 
     container_type_lower = container_type.lower()
@@ -225,7 +235,7 @@ def sync_config_to_omero_table(
 
     if config_df.empty:
         print("Warning: No annotations in config to sync")
-        return existing_table_id if existing_table_id else -1
+        return existing_table_id if existing_table_id else None
 
     # Create or replace table
     return create_or_replace_tracking_table(
@@ -281,7 +291,7 @@ def upload_annotation_config_to_omero(
     """
     id = ezomero.post_file_annotation(conn,
                                       file_path=file_path,
-                                      ns="openmicroscopy.org/omero/annotate/config",
+                                      ns=CONFIG_NS,
                                       object_type=object_type,
                                       object_id=object_id)
     return id
@@ -302,11 +312,6 @@ def download_annotation_config_from_omero(conn, object_type: str, object_id: int
     Returns:
         AnnotationConfig if found, else None
     """
-    import tempfile
-    from ..core.annotation_config import AnnotationConfig
-    from .omero_utils import list_annotations_by_namespace
-
-    CONFIG_NS = "openmicroscopy.org/omero/annotate/config"
     annotations = list_annotations_by_namespace(conn, object_type, object_id, CONFIG_NS)
     if not annotations:
         return None
@@ -503,8 +508,6 @@ def update_workflow_status_map(
             status = "pending"
 
         # Create status map
-        from datetime import datetime
-
         status_map = {
             "workflow_status": status,
             "table_id": str(table_id),
@@ -515,7 +518,7 @@ def update_workflow_status_map(
                 if total_units > 0
                 else "0.0"
             ),
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
         # Remove any existing workflow status annotation (best-effort cleanup)
@@ -603,8 +606,6 @@ def list_annotation_tables(
     Returns:
         List of dictionaries with table information, sorted newest first
     """
-    from .omero_utils import list_user_tables
-
     all_tables = list_user_tables(
         conn, container_type=container_type, container_id=container_id
     )
@@ -626,8 +627,6 @@ def generate_unique_table_name(
     Returns:
         Unique table name
     """
-    import datetime
-
     # Get container name for better naming
     try:
         container = conn.getObject(container_type.capitalize(), container_id)
@@ -644,7 +643,7 @@ def generate_unique_table_name(
 
     # Create base name if not provided
     if not base_name:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         base_name = f"{container_name}_{timestamp}"
 
     # Check if name already exists and make it unique
@@ -805,9 +804,6 @@ def cleanup_project_annotations(
             'images_processed': int
         }
     """
-    # Import required functions
-    from .omero_utils import delete_annotations_by_namespace, delete_table
-
     # Initialize counters
     results = {"tables": 0, "rois": 0, "map_annotations": 0, "images_processed": 0}
 

@@ -64,7 +64,7 @@ class SimpleOMEROConnection:
             # Store in keychain
             keyring.set_password(self.SERVICE_NAME, key, json.dumps(password_data))
 
-            if expire_hours:
+            if expire_hours is not None:
                 print(
                     f"Password saved to keychain (expires in {expire_hours} hours)"
                 )
@@ -568,7 +568,7 @@ class SimpleOMEROConnection:
             try:
                 last_used = datetime.fromisoformat(conn["last_used"])
                 conn["last_used_display"] = last_used.strftime("%Y-%m-%d %H:%M")
-            except:
+            except (ValueError, KeyError, TypeError, OSError):
                 conn["last_used_display"] = "Unknown"
 
         return connections

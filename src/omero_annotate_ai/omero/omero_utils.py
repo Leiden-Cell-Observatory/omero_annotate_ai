@@ -50,10 +50,18 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
                         if file_ann and hasattr(file_ann, 'getFile'):
                             original_file = file_ann.getFile()
                             file_name = original_file.getName() if original_file else f"table_{ann_id}"
-                            
+                            created = ""
+                            try:
+                                date = file_ann.getDate()
+                                if date:
+                                    created = date.isoformat()
+                            except Exception:
+                                pass
+
                             tables.append({
                                 'id': ann_id,
                                 'name': file_name,
+                                'created': created,
                                 'container_type': container_type,
                                 'container_id': container_id,
                                 'description': file_ann.getDescription() or "",
@@ -63,8 +71,8 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
                     # Not a valid OMERO.table, skip silently
                     continue
         else:
-            # More complex search across user's space would go here
-            # For now, we'll return empty list and recommend specifying container
+            # Searching all tables without specifying a container is not supported.
+            # Please provide container_type and container_id.
             print("Tip: Specify container_type and container_id for more efficient search")
             
     except Exception as e:
@@ -729,22 +737,16 @@ def get_dask_image_single(conn, image, timepoints: List[int],
     except Exception as e:
         print(f"Error with dask loading for image {image.getId()}: {e}")
         # Direct loading fallback
-        if not image:
-            return None
-            
         pixels = image.getPrimaryPixels()
-        
-        # Use first timepoint, channel, z-slice if multiple provided
         t = timepoints[0] if timepoints else 0
         c = channels[0] if channels else 0
         z = z_slices[0] if z_slices else 0
-        
+
         try:
             plane_data = pixels.getPlane(z, c, t)
             return plane_data
         except Exception as e2:
             print(f"Could not load plane for image {image.getId()}: {e2}")
-            # Fallback to zeros array
             height = image.getSizeY()
             width = image.getSizeX()
             return np.zeros((height, width), dtype=np.uint16)

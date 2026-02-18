@@ -12,7 +12,13 @@ from omero_annotate_ai.omero.omero_functions import (
     link_table_to_containers,
     create_or_replace_tracking_table,
     download_annotation_config_from_omero,
+    sync_config_to_omero_table,
+    update_workflow_status_map,
+    generate_unique_table_name,
+    list_annotation_tables,
+    CONFIG_NS,
 )
+from omero_annotate_ai.omero.omero_utils import list_user_tables
 
 
 @pytest.mark.unit
@@ -173,7 +179,7 @@ class TestDownloadAnnotationConfigFromOmero:
         mock_conn = Mock()
         with (
             patch(
-                "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+                "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
                 return_value=[{"id": 42}],
             ),
             patch(
@@ -191,7 +197,7 @@ class TestDownloadAnnotationConfigFromOmero:
         mock_conn = Mock()
         with (
             patch(
-                "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+                "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
                 return_value=[{"id": 42}],
             ),
             patch(
@@ -213,7 +219,7 @@ class TestDownloadAnnotationConfigFromOmero:
         mock_conn = Mock()
         with (
             patch(
-                "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+                "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
                 return_value=[{"id": 10}, {"id": 20}],
             ),
             patch(
@@ -227,3 +233,254 @@ class TestDownloadAnnotationConfigFromOmero:
         mock_get.assert_called_once()
         assert mock_get.call_args[0][1] == 20
         assert result.name == "latest_config"
+
+
+@pytest.mark.unit
+class TestConfigNSConstant:
+    """Test that the CONFIG_NS constant is defined and used consistently."""
+
+    def test_config_ns_value(self):
+        """CONFIG_NS has the expected namespace string."""
+        assert CONFIG_NS == "openmicroscopy.org/omero/annotate/config"
+
+    def test_upload_uses_config_ns(self):
+        """upload_annotation_config_to_omero uses the CONFIG_NS constant."""
+        mock_conn = Mock()
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            return_value=42,
+        ) as mock_post:
+            from omero_annotate_ai.omero.omero_functions import (
+                upload_annotation_config_to_omero,
+            )
+
+            result = upload_annotation_config_to_omero(
+                mock_conn, "Dataset", 1, file_path="/tmp/config.yaml"
+            )
+
+        assert result == 42
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["ns"] == CONFIG_NS
+
+    def test_download_uses_config_ns(self):
+        """download_annotation_config_from_omero searches with CONFIG_NS."""
+        mock_conn = Mock()
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
+            return_value=[],
+        ) as mock_list:
+            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
+
+        assert result is None
+        mock_list.assert_called_once_with(mock_conn, "Dataset", 1, CONFIG_NS)
+
+
+
+
+@pytest.mark.unit
+class TestSyncConfigToOmeroTableEdgeCases:
+    """Test edge cases in sync_config_to_omero_table."""
+
+    def test_returns_none_when_empty_config(self):
+        """Returns None (not -1) when config has no annotations."""
+        mock_conn = Mock()
+        mock_config = Mock()
+        mock_config.to_dataframe.return_value = pd.DataFrame()
+
+        result = sync_config_to_omero_table(
+            conn=mock_conn,
+            config=mock_config,
+            table_title="test",
+            container_type="dataset",
+            container_id=1,
+        )
+
+        assert result is None
+
+    def test_returns_existing_table_id_when_empty_config_and_existing(self):
+        """Returns existing_table_id when config is empty and table already exists."""
+        mock_conn = Mock()
+        mock_config = Mock()
+        mock_config.to_dataframe.return_value = pd.DataFrame()
+
+        result = sync_config_to_omero_table(
+            conn=mock_conn,
+            config=mock_config,
+            table_title="test",
+            container_type="dataset",
+            container_id=1,
+            existing_table_id=99,
+        )
+
+        assert result == 99
+
+
+@pytest.mark.unit
+class TestUpdateWorkflowStatusDatetime:
+    """Test that update_workflow_status_map uses timezone-aware datetimes."""
+
+    def test_last_updated_is_timezone_aware(self):
+        """last_updated field in status map should be a timezone-aware ISO string."""
+        from datetime import timezone
+
+        mock_conn = Mock()
+        mock_df = pd.DataFrame({"processed": [True, False, True]})
+
+        captured_status_map = {}
+
+        def capture_post_map_annotation(*args, **kwargs):
+            captured_status_map.update(kwargs.get("kv_dict", {}))
+            return 123
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.get_table",
+            return_value=mock_df,
+        ), patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.get_map_annotation",
+            side_effect=Exception("no annotation"),
+        ), patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_map_annotation",
+            side_effect=capture_post_map_annotation,
+        ):
+            update_workflow_status_map(mock_conn, "dataset", 1, 10)
+
+        assert "last_updated" in captured_status_map
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(captured_status_map["last_updated"])
+        assert dt.tzinfo is not None, "last_updated must be timezone-aware"
+
+
+@pytest.mark.unit
+class TestGenerateUniqueTableNameDatetime:
+    """Test that generate_unique_table_name uses timezone-aware datetimes."""
+
+    def test_timestamp_in_name_uses_utc(self):
+        """Auto-generated table name should use UTC timestamp (no error)."""
+        mock_conn = Mock()
+        mock_container = Mock()
+        mock_container.getName.return_value = "my_dataset"
+        mock_conn.getObject.return_value = mock_container
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.list_annotation_tables",
+            return_value=[],
+        ):
+            name = generate_unique_table_name(mock_conn, "dataset", 1)
+
+        assert "my_dataset" in name
+        # Name includes a timestamp in YYYYMMDD_HHMMSS format
+        import re
+
+        assert re.search(r"\d{8}_\d{6}", name)
+
+    def test_custom_base_name_no_timestamp(self):
+        """When base_name is provided, no timestamp is added."""
+        mock_conn = Mock()
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.list_annotation_tables",
+            return_value=[],
+        ):
+            name = generate_unique_table_name(
+                mock_conn, "dataset", 1, base_name="my_table"
+            )
+
+        assert name == "my_table"
+
+    def test_versioning_when_name_exists(self):
+        """Appends _v1, _v2 etc. when name already exists."""
+        mock_conn = Mock()
+        existing = [{"name": "my_table"}, {"name": "my_table_v1"}]
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.list_annotation_tables",
+            return_value=existing,
+        ):
+            name = generate_unique_table_name(
+                mock_conn, "dataset", 1, base_name="my_table"
+            )
+
+        assert name == "my_table_v2"
+
+
+@pytest.mark.unit
+class TestListUserTablesCreatedField:
+    """Test that list_user_tables includes the 'created' field."""
+
+    def test_created_field_populated_when_date_available(self):
+        """Tables returned by list_user_tables include a 'created' field."""
+        mock_conn = Mock()
+
+        # Mock table data (not None = it's a table)
+        mock_df = pd.DataFrame({"col": [1]})
+
+        # Mock file annotation with a date
+        mock_file_ann = Mock()
+        mock_file_ann.getFile.return_value.getName.return_value = "my_table.h5"
+        mock_file_ann.getDescription.return_value = ""
+        mock_file_ann.getNs.return_value = "omero.tables"
+        mock_date = Mock()
+        mock_date.isoformat.return_value = "2024-01-15T10:00:00"
+        mock_file_ann.getDate.return_value = mock_date
+        mock_conn.getObject.return_value = mock_file_ann
+
+        with patch(
+            "omero_annotate_ai.omero.omero_utils.ezomero.get_file_annotation_ids",
+            return_value=[42],
+        ), patch(
+            "omero_annotate_ai.omero.omero_utils.ezomero.get_table",
+            return_value=mock_df,
+        ):
+            tables = list_user_tables(mock_conn, "dataset", 1)
+
+        assert len(tables) == 1
+        assert "created" in tables[0]
+        assert tables[0]["created"] == "2024-01-15T10:00:00"
+
+    def test_created_field_empty_when_date_unavailable(self):
+        """created field is empty string when file annotation has no date."""
+        mock_conn = Mock()
+        mock_df = pd.DataFrame({"col": [1]})
+
+        mock_file_ann = Mock()
+        mock_file_ann.getFile.return_value.getName.return_value = "my_table.h5"
+        mock_file_ann.getDescription.return_value = ""
+        mock_file_ann.getNs.return_value = "omero.tables"
+        mock_file_ann.getDate.side_effect = AttributeError("no date")
+        mock_conn.getObject.return_value = mock_file_ann
+
+        with patch(
+            "omero_annotate_ai.omero.omero_utils.ezomero.get_file_annotation_ids",
+            return_value=[42],
+        ), patch(
+            "omero_annotate_ai.omero.omero_utils.ezomero.get_table",
+            return_value=mock_df,
+        ):
+            tables = list_user_tables(mock_conn, "dataset", 1)
+
+        assert len(tables) == 1
+        assert tables[0]["created"] == ""
+
+
+@pytest.mark.unit
+class TestListAnnotationTablesSortsByCreated:
+    """Test that list_annotation_tables sorts by the 'created' field."""
+
+    def test_sorts_newest_first(self):
+        """Tables are sorted by 'created' descending (newest first)."""
+        tables = [
+            {"name": "old_table", "created": "2023-01-01T00:00:00"},
+            {"name": "new_table", "created": "2024-06-01T00:00:00"},
+            {"name": "mid_table", "created": "2023-12-01T00:00:00"},
+        ]
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.list_user_tables",
+            return_value=tables,
+        ):
+            result = list_annotation_tables(Mock(), "dataset", 1)
+
+        assert result[0]["name"] == "new_table"
+        assert result[1]["name"] == "mid_table"
+        assert result[2]["name"] == "old_table"
