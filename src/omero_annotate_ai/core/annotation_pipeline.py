@@ -116,7 +116,7 @@ class AnnotationPipeline:
         Creates a unified folder structure:
         - input/: Source images for annotation
         - output/: Annotation masks
-        - embed/: Embeddings (micro-SAM)
+        - sam_embeddings/: Embeddings (micro-SAM)
 
         Category metadata (training/validation/test) is tracked in config.yaml,
         not in the folder structure.
@@ -125,9 +125,9 @@ class AnnotationPipeline:
 
         dirs = [
             output_path,
-            output_path / "input",       # Source images for annotation
-            output_path / "output",      # Annotation masks
-            output_path / "embed",       # Embeddings (micro-SAM)
+            output_path / "input",              # Source images for annotation
+            output_path / "output",             # Annotation masks
+            output_path / "sam_embeddings",     # Embeddings (micro-SAM)
         ]
 
         for dir_path in dirs:
@@ -137,7 +137,7 @@ class AnnotationPipeline:
 
     def _cleanup_embeddings(self, output_path: Path):
         """Clean up any existing embeddings from interrupted runs."""
-        embed_path = output_path / "embed"
+        embed_path = output_path / "sam_embeddings"
         if embed_path.exists():
             for file in embed_path.glob("*"):
                 if file.is_file():
@@ -470,7 +470,7 @@ class AnnotationPipeline:
 
             # Set up output paths
             output_path = Path(self.config.output.output_directory)
-            embedding_path = output_path / "embed"
+            embedding_path = output_path / "sam_embeddings"
             annotations_path = output_path / "annotations"
             annotations_path.mkdir(exist_ok=True)
             # print("DEBUG: Ready to run micro_sam annotations")
