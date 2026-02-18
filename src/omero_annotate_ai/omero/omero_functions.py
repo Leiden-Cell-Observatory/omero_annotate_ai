@@ -279,12 +279,45 @@ def upload_annotation_config_to_omero(
     Returns:
         ID of the uploaded file annotation
     """
-    id = ezomero.post_file_annotation(conn, 
+    id = ezomero.post_file_annotation(conn,
                                       file_path=file_path,
                                       ns="openmicroscopy.org/omero/annotate/config",
                                       object_type=object_type,
                                       object_id=object_id)
     return id
+
+
+def download_annotation_config_from_omero(conn, object_type: str, object_id: int) -> Optional[Any]:
+    """Download and parse the annotation config YAML attached to an OMERO container.
+
+    Finds the most recent FileAnnotation with namespace
+    'openmicroscopy.org/omero/annotate/config' on the given container,
+    downloads it to a temp file, and parses it into an AnnotationConfig.
+
+    Args:
+        conn: OMERO connection
+        object_type: Container type ('Dataset', 'Plate', 'Project', 'Screen')
+        object_id: Container ID
+
+    Returns:
+        AnnotationConfig if found, else None
+    """
+    import tempfile
+    from ..core.annotation_config import AnnotationConfig
+    from .omero_utils import list_annotations_by_namespace
+
+    CONFIG_NS = "openmicroscopy.org/omero/annotate/config"
+    annotations = list_annotations_by_namespace(conn, object_type, object_id, CONFIG_NS)
+    if not annotations:
+        return None
+
+    ann_id = annotations[-1]["id"]
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        file_path = ezomero.get_file_annotation(conn, ann_id, tmp_dir)
+        if file_path is None:
+            return None
+        return AnnotationConfig.from_yaml(file_path)
 
 
 def upload_rois_and_labels(

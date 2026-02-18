@@ -157,7 +157,7 @@ twine = "*"
 # Environment definitions
 [tool.pixi.environments]
 default = []
-dev = ["dev"]
+dev = ["dev","all"]
 docs = ["docs"]
 dev-docs = ["dev", "docs"]
 

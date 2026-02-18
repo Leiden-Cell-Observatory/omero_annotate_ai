@@ -11,6 +11,7 @@ from omero_annotate_ai.omero.omero_functions import (
     upload_rois_and_labels,
     link_table_to_containers,
     create_or_replace_tracking_table,
+    download_annotation_config_from_omero,
 )
 
 
@@ -144,3 +145,85 @@ class TestCreateOrReplaceTrackingTableMultiContainer:
             assert table_id == 100
             call_kwargs = mock_ezomero.post_table.call_args.kwargs
             assert call_kwargs['object_id'] == 123
+
+
+@pytest.mark.unit
+class TestDownloadAnnotationConfigFromOmero:
+    """Test download_annotation_config_from_omero function."""
+
+    def test_returns_none_when_no_config_annotation(self):
+        """Returns None when no config FileAnnotation is found."""
+        mock_conn = Mock()
+        with patch(
+            "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+            return_value=[],
+        ):
+            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
+        assert result is None
+
+    def test_returns_annotation_config_from_yaml(self, tmp_path):
+        """Downloads config YAML and parses it into an AnnotationConfig."""
+        from omero_annotate_ai.core.annotation_config import AnnotationConfig
+
+        # Write a minimal valid YAML to tmp_path
+        yaml_path = tmp_path / "annotation_config_test.yaml"
+        config = AnnotationConfig(name="test_workflow")
+        config.save_yaml(yaml_path)
+
+        mock_conn = Mock()
+        with (
+            patch(
+                "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+                return_value=[{"id": 42}],
+            ),
+            patch(
+                "omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
+                return_value=str(yaml_path),
+            ),
+        ):
+            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
+
+        assert result is not None
+        assert result.name == "test_workflow"
+
+    def test_returns_none_when_download_fails(self):
+        """Returns None when ezomero.get_file_annotation returns None."""
+        mock_conn = Mock()
+        with (
+            patch(
+                "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+                return_value=[{"id": 42}],
+            ),
+            patch(
+                "omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
+                return_value=None,
+            ),
+        ):
+            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
+        assert result is None
+
+    def test_uses_last_annotation_when_multiple(self, tmp_path):
+        """Uses the last (most recent) config annotation when multiple exist."""
+        from omero_annotate_ai.core.annotation_config import AnnotationConfig
+
+        yaml_path = tmp_path / "config.yaml"
+        config = AnnotationConfig(name="latest_config")
+        config.save_yaml(yaml_path)
+
+        mock_conn = Mock()
+        with (
+            patch(
+                "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
+                return_value=[{"id": 10}, {"id": 20}],
+            ),
+            patch(
+                "omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
+                return_value=str(yaml_path),
+            ) as mock_get,
+        ):
+            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
+
+        # Should use ann_id 20 (last in list)
+        mock_get.assert_called_once()
+        assert mock_get.call_args[0][1] == 20
+        assert result.name == "latest_config"

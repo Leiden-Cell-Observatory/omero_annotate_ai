@@ -1250,7 +1250,7 @@ class WorkflowWidget:
             self._on_update_config(button)
 
             # Then save to file
-            config_path = Path(self.working_directory) / "annotation_config.yaml"
+            config_path = Path(self.working_directory) / f"annotation_config_{self.config.name}.yaml"
             
             # This will now set config.config_file_path automatically
             self.config.save_yaml(config_path)

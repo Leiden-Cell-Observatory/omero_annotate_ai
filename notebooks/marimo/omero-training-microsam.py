@@ -8,7 +8,7 @@
 
 import marimo
 
-__generated_with = "0.19.2"
+__generated_with = "0.19.11"
 app = marimo.App(width="medium")
 
 
@@ -54,11 +54,27 @@ def _(mo):
         omero_secure,
         connect_button,
     ])
-    return omero_host, omero_username, omero_password, omero_group, omero_secure, connect_button
+    return (
+        connect_button,
+        omero_group,
+        omero_host,
+        omero_password,
+        omero_secure,
+        omero_username,
+    )
 
 
 @app.cell
-def _(connect_button, omero_host, omero_username, omero_password, omero_group, omero_secure, establish_connection, mo):
+def _(
+    connect_button,
+    establish_connection,
+    mo,
+    omero_group,
+    omero_host,
+    omero_password,
+    omero_secure,
+    omero_username,
+):
     conn = None
     connection_status = "Not connected"
 
@@ -131,7 +147,7 @@ def _(conn, container_id, container_type, list_annotation_tables, mo):
 
     | Table ID | Name | Progress |
     |----------|------|----------|
-{rows}
+    {rows}
                 """
             else:
                 tables_info = "No annotation tables found in this container."
@@ -150,6 +166,32 @@ def _(mo):
 
 
 @app.cell
+def _(
+    conn,
+    container_id,
+    container_type,
+    download_annotation_config_from_omero,
+    mo,
+    table_id,
+):
+    annotation_config = None
+    _config_info = ""
+    if conn and conn.isConnected() and table_id.value > 0 and container_id.value > 0:
+        try:
+            annotation_config = download_annotation_config_from_omero(
+                conn, container_type.value.capitalize(), int(container_id.value)
+            )
+            if annotation_config:
+                _config_info = f"Loaded config **{annotation_config.name}** (model: `{annotation_config.ai_model.pretrained_from}`)"
+            else:
+                _config_info = "No annotation config found on this container — using defaults."
+        except Exception as e:
+            _config_info = f"Could not load config: {e}"
+    mo.md(_config_info) if _config_info else mo.md("")
+    return (annotation_config,)
+
+
+@app.cell
 def _(mo):
     mo.md("""
     ## 3. Training Configuration
@@ -158,33 +200,48 @@ def _(mo):
 
 
 @app.cell
-def _(Path, datetime, mo):
+def _(Path, annotation_config, datetime, mo):
     _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    _default_name = annotation_config.name if annotation_config else f"micro_sam_training_{_timestamp}"
+    _default_model = (annotation_config.ai_model.pretrained_from if annotation_config else "vit_b_lm") or "vit_b_lm"
+    _default_patch = (
+        f"{annotation_config.spatial_coverage.patch_size[0]}, {annotation_config.spatial_coverage.patch_size[1]}"
+        if annotation_config and annotation_config.spatial_coverage.patch_size else "512, 512"
+    )
+    _default_val_split = annotation_config.training.validation_fraction if annotation_config else 0.2
+
     output_directory = mo.ui.text(
         value=str(Path.home() / "omero-annotate-ai" / "micro-sam_models" / f"micro-sam-{_timestamp}"),
         label="Output Directory",
         full_width=True,
     )
-    model_name = mo.ui.text(
-        value=f"micro_sam_training_{_timestamp}",
-        label="Model Name",
-    )
+    model_name = mo.ui.text(value=_default_name, label="Model Name")
     model_type = mo.ui.dropdown(
         options=["vit_b_lm", "vit_b", "vit_l", "vit_h"],
-        value="vit_b_lm",
+        value=_default_model,
         label="SAM Model",
     )
     epochs = mo.ui.slider(start=1, stop=200, value=10, label="Epochs (use 50+ for real training)")
     batch_size = mo.ui.slider(start=1, stop=8, value=1, label="Batch Size")
-    patch_shape = mo.ui.text(value="512, 512", label="Patch Shape (width, height)")
+    patch_shape = mo.ui.text(value=_default_patch, label="Patch Shape (width, height)")
+    validation_split = mo.ui.slider(start=0.05, stop=0.5, step=0.05, value=_default_val_split, label="Validation Split")
 
     mo.vstack([
         output_directory,
         mo.hstack([model_name, model_type], justify="start", gap=2),
         mo.hstack([epochs, batch_size], justify="start", gap=2),
-        patch_shape,
+        mo.hstack([patch_shape, validation_split], justify="start", gap=2),
     ])
-    return output_directory, model_name, model_type, epochs, batch_size, patch_shape
+    return (
+        batch_size,
+        epochs,
+        model_name,
+        model_type,
+        output_directory,
+        patch_shape,
+        validation_split,
+    )
 
 
 @app.cell
@@ -205,7 +262,17 @@ def _(mo):
 
 
 @app.cell
-def _(Path, conn, mo, output_directory, prepare_button, prepare_training_data_from_table, table_id):
+def _(
+    Path,
+    conn,
+    mo,
+    model_name,
+    output_directory,
+    prepare_button,
+    prepare_training_data_from_table,
+    table_id,
+    validation_split,
+):
     training_result = None
     mo.stop(not prepare_button.value, mo.md("Click 'Prepare Training Data' to download from OMERO"))
 
@@ -221,9 +288,10 @@ def _(Path, conn, mo, output_directory, prepare_button, prepare_training_data_fr
             training_result = prepare_training_data_from_table(
                 conn=conn,
                 table_id=int(table_id.value),
-                training_name=f"training_table_{int(table_id.value)}",
+                training_name=model_name.value,
                 output_dir=_out_dir,
                 clean_existing=True,
+                validation_split=validation_split.value,
             )
 
             stats_rows = "\n".join(f"    | {k} | {v} |" for k, v in training_result['stats'].items())
@@ -232,7 +300,7 @@ def _(Path, conn, mo, output_directory, prepare_button, prepare_training_data_fr
 
             | Statistic | Value |
             |-----------|-------|
-{stats_rows}
+    {stats_rows}
 
             - Training images: `{training_result['training_input']}`
             - Training labels: `{training_result['training_label']}`
@@ -260,7 +328,18 @@ def _(mo):
 
 
 @app.cell
-def _(batch_size, epochs, mo, model_name, model_type, patch_shape, parse_patch_size, run_training, setup_training, train_button, training_result):
+def _(
+    batch_size,
+    epochs,
+    mo,
+    model_name,
+    model_type,
+    patch_shape,
+    run_training,
+    setup_training,
+    train_button,
+    training_result,
+):
     mo.stop(not train_button.value, mo.md("Click 'Start Training' to begin micro-SAM fine-tuning"))
 
     if training_result is None:
@@ -299,6 +378,7 @@ def _(batch_size, epochs, mo, model_name, model_type, patch_shape, parse_patch_s
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -306,6 +386,7 @@ def _():
 def _():
     from pathlib import Path
     from datetime import datetime
+
     return Path, datetime
 
 
@@ -316,7 +397,10 @@ def _():
         setup_training,
         run_training,
     )
-    from omero_annotate_ai.omero.omero_functions import list_annotation_tables
+    from omero_annotate_ai.omero.omero_functions import (
+        list_annotation_tables,
+        download_annotation_config_from_omero,
+    )
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
@@ -326,10 +410,11 @@ def _():
     return (
         OMERO_AVAILABLE,
         SimpleOMEROConnection,
+        download_annotation_config_from_omero,
         list_annotation_tables,
         prepare_training_data_from_table,
-        setup_training,
         run_training,
+        setup_training,
     )
 
 
@@ -353,20 +438,19 @@ def _(OMERO_AVAILABLE, SimpleOMEROConnection):
         if conn:
             conn.c.enableKeepAlive(60)
         return conn
+
     return (establish_connection,)
 
 
-@app.cell
-def _():
-    def parse_patch_size(text):
-        try:
-            parts = [int(x.strip()) for x in text.split(",")]
-            if len(parts) == 2:
-                return parts
-            return [512, 512]
-        except ValueError:
-            return [512, 512]
-    return (parse_patch_size,)
+@app.function
+def parse_patch_size(text):
+    try:
+        parts = [int(x.strip()) for x in text.split(",")]
+        if len(parts) == 2:
+            return parts
+        return [512, 512]
+    except ValueError:
+        return [512, 512]
 
 
 if __name__ == "__main__":
