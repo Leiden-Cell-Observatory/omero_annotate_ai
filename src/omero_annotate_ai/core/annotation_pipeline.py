@@ -66,6 +66,12 @@ class AnnotationPipeline:
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
+        # If no explicit path, derive from config name and output directory
+        if self.config_file_path is None and config.name and config.output.output_directory:
+            self.config_file_path = (
+                Path(config.output.output_directory)
+                / f"annotation_config_{config.name}.yaml"
+            )
         self._validate_setup()
 
     def set_table_id(self, table_id: int) -> None:
