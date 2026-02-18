@@ -568,44 +568,15 @@ def list_annotation_tables(
         container_id: Container ID to search in
 
     Returns:
-        List of dictionaries with table information including progress
+        List of dictionaries with table information, sorted newest first
     """
     from .omero_utils import list_user_tables
 
-    # Get all tables in the container
     all_tables = list_user_tables(
         conn, container_type=container_type, container_id=container_id
     )
-
-    # Include all tables attached to the container
-    annotation_tables = []
-
-    for table_info in all_tables:
-        table_name = table_info.get("name", "")
-
-        # Include ALL tables attached to this container (no name filtering)
-        # Add progress information
-        try:
-            progress_info = analyze_table_completion_status(conn, table_info["id"])
-            table_info.update(progress_info)
-        except Exception as e:
-            print(f"Could not analyze table {table_name}: {e}")
-            table_info.update(
-                {
-                    "total_units": 0,
-                    "completed_units": 0,
-                    "progress_percent": 0,
-                    "is_complete": False,
-                    "status": "error",
-                }
-            )
-
-        annotation_tables.append(table_info)
-
-    # Sort by creation date (newest first)
-    annotation_tables.sort(key=lambda x: x.get("created_date", ""), reverse=True)
-
-    return annotation_tables
+    all_tables.sort(key=lambda x: x.get("created", ""), reverse=True)
+    return all_tables
 
 
 def generate_unique_table_name(

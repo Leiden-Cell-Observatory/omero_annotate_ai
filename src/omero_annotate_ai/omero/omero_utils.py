@@ -69,7 +69,7 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
             
     except Exception as e:
         print(f"Error listing tables: {e}")
-    
+
     return tables
 
 
