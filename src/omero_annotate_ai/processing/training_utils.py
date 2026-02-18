@@ -218,12 +218,11 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
         with_segmentation_decoder=train_instance_segmentation,
         patch_shape=patch_shape_3d,
         batch_size=config["batch_size"],
-        is_seg_dataset=True,
         shuffle=True,
         raw_transform=sam_training.identity,
         sampler=sampler,
     )
-    
+
     val_loader = sam_training.default_sam_loader(
         raw_paths=str(config["val_input"]),
         raw_key="*.tif",
@@ -232,7 +231,6 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
         with_segmentation_decoder=train_instance_segmentation,
         patch_shape=patch_shape_3d,
         batch_size=config["batch_size"],
-        is_seg_dataset=True,
         shuffle=True,
         raw_transform=sam_training.identity,
         sampler=sampler,
