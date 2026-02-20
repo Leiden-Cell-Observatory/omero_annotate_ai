@@ -900,3 +900,199 @@ class TestConsistentFolderStructure:
             assert "file_mapping" in result
         finally:
             shutil.rmtree(temp_dir)
+
+
+@pytest.mark.unit
+class TestReorganizeSeparateChannels:
+    """Test reorganize_local_data_for_training with separate label/training channels."""
+
+    @pytest.fixture
+    def separate_channel_config(self):
+        """Config with label_channel=0 and training_channels=[1]."""
+        config = AnnotationConfig(name="separate_channel_test")
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1]
+
+        for i in range(2):
+            ann = ImageAnnotation(
+                image_id=100 + i,
+                image_name=f"image_{i}",
+                annotation_id=f"ann_{i}",
+                timepoint=0,
+                z_slice=0,
+                category="training",
+                channel=0,
+            )
+            ann.processed = True
+            config.annotations.append(ann)
+
+        ann = ImageAnnotation(
+            image_id=200,
+            image_name="val_image",
+            annotation_id="ann_val",
+            timepoint=0,
+            z_slice=0,
+            category="validation",
+            channel=0,
+        )
+        ann.processed = True
+        config.annotations.append(ann)
+
+        return config
+
+    @pytest.fixture
+    def annotation_dir_with_train_files(self, separate_channel_config):
+        """Directory with both label-channel and training-channel files."""
+        temp_dir = Path(tempfile.mkdtemp())
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        for ann in separate_channel_config.annotations:
+            # Label-channel image (fluorescence)
+            (input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
+            # Training-channel image (e.g. brightfield)
+            (input_dir / f"{ann.annotation_id}_train.tif").write_text("train channel data")
+            # Mask
+            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
+
+        yield temp_dir
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def annotation_dir_label_only(self, separate_channel_config):
+        """Directory with only label-channel files (no _train files, simulating old pipeline)."""
+        temp_dir = Path(tempfile.mkdtemp())
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        for ann in separate_channel_config.annotations:
+            (input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
+            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
+
+        yield temp_dir
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+    def test_detects_separate_channels(self, separate_channel_config):
+        """uses_separate_channels() returns True for this config."""
+        assert separate_channel_config.spatial_coverage.uses_separate_channels() is True
+
+    def test_creates_label_input_dirs(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Reorganization creates *_label_input directories when separate channels."""
+        result = reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        base = annotation_dir_with_train_files
+        assert (base / "training_label_input").exists()
+        assert (base / "val_label_input").exists()
+
+    def test_label_channel_goes_to_label_input(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Label-channel images (*.tif) are placed in *_label_input/, not *_input/."""
+        reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        base = annotation_dir_with_train_files
+        label_input_files = list((base / "training_label_input").glob("*.tif"))
+        assert len(label_input_files) == 2
+        # Content should be the label-channel data
+        assert label_input_files[0].read_text() == "label channel data"
+
+    def test_training_channel_goes_to_input(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Training-channel images (*_train.tif) are placed in *_input/."""
+        reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        base = annotation_dir_with_train_files
+        input_files = list((base / "training_input").glob("*.tif"))
+        assert len(input_files) == 2
+        # Content should be the training-channel data
+        assert input_files[0].read_text() == "train channel data"
+
+    def test_stats_count_label_input(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Stats include n_training_label_input and n_val_label_input counts."""
+        result = reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        stats = result["stats"]
+        assert stats["n_training_label_input"] == 2
+        assert stats["n_val_label_input"] == 1
+        assert stats["n_training_images"] == 2
+        assert stats["n_val_images"] == 1
+
+    def test_missing_train_files_reported(
+        self, annotation_dir_label_only, separate_channel_config
+    ):
+        """Missing _train.tif files increment n_missing_input and don't crash."""
+        result = reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_label_only,
+            file_mode="copy",
+        )
+        stats = result["stats"]
+        # Label-channel images should still be placed in label_input
+        assert stats["n_training_label_input"] == 2
+        # Training-channel images are missing
+        assert stats["n_missing_input"] == 3  # 2 training + 1 validation
+
+    def test_single_channel_unchanged(self):
+        """Single-channel config (label == training) preserves existing behaviour."""
+        config = AnnotationConfig(name="single_channel_test")
+        # No separate channels: label_channel and training_channels both None
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+        for i in range(2):
+            ann = ImageAnnotation(
+                image_id=100 + i,
+                image_name=f"image_{i}",
+                annotation_id=f"sc_ann_{i}",
+                timepoint=0,
+                z_slice=0,
+                category="training",
+                channel=0,
+            )
+            ann.processed = True
+            config.annotations.append(ann)
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            input_dir = temp_dir / "input"
+            output_dir = temp_dir / "output"
+            input_dir.mkdir()
+            output_dir.mkdir()
+
+            for ann in config.annotations:
+                (input_dir / f"{ann.annotation_id}.tif").write_text("image data")
+                (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
+
+            result = reorganize_local_data_for_training(
+                config=config, annotation_dir=temp_dir, file_mode="copy"
+            )
+            stats = result["stats"]
+            assert stats["n_training_images"] == 2
+            assert stats["n_training_labels"] == 2
+            # No label_input dirs should be created
+            assert not (temp_dir / "training_label_input").exists()
+        finally:
+            shutil.rmtree(temp_dir)

@@ -1300,10 +1300,13 @@ def reorganize_local_data_for_training(
     stats: Dict[str, Any] = {
         "n_training_images": 0,
         "n_training_labels": 0,
+        "n_training_label_input": 0,
         "n_val_images": 0,
         "n_val_labels": 0,
+        "n_val_label_input": 0,
         "n_test_images": 0,
         "n_test_labels": 0,
+        "n_test_label_input": 0,
         "n_skipped": 0,
         "n_missing_input": 0,
         "n_missing_label": 0,
@@ -1312,6 +1315,9 @@ def reorganize_local_data_for_training(
 
     file_mapping: Dict[str, Dict[str, Any]] = {}
     category_counters: Dict[str, int] = {"training": 0, "validation": 0, "test": 0}
+
+    # Build folder structure once (consistent with directory creation above)
+    folder_structure = _get_standard_folder_structure(uses_separate_channels, include_test)
 
     for ann in processed_annotations:
         category = ann.category
@@ -1328,11 +1334,15 @@ def reorganize_local_data_for_training(
         annotation_id = ann.annotation_id
 
         # Find source files
-        # Input image: input/{annotation_id}.tif
-        input_file = input_source / f"{annotation_id}.tif"
-        if not input_file.exists():
-            # Try .tiff extension
-            input_file = input_source / f"{annotation_id}.tiff"
+        # Label-channel image (always present): input/{annotation_id}.tif
+        label_input_file = input_source / f"{annotation_id}.tif"
+        if not label_input_file.exists():
+            label_input_file = input_source / f"{annotation_id}.tiff"
+
+        # Training-channel image (present when separate channels were saved): input/{annotation_id}_train.tif
+        train_input_file = input_source / f"{annotation_id}_train.tif"
+        if not train_input_file.exists():
+            train_input_file = input_source / f"{annotation_id}_train.tiff"
 
         # Label/mask file: output/{annotation_id}_mask.tif
         label_file = output_source / f"{annotation_id}_mask.tif"
@@ -1343,59 +1353,116 @@ def reorganize_local_data_for_training(
         idx = category_counters[category]
         category_counters[category] += 1
 
-        # Determine destination paths using standard folder names from helper
-        folder_structure = _get_standard_folder_structure(
-            uses_separate_channels, include_test
-        )
+        # Determine destination folder names
         input_folder = folder_structure.get(f"{category}_input", f"{category}_input")
         label_folder = folder_structure.get(f"{category}_label", f"{category}_label")
 
-        input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
         label_dest = output_dir / label_folder / f"label_{idx:05d}.tif"
 
         # Track mapping
         file_mapping[annotation_id] = {
             "category": category,
             "index": idx,
-            "input_dest": str(input_dest),
             "label_dest": str(label_dest),
         }
 
-        # Process input file
-        if input_file.exists():
+        if uses_separate_channels:
+            # Separate-channel workflow:
+            #   - label-channel image (fluorescence) → *_label_input/
+            #   - training-channel image (e.g. brightfield) → *_input/
+            label_input_folder = folder_structure.get(
+                f"{category}_label_input", f"{category}_label_input"
+            )
+            label_input_dest = output_dir / label_input_folder / f"input_{idx:05d}.tif"
+            input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
+
+            file_mapping[annotation_id]["input_dest"] = str(input_dest)
+            file_mapping[annotation_id]["label_input_dest"] = str(label_input_dest)
+
+            # Copy label-channel image → *_label_input/
+            if label_input_file.exists():
+                label_input_dest.parent.mkdir(parents=True, exist_ok=True)
+                operation = _create_file_link_or_copy(
+                    label_input_file, label_input_dest, file_mode, logger
+                )
+                stats["file_operations"][operation] = (
+                    stats["file_operations"].get(operation, 0) + 1
+                )
+                if category == "training":
+                    stats["n_training_label_input"] += 1
+                elif category == "validation":
+                    stats["n_val_label_input"] += 1
+                elif category == "test":
+                    stats["n_test_label_input"] += 1
+                logger.debug(
+                    f"[{operation}] {label_input_file.name} -> {label_input_dest.name} (label_input)"
+                )
+            else:
+                logger.warning(f"Label-channel input file not found: {label_input_file}")
+
+            # Copy training-channel image → *_input/
+            if train_input_file.exists():
+                input_dest.parent.mkdir(parents=True, exist_ok=True)
+                operation = _create_file_link_or_copy(
+                    train_input_file, input_dest, file_mode, logger
+                )
+                stats["file_operations"][operation] = (
+                    stats["file_operations"].get(operation, 0) + 1
+                )
+                if category == "training":
+                    stats["n_training_images"] += 1
+                elif category == "validation":
+                    stats["n_val_images"] += 1
+                elif category == "test":
+                    stats["n_test_images"] += 1
+                logger.debug(
+                    f"[{operation}] {train_input_file.name} -> {input_dest.name} (train_input)"
+                )
+            else:
+                stats["n_missing_input"] += 1
+                logger.warning(
+                    f"Training-channel input file not found: {train_input_file}. "
+                    "Re-run the annotation pipeline to generate training channel images."
+                )
+        else:
+            # Single-channel workflow: label-channel image goes directly to *_input/
+            input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
+            file_mapping[annotation_id]["input_dest"] = str(input_dest)
+
+            if label_input_file.exists():
+                input_dest.parent.mkdir(parents=True, exist_ok=True)
+                operation = _create_file_link_or_copy(
+                    label_input_file, input_dest, file_mode, logger
+                )
+                stats["file_operations"][operation] = (
+                    stats["file_operations"].get(operation, 0) + 1
+                )
+                if category == "training":
+                    stats["n_training_images"] += 1
+                elif category == "validation":
+                    stats["n_val_images"] += 1
+                elif category == "test":
+                    stats["n_test_images"] += 1
+                logger.debug(f"[{operation}] {label_input_file.name} -> {input_dest.name}")
+            else:
+                stats["n_missing_input"] += 1
+                logger.warning(f"Input file not found: {label_input_file}")
+
+        # Process label/mask file (same for both workflows)
+        if label_file.exists():
+            label_dest.parent.mkdir(parents=True, exist_ok=True)
             operation = _create_file_link_or_copy(
-                input_file, input_dest, file_mode, logger
+                label_file, label_dest, file_mode, logger
             )
             stats["file_operations"][operation] = (
                 stats["file_operations"].get(operation, 0) + 1
             )
-
-            # Update stats based on category
-            if category == "training":
-                stats["n_training_images"] += 1
-            elif category == "validation":
-                stats["n_val_images"] += 1
-            elif category == "test":
-                stats["n_test_images"] += 1
-
-            logger.debug(f"[{operation}] {input_file.name} -> {input_dest.name}")
-        else:
-            stats["n_missing_input"] += 1
-            logger.warning(f"Input file not found: {input_file}")
-
-        # Process label file
-        if label_file.exists():
-            operation = _create_file_link_or_copy(
-                label_file, label_dest, file_mode, logger
-            )
-
             if category == "training":
                 stats["n_training_labels"] += 1
             elif category == "validation":
                 stats["n_val_labels"] += 1
             elif category == "test":
                 stats["n_test_labels"] += 1
-
             logger.debug(f"[{operation}] {label_file.name} -> {label_dest.name}")
         else:
             stats["n_missing_label"] += 1
@@ -1414,12 +1481,24 @@ def reorganize_local_data_for_training(
         stats["n_training_images"] + stats["n_val_images"] + stats["n_test_images"]
     )
     logger.info(f"Reorganization complete: {total_processed} images processed")
-    logger.info(
-        f"  Training: {stats['n_training_images']} images, {stats['n_training_labels']} labels"
-    )
-    logger.info(
-        f"  Validation: {stats['n_val_images']} images, {stats['n_val_labels']} labels"
-    )
+    if uses_separate_channels:
+        logger.info(
+            f"  Training: {stats['n_training_images']} train images, "
+            f"{stats['n_training_label_input']} label-channel images, "
+            f"{stats['n_training_labels']} labels"
+        )
+        logger.info(
+            f"  Validation: {stats['n_val_images']} train images, "
+            f"{stats['n_val_label_input']} label-channel images, "
+            f"{stats['n_val_labels']} labels"
+        )
+    else:
+        logger.info(
+            f"  Training: {stats['n_training_images']} images, {stats['n_training_labels']} labels"
+        )
+        logger.info(
+            f"  Validation: {stats['n_val_images']} images, {stats['n_val_labels']} labels"
+        )
     if include_test:
         logger.info(
             f"  Test: {stats['n_test_images']} images, {stats['n_test_labels']} labels"
