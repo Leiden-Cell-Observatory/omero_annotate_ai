@@ -76,9 +76,17 @@ docs = [
     "mkdocs-autorefs>=0.5.0",
     "griffe-pydantic>=1.1.7",
 ]
+napari-plugin = [
+    "npe2>=0.7",
+    "qtpy>=2.4",
+    # napari, micro-sam, and omero-napari must be installed via conda-forge
+]
 all = [
     "omero-annotate-ai[notebooks,microsam]",
 ]
+
+[project.entry-points."napari.manifest"]
+omero-annotate-ai = "omero_annotate_ai.napari_plugin:napari.yaml"
 
 [project.urls]
 Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
