@@ -1,0 +1,12 @@
+name: omero-annotate-ai
+display_name: OMERO Annotate AI
+schema_version: 0.2.1
+contributions:
+  widgets:
+    - display_name: OMERO Annotate AI
+      autogenerate: false
+      command: omero-annotate-ai.widget
+  commands:
+    - id: omero-annotate-ai.widget
+      title: Open OMERO Annotate AI
+      python_name: omero_annotate_ai.napari_plugin._widget:OMEROAnnotateWidget

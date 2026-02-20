@@ -73,6 +73,9 @@ class AnnotationPipeline:
                 / f"annotation_config_{config.name}.yaml"
             )
         self._validate_setup()
+        # Optional: set by the napari plugin to reuse an existing viewer
+        # instead of spawning a new one and calling napari.run().
+        self._napari_viewer = None
 
     def set_table_id(self, table_id: int) -> None:
         """Update the current table ID and sync to config."""
@@ -484,20 +487,27 @@ class AnnotationPipeline:
             model_type = self.config.ai_model.pretrained_from
 
     
+            # Use an existing napari viewer if one was injected (e.g. by the
+            # napari plugin), otherwise let image_series_annotator create its own.
+            _external_viewer = getattr(self, "_napari_viewer", None)
+
             # Run image series annotator with explicit napari.run() call
             viewer = image_series_annotator(
                 images=images,
                 output_folder=str(annotations_path),
                 model_type=model_type,
-                viewer=None,  # Let it create its own viewer
+                viewer=_external_viewer,
                 return_viewer=True,  # Important: get the viewer back
                 embedding_path=str(embedding_path),
                 is_volumetric=self.config.spatial_coverage.three_d,
                 skip_segmented=True,
             )
 
-            # Explicitly start the event loop - this will block until viewer is closed
-            napari.run()
+            # Only block the event loop when we own the viewer (notebook mode).
+            # When running inside napari as a plugin the viewer's event loop is
+            # already running, so calling napari.run() again would deadlock.
+            if _external_viewer is None:
+                napari.run()
 
         finally:
             # Always restore the original setting
