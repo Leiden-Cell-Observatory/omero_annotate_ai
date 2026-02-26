@@ -1096,3 +1096,231 @@ class TestReorganizeSeparateChannels:
             assert not (temp_dir / "training_label_input").exists()
         finally:
             shutil.rmtree(temp_dir)
+
+
+@pytest.mark.unit
+class TestExternalClassificationWorkflow:
+    """Tests for the external-label workflow.
+
+    Scenario: user runs CellPose + intensity thresholding in a separate notebook,
+    uploads class label maps (integer masks: 0=bg, 1/2/3=class) as FileAnnotations
+    to OMERO, and stores the FileAnnotation IDs in the tracking table's label_id column.
+    omero_annotate_ai then exports Ch0 as training input and the class label map as
+    training ground truth.
+    """
+
+    @pytest.fixture
+    def patch_df(self):
+        """DataFrame using patch mode (avoids the no_pixels image dimension lookup)."""
+        return pd.DataFrame(
+            {
+                "image_id": [1],
+                "z_slice": [0],
+                "channel": [0],
+                "timepoint": [0],
+                "is_patch": [True],   # patch=True avoids get_image(no_pixels=True) call
+                "patch_x": [0],
+                "patch_y": [0],
+                "patch_width": [256],
+                "patch_height": [256],
+                "is_volumetric": [False],
+                "label_id": ["None"],
+            }
+        )
+
+    def test_label_id_as_string_none_is_skipped(self, patch_df):
+        """label_id stored as string 'None' (from OMERO table) should not crash."""
+        from omero_annotate_ai.processing.training_functions import (
+            _prepare_dataset_from_table,
+        )
+        import tempfile
+        from unittest.mock import Mock, patch
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            mock_conn = Mock()
+            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
+            with patch(
+                "omero_annotate_ai.processing.training_functions.ezomero"
+            ) as mock_ez:
+                mock_ez.get_image.return_value = (None, fake_img)
+                input_dir, label_dir = _prepare_dataset_from_table(
+                    conn=mock_conn,
+                    df=patch_df,
+                    output_dir=temp_dir,
+                    subset_type="training",
+                    tmp_dir=temp_dir / "tmp",
+                )
+            # No label downloaded — no crash
+            assert len(list(label_dir.glob("*.tif"))) == 0
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_label_id_as_string_integer_is_used(self, patch_df):
+        """label_id stored as string '101' (from OMERO table) should be parsed to int."""
+        from omero_annotate_ai.processing.training_functions import (
+            _prepare_dataset_from_table,
+        )
+        import tempfile
+        from unittest.mock import Mock, patch
+        from tifffile import imwrite as tiff_imwrite
+
+        df = patch_df.copy()
+        df["label_id"] = ["101"]  # String "101" as stored in OMERO table
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            label_tiff = temp_dir / "label.tif"
+            label_data = np.array([[0, 1, 2, 3]], dtype=np.uint8)
+            tiff_imwrite(str(label_tiff), label_data)
+
+            mock_conn = Mock()
+            mock_file_ann = Mock()
+            mock_file_ann.getFile.return_value.getName.return_value = "label.tif"
+            mock_conn.getObject.return_value = mock_file_ann
+
+            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
+            with patch(
+                "omero_annotate_ai.processing.training_functions.ezomero"
+            ) as mock_ez:
+                mock_ez.get_image.return_value = (None, fake_img)
+                mock_ez.get_file_annotation.return_value = str(label_tiff)
+                input_dir, label_dir = _prepare_dataset_from_table(
+                    conn=mock_conn,
+                    df=df,
+                    output_dir=temp_dir,
+                    subset_type="training",
+                    tmp_dir=temp_dir / "tmp",
+                )
+            # Label was downloaded — getObject called with int 101
+            mock_conn.getObject.assert_called_once_with("FileAnnotation", 101)
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_multiclass_label_pixel_values_preserved(self, patch_df):
+        """Integer pixel values in a multi-class label TIFF are not remapped."""
+        from omero_annotate_ai.processing.training_functions import (
+            _prepare_dataset_from_table,
+        )
+        import tempfile
+        from unittest.mock import Mock, patch
+        from tifffile import imwrite as tiff_imwrite, imread as tiff_imread
+
+        df = patch_df.copy()
+        df["label_id"] = [101]  # integer label_id
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            # Create a class label map with values 0, 1, 2, 3
+            label_tiff = temp_dir / "class_label.tif"
+            label_data = np.array([[0, 1, 2, 3], [3, 2, 1, 0]], dtype=np.uint8)
+            tiff_imwrite(str(label_tiff), label_data)
+
+            mock_conn = Mock()
+            mock_file_ann = Mock()
+            mock_file_ann.getFile.return_value.getName.return_value = "class_label.tif"
+            mock_conn.getObject.return_value = mock_file_ann
+
+            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
+            with patch(
+                "omero_annotate_ai.processing.training_functions.ezomero"
+            ) as mock_ez:
+                mock_ez.get_image.return_value = (None, fake_img)
+                mock_ez.get_file_annotation.return_value = str(label_tiff)
+                input_dir, label_dir = _prepare_dataset_from_table(
+                    conn=mock_conn,
+                    df=df,
+                    output_dir=temp_dir,
+                    subset_type="training",
+                    tmp_dir=temp_dir / "tmp",
+                )
+
+            # Check saved label has same pixel values
+            saved_label = tiff_imread(str(label_dir / "label_00000.tif"))
+            assert set(np.unique(saved_label)) == {0, 1, 2, 3}
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_label_input_id_round_trips_through_dataframe(self):
+        """label_input_id is serialized and deserialized correctly via to/from_dataframe."""
+        config = AnnotationConfig(name="classification_workflow")
+        ann = ImageAnnotation(
+            image_id=42,
+            image_name="test_image",
+            timepoint=0,
+            z_slice=0,
+            channel=0,
+            label_id=101,
+            label_input_id=202,
+            processed=True,
+        )
+        config.annotations.append(ann)
+
+        df = config.to_dataframe()
+        assert "label_input_id" in df.columns
+        assert df.iloc[0]["label_input_id"] == "202"
+
+        config2 = AnnotationConfig(name="classification_workflow")
+        config2.from_dataframe(df)
+        assert config2.annotations[0].label_input_id == 202
+
+    def test_label_input_id_none_round_trips(self):
+        """label_input_id=None serializes as 'None' and deserializes back to None."""
+        config = AnnotationConfig(name="classification_workflow")
+        ann = ImageAnnotation(
+            image_id=42,
+            image_name="test_image",
+            timepoint=0,
+            z_slice=0,
+            channel=0,
+            label_id=101,
+            label_input_id=None,
+            processed=True,
+        )
+        config.annotations.append(ann)
+
+        df = config.to_dataframe()
+        assert df.iloc[0]["label_input_id"] == "None"
+
+        config2 = AnnotationConfig(name="classification_workflow")
+        config2.from_dataframe(df)
+        assert config2.annotations[0].label_input_id is None
+
+    def test_classification_annotation_type_is_valid(self):
+        """annotation_type='classification' and 'semantic_segmentation' are valid values."""
+        from omero_annotate_ai.core.annotation_config import AnnotationMethodology
+
+        m = AnnotationMethodology(
+            annotation_type="classification",
+            annotation_criteria="3-class cell type classification",
+        )
+        assert m.annotation_type == "classification"
+
+        m2 = AnnotationMethodology(
+            annotation_type="semantic_segmentation",
+            annotation_criteria="semantic segmentation",
+        )
+        assert m2.annotation_type == "semantic_segmentation"
+
+    def test_external_workflow_config_yaml_roundtrip(self):
+        """Config describing the external classification workflow serializes to valid YAML."""
+        import yaml
+
+        config = AnnotationConfig(name="cell_classification_workflow")
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [0]
+        config.annotation_methodology.annotation_type = "classification"
+        config.annotation_methodology.annotation_method = "automatic"
+        config.annotation_methodology.annotation_criteria = (
+            "CellPose segmentation + intensity thresholding on Ch1/Ch2 into 3 classes"
+        )
+
+        yaml_str = config.to_yaml()
+        config2 = AnnotationConfig.from_dict(yaml.safe_load(yaml_str))
+
+        assert config2.spatial_coverage.channels == [0, 1, 2]
+        assert config2.spatial_coverage.label_channel == 0
+        assert config2.spatial_coverage.training_channels == [0]
+        assert config2.annotation_methodology.annotation_type == "classification"
+        assert config2.annotation_methodology.annotation_method == "automatic"

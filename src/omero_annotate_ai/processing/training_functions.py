@@ -332,18 +332,6 @@ def prepare_training_data_from_table(
     created_dirs["val_input"] = val_input_dir
     created_dirs["val_label"] = val_label_dir
 
-    # Prepare validation data (uses training channel if specified)
-    val_input_dir, val_label_dir = _prepare_dataset_from_table(
-        conn,
-        val_images,
-        output_dir,
-        subset_type="val",
-        tmp_dir=tmp_dir,
-        train_channel=effective_train_channel,
-        logger=logger,
-        verbose=verbose,
-    )
-
     # If using separate channels, also prepare label channel images
     training_label_input_dir = None
     val_label_input_dir = None
@@ -1040,11 +1028,17 @@ def _prepare_dataset_from_table(
                         f"  Saved 2D TIFF to {output_path} with shape {img_8bit.shape}"
                     )
 
-            # Get label file (already normalized to int or NaN)
+            # Get label file - label_id may be int, float, or string "None"/"123"
             label_id_val = df.iloc[n]["label_id"]
+            label_id = None
             if pd.notna(label_id_val):
-                label_id = int(label_id_val)
-
+                str_val = str(label_id_val).strip()
+                if str_val not in ("None", "nan", ""):
+                    try:
+                        label_id = int(float(str_val))
+                    except (ValueError, TypeError):
+                        label_id = None
+            if label_id is not None:
                 try:
                     # First, check if the file annotation exists
                     if logger:
