@@ -900,3 +900,427 @@ class TestConsistentFolderStructure:
             assert "file_mapping" in result
         finally:
             shutil.rmtree(temp_dir)
+
+
+@pytest.mark.unit
+class TestReorganizeSeparateChannels:
+    """Test reorganize_local_data_for_training with separate label/training channels."""
+
+    @pytest.fixture
+    def separate_channel_config(self):
+        """Config with label_channel=0 and training_channels=[1]."""
+        config = AnnotationConfig(name="separate_channel_test")
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1]
+
+        for i in range(2):
+            ann = ImageAnnotation(
+                image_id=100 + i,
+                image_name=f"image_{i}",
+                annotation_id=f"ann_{i}",
+                timepoint=0,
+                z_slice=0,
+                category="training",
+                channel=0,
+            )
+            ann.processed = True
+            config.annotations.append(ann)
+
+        ann = ImageAnnotation(
+            image_id=200,
+            image_name="val_image",
+            annotation_id="ann_val",
+            timepoint=0,
+            z_slice=0,
+            category="validation",
+            channel=0,
+        )
+        ann.processed = True
+        config.annotations.append(ann)
+
+        return config
+
+    @pytest.fixture
+    def annotation_dir_with_train_files(self, separate_channel_config):
+        """Directory with both label-channel and training-channel files."""
+        temp_dir = Path(tempfile.mkdtemp())
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        for ann in separate_channel_config.annotations:
+            # Label-channel image (fluorescence)
+            (input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
+            # Training-channel image (e.g. brightfield)
+            (input_dir / f"{ann.annotation_id}_train.tif").write_text("train channel data")
+            # Mask
+            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
+
+        yield temp_dir
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+    @pytest.fixture
+    def annotation_dir_label_only(self, separate_channel_config):
+        """Directory with only label-channel files (no _train files, simulating old pipeline)."""
+        temp_dir = Path(tempfile.mkdtemp())
+        input_dir = temp_dir / "input"
+        output_dir = temp_dir / "output"
+        input_dir.mkdir()
+        output_dir.mkdir()
+
+        for ann in separate_channel_config.annotations:
+            (input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
+            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
+
+        yield temp_dir
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+    def test_detects_separate_channels(self, separate_channel_config):
+        """uses_separate_channels() returns True for this config."""
+        assert separate_channel_config.spatial_coverage.uses_separate_channels() is True
+
+    def test_creates_label_input_dirs(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Reorganization creates *_label_input directories when separate channels."""
+        result = reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        base = annotation_dir_with_train_files
+        assert (base / "training_label_input").exists()
+        assert (base / "val_label_input").exists()
+
+    def test_label_channel_goes_to_label_input(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Label-channel images (*.tif) are placed in *_label_input/, not *_input/."""
+        reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        base = annotation_dir_with_train_files
+        label_input_files = list((base / "training_label_input").glob("*.tif"))
+        assert len(label_input_files) == 2
+        # Content should be the label-channel data
+        assert label_input_files[0].read_text() == "label channel data"
+
+    def test_training_channel_goes_to_input(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Training-channel images (*_train.tif) are placed in *_input/."""
+        reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        base = annotation_dir_with_train_files
+        input_files = list((base / "training_input").glob("*.tif"))
+        assert len(input_files) == 2
+        # Content should be the training-channel data
+        assert input_files[0].read_text() == "train channel data"
+
+    def test_stats_count_label_input(
+        self, annotation_dir_with_train_files, separate_channel_config
+    ):
+        """Stats include n_training_label_input and n_val_label_input counts."""
+        result = reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_with_train_files,
+            file_mode="copy",
+        )
+        stats = result["stats"]
+        assert stats["n_training_label_input"] == 2
+        assert stats["n_val_label_input"] == 1
+        assert stats["n_training_images"] == 2
+        assert stats["n_val_images"] == 1
+
+    def test_missing_train_files_reported(
+        self, annotation_dir_label_only, separate_channel_config
+    ):
+        """Missing _train.tif files increment n_missing_input and don't crash."""
+        result = reorganize_local_data_for_training(
+            config=separate_channel_config,
+            annotation_dir=annotation_dir_label_only,
+            file_mode="copy",
+        )
+        stats = result["stats"]
+        # Label-channel images should still be placed in label_input
+        assert stats["n_training_label_input"] == 2
+        # Training-channel images are missing
+        assert stats["n_missing_input"] == 3  # 2 training + 1 validation
+
+    def test_single_channel_unchanged(self):
+        """Single-channel config (label == training) preserves existing behaviour."""
+        config = AnnotationConfig(name="single_channel_test")
+        # No separate channels: label_channel and training_channels both None
+        assert config.spatial_coverage.uses_separate_channels() is False
+
+        for i in range(2):
+            ann = ImageAnnotation(
+                image_id=100 + i,
+                image_name=f"image_{i}",
+                annotation_id=f"sc_ann_{i}",
+                timepoint=0,
+                z_slice=0,
+                category="training",
+                channel=0,
+            )
+            ann.processed = True
+            config.annotations.append(ann)
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            input_dir = temp_dir / "input"
+            output_dir = temp_dir / "output"
+            input_dir.mkdir()
+            output_dir.mkdir()
+
+            for ann in config.annotations:
+                (input_dir / f"{ann.annotation_id}.tif").write_text("image data")
+                (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
+
+            result = reorganize_local_data_for_training(
+                config=config, annotation_dir=temp_dir, file_mode="copy"
+            )
+            stats = result["stats"]
+            assert stats["n_training_images"] == 2
+            assert stats["n_training_labels"] == 2
+            # No label_input dirs should be created
+            assert not (temp_dir / "training_label_input").exists()
+        finally:
+            shutil.rmtree(temp_dir)
+
+
+@pytest.mark.unit
+class TestExternalClassificationWorkflow:
+    """Tests for the external-label workflow.
+
+    Scenario: user runs CellPose + intensity thresholding in a separate notebook,
+    uploads class label maps (integer masks: 0=bg, 1/2/3=class) as FileAnnotations
+    to OMERO, and stores the FileAnnotation IDs in the tracking table's label_id column.
+    omero_annotate_ai then exports Ch0 as training input and the class label map as
+    training ground truth.
+    """
+
+    @pytest.fixture
+    def patch_df(self):
+        """DataFrame using patch mode (avoids the no_pixels image dimension lookup)."""
+        return pd.DataFrame(
+            {
+                "image_id": [1],
+                "z_slice": [0],
+                "channel": [0],
+                "timepoint": [0],
+                "is_patch": [True],   # patch=True avoids get_image(no_pixels=True) call
+                "patch_x": [0],
+                "patch_y": [0],
+                "patch_width": [256],
+                "patch_height": [256],
+                "is_volumetric": [False],
+                "label_id": ["None"],
+            }
+        )
+
+    def test_label_id_as_string_none_is_skipped(self, patch_df):
+        """label_id stored as string 'None' (from OMERO table) should not crash."""
+        from omero_annotate_ai.processing.training_functions import (
+            _prepare_dataset_from_table,
+        )
+        import tempfile
+        from unittest.mock import Mock, patch
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            mock_conn = Mock()
+            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
+            with patch(
+                "omero_annotate_ai.processing.training_functions.ezomero"
+            ) as mock_ez:
+                mock_ez.get_image.return_value = (None, fake_img)
+                input_dir, label_dir = _prepare_dataset_from_table(
+                    conn=mock_conn,
+                    df=patch_df,
+                    output_dir=temp_dir,
+                    subset_type="training",
+                    tmp_dir=temp_dir / "tmp",
+                )
+            # No label downloaded — no crash
+            assert len(list(label_dir.glob("*.tif"))) == 0
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_label_id_as_string_integer_is_used(self, patch_df):
+        """label_id stored as string '101' (from OMERO table) should be parsed to int."""
+        from omero_annotate_ai.processing.training_functions import (
+            _prepare_dataset_from_table,
+        )
+        import tempfile
+        from unittest.mock import Mock, patch
+        from tifffile import imwrite as tiff_imwrite
+
+        df = patch_df.copy()
+        df["label_id"] = ["101"]  # String "101" as stored in OMERO table
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            label_tiff = temp_dir / "label.tif"
+            label_data = np.array([[0, 1, 2, 3]], dtype=np.uint8)
+            tiff_imwrite(str(label_tiff), label_data)
+
+            mock_conn = Mock()
+            mock_file_ann = Mock()
+            mock_file_ann.getFile.return_value.getName.return_value = "label.tif"
+            mock_conn.getObject.return_value = mock_file_ann
+
+            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
+            with patch(
+                "omero_annotate_ai.processing.training_functions.ezomero"
+            ) as mock_ez:
+                mock_ez.get_image.return_value = (None, fake_img)
+                mock_ez.get_file_annotation.return_value = str(label_tiff)
+                input_dir, label_dir = _prepare_dataset_from_table(
+                    conn=mock_conn,
+                    df=df,
+                    output_dir=temp_dir,
+                    subset_type="training",
+                    tmp_dir=temp_dir / "tmp",
+                )
+            # Label was downloaded — getObject called with int 101
+            mock_conn.getObject.assert_called_once_with("FileAnnotation", 101)
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_multiclass_label_pixel_values_preserved(self, patch_df):
+        """Integer pixel values in a multi-class label TIFF are not remapped."""
+        from omero_annotate_ai.processing.training_functions import (
+            _prepare_dataset_from_table,
+        )
+        import tempfile
+        from unittest.mock import Mock, patch
+        from tifffile import imwrite as tiff_imwrite, imread as tiff_imread
+
+        df = patch_df.copy()
+        df["label_id"] = [101]  # integer label_id
+
+        temp_dir = Path(tempfile.mkdtemp())
+        try:
+            # Create a class label map with values 0, 1, 2, 3
+            label_tiff = temp_dir / "class_label.tif"
+            label_data = np.array([[0, 1, 2, 3], [3, 2, 1, 0]], dtype=np.uint8)
+            tiff_imwrite(str(label_tiff), label_data)
+
+            mock_conn = Mock()
+            mock_file_ann = Mock()
+            mock_file_ann.getFile.return_value.getName.return_value = "class_label.tif"
+            mock_conn.getObject.return_value = mock_file_ann
+
+            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
+            with patch(
+                "omero_annotate_ai.processing.training_functions.ezomero"
+            ) as mock_ez:
+                mock_ez.get_image.return_value = (None, fake_img)
+                mock_ez.get_file_annotation.return_value = str(label_tiff)
+                input_dir, label_dir = _prepare_dataset_from_table(
+                    conn=mock_conn,
+                    df=df,
+                    output_dir=temp_dir,
+                    subset_type="training",
+                    tmp_dir=temp_dir / "tmp",
+                )
+
+            # Check saved label has same pixel values
+            saved_label = tiff_imread(str(label_dir / "label_00000.tif"))
+            assert set(np.unique(saved_label)) == {0, 1, 2, 3}
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_label_input_id_round_trips_through_dataframe(self):
+        """label_input_id is serialized and deserialized correctly via to/from_dataframe."""
+        config = AnnotationConfig(name="classification_workflow")
+        ann = ImageAnnotation(
+            image_id=42,
+            image_name="test_image",
+            timepoint=0,
+            z_slice=0,
+            channel=0,
+            label_id=101,
+            label_input_id=202,
+            processed=True,
+        )
+        config.annotations.append(ann)
+
+        df = config.to_dataframe()
+        assert "label_input_id" in df.columns
+        assert df.iloc[0]["label_input_id"] == "202"
+
+        config2 = AnnotationConfig(name="classification_workflow")
+        config2.from_dataframe(df)
+        assert config2.annotations[0].label_input_id == 202
+
+    def test_label_input_id_none_round_trips(self):
+        """label_input_id=None serializes as 'None' and deserializes back to None."""
+        config = AnnotationConfig(name="classification_workflow")
+        ann = ImageAnnotation(
+            image_id=42,
+            image_name="test_image",
+            timepoint=0,
+            z_slice=0,
+            channel=0,
+            label_id=101,
+            label_input_id=None,
+            processed=True,
+        )
+        config.annotations.append(ann)
+
+        df = config.to_dataframe()
+        assert df.iloc[0]["label_input_id"] == "None"
+
+        config2 = AnnotationConfig(name="classification_workflow")
+        config2.from_dataframe(df)
+        assert config2.annotations[0].label_input_id is None
+
+    def test_classification_annotation_type_is_valid(self):
+        """annotation_type='classification' and 'semantic_segmentation' are valid values."""
+        from omero_annotate_ai.core.annotation_config import AnnotationMethodology
+
+        m = AnnotationMethodology(
+            annotation_type="classification",
+            annotation_criteria="3-class cell type classification",
+        )
+        assert m.annotation_type == "classification"
+
+        m2 = AnnotationMethodology(
+            annotation_type="semantic_segmentation",
+            annotation_criteria="semantic segmentation",
+        )
+        assert m2.annotation_type == "semantic_segmentation"
+
+    def test_external_workflow_config_yaml_roundtrip(self):
+        """Config describing the external classification workflow serializes to valid YAML."""
+        import yaml
+
+        config = AnnotationConfig(name="cell_classification_workflow")
+        config.spatial_coverage.channels = [0, 1, 2]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [0]
+        config.annotation_methodology.annotation_type = "classification"
+        config.annotation_methodology.annotation_method = "automatic"
+        config.annotation_methodology.annotation_criteria = (
+            "CellPose segmentation + intensity thresholding on Ch1/Ch2 into 3 classes"
+        )
+
+        yaml_str = config.to_yaml()
+        config2 = AnnotationConfig.from_dict(yaml.safe_load(yaml_str))
+
+        assert config2.spatial_coverage.channels == [0, 1, 2]
+        assert config2.spatial_coverage.label_channel == 0
+        assert config2.spatial_coverage.training_channels == [0]
+        assert config2.annotation_methodology.annotation_type == "classification"
+        assert config2.annotation_methodology.annotation_method == "automatic"

@@ -513,7 +513,7 @@ class AnnotationPipeline:
         """Load image data from OMERO based on metadata."""
 
         timepoint = metadata["timepoint"]
-        channel = self.config.spatial_coverage.get_label_channel()
+        channel = metadata.get("channel_override", self.config.spatial_coverage.get_label_channel())
         is_volumetric = metadata.get("is_volumetric", False)
 
         if is_volumetric:
@@ -709,6 +709,10 @@ class AnnotationPipeline:
         All images are saved to a single 'input' folder. Category metadata
         is tracked in the config.yaml, not in folder structure.
 
+        When separate channels are configured (label_channel != training_channels),
+        also saves the training channel image as '{annotation_id}_train.tif' so
+        that reorganize_local_data_for_training can route it correctly.
+
         Args:
             meta: Metadata dictionary containing image information
             annotation_id: Unique annotation identifier
@@ -722,9 +726,22 @@ class AnnotationPipeline:
         output_path = Path(self.config.output.output_directory)
         input_folder = output_path / "input"
 
+        # Save label channel image (always)
         saved_path = self._save_training_image(image_obj, meta, annotation_id, input_folder)
         if saved_path is None:
             self._debug_print(f"Could not save original image for {annotation_id}")
+
+        # Save training channel image separately when channels differ
+        if self.config.spatial_coverage.uses_separate_channels():
+            training_channels = self.config.spatial_coverage.get_training_channels()
+            train_meta = {**meta, "channel_override": training_channels[0]}
+            train_path = self._save_training_image(
+                image_obj, train_meta, f"{annotation_id}_train", input_folder
+            )
+            if train_path is None:
+                self._debug_print(
+                    f"Could not save training channel image for {annotation_id}"
+                )
 
     def _save_image_to_disk(self, image_data: np.ndarray, file_path: Path) -> bool:
         """Save image data to disk using tifffile (preferred) or imageio fallback.

@@ -142,7 +142,8 @@ class AnnotationMethodology(BaseModel):
     """MIFA-compatible annotation methodology"""
 
     annotation_type: Literal[
-        "segmentation_mask", "bounding_box", "point", "classification"
+        "segmentation_mask", "bounding_box", "point", "classification",
+        "semantic_segmentation",
     ] = "segmentation_mask"
     annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = (
         Field(default=None, description="How annotations were produced")
@@ -724,6 +725,7 @@ class AnnotationConfig(BaseModel):
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
+                "label_input_id": _optional_int_to_str(annotation.label_input_id),
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
@@ -752,6 +754,7 @@ class AnnotationConfig(BaseModel):
             "annotation_created_at",
             "annotation_updated_at",
             "schema_attachment_id",
+            "label_input_id",
             "z_start",
             "z_end",
             "z_length",
@@ -833,6 +836,12 @@ class AnnotationConfig(BaseModel):
             )
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
+
+            label_input_id = _str_to_optional_int(
+                str(row.get("label_input_id", "None"))
+            )
+            if label_input_id is not None:
+                annotation_data["label_input_id"] = label_input_id
 
             # Handle timestamps - keep as string
             created_at_str = str(row.get("annotation_created_at", "None"))
