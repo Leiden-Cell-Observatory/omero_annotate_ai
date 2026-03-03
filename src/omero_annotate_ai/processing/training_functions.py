@@ -1328,15 +1328,29 @@ def reorganize_local_data_for_training(
         annotation_id = ann.annotation_id
 
         # Find source files
-        # Label-channel image (always present): input/{annotation_id}.tif
-        label_input_file = input_source / f"{annotation_id}.tif"
-        if not label_input_file.exists():
-            label_input_file = input_source / f"{annotation_id}.tiff"
+        # Label-channel image: input/label_input/{annotation_id}.tif (new layout)
+        # or input/{annotation_id}.tif (legacy flat layout)
+        label_subfolder = input_source / "label_input"
+        if label_subfolder.exists():
+            label_input_file = label_subfolder / f"{annotation_id}.tif"
+            if not label_input_file.exists():
+                label_input_file = label_subfolder / f"{annotation_id}.tiff"
+        else:
+            label_input_file = input_source / f"{annotation_id}.tif"
+            if not label_input_file.exists():
+                label_input_file = input_source / f"{annotation_id}.tiff"
 
-        # Training-channel image (present when separate channels were saved): input/{annotation_id}_train.tif
-        train_input_file = input_source / f"{annotation_id}_train.tif"
-        if not train_input_file.exists():
-            train_input_file = input_source / f"{annotation_id}_train.tiff"
+        # Training-channel image: input/training_input/{annotation_id}.tif (new layout)
+        # or input/{annotation_id}_train.tif (legacy flat layout)
+        training_subfolder = input_source / "training_input"
+        if training_subfolder.exists():
+            train_input_file = training_subfolder / f"{annotation_id}.tif"
+            if not train_input_file.exists():
+                train_input_file = training_subfolder / f"{annotation_id}.tiff"
+        else:
+            train_input_file = input_source / f"{annotation_id}_train.tif"
+            if not train_input_file.exists():
+                train_input_file = input_source / f"{annotation_id}_train.tiff"
 
         # Label/mask file: output/{annotation_id}_mask.tif
         label_file = output_source / f"{annotation_id}_mask.tif"

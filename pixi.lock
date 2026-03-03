@@ -20779,8 +20779,8 @@ packages:
   timestamp: 1743700382939
 - pypi: ./
   name: omero-annotate-ai
-  version: 0.2.4
-  sha256: b7aaf3d52ecefc481a284311c3fe0c43092cee69d50bc46e46b57ca6f0074d1e
+  version: 0.2.5
+  sha256: 97c2137d96176f6ef1f03cea2b8e616cb6c1d24f0fd0d72d22b8b4cf97712b50
   requires_dist:
   - numpy>=1.21.0,<2.0
   - pandas>=1.3.0

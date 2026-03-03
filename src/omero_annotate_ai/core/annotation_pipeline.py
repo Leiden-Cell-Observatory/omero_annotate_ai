@@ -119,25 +119,39 @@ class AnnotationPipeline:
     def _setup_directories(self):
         """Create output directories for annotation workflow.
 
-        Creates a unified folder structure:
-        - input/: Source images for annotation
+        micro-SAM layout:
+        - input/: Source images for annotation (flat, named by annotation_id)
         - output/: Annotation masks
-        - sam_embeddings/: Embeddings (micro-SAM only)
+        - sam_embeddings/: Embeddings
 
-        Category metadata (training/validation/test) is tracked in config.yaml,
-        not in the folder structure.
+        Cellpose layout (separate channels):
+        - input/label_input/: Label-channel images (used for CellPose annotation)
+        - input/training_input/: Training-channel images (actual model input)
+        - output/: Segmentation masks
+
+        Cellpose layout (single channel):
+        - input/: Source images (flat)
+        - output/: Segmentation masks
+
+        Category metadata (training/validation/test) is tracked in config.yaml.
         """
         output_path = Path(self.config.output.output_directory)
 
-        dirs = [
-            output_path,
-            output_path / "input",   # Source images for annotation
-            output_path / "output",  # Annotation masks
-        ]
-
-        # Only create sam_embeddings for micro-SAM workflows
-        if self.config.ai_model.framework == "micro_sam":
-            dirs.append(output_path / "sam_embeddings")
+        if self.config.ai_model.framework == "cellpose" and self.config.spatial_coverage.uses_separate_channels():
+            dirs = [
+                output_path,
+                output_path / "input" / "label_input",
+                output_path / "input" / "training_input",
+                output_path / "output",
+            ]
+        else:
+            dirs = [
+                output_path,
+                output_path / "input",
+                output_path / "output",
+            ]
+            if self.config.ai_model.framework == "micro_sam":
+                dirs.append(output_path / "sam_embeddings")
 
         for dir_path in dirs:
             dir_path.mkdir(parents=True, exist_ok=True)
@@ -1424,33 +1438,48 @@ class AnnotationPipeline:
     def _save_images_for_cellpose(self, processing_units: List[Tuple]) -> None:
         """Save images locally for Cellpose training.
 
-        All images are saved to a single 'input' folder. Category metadata
-        is tracked in the config.yaml, not in folder structure.
+        Single-channel: saves to input/{annotation_id}.tif
+        Separate-channel: saves label channel to input/label_input/{annotation_id}.tif
+                          and training channel to input/training_input/{annotation_id}.tif
+        Category metadata is tracked in config.yaml, not in folder structure.
         """
         if self.conn is None:
             raise ValueError("OMERO connection is not set.")
 
         output_path = Path(self.config.output.output_directory)
-        input_folder = output_path / "input"
+        uses_separate = self.config.spatial_coverage.uses_separate_channels()
+
+        if uses_separate:
+            label_input_folder = output_path / "input" / "label_input"
+            training_input_folder = output_path / "input" / "training_input"
+        else:
+            input_folder = output_path / "input"
 
         for img_id, annotation_id, meta, row_idx in processing_units:
             print(f"Processing image {annotation_id} (ID: {img_id})")
 
             image_obj = self.conn.getObject("Image", img_id)
-            saved_path = self._save_training_image(image_obj, meta, annotation_id, input_folder)
 
-            if saved_path is None:
-                print(f"Warning: Could not save image {annotation_id}")
+            if uses_separate:
+                # Label channel → input/label_input/
+                saved_path = self._save_training_image(
+                    image_obj, meta, annotation_id, label_input_folder
+                )
+                if saved_path is None:
+                    print(f"Warning: Could not save label channel image for {annotation_id}")
 
-            # Save training channel image separately when channels differ
-            if self.config.spatial_coverage.uses_separate_channels():
+                # Training channel → input/training_input/
                 training_channels = self.config.spatial_coverage.get_training_channels()
                 train_meta = {**meta, "channel_override": training_channels[0]}
                 train_path = self._save_training_image(
-                    image_obj, train_meta, f"{annotation_id}_train", input_folder
+                    image_obj, train_meta, annotation_id, training_input_folder
                 )
                 if train_path is None:
                     print(f"Warning: Could not save training channel image for {annotation_id}")
+            else:
+                saved_path = self._save_training_image(image_obj, meta, annotation_id, input_folder)
+                if saved_path is None:
+                    print(f"Warning: Could not save image {annotation_id}")
 
     def _process_annotation_file(
         self, annotation_file: Path, annotation_id: str, matching_annotation
