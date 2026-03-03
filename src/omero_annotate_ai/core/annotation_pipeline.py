@@ -1428,6 +1428,16 @@ class AnnotationPipeline:
             if saved_path is None:
                 print(f"Warning: Could not save image {annotation_id}")
 
+            # Save training channel image separately when channels differ
+            if self.config.spatial_coverage.uses_separate_channels():
+                training_channels = self.config.spatial_coverage.get_training_channels()
+                train_meta = {**meta, "channel_override": training_channels[0]}
+                train_path = self._save_training_image(
+                    image_obj, train_meta, f"{annotation_id}_train", input_folder
+                )
+                if train_path is None:
+                    print(f"Warning: Could not save training channel image for {annotation_id}")
+
     def _process_annotation_file(
         self, annotation_file: Path, annotation_id: str, matching_annotation
     ) -> bool:
