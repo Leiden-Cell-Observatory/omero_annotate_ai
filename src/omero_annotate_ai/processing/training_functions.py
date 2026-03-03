@@ -1341,25 +1341,23 @@ def reorganize_local_data_for_training(
 
         annotation_id = ann.annotation_id
 
-        # Find source files
-        # Label-channel image: label_input/{annotation_id}.tif (new flat layout)
-        # or input/{annotation_id}.tif (legacy layout)
-        if has_new_layout:
-            label_input_file = label_input_source / f"{annotation_id}.tif"
-            if not label_input_file.exists():
-                label_input_file = label_input_source / f"{annotation_id}.tiff"
-        else:
+        # Find source files - detect layout per file by probing both locations.
+        # New layout:    label_input/{id}.tif  +  training_input/{id}.tif
+        # Legacy layout: input/{id}.tif        +  input/{id}_train.tif
+        label_input_file = label_input_source / f"{annotation_id}.tif"
+        if not label_input_file.exists():
+            label_input_file = label_input_source / f"{annotation_id}.tiff"
+        if not label_input_file.exists():
+            # Fall back to legacy flat input/
             label_input_file = input_source / f"{annotation_id}.tif"
             if not label_input_file.exists():
                 label_input_file = input_source / f"{annotation_id}.tiff"
 
-        # Training-channel image: training_input/{annotation_id}.tif (new flat layout)
-        # or input/{annotation_id}_train.tif (legacy layout)
-        if has_new_layout:
-            train_input_file = training_input_source / f"{annotation_id}.tif"
-            if not train_input_file.exists():
-                train_input_file = training_input_source / f"{annotation_id}.tiff"
-        else:
+        train_input_file = training_input_source / f"{annotation_id}.tif"
+        if not train_input_file.exists():
+            train_input_file = training_input_source / f"{annotation_id}.tiff"
+        if not train_input_file.exists():
+            # Fall back to legacy flat input/ with _train suffix
             train_input_file = input_source / f"{annotation_id}_train.tif"
             if not train_input_file.exists():
                 train_input_file = input_source / f"{annotation_id}_train.tiff"
