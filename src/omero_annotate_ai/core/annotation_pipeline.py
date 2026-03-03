@@ -36,7 +36,7 @@ except Exception:
     image_series_annotator = None
 
 # Local imports
-from .annotation_config import AnnotationConfig, ImageAnnotation
+from .annotation_config import AnnotationConfig, ImageAnnotation, validate_annotations_against_config
 from ..omero.omero_functions import (
     create_or_replace_tracking_table,
     sync_omero_table_to_config,
@@ -122,7 +122,7 @@ class AnnotationPipeline:
         Creates a unified folder structure:
         - input/: Source images for annotation
         - output/: Annotation masks
-        - sam_embeddings/: Embeddings (micro-SAM)
+        - sam_embeddings/: Embeddings (micro-SAM only)
 
         Category metadata (training/validation/test) is tracked in config.yaml,
         not in the folder structure.
@@ -131,10 +131,13 @@ class AnnotationPipeline:
 
         dirs = [
             output_path,
-            output_path / "input",              # Source images for annotation
-            output_path / "output",             # Annotation masks
-            output_path / "sam_embeddings",     # Embeddings (micro-SAM)
+            output_path / "input",   # Source images for annotation
+            output_path / "output",  # Annotation masks
         ]
+
+        # Only create sam_embeddings for micro-SAM workflows
+        if self.config.ai_model.framework == "micro_sam":
+            dirs.append(output_path / "sam_embeddings")
 
         for dir_path in dirs:
             dir_path.mkdir(parents=True, exist_ok=True)
@@ -1186,6 +1189,17 @@ class AnnotationPipeline:
         # Preserve existing annotations if already present in config
         if self.config.annotations:
             print(f"Using existing {len(self.config.annotations)} annotations from config")
+            result = validate_annotations_against_config(self.config)
+            for w in result.warnings:
+                print(f"Warning [{w.field}]: {w.message}")
+            if not result.is_valid:
+                error_summary = "; ".join(f"{e.field}: {e.message}" for e in result.errors)
+                raise ValueError(
+                    f"Existing annotations are inconsistent with current config "
+                    f"({result.annotation_count} annotations checked). "
+                    f"Errors: {error_summary}. "
+                    f"Fix the config or clear config.annotations to regenerate."
+                )
             return self.config
 
         # Generate new annotation schema

@@ -955,6 +955,143 @@ class AnnotationConfig(BaseModel):
         return cls.from_dict(config_dict)
 
 
+class ValidationIssue(BaseModel):
+    """A single validation issue found when checking annotations against config."""
+
+    field: str
+    message: str
+
+
+class ValidationResult(BaseModel):
+    """Result from validate_annotations_against_config()."""
+
+    is_valid: bool
+    errors: List[ValidationIssue]
+    warnings: List[ValidationIssue]
+    annotation_count: int
+
+    @property
+    def summary(self) -> str:
+        if self.is_valid:
+            return f"OK: {self.annotation_count} annotations are consistent with config"
+        parts = []
+        if self.errors:
+            parts.append(f"{len(self.errors)} error(s)")
+        if self.warnings:
+            parts.append(f"{len(self.warnings)} warning(s)")
+        return f"INVALID: {', '.join(parts)} in {self.annotation_count} annotations"
+
+
+def validate_annotations_against_config(config: "AnnotationConfig") -> ValidationResult:
+    """Validate existing annotations against current SpatialCoverage and TrainingConfig.
+
+    Called when annotations are reused from a saved YAML to ensure they are still
+    consistent with the current config settings. Works offline — no OMERO connection needed.
+
+    Args:
+        config: AnnotationConfig with a non-empty annotations list.
+
+    Returns:
+        ValidationResult with categorised errors and warnings.
+    """
+    errors: List[ValidationIssue] = []
+    warnings: List[ValidationIssue] = []
+    annotations = config.annotations
+    sc = config.spatial_coverage
+    training = config.training
+
+    expected_channel = sc.get_label_channel()
+    expected_volumetric = sc.three_d
+    expected_patch = sc.use_patches
+
+    # ERROR: channel mismatch
+    bad_channel = [a for a in annotations if a.channel != expected_channel]
+    if bad_channel:
+        errors.append(ValidationIssue(
+            field="channel",
+            message=(
+                f"{len(bad_channel)}/{len(annotations)} annotations have channel != "
+                f"{expected_channel} (current label_channel). "
+                f"Example: image_id={bad_channel[0].image_id} has channel={bad_channel[0].channel}"
+            ),
+        ))
+
+    # ERROR: is_volumetric mismatch
+    bad_vol = [a for a in annotations if a.is_volumetric != expected_volumetric]
+    if bad_vol:
+        errors.append(ValidationIssue(
+            field="is_volumetric",
+            message=(
+                f"{len(bad_vol)}/{len(annotations)} annotations have "
+                f"is_volumetric={not expected_volumetric} but three_d={expected_volumetric} in config"
+            ),
+        ))
+
+    # ERROR: is_patch mismatch
+    bad_patch = [a for a in annotations if a.is_patch != expected_patch]
+    if bad_patch:
+        errors.append(ValidationIssue(
+            field="is_patch",
+            message=(
+                f"{len(bad_patch)}/{len(annotations)} annotations have "
+                f"is_patch={not expected_patch} but use_patches={expected_patch} in config"
+            ),
+        ))
+
+    # WARNING: patch dimensions mismatch (may be legitimately clipped to image boundary)
+    if expected_patch and len(sc.patch_size) >= 2:
+        expected_w, expected_h = sc.patch_size[0], sc.patch_size[1]
+        bad_size = [
+            a for a in annotations
+            if a.is_patch and (a.patch_width != expected_w or a.patch_height != expected_h)
+        ]
+        if bad_size:
+            warnings.append(ValidationIssue(
+                field="patch_size",
+                message=(
+                    f"{len(bad_size)} patch annotations have dimensions that do not match "
+                    f"patch_size={sc.patch_size}. "
+                    f"May be expected if patches were clipped to image boundaries."
+                ),
+            ))
+
+    # WARNING: category distribution mismatch
+    actual_train = sum(1 for a in annotations if a.category == "training")
+    actual_val = sum(1 for a in annotations if a.category == "validation")
+    actual_test = sum(1 for a in annotations if a.category == "test")
+
+    if not training.segment_all:
+        if actual_train != training.train_n or actual_val != training.validate_n:
+            warnings.append(ValidationIssue(
+                field="category_counts",
+                message=(
+                    f"Category counts (train={actual_train}, val={actual_val}) "
+                    f"do not match config (train_n={training.train_n}, "
+                    f"validate_n={training.validate_n}). "
+                    f"Config may have been changed after annotations were generated."
+                ),
+            ))
+    else:
+        actual_total = actual_train + actual_val + actual_test
+        if actual_total > 0:
+            actual_ratio = actual_train / actual_total
+            if abs(actual_ratio - training.train_fraction) > 0.15:
+                warnings.append(ValidationIssue(
+                    field="category_fractions",
+                    message=(
+                        f"Actual training fraction {actual_ratio:.2f} differs from "
+                        f"configured train_fraction={training.train_fraction:.2f} by more than 0.15"
+                    ),
+                ))
+
+    return ValidationResult(
+        is_valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+        annotation_count=len(annotations),
+    )
+
+
 def parse_sequence(value: Union[str, List[int]]) -> List[int]:
     """Parse a sequence specification into a list of integers."""
     if isinstance(value, list):

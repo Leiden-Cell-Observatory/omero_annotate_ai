@@ -8,9 +8,12 @@ from dataclasses import asdict
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
+    ImageAnnotation,
     create_default_config,
     load_config,
-    get_config_template
+    get_config_template,
+    validate_annotations_against_config,
+    ValidationResult,
 )
 
 
@@ -551,3 +554,192 @@ class TestOMEROConfigMultiContainer:
         config = AnnotationConfig.from_yaml(yaml_str)
         assert config.omero.container_id == 456
         assert config.omero.get_all_container_ids() == [456]
+
+
+@pytest.mark.unit
+class TestAnnotationValidation:
+    """Tests for validate_annotations_against_config()."""
+
+    def _make_config(self, **spatial_kwargs):
+        """Helper: default config with customisable spatial coverage fields."""
+        config = create_default_config()
+        for k, v in spatial_kwargs.items():
+            setattr(config.spatial_coverage, k, v)
+        return config
+
+    def _make_ann(self, **kwargs):
+        """Helper: ImageAnnotation with sensible defaults."""
+        defaults = dict(
+            image_id=1,
+            image_name="test.tif",
+            channel=0,
+            timepoint=0,
+            z_slice=0,
+            is_volumetric=False,
+            is_patch=False,
+            category="training",
+        )
+        defaults.update(kwargs)
+        return ImageAnnotation(**defaults)
+
+    # ---- Valid cases ----
+
+    def test_valid_2d_annotations_pass(self):
+        """Consistent 2D annotations produce no errors and no warnings."""
+        config = self._make_config(channels=[0], label_channel=0, three_d=False, use_patches=False)
+        config.training.segment_all = True
+        config.training.train_fraction = 0.7
+        config.training.validation_fraction = 0.3
+        config.annotations = [
+            self._make_ann(image_id=i, channel=0, is_volumetric=False, is_patch=False,
+                           category="training" if i < 7 else "validation")
+            for i in range(10)
+        ]
+        result = validate_annotations_against_config(config)
+        assert result.is_valid
+        assert result.errors == []
+        assert result.warnings == []
+
+    def test_valid_3d_annotations_pass(self):
+        """Consistent 3D annotations produce no errors."""
+        config = self._make_config(channels=[0], label_channel=0, three_d=True, use_patches=False)
+        config.annotations = [
+            self._make_ann(channel=0, is_volumetric=True, is_patch=False)
+        ]
+        result = validate_annotations_against_config(config)
+        assert result.is_valid
+        assert result.errors == []
+
+    def test_valid_patch_annotations_pass(self):
+        """Consistent patch annotations produce no errors."""
+        config = self._make_config(
+            channels=[0], label_channel=0, three_d=False,
+            use_patches=True, patch_size=[512, 512]
+        )
+        config.annotations = [
+            self._make_ann(channel=0, is_patch=True, patch_width=512, patch_height=512)
+        ]
+        result = validate_annotations_against_config(config)
+        assert result.is_valid
+        assert result.errors == []
+
+    # ---- Error cases ----
+
+    def test_channel_mismatch_is_error(self):
+        """Annotations with wrong channel produce an error."""
+        config = self._make_config(channels=[0, 1], label_channel=1)
+        config.annotations = [self._make_ann(channel=0)]  # should be 1
+        result = validate_annotations_against_config(config)
+        assert not result.is_valid
+        assert any(e.field == "channel" for e in result.errors)
+
+    def test_volumetric_flag_mismatch_is_error(self):
+        """Annotations with wrong is_volumetric produce an error."""
+        config = self._make_config(channels=[0], three_d=True)
+        config.annotations = [self._make_ann(is_volumetric=False)]  # should be True
+        result = validate_annotations_against_config(config)
+        assert not result.is_valid
+        assert any(e.field == "is_volumetric" for e in result.errors)
+
+    def test_patch_flag_mismatch_is_error(self):
+        """Annotations with wrong is_patch produce an error."""
+        config = self._make_config(channels=[0], use_patches=True, patch_size=[512, 512])
+        config.annotations = [self._make_ann(is_patch=False)]  # should be True
+        result = validate_annotations_against_config(config)
+        assert not result.is_valid
+        assert any(e.field == "is_patch" for e in result.errors)
+
+    # ---- Warning cases ----
+
+    def test_patch_size_mismatch_is_warning(self):
+        """Patch dimension differences produce a warning, not an error."""
+        config = self._make_config(channels=[0], use_patches=True, patch_size=[512, 512])
+        config.annotations = [
+            self._make_ann(is_patch=True, patch_width=256, patch_height=256)
+        ]
+        result = validate_annotations_against_config(config)
+        assert result.is_valid  # warning only, not an error
+        assert any(w.field == "patch_size" for w in result.warnings)
+
+    def test_category_count_mismatch_is_warning(self):
+        """Wrong annotation counts vs train_n/validate_n produce a warning."""
+        config = create_default_config()
+        config.training.segment_all = False
+        config.training.train_n = 3
+        config.training.validate_n = 2
+        config.spatial_coverage.channels = [0]
+        config.annotations = [
+            self._make_ann(image_id=i, category="training") for i in range(5)
+        ]  # 5 training, 0 validation — doesn't match train_n=3, validate_n=2
+        result = validate_annotations_against_config(config)
+        assert result.is_valid
+        assert any(w.field == "category_counts" for w in result.warnings)
+
+    def test_category_fraction_mismatch_is_warning(self):
+        """A training fraction far from configured train_fraction produces a warning."""
+        config = create_default_config()
+        config.training.segment_all = True
+        config.training.train_fraction = 0.7
+        config.training.validation_fraction = 0.3
+        config.spatial_coverage.channels = [0]
+        # Only 2 training out of 10 → ratio = 0.2, far from 0.7
+        config.annotations = (
+            [self._make_ann(image_id=i, category="training") for i in range(2)]
+            + [self._make_ann(image_id=i + 10, category="validation") for i in range(8)]
+        )
+        result = validate_annotations_against_config(config)
+        assert result.is_valid
+        assert any(w.field == "category_fractions" for w in result.warnings)
+
+    # ---- is_valid semantics ----
+
+    def test_is_valid_false_when_errors_present(self):
+        """is_valid is False when the errors list is non-empty."""
+        config = self._make_config(channels=[0, 1], label_channel=1)
+        config.annotations = [self._make_ann(channel=0)]
+        result = validate_annotations_against_config(config)
+        assert not result.is_valid
+        assert len(result.errors) > 0
+
+    def test_is_valid_true_when_only_warnings(self):
+        """is_valid is True even when warnings are present."""
+        config = create_default_config()
+        config.training.segment_all = False
+        config.training.train_n = 3
+        config.training.validate_n = 0
+        config.spatial_coverage.channels = [0]
+        config.annotations = [self._make_ann(image_id=i, category="training") for i in range(5)]
+        result = validate_annotations_against_config(config)
+        assert result.is_valid
+        assert len(result.warnings) > 0
+
+    def test_summary_valid(self):
+        """summary property returns OK string for a passing result."""
+        config = self._make_config(channels=[0], label_channel=0)
+        config.annotations = [self._make_ann(channel=0)]
+        result = validate_annotations_against_config(config)
+        assert result.summary.startswith("OK:")
+
+    def test_summary_invalid(self):
+        """summary property returns INVALID string when errors exist."""
+        config = self._make_config(channels=[0, 1], label_channel=1)
+        config.annotations = [self._make_ann(channel=0)]
+        result = validate_annotations_against_config(config)
+        assert result.summary.startswith("INVALID:")
+
+    def test_define_annotation_schema_raises_on_validation_error(self):
+        """define_annotation_schema raises ValueError for invalid reused annotations."""
+        from unittest.mock import Mock
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        config = self._make_config(channels=[0, 1], label_channel=1)
+        config.name = "test"
+        config.output.output_directory = "/tmp/test_validation"
+        config.annotations = [self._make_ann(channel=0)]  # wrong channel
+
+        mock_conn = Mock()
+        mock_conn.isConnected.return_value = True
+        pipeline = AnnotationPipeline(config, mock_conn)
+
+        with pytest.raises(ValueError, match="inconsistent with current config"):
+            pipeline.define_annotation_schema(images_list=[])
