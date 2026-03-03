@@ -125,8 +125,8 @@ class AnnotationPipeline:
         - sam_embeddings/: Embeddings
 
         Cellpose layout (separate channels):
-        - input/label_input/: Label-channel images (used for CellPose annotation)
-        - input/training_input/: Training-channel images (actual model input)
+        - label_input/: Label-channel images (used for CellPose annotation)
+        - training_input/: Training-channel images (actual model input)
         - output/: Segmentation masks
 
         Cellpose layout (single channel):
@@ -140,8 +140,8 @@ class AnnotationPipeline:
         if self.config.ai_model.framework == "cellpose" and self.config.spatial_coverage.uses_separate_channels():
             dirs = [
                 output_path,
-                output_path / "input" / "label_input",
-                output_path / "input" / "training_input",
+                output_path / "label_input",
+                output_path / "training_input",
                 output_path / "output",
             ]
         else:
@@ -1439,8 +1439,8 @@ class AnnotationPipeline:
         """Save images locally for Cellpose training.
 
         Single-channel: saves to input/{annotation_id}.tif
-        Separate-channel: saves label channel to input/label_input/{annotation_id}.tif
-                          and training channel to input/training_input/{annotation_id}.tif
+        Separate-channel: saves label channel to label_input/{annotation_id}.tif
+                          and training channel to training_input/{annotation_id}.tif
         Category metadata is tracked in config.yaml, not in folder structure.
         """
         if self.conn is None:
@@ -1450,8 +1450,8 @@ class AnnotationPipeline:
         uses_separate = self.config.spatial_coverage.uses_separate_channels()
 
         if uses_separate:
-            label_input_folder = output_path / "input" / "label_input"
-            training_input_folder = output_path / "input" / "training_input"
+            label_input_folder = output_path / "label_input"
+            training_input_folder = output_path / "training_input"
         else:
             input_folder = output_path / "input"
 

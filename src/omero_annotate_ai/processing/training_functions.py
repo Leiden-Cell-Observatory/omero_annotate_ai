@@ -1226,11 +1226,25 @@ def reorganize_local_data_for_training(
     if not annotation_dir.exists():
         raise FileNotFoundError(f"Annotation directory not found: {annotation_dir}")
 
-    input_source = annotation_dir / "input"
     output_source = annotation_dir / "output"
 
-    if not input_source.exists():
-        raise FileNotFoundError(f"Input folder not found: {input_source}")
+    # Support two layouts:
+    #   New flat layout (separate channels):  label_input/ and training_input/ at top level
+    #   Legacy layout (single or separate):   input/ at top level
+    label_input_source = annotation_dir / "label_input"
+    training_input_source = annotation_dir / "training_input"
+    input_source = annotation_dir / "input"  # legacy / single-channel
+
+    # Use label_input/ as the authoritative marker for the new layout.
+    # training_input/ alone is ambiguous (it's also an output folder name from reorganize).
+    has_new_layout = label_input_source.exists()
+    has_legacy_layout = input_source.exists()
+
+    if not has_new_layout and not has_legacy_layout:
+        raise FileNotFoundError(
+            f"No input folder found in: {annotation_dir} "
+            "(expected 'label_input/' + 'training_input/' or 'input/')"
+        )
     if not output_source.exists():
         raise FileNotFoundError(f"Output folder not found: {output_source}")
 
@@ -1328,25 +1342,23 @@ def reorganize_local_data_for_training(
         annotation_id = ann.annotation_id
 
         # Find source files
-        # Label-channel image: input/label_input/{annotation_id}.tif (new layout)
-        # or input/{annotation_id}.tif (legacy flat layout)
-        label_subfolder = input_source / "label_input"
-        if label_subfolder.exists():
-            label_input_file = label_subfolder / f"{annotation_id}.tif"
+        # Label-channel image: label_input/{annotation_id}.tif (new flat layout)
+        # or input/{annotation_id}.tif (legacy layout)
+        if has_new_layout:
+            label_input_file = label_input_source / f"{annotation_id}.tif"
             if not label_input_file.exists():
-                label_input_file = label_subfolder / f"{annotation_id}.tiff"
+                label_input_file = label_input_source / f"{annotation_id}.tiff"
         else:
             label_input_file = input_source / f"{annotation_id}.tif"
             if not label_input_file.exists():
                 label_input_file = input_source / f"{annotation_id}.tiff"
 
-        # Training-channel image: input/training_input/{annotation_id}.tif (new layout)
-        # or input/{annotation_id}_train.tif (legacy flat layout)
-        training_subfolder = input_source / "training_input"
-        if training_subfolder.exists():
-            train_input_file = training_subfolder / f"{annotation_id}.tif"
+        # Training-channel image: training_input/{annotation_id}.tif (new flat layout)
+        # or input/{annotation_id}_train.tif (legacy layout)
+        if has_new_layout:
+            train_input_file = training_input_source / f"{annotation_id}.tif"
             if not train_input_file.exists():
-                train_input_file = training_subfolder / f"{annotation_id}.tiff"
+                train_input_file = training_input_source / f"{annotation_id}.tiff"
         else:
             train_input_file = input_source / f"{annotation_id}_train.tif"
             if not train_input_file.exists():
