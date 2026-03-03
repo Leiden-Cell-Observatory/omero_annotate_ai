@@ -1228,22 +1228,16 @@ def reorganize_local_data_for_training(
 
     output_source = annotation_dir / "output"
 
-    # Support two layouts:
-    #   New flat layout (separate channels):  label_input/ and training_input/ at top level
-    #   Legacy layout (single or separate):   input/ at top level
+    # New layout:    label_input/ + training_input/
+    # Legacy layout: input/
     label_input_source = annotation_dir / "label_input"
     training_input_source = annotation_dir / "training_input"
-    input_source = annotation_dir / "input"  # legacy / single-channel
+    input_source = annotation_dir / "input"
 
-    # Use label_input/ as the authoritative marker for the new layout.
-    # training_input/ alone is ambiguous (it's also an output folder name from reorganize).
-    has_new_layout = label_input_source.exists()
-    has_legacy_layout = input_source.exists()
-
-    if not has_new_layout and not has_legacy_layout:
+    if not label_input_source.exists() and not input_source.exists():
         raise FileNotFoundError(
             f"No input folder found in: {annotation_dir} "
-            "(expected 'label_input/' + 'training_input/' or 'input/')"
+            "(expected 'label_input/' or 'input/')"
         )
     if not output_source.exists():
         raise FileNotFoundError(f"Output folder not found: {output_source}")
@@ -1341,31 +1335,17 @@ def reorganize_local_data_for_training(
 
         annotation_id = ann.annotation_id
 
-        # Find source files - detect layout per file by probing both locations.
         # New layout:    label_input/{id}.tif  +  training_input/{id}.tif
         # Legacy layout: input/{id}.tif        +  input/{id}_train.tif
         label_input_file = label_input_source / f"{annotation_id}.tif"
         if not label_input_file.exists():
-            label_input_file = label_input_source / f"{annotation_id}.tiff"
-        if not label_input_file.exists():
-            # Fall back to legacy flat input/
             label_input_file = input_source / f"{annotation_id}.tif"
-            if not label_input_file.exists():
-                label_input_file = input_source / f"{annotation_id}.tiff"
 
         train_input_file = training_input_source / f"{annotation_id}.tif"
         if not train_input_file.exists():
-            train_input_file = training_input_source / f"{annotation_id}.tiff"
-        if not train_input_file.exists():
-            # Fall back to legacy flat input/ with _train suffix
             train_input_file = input_source / f"{annotation_id}_train.tif"
-            if not train_input_file.exists():
-                train_input_file = input_source / f"{annotation_id}_train.tiff"
 
-        # Label/mask file: output/{annotation_id}_mask.tif
         label_file = output_source / f"{annotation_id}_mask.tif"
-        if not label_file.exists():
-            label_file = output_source / f"{annotation_id}_mask.tiff"
 
         # Get sequential index for this category
         idx = category_counters[category]
