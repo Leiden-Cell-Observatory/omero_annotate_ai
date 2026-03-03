@@ -1,0 +1,154 @@
+schema_version: 2.0.0
+config_file_path: annotations/annotation_config_default_annotation_workflow.yaml
+name: default_annotation_workflow
+version: 1.0.0
+authors: []
+created: 2026-03-03 18:09:50.885525
+study:
+  title: ''
+  description: ''
+  keywords: []
+  organism: null
+  imaging_method: null
+dataset:
+  source_dataset_id: null
+  source_dataset_url: null
+  source_description: ''
+  license: CC-BY-4.0
+annotation_methodology:
+  annotation_type: segmentation_mask
+  annotation_method: null
+  annotation_criteria: ''
+  annotation_coverage: representative
+  annotation_tool: null
+spatial_coverage:
+  channels:
+  - 0
+  timepoints:
+  - 0
+  n_timepoints: null
+  timepoint_mode: specific
+  z_slices:
+  - 0
+  n_slices: null
+  z_slice_mode: specific
+  three_d: false
+  z_range_start: null
+  z_range_end: null
+  label_channel: null
+  training_channels: null
+  use_patches: false
+  patch_size:
+  - 512
+  - 512
+  patches_per_image: 1
+  random_patches: true
+training:
+  validation_strategy: random_split
+  train_fraction: 0.7
+  validation_fraction: 0.3
+  test_fraction: 0.0
+  train_n: 3
+  validate_n: 0
+  test_n: 0
+  segment_all: false
+  quality_threshold: null
+ai_model:
+  framework: micro_sam
+  framework_version: null
+  model_name: ''
+  model_version: latest
+  model_url: null
+  model_doi: null
+  training_mode: inference
+  pretrained_from: vit_b_lm
+workflow:
+  resume_from_table: false
+  read_only_mode: false
+  batch_size: 0
+output:
+  output_directory: annotations
+omero:
+  container_type: dataset
+  container_id: 123
+  container_ids: null
+  source_desc: ''
+  well_filters: null
+  well_filter_mode: include
+  table_id: 12345
+annotations:
+- image_id: 2
+  image_name: image_2
+  annotation_id: '2_0_0'
+  category: training
+  timepoint: 0
+  z_slice: 0
+  channel: 0
+  is_volumetric: false
+  z_start: 0
+  z_end: 0
+  z_length: 1
+  is_patch: false
+  patch_x: 0
+  patch_y: 0
+  patch_width: 0
+  patch_height: 0
+  processed: true
+  annotation_created_at: null
+  annotation_updated_at: null
+  annotation_type: segmentation_mask
+  roi_id: null
+  label_id: null
+  label_input_id: null
+  schema_attachment_id: null
+- image_id: 1
+  image_name: image_1
+  annotation_id: '1_0_0'
+  category: training
+  timepoint: 0
+  z_slice: 0
+  channel: 0
+  is_volumetric: false
+  z_start: 0
+  z_end: 0
+  z_length: 1
+  is_patch: false
+  patch_x: 0
+  patch_y: 0
+  patch_width: 0
+  patch_height: 0
+  processed: false
+  annotation_created_at: null
+  annotation_updated_at: null
+  annotation_type: segmentation_mask
+  roi_id: null
+  label_id: null
+  label_input_id: null
+  schema_attachment_id: null
+- image_id: 3
+  image_name: image_3
+  annotation_id: '3_0_0'
+  category: training
+  timepoint: 0
+  z_slice: 0
+  channel: 0
+  is_volumetric: false
+  z_start: 0
+  z_end: 0
+  z_length: 1
+  is_patch: false
+  patch_x: 0
+  patch_y: 0
+  patch_width: 0
+  patch_height: 0
+  processed: true
+  annotation_created_at: null
+  annotation_updated_at: null
+  annotation_type: segmentation_mask
+  roi_id: null
+  label_id: null
+  label_input_id: null
+  schema_attachment_id: null
+documentation: null
+repository: null
+tags: []
