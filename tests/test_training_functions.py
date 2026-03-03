@@ -457,8 +457,8 @@ class TestReorganizeLocalDataForTraining:
         )
 
         # Check that training folders were created
-        assert (populated_annotation_dir / "training_input").exists()
-        assert (populated_annotation_dir / "training_label").exists()
+        assert (populated_annotation_dir / "train_input").exists()
+        assert (populated_annotation_dir / "train_label").exists()
         assert (populated_annotation_dir / "val_input").exists()
         assert (populated_annotation_dir / "val_label").exists()
 
@@ -509,7 +509,7 @@ class TestReorganizeLocalDataForTraining:
             file_mode="copy",
         )
 
-        training_input = populated_annotation_dir / "training_input"
+        training_input = populated_annotation_dir / "train_input"
 
         # Check sequential naming
         assert (training_input / "input_00000.tif").exists()
@@ -654,7 +654,7 @@ class TestReorganizeLocalDataForTraining:
 
     def test_reorganize_clean_existing(self, populated_annotation_dir, mock_config):
         """Test that clean_existing removes previous training folders."""
-        training_input = populated_annotation_dir / "training_input"
+        training_input = populated_annotation_dir / "train_input"
         training_input.mkdir()
         old_file = training_input / "old_file.txt"
         old_file.write_text("old data")
@@ -752,7 +752,7 @@ class TestConsistentFolderStructure:
         assert "training_label" in structure
         assert "validation_input" in structure
         assert "validation_label" in structure
-        assert structure["training_input"] == "training_input"
+        assert structure["training_input"] == "train_input"
         assert structure["validation_input"] == "val_input"
 
     def test_standard_folder_structure_with_separate_channels(self):
@@ -766,7 +766,7 @@ class TestConsistentFolderStructure:
         )
         assert "training_label_input" in structure
         assert "validation_label_input" in structure
-        assert structure["training_label_input"] == "training_label_input"
+        assert structure["training_label_input"] == "train_label_input"
         assert structure["validation_label_input"] == "val_label_input"
 
     def test_standard_folder_structure_with_test(self):
@@ -825,15 +825,15 @@ class TestConsistentFolderStructure:
             )
 
             # Check directories exist
-            assert (temp_dir / "training_input").exists()
-            assert (temp_dir / "training_label").exists()
+            assert (temp_dir / "train_input").exists()
+            assert (temp_dir / "train_label").exists()
             assert (temp_dir / "val_input").exists()
             assert (temp_dir / "val_label").exists()
 
             # Check created_dirs keys
             assert "training_input" in created
             assert "validation_input" in created
-            assert created["training_input"] == temp_dir / "training_input"
+            assert created["training_input"] == temp_dir / "train_input"
             assert created["validation_input"] == temp_dir / "val_input"
         finally:
             shutil.rmtree(temp_dir)
@@ -943,19 +943,18 @@ class TestReorganizeSeparateChannels:
 
     @pytest.fixture
     def annotation_dir_with_train_files(self, separate_channel_config):
-        """Directory with both label-channel and training-channel files."""
+        """Directory with both label-channel and training-channel files (new layout)."""
         temp_dir = Path(tempfile.mkdtemp())
-        input_dir = temp_dir / "input"
+        label_input_dir = temp_dir / "label_input"
+        training_input_dir = temp_dir / "training_input"
         output_dir = temp_dir / "output"
-        input_dir.mkdir()
+        label_input_dir.mkdir()
+        training_input_dir.mkdir()
         output_dir.mkdir()
 
         for ann in separate_channel_config.annotations:
-            # Label-channel image (fluorescence)
-            (input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
-            # Training-channel image (e.g. brightfield)
-            (input_dir / f"{ann.annotation_id}_train.tif").write_text("train channel data")
-            # Mask
+            (label_input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
+            (training_input_dir / f"{ann.annotation_id}.tif").write_text("train channel data")
             (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
 
         yield temp_dir
@@ -964,15 +963,15 @@ class TestReorganizeSeparateChannels:
 
     @pytest.fixture
     def annotation_dir_label_only(self, separate_channel_config):
-        """Directory with only label-channel files (no _train files, simulating old pipeline)."""
+        """Directory with only label-channel files (training_input/ absent)."""
         temp_dir = Path(tempfile.mkdtemp())
-        input_dir = temp_dir / "input"
+        label_input_dir = temp_dir / "label_input"
         output_dir = temp_dir / "output"
-        input_dir.mkdir()
+        label_input_dir.mkdir()
         output_dir.mkdir()
 
         for ann in separate_channel_config.annotations:
-            (input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
+            (label_input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
             (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
 
         yield temp_dir
@@ -993,7 +992,7 @@ class TestReorganizeSeparateChannels:
             file_mode="copy",
         )
         base = annotation_dir_with_train_files
-        assert (base / "training_label_input").exists()
+        assert (base / "train_label_input").exists()
         assert (base / "val_label_input").exists()
 
     def test_label_channel_goes_to_label_input(
@@ -1006,7 +1005,7 @@ class TestReorganizeSeparateChannels:
             file_mode="copy",
         )
         base = annotation_dir_with_train_files
-        label_input_files = list((base / "training_label_input").glob("*.tif"))
+        label_input_files = list((base / "train_label_input").glob("*.tif"))
         assert len(label_input_files) == 2
         # Content should be the label-channel data
         assert label_input_files[0].read_text() == "label channel data"
@@ -1021,7 +1020,7 @@ class TestReorganizeSeparateChannels:
             file_mode="copy",
         )
         base = annotation_dir_with_train_files
-        input_files = list((base / "training_input").glob("*.tif"))
+        input_files = list((base / "train_input").glob("*.tif"))
         assert len(input_files) == 2
         # Content should be the training-channel data
         assert input_files[0].read_text() == "train channel data"
@@ -1093,7 +1092,7 @@ class TestReorganizeSeparateChannels:
             assert stats["n_training_images"] == 2
             assert stats["n_training_labels"] == 2
             # No label_input dirs should be created
-            assert not (temp_dir / "training_label_input").exists()
+            assert not (temp_dir / "train_label_input").exists()
         finally:
             shutil.rmtree(temp_dir)
 

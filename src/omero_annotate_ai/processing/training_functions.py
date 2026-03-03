@@ -32,8 +32,8 @@ def _get_standard_folder_structure(
         Dictionary mapping folder purposes to folder names
     """
     structure = {
-        "training_input": "training_input",
-        "training_label": "training_label",
+        "training_input": "train_input",
+        "training_label": "train_label",
         "validation_input": "val_input",
         "validation_label": "val_label",
     }
@@ -41,7 +41,7 @@ def _get_standard_folder_structure(
     if uses_separate_channels:
         structure.update(
             {
-                "training_label_input": "training_label_input",
+                "training_label_input": "train_label_input",
                 "validation_label_input": "val_label_input",
             }
         )
@@ -1335,15 +1335,14 @@ def reorganize_local_data_for_training(
 
         annotation_id = ann.annotation_id
 
-        # New layout:    label_input/{id}.tif  +  training_input/{id}.tif
-        # Legacy layout: input/{id}.tif        +  input/{id}_train.tif
+        # label_input/{id}.tif (new) or input/{id}.tif (legacy single-channel)
         label_input_file = label_input_source / f"{annotation_id}.tif"
         if not label_input_file.exists():
             label_input_file = input_source / f"{annotation_id}.tif"
 
-        train_input_file = training_input_source / f"{annotation_id}.tif"
-        if not train_input_file.exists():
-            train_input_file = input_source / f"{annotation_id}_train.tif"
+        # training_input/{id}.tif only resolved when needed (separate-channel path)
+        if uses_separate_channels:
+            train_input_file = training_input_source / f"{annotation_id}.tif"
 
         label_file = output_source / f"{annotation_id}_mask.tif"
 

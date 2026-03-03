@@ -350,8 +350,8 @@ class AIModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     # Framework information
-    framework: str = Field(
-        default="micro_sam", description="AI framework (e.g., micro_sam, cellpose)"
+    framework: Literal["micro_sam", "cellpose"] = Field(
+        default="micro_sam", description="AI framework"
     )
     framework_version: Optional[str] = Field(
         default=None, description="Framework version"

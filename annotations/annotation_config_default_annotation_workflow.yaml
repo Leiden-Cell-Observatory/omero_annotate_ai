@@ -3,7 +3,7 @@ config_file_path: annotations/annotation_config_default_annotation_workflow.yaml
 name: default_annotation_workflow
 version: 1.0.0
 authors: []
-created: 2026-03-03 20:45:30.430549
+created: 2026-03-03 21:46:42.020861
 study:
   title: ''
   description: ''
