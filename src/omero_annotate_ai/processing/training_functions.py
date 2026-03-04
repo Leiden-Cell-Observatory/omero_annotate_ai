@@ -1506,6 +1506,16 @@ def reorganize_local_data_for_training(
         )
     logger.info(f"  File operations: {stats['file_operations']}")
 
+    # After a move, remove empty source folders
+    if file_mode == "move":
+        for src in [label_input_source, training_input_source, input_source, output_source]:
+            try:
+                if src.exists() and not any(src.iterdir()):
+                    src.rmdir()
+                    logger.debug(f"Removed empty source folder: {src.name}/")
+            except OSError:
+                pass
+
     _close_logger_handlers()
 
     return result
