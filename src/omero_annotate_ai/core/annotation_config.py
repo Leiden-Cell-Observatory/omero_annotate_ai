@@ -273,6 +273,18 @@ class SpatialCoverage(BaseModel):
             return z_end - z_start + 1
         return 1
 
+    def model_dump(self, **kwargs):
+        """Override model_dump to exclude patch fields when use_patches is False."""
+        data = super().model_dump(**kwargs)
+        
+        if not self.use_patches:
+            # Remove patch-related fields when patches are not used
+            data.pop('patch_size', None)
+            data.pop('patches_per_image', None)
+            data.pop('random_patches', None)
+        
+        return data
+
     @model_validator(mode="after")
     def validate_3d_settings(self):
         """Validate 3D configuration consistency"""
