@@ -119,12 +119,13 @@ class AnnotationPipeline:
     def _get_input_folders(self, output_path: Path) -> dict:
         """Return input folder paths for the current workflow configuration.
 
-        Returns a dict with keys present for this configuration:
-          - 'input': single flat folder (micro-SAM or Cellpose single-channel)
-          - 'label_input': fluorescence channel (Cellpose separate-channel)
-          - 'training_input': training channel (Cellpose separate-channel)
+        Separate channels (label_channel != training_channels):
+          - 'label_input': fluorescence channel (for annotation)
+          - 'training_input': training channel (e.g. brightfield)
+        Single channel:
+          - 'input': flat folder
         """
-        if self.config.ai_model.framework == "cellpose" and self.config.spatial_coverage.uses_separate_channels():
+        if self.config.spatial_coverage.uses_separate_channels():
             return {
                 "label_input": output_path / "label_input",
                 "training_input": output_path / "training_input",
@@ -134,9 +135,8 @@ class AnnotationPipeline:
     def _setup_directories(self):
         """Create output directories for annotation workflow.
 
-        micro-SAM layout:        input/  output/  sam_embeddings/
-        Cellpose separate-ch:    label_input/  training_input/  output/
-        Cellpose single-ch:      input/  output/
+        Separate channels:  label_input/  training_input/  output/
+        Single channel:     input/  output/  (+ sam_embeddings/ for micro-SAM)
         """
         output_path = Path(self.config.output.output_directory)
 
