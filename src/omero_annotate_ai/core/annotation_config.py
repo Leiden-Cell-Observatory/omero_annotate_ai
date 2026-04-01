@@ -31,6 +31,28 @@ def _str_to_optional_int(value: str) -> Optional[int]:
 # Sub-models for the configuration
 
 
+class ChannelPresentation(BaseModel):
+    """How an image channel is presented for annotation/training.
+
+    Records the exact rendering parameters used when annotating,
+    ensuring reproducibility and correct normalization for training.
+    Lives at the image level — all patches share the same normalization.
+    """
+
+    channel_index: int
+    visible: bool = True
+    contrast_start: float
+    contrast_end: float
+    color: str = "#FFFFFF"
+
+
+class FeatureType(BaseModel):
+    """An annotation class (e.g. cell, nucleus, background)."""
+
+    name: str
+    color: str  # hex color, e.g. "#FF0000"
+
+
 class ImageAnnotation(BaseModel):
     """Individual image annotation record for tracking processing state"""
 
@@ -84,6 +106,12 @@ class ImageAnnotation(BaseModel):
     )
     schema_attachment_id: Optional[int] = Field(
         default=None, description="OMERO schema attachment ID"
+    )
+
+    # Channel presentation (how the image was displayed during annotation)
+    channel_presentation: Optional[List[ChannelPresentation]] = Field(
+        default=None,
+        description="Channel rendering parameters at annotation time (image-level, shared across patches)",
     )
 
     def mark_processed(
@@ -608,6 +636,10 @@ class AnnotationConfig(BaseModel):
         default=None, description="Code repository URL"
     )
     tags: List[str] = Field(default_factory=list, description="Classification tags")
+    feature_types: List[FeatureType] = Field(
+        default_factory=list,
+        description="Annotation classes (e.g. cell, nucleus) with display colors",
+    )
 
     def model_dump(self, **kwargs):
         """Override model_dump to handle Path serialization"""

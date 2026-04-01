@@ -743,3 +743,51 @@ class TestAnnotationValidation:
 
         with pytest.raises(ValueError, match="inconsistent with current config"):
             pipeline.define_annotation_schema(images_list=[])
+
+
+@pytest.mark.unit
+class TestChannelPresentation:
+    """Tests for ChannelPresentation model."""
+
+    def test_create_with_required_fields(self):
+        from omero_annotate_ai.core.annotation_config import ChannelPresentation
+        cp = ChannelPresentation(channel_index=0, contrast_start=100.0, contrast_end=4500.0)
+        assert cp.channel_index == 0
+        assert cp.visible is True
+        assert cp.contrast_start == 100.0
+        assert cp.contrast_end == 4500.0
+        assert cp.color == "#FFFFFF"
+
+    def test_create_with_all_fields(self):
+        from omero_annotate_ai.core.annotation_config import ChannelPresentation
+        cp = ChannelPresentation(
+            channel_index=1, visible=False,
+            contrast_start=0.0, contrast_end=255.0, color="#00FF00"
+        )
+        assert cp.visible is False
+        assert cp.color == "#00FF00"
+
+    def test_serialization_round_trip(self):
+        from omero_annotate_ai.core.annotation_config import ChannelPresentation
+        cp = ChannelPresentation(channel_index=0, contrast_start=100.0, contrast_end=4500.0, color="#FF0000")
+        data = cp.model_dump()
+        cp2 = ChannelPresentation(**data)
+        assert cp == cp2
+
+
+@pytest.mark.unit
+class TestFeatureType:
+    """Tests for FeatureType model."""
+
+    def test_create(self):
+        from omero_annotate_ai.core.annotation_config import FeatureType
+        ft = FeatureType(name="cell", color="#FF0000")
+        assert ft.name == "cell"
+        assert ft.color == "#FF0000"
+
+    def test_serialization_round_trip(self):
+        from omero_annotate_ai.core.annotation_config import FeatureType
+        ft = FeatureType(name="nucleus", color="#00FF00")
+        data = ft.model_dump()
+        ft2 = FeatureType(**data)
+        assert ft == ft2
