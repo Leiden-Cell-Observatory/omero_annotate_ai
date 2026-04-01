@@ -1,5 +1,6 @@
 """Configuration management for OMERO AI annotation workflows."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -29,6 +30,28 @@ def _str_to_optional_int(value: str) -> Optional[int]:
 
 
 # Sub-models for the configuration
+
+
+class ChannelPresentation(BaseModel):
+    """How an image channel is presented for annotation/training.
+
+    Records the exact rendering parameters used when annotating,
+    ensuring reproducibility and correct normalization for training.
+    Lives at the image level — all patches share the same normalization.
+    """
+
+    channel_index: int
+    visible: bool = True
+    contrast_start: float
+    contrast_end: float
+    color: str = "#FFFFFF"
+
+
+class FeatureType(BaseModel):
+    """An annotation class (e.g. cell, nucleus, background)."""
+
+    name: str
+    color: str  # hex color, e.g. "#FF0000"
 
 
 class ImageAnnotation(BaseModel):
@@ -84,6 +107,12 @@ class ImageAnnotation(BaseModel):
     )
     schema_attachment_id: Optional[int] = Field(
         default=None, description="OMERO schema attachment ID"
+    )
+
+    # Channel presentation (how the image was displayed during annotation)
+    channel_presentation: Optional[List[ChannelPresentation]] = Field(
+        default=None,
+        description="Channel rendering parameters at annotation time (image-level, shared across patches)",
     )
 
     def mark_processed(
@@ -608,6 +637,10 @@ class AnnotationConfig(BaseModel):
         default=None, description="Code repository URL"
     )
     tags: List[str] = Field(default_factory=list, description="Classification tags")
+    feature_types: List[FeatureType] = Field(
+        default_factory=list,
+        description="Annotation classes (e.g. cell, nucleus) with display colors",
+    )
 
     def model_dump(self, **kwargs):
         """Override model_dump to handle Path serialization"""
@@ -965,6 +998,36 @@ class AnnotationConfig(BaseModel):
         # Not a file path - treat as YAML string
         config_dict = yaml.safe_load(str(yaml_source))
         return cls.from_dict(config_dict)
+
+    def to_json(self, **kwargs) -> str:
+        """Serialize to JSON string.
+
+        Uses the same dict representation as to_dict(), ensuring
+        consistency with YAML serialization.
+        """
+        return json.dumps(self.to_dict(), default=str, **kwargs)
+
+    @classmethod
+    def from_json(cls, json_source: Union[str, Path, dict]) -> "AnnotationConfig":
+        """Load from JSON string, file path, or dict.
+
+        Args:
+            json_source: JSON string, Path to .json file, or dict.
+
+        Returns:
+            Hydrated AnnotationConfig instance.
+        """
+        if isinstance(json_source, dict):
+            return cls.from_dict(json_source)
+        if isinstance(json_source, Path) or (
+            isinstance(json_source, str) and not json_source.strip().startswith("{")
+        ):
+            path = Path(json_source)
+            with open(path) as f:
+                data = json.load(f)
+            return cls.from_dict(data)
+        data = json.loads(json_source)
+        return cls.from_dict(data)
 
 
 class ValidationIssue(BaseModel):

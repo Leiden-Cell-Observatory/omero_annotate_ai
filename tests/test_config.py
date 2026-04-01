@@ -743,3 +743,125 @@ class TestAnnotationValidation:
 
         with pytest.raises(ValueError, match="inconsistent with current config"):
             pipeline.define_annotation_schema(images_list=[])
+
+
+@pytest.mark.unit
+class TestChannelPresentation:
+    """Tests for ChannelPresentation model."""
+
+    def test_create_with_required_fields(self):
+        from omero_annotate_ai.core.annotation_config import ChannelPresentation
+        cp = ChannelPresentation(channel_index=0, contrast_start=100.0, contrast_end=4500.0)
+        assert cp.channel_index == 0
+        assert cp.visible is True
+        assert cp.contrast_start == 100.0
+        assert cp.contrast_end == 4500.0
+        assert cp.color == "#FFFFFF"
+
+    def test_create_with_all_fields(self):
+        from omero_annotate_ai.core.annotation_config import ChannelPresentation
+        cp = ChannelPresentation(
+            channel_index=1, visible=False,
+            contrast_start=0.0, contrast_end=255.0, color="#00FF00"
+        )
+        assert cp.visible is False
+        assert cp.color == "#00FF00"
+
+    def test_serialization_round_trip(self):
+        from omero_annotate_ai.core.annotation_config import ChannelPresentation
+        cp = ChannelPresentation(channel_index=0, contrast_start=100.0, contrast_end=4500.0, color="#FF0000")
+        data = cp.model_dump()
+        cp2 = ChannelPresentation(**data)
+        assert cp == cp2
+
+
+@pytest.mark.unit
+class TestFeatureType:
+    """Tests for FeatureType model."""
+
+    def test_create(self):
+        from omero_annotate_ai.core.annotation_config import FeatureType
+        ft = FeatureType(name="cell", color="#FF0000")
+        assert ft.name == "cell"
+        assert ft.color == "#FF0000"
+
+    def test_serialization_round_trip(self):
+        from omero_annotate_ai.core.annotation_config import FeatureType
+        ft = FeatureType(name="nucleus", color="#00FF00")
+        data = ft.model_dump()
+        ft2 = FeatureType(**data)
+        assert ft == ft2
+
+
+@pytest.mark.unit
+class TestAnnotationConfigJSON:
+    """Tests for JSON serialization of AnnotationConfig."""
+
+    def _make_config(self):
+        from omero_annotate_ai.core.annotation_config import (
+            AnnotationConfig, FeatureType, ChannelPresentation,
+            StudyContext, DatasetInfo, AnnotationMethodology,
+            SpatialCoverage, TrainingConfig, AIModelConfig,
+            WorkflowConfig, OutputConfig, OMEROConfig, ImageAnnotation,
+        )
+        config = AnnotationConfig(
+            name="test_workflow",
+            study=StudyContext(title="Test", description="Test study"),
+            dataset=DatasetInfo(source_description="test"),
+            annotation_methodology=AnnotationMethodology(annotation_criteria="test"),
+            spatial_coverage=SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0]),
+            training=TrainingConfig(),
+            ai_model=AIModelConfig(),
+            workflow=WorkflowConfig(),
+            output=OutputConfig(),
+            omero=OMEROConfig(container_type="dataset", container_id=1),
+            feature_types=[FeatureType(name="cell", color="#FF0000")],
+        )
+        ann = ImageAnnotation(image_id=1, image_name="img1")
+        ann.channel_presentation = [
+            ChannelPresentation(channel_index=0, contrast_start=100, contrast_end=4500, color="#00FF00")
+        ]
+        config.annotations.append(ann)
+        return config
+
+    def test_to_json_returns_valid_json(self):
+        import json
+        config = self._make_config()
+        json_str = config.to_json()
+        data = json.loads(json_str)
+        assert data["name"] == "test_workflow"
+        assert len(data["feature_types"]) == 1
+        assert data["feature_types"][0]["name"] == "cell"
+
+    def test_from_json_string(self):
+        config = self._make_config()
+        json_str = config.to_json()
+        loaded = type(config).from_json(json_str)
+        assert loaded.name == config.name
+        assert len(loaded.feature_types) == 1
+        assert loaded.feature_types[0].name == "cell"
+        assert len(loaded.annotations) == 1
+        assert loaded.annotations[0].channel_presentation[0].contrast_start == 100
+
+    def test_from_json_dict(self):
+        import json
+        config = self._make_config()
+        data = json.loads(config.to_json())
+        loaded = type(config).from_json(data)
+        assert loaded.name == config.name
+
+    def test_from_json_file(self):
+        import tempfile
+        from pathlib import Path
+        config = self._make_config()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write(config.to_json())
+            f.flush()
+            loaded = type(config).from_json(Path(f.name))
+        assert loaded.name == config.name
+
+    def test_round_trip_preserves_all_fields(self):
+        config = self._make_config()
+        json_str = config.to_json()
+        loaded = type(config).from_json(json_str)
+        assert config.to_dict() == loaded.to_dict()
