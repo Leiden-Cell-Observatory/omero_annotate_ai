@@ -1,5 +1,6 @@
 """Configuration management for OMERO AI annotation workflows."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -997,6 +998,36 @@ class AnnotationConfig(BaseModel):
         # Not a file path - treat as YAML string
         config_dict = yaml.safe_load(str(yaml_source))
         return cls.from_dict(config_dict)
+
+    def to_json(self, **kwargs) -> str:
+        """Serialize to JSON string.
+
+        Uses the same dict representation as to_dict(), ensuring
+        consistency with YAML serialization.
+        """
+        return json.dumps(self.to_dict(), default=str, **kwargs)
+
+    @classmethod
+    def from_json(cls, json_source: Union[str, Path, dict]) -> "AnnotationConfig":
+        """Load from JSON string, file path, or dict.
+
+        Args:
+            json_source: JSON string, Path to .json file, or dict.
+
+        Returns:
+            Hydrated AnnotationConfig instance.
+        """
+        if isinstance(json_source, dict):
+            return cls.from_dict(json_source)
+        if isinstance(json_source, Path) or (
+            isinstance(json_source, str) and not json_source.strip().startswith("{")
+        ):
+            path = Path(json_source)
+            with open(path) as f:
+                data = json.load(f)
+            return cls.from_dict(data)
+        data = json.loads(json_source)
+        return cls.from_dict(data)
 
 
 class ValidationIssue(BaseModel):
