@@ -418,6 +418,7 @@ class TestListUserTablesCreatedField:
         # Mock file annotation with a date
         mock_file_ann = Mock()
         mock_file_ann.getFile.return_value.getName.return_value = "my_table.h5"
+        mock_file_ann.getFile.return_value.getMimetype.return_value = "OMERO.tables"
         mock_file_ann.getDescription.return_value = ""
         mock_file_ann.getNs.return_value = "omero.tables"
         mock_date = Mock()
@@ -445,6 +446,7 @@ class TestListUserTablesCreatedField:
 
         mock_file_ann = Mock()
         mock_file_ann.getFile.return_value.getName.return_value = "my_table.h5"
+        mock_file_ann.getFile.return_value.getMimetype.return_value = "OMERO.tables"
         mock_file_ann.getDescription.return_value = ""
         mock_file_ann.getNs.return_value = "omero.tables"
         mock_file_ann.getDate.side_effect = AttributeError("no date")
