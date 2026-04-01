@@ -484,3 +484,164 @@ class TestListAnnotationTablesSortsByCreated:
         assert result[0]["name"] == "new_table"
         assert result[1]["name"] == "mid_table"
         assert result[2]["name"] == "old_table"
+
+
+# =============================================================================
+# Manifest and GeoJSON persistence tests
+# =============================================================================
+
+import json
+from omero_annotate_ai.omero.omero_functions import (
+    generate_set_id, manifest_namespace, geojson_namespace,
+    save_manifest_to_omero, load_manifest_from_omero,
+    list_manifests_from_omero, delete_manifest_from_omero,
+    save_geojson_to_omero, load_geojson_from_omero, merge_geojson_patches,
+)
+from omero_annotate_ai.core.annotation_config import (
+    AnnotationConfig, StudyContext, DatasetInfo, AnnotationMethodology,
+    SpatialCoverage, TrainingConfig, AIModelConfig, WorkflowConfig,
+    OutputConfig, OMEROConfig, FeatureType, ImageAnnotation, ChannelPresentation,
+)
+
+
+def _make_test_config():
+    return AnnotationConfig(
+        name="test_workflow",
+        study=StudyContext(title="Test", description="Test"),
+        dataset=DatasetInfo(source_description="test"),
+        annotation_methodology=AnnotationMethodology(annotation_criteria="test"),
+        spatial_coverage=SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0]),
+        training=TrainingConfig(),
+        ai_model=AIModelConfig(),
+        workflow=WorkflowConfig(),
+        output=OutputConfig(),
+        omero=OMEROConfig(container_type="dataset", container_id=1),
+        feature_types=[FeatureType(name="cell", color="#FF0000")],
+        annotations=[ImageAnnotation(image_id=1, image_name="img1")],
+    )
+
+
+@pytest.mark.unit
+class TestManifestPersistence:
+    """Tests for JSON manifest save/load/list/delete on OMERO."""
+
+    def test_generate_set_id_is_unique(self):
+        ids = {generate_set_id() for _ in range(100)}
+        assert len(ids) == 100
+
+    def test_manifest_namespace(self):
+        assert manifest_namespace("abc123") == "omero.biomero.manifest.abc123"
+
+    def test_geojson_namespace(self):
+        assert geojson_namespace("abc123") == "omero.biomero.annotations.abc123"
+
+    def test_load_manifest_from_omero(self):
+        config = _make_test_config()
+        json_bytes = config.to_json().encode("utf-8")
+
+        file_ann = MagicMock()
+        file_ann.getNs.return_value = manifest_namespace("test_set")
+        file_ann.getFileInChunks.return_value = [json_bytes]
+
+        dataset = MagicMock()
+        dataset.listAnnotations.return_value = [file_ann]
+        conn = MagicMock()
+        conn.getObject.return_value = dataset
+
+        loaded = load_manifest_from_omero(conn, "dataset", 1, "test_set")
+        assert loaded is not None
+        assert loaded.name == "test_workflow"
+        assert len(loaded.feature_types) == 1
+
+    def test_load_manifest_not_found(self):
+        dataset = MagicMock()
+        dataset.listAnnotations.return_value = []
+        conn = MagicMock()
+        conn.getObject.return_value = dataset
+
+        result = load_manifest_from_omero(conn, "dataset", 1, "nonexistent")
+        assert result is None
+
+    def test_list_manifests_from_omero(self):
+        config = _make_test_config()
+        json_bytes = config.to_json().encode("utf-8")
+
+        file_ann = MagicMock()
+        file_ann.getNs.return_value = manifest_namespace("set_001")
+        file_ann.getFileInChunks.return_value = [json_bytes]
+        file_ann.getId.return_value = 10
+
+        dataset = MagicMock()
+        dataset.listAnnotations.return_value = [file_ann]
+        conn = MagicMock()
+        conn.getObject.return_value = dataset
+
+        manifests = list_manifests_from_omero(conn, "dataset", 1)
+        assert len(manifests) == 1
+        assert manifests[0]["set_id"] == "set_001"
+        assert manifests[0]["name"] == "test_workflow"
+
+
+@pytest.mark.unit
+class TestGeoJSONPersistence:
+    """Tests for GeoJSON save/load and patch merging."""
+
+    def _make_geojson(self, patch=None):
+        feature = {
+            "type": "Feature",
+            "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]},
+            "properties": {"objectType": "annotation", "featureType": "cell", "plane": {"c": 0, "z": 0, "t": 0}},
+        }
+        if patch:
+            feature["properties"]["patch"] = patch
+        return {
+            "type": "FeatureCollection",
+            "channel_presentation": [{"channel_index": 0, "visible": True, "contrast_start": 0, "contrast_end": 255, "color": "#FFFFFF"}],
+            "features": [feature],
+        }
+
+    def test_load_geojson_from_omero(self):
+        geojson = self._make_geojson()
+        json_bytes = json.dumps(geojson).encode("utf-8")
+
+        file_ann = MagicMock()
+        file_ann.getNs.return_value = geojson_namespace("set_001")
+        file_ann.getFileInChunks.return_value = [json_bytes]
+
+        image = MagicMock()
+        image.listAnnotations.return_value = [file_ann]
+        conn = MagicMock()
+        conn.getObject.return_value = image
+
+        loaded = load_geojson_from_omero(conn, 1, "set_001")
+        assert loaded is not None
+        assert loaded["type"] == "FeatureCollection"
+        assert len(loaded["features"]) == 1
+
+    def test_load_geojson_not_found(self):
+        image = MagicMock()
+        image.listAnnotations.return_value = []
+        conn = MagicMock()
+        conn.getObject.return_value = image
+        assert load_geojson_from_omero(conn, 1, "nonexistent") is None
+
+    def test_merge_geojson_accumulates_patches(self):
+        existing = self._make_geojson(patch={"x": 0, "y": 0, "width": 512, "height": 512})
+        new_patch = self._make_geojson(patch={"x": 512, "y": 0, "width": 512, "height": 512})
+        merged = merge_geojson_patches(existing, new_patch)
+        assert len(merged["features"]) == 2
+
+    def test_merge_geojson_replaces_same_patch(self):
+        existing = self._make_geojson(patch={"x": 0, "y": 0, "width": 512, "height": 512})
+        updated = self._make_geojson(patch={"x": 0, "y": 0, "width": 512, "height": 512})
+        updated["features"][0]["properties"]["featureType"] = "nucleus"
+        merged = merge_geojson_patches(existing, updated)
+        assert len(merged["features"]) == 1
+        assert merged["features"][0]["properties"]["featureType"] == "nucleus"
+
+    def test_merge_geojson_updates_channel_presentation(self):
+        existing = self._make_geojson()
+        new = self._make_geojson()
+        new["channel_presentation"][0]["contrast_end"] = 999
+        merged = merge_geojson_patches(existing, new)
+        assert merged["channel_presentation"][0]["contrast_end"] == 999
