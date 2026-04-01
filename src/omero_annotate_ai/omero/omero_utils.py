@@ -18,14 +18,16 @@ import ezomero
 # Table Management Utilities
 # =============================================================================
 
-def list_user_tables(conn, container_type: str = None, container_id: int = None) -> List[Dict]:
-    """List all tables accessible to the user.
-    
+def list_user_tables(conn, container_type: str = None, container_id: int = None,
+                     namespace: str = None) -> List[Dict]:
+    """List all OMERO.tables accessible to the user.
+
     Args:
         conn: OMERO connection
         container_type: Optional container type to filter by ('dataset', 'project', etc.)
         container_id: Optional container ID to filter by
-        
+        namespace: Optional namespace to filter by (recommended for performance)
+
     Returns:
         List of dictionaries with table information
     """
@@ -34,47 +36,53 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None)
         return []
 
     tables = []
-    
+
     try:
         if container_type and container_id:
-            # Search within specific container
-            annotations = ezomero.get_file_annotation_ids(conn, container_type.capitalize(), container_id)
-            
+            # Get file annotation IDs — pass namespace for server-side filtering
+            annotations = ezomero.get_file_annotation_ids(
+                conn, container_type.capitalize(), container_id, ns=namespace
+            )
+
             for ann_id in annotations:
                 try:
-                    # Try to read as table using ezomero - simpler and more reliable
-                    table = ezomero.get_table(conn, ann_id)
-                    if table is not None:
-                        # This is a valid OMERO.table, get the annotation details
-                        file_ann = conn.getObject("FileAnnotation", ann_id)
-                        if file_ann and hasattr(file_ann, 'getFile'):
-                            original_file = file_ann.getFile()
-                            file_name = original_file.getName() if original_file else f"table_{ann_id}"
-                            created = ""
-                            try:
-                                date = file_ann.getDate()
-                                if date:
-                                    created = date.isoformat()
-                            except Exception:
-                                pass
+                    file_ann = conn.getObject("FileAnnotation", ann_id)
+                    if not file_ann or not hasattr(file_ann, 'getFile'):
+                        continue
 
-                            tables.append({
-                                'id': ann_id,
-                                'name': file_name,
-                                'created': created,
-                                'container_type': container_type,
-                                'container_id': container_id,
-                                'description': file_ann.getDescription() or "",
-                                'namespace': file_ann.getNs() or ""
-                            })
+                    original_file = file_ann.getFile()
+                    if not original_file:
+                        continue
+
+                    # Check mimetype to confirm this is an OMERO.table
+                    # without loading the table contents
+                    mimetype = original_file.getMimetype()
+                    if mimetype != "OMERO.tables":
+                        continue
+
+                    file_name = original_file.getName() or f"table_{ann_id}"
+                    created = ""
+                    try:
+                        date = file_ann.getDate()
+                        if date:
+                            created = date.isoformat()
+                    except Exception:
+                        pass
+
+                    tables.append({
+                        'id': ann_id,
+                        'name': file_name,
+                        'created': created,
+                        'container_type': container_type,
+                        'container_id': container_id,
+                        'description': file_ann.getDescription() or "",
+                        'namespace': file_ann.getNs() or ""
+                    })
                 except Exception:
-                    # Not a valid OMERO.table, skip silently
                     continue
         else:
-            # Searching all tables without specifying a container is not supported.
-            # Please provide container_type and container_id.
             print("Tip: Specify container_type and container_id for more efficient search")
-            
+
     except Exception as e:
         print(f"Error listing tables: {e}")
 
@@ -272,29 +280,29 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
 # Annotation Management Utilities  
 # =============================================================================
 
-def list_annotations_by_namespace(conn, object_type: str, object_id: int, 
+def list_annotations_by_namespace(conn, object_type: str, object_id: int,
                                 namespace: str) -> List[Dict]:
     """List annotations by namespace.
-    
+
     Args:
         conn: OMERO connection
         object_type: Type of object ('Image', 'Dataset', etc.)
         object_id: ID of object
         namespace: Namespace to filter by
-        
+
     Returns:
         List of annotation dictionaries
     """
     annotations = []
-    
+
     try:
-        # Get file annotation IDs
-        ann_ids = ezomero.get_file_annotation_ids(conn, object_type, object_id)
-        
+        # Pass namespace for server-side filtering
+        ann_ids = ezomero.get_file_annotation_ids(conn, object_type, object_id, ns=namespace)
+
         for ann_id in ann_ids:
             try:
                 file_ann = conn.getObject("FileAnnotation", ann_id)
-                if file_ann and file_ann.getNs() == namespace:
+                if file_ann:
                     annotations.append({
                         'id': ann_id,
                         'namespace': file_ann.getNs(),
@@ -304,12 +312,12 @@ def list_annotations_by_namespace(conn, object_type: str, object_id: int,
                     })
             except Exception:
                 continue
-        
+
         print(f"Found {len(annotations)} annotations with namespace '{namespace}'")
-        
+
     except Exception as e:
         print(f"Error listing annotations: {e}")
-    
+
     return annotations
 
 
