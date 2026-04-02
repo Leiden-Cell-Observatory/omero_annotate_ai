@@ -226,6 +226,26 @@ class SpatialCoverage(BaseModel):
         "Multiple channels supported if the training model permits.",
     )
 
+    # Image normalization settings (applied per-image, not per-patch)
+    normalization_method: Literal["percentile", "none"] = Field(
+        default="percentile",
+        description="How to normalize image intensities. "
+        "'percentile' computes per-image percentile bounds. "
+        "'none' uses the full intensity range without normalization.",
+    )
+    percentile_low: float = Field(
+        default=0.5,
+        ge=0,
+        le=100,
+        description="Lower percentile for intensity normalization (used when normalization_method='percentile')",
+    )
+    percentile_high: float = Field(
+        default=99.5,
+        ge=0,
+        le=100,
+        description="Upper percentile for intensity normalization (used when normalization_method='percentile')",
+    )
+
     # Patch processing settings (moved from ProcessingConfig)
     use_patches: bool = Field(
         default=False, description="Extract patches vs full images"
