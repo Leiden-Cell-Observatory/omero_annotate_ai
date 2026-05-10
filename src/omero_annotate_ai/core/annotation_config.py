@@ -184,6 +184,9 @@ class AnnotationMethodology(BaseModel):
     )
 
 
+_CONTEXT_COLORMAP_CYCLE = ["blue", "magenta", "green", "yellow", "cyan"]
+
+
 class SpatialCoverage(BaseModel):
     """Spatial scope of annotations (MIFA requirement)"""
 
@@ -224,6 +227,25 @@ class SpatialCoverage(BaseModel):
         description="Channel index(es) used for model training input (e.g., brightfield). "
         "If not specified, defaults to [label_channel] for backward compatibility. "
         "Multiple channels supported if the training model permits.",
+    )
+
+    # Display-only context channels shown alongside the label channel during annotation.
+    # Never enter SAM embeddings, never saved as training pairs.
+    context_channels: List[int] = Field(
+        default_factory=list,
+        description="Display-only channel indices shown alongside the annotation channel in napari. "
+        "Never enter SAM embeddings or training data. OMERO channel index space.",
+    )
+    context_channel_names: Optional[List[str]] = Field(
+        default=None,
+        description="Display names for context_channels. "
+        "Length must match context_channels when provided. Defaults to 'ch{idx}'.",
+    )
+    context_channel_colormaps: Optional[List[str]] = Field(
+        default=None,
+        description="Napari colormap names for context_channels. "
+        "Length must match context_channels when provided. "
+        "Defaults to cycle ['blue', 'magenta', 'green', 'yellow', 'cyan'].",
     )
 
     # Image normalization settings (applied per-image, not per-patch)
@@ -300,6 +322,27 @@ class SpatialCoverage(BaseModel):
             return False
         return self.get_label_channel() not in self.get_training_channels()
 
+    def uses_context_channels(self) -> bool:
+        """Return True if any context channels are configured."""
+        return bool(self.context_channels)
+
+    def get_context_channel_specs(self) -> List[Tuple[int, str, str]]:
+        """Return [(channel_index, display_name, colormap), ...] for each context channel."""
+        specs = []
+        for i, ch_idx in enumerate(self.context_channels):
+            name = (
+                self.context_channel_names[i]
+                if self.context_channel_names is not None
+                else f"ch{ch_idx}"
+            )
+            cmap = (
+                self.context_channel_colormaps[i]
+                if self.context_channel_colormaps is not None
+                else _CONTEXT_COLORMAP_CYCLE[i % len(_CONTEXT_COLORMAP_CYCLE)]
+            )
+            specs.append((ch_idx, name, cmap))
+        return specs
+
     def get_z_range(self) -> Tuple[int, int]:
         """Get the z-range for volumetric processing"""
         if (
@@ -375,6 +418,29 @@ class SpatialCoverage(BaseModel):
                 if tc not in all_channels:
                     raise ValueError(
                         f"training_channels ({tc}) must be in channels list ({self.channels})"
+                    )
+
+        # Validate context_channels do not overlap with label_channel
+        if self.context_channels:
+            label_ch = self.get_label_channel()
+            overlapping = [ch for ch in self.context_channels if ch == label_ch]
+            if overlapping:
+                raise ValueError(
+                    f"context_channels {overlapping} overlap with label_channel ({label_ch}). "
+                    "Context channels must be different from the label channel."
+                )
+            # Validate optional list lengths match
+            if self.context_channel_names is not None:
+                if len(self.context_channel_names) != len(self.context_channels):
+                    raise ValueError(
+                        f"context_channel_names length ({len(self.context_channel_names)}) "
+                        f"must match context_channels length ({len(self.context_channels)})"
+                    )
+            if self.context_channel_colormaps is not None:
+                if len(self.context_channel_colormaps) != len(self.context_channels):
+                    raise ValueError(
+                        f"context_channel_colormaps length ({len(self.context_channel_colormaps)}) "
+                        f"must match context_channels length ({len(self.context_channels)})"
                     )
 
         return self

@@ -369,6 +369,98 @@ class TestMultiChannelValidation:
 
 
 @pytest.mark.unit
+class TestContextChannelConfig:
+    """Tests for context_channels fields on SpatialCoverage."""
+
+    def test_defaults_empty(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        sc = SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0])
+        assert sc.context_channels == []
+        assert sc.context_channel_names is None
+        assert sc.context_channel_colormaps is None
+
+    def test_uses_context_channels_false_by_default(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        sc = SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0])
+        assert sc.uses_context_channels() is False
+
+    def test_uses_context_channels_true_when_set(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        sc = SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
+                             context_channels=[1])
+        assert sc.uses_context_channels() is True
+
+    def test_get_context_channel_specs_defaults(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        sc = SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0],
+                             context_channels=[1, 2])
+        specs = sc.get_context_channel_specs()
+        assert len(specs) == 2
+        ch_idx0, name0, cmap0 = specs[0]
+        ch_idx1, name1, cmap1 = specs[1]
+        assert ch_idx0 == 1
+        assert ch_idx1 == 2
+        assert name0 == "ch1"
+        assert name1 == "ch2"
+        assert cmap0 in ["blue", "magenta", "green", "yellow", "cyan"]
+        assert cmap1 in ["blue", "magenta", "green", "yellow", "cyan"]
+
+    def test_get_context_channel_specs_custom_names(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        sc = SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
+                             context_channels=[1],
+                             context_channel_names=["DAPI"])
+        specs = sc.get_context_channel_specs()
+        assert specs[0][1] == "DAPI"
+
+    def test_get_context_channel_specs_custom_colormaps(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        sc = SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
+                             context_channels=[1],
+                             context_channel_colormaps=["magenta"])
+        specs = sc.get_context_channel_specs()
+        assert specs[0][2] == "magenta"
+
+    def test_validation_rejects_overlap_with_label_channel(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="context_channels"):
+            SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
+                            label_channel=0, context_channels=[0])
+
+    def test_validation_rejects_mismatched_names_length(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0],
+                            context_channels=[1, 2],
+                            context_channel_names=["DAPI"])  # length 1, should be 2
+
+    def test_validation_rejects_mismatched_colormaps_length(self):
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0],
+                            context_channels=[1, 2],
+                            context_channel_colormaps=["blue"])  # length 1, should be 2
+
+    def test_yaml_round_trip(self):
+        from omero_annotate_ai.core.annotation_config import AnnotationConfig
+        config = AnnotationConfig(name="test")
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.context_channels = [1]
+        config.spatial_coverage.context_channel_names = ["DAPI"]
+        config.spatial_coverage.context_channel_colormaps = ["blue"]
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            config.save_yaml(f.name)
+            loaded = AnnotationConfig.from_yaml(f.name)
+        Path(f.name).unlink()
+        assert loaded.spatial_coverage.context_channels == [1]
+        assert loaded.spatial_coverage.context_channel_names == ["DAPI"]
+        assert loaded.spatial_coverage.context_channel_colormaps == ["blue"]
+
+
+@pytest.mark.unit
 class TestMultiChannelYamlSerialization:
     """Test YAML serialization with channel fields."""
 
