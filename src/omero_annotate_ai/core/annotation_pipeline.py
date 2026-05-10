@@ -668,6 +668,7 @@ class AnnotationPipeline:
                             blending="additive",
                             visible=True,
                         )
+                        viewer.layers.move(len(viewer.layers) - 1, 0)
                 else:
                     viewer.add_image(
                         arr,
@@ -676,6 +677,7 @@ class AnnotationPipeline:
                         blending="additive",
                         visible=True,
                     )
+                    viewer.layers.move(len(viewer.layers) - 1, 0)
 
         def on_image_data_changed(event) -> None:
             try:
