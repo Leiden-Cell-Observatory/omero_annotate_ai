@@ -378,6 +378,7 @@ class TestContextChannelConfig:
         assert sc.context_channels == []
         assert sc.context_channel_names is None
         assert sc.context_channel_colormaps is None
+        assert sc.get_context_channel_specs() == []
 
     def test_uses_context_channels_false_by_default(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
@@ -402,8 +403,8 @@ class TestContextChannelConfig:
         assert ch_idx1 == 2
         assert name0 == "ch1"
         assert name1 == "ch2"
-        assert cmap0 in ["blue", "magenta", "green", "yellow", "cyan"]
-        assert cmap1 in ["blue", "magenta", "green", "yellow", "cyan"]
+        assert cmap0 == "blue"
+        assert cmap1 == "magenta"
 
     def test_get_context_channel_specs_custom_names(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
