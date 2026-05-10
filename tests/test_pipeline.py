@@ -1022,7 +1022,7 @@ class TestContextChannelHook:
 
         # Should not raise; viewer.layers should not be touched
         pipeline._install_context_channel_hook(mock_viewer, images, context_images)
-        mock_viewer.layers.assert_not_called()
+        mock_viewer.add_image.assert_not_called()
 
     def test_install_context_channel_hook_adds_initial_layer(self):
         """Hook install should add a context layer for the initial image."""

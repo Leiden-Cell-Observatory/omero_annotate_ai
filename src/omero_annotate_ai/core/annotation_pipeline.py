@@ -694,8 +694,9 @@ class AnnotationPipeline:
 
         # Handle the initial image (already loaded before napari.run())
         initial_data = viewer.layers["image"].data
-        initial_idx = id_to_index.get(id(initial_data), 0)
-        update_context_layers(initial_idx)
+        initial_idx = id_to_index.get(id(initial_data))
+        if initial_idx is not None:
+            update_context_layers(initial_idx)
 
         # Subscribe for subsequent image transitions
         viewer.layers["image"].events.data.connect(on_image_data_changed)
