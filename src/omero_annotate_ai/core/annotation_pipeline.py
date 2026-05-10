@@ -495,7 +495,6 @@ class AnnotationPipeline:
             # Run micro-SAM annotation
             model_type = self.config.ai_model.pretrained_from
 
-
             # Run image series annotator with explicit napari.run() call
             viewer = image_series_annotator(
                 images=images,
@@ -509,8 +508,7 @@ class AnnotationPipeline:
             )
 
             # Install context channel sidecar layers (no-op if none configured)
-            if self.config.spatial_coverage.uses_context_channels():
-                self._install_context_channel_hook(viewer, images, context_images)
+            self._install_context_channel_hook(viewer, images, context_images)
 
             # Explicitly start the event loop - this will block until viewer is closed
             napari.run()
