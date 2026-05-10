@@ -474,7 +474,7 @@ class AnnotationPipeline:
             images = []
             metadata = []
 
-            for image_obj, annotation_id, meta, row_idx in batch_data    :
+            for image_obj, annotation_id, meta, row_idx in batch_data:
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
@@ -482,6 +482,9 @@ class AnnotationPipeline:
                 meta_with_image_id = meta.copy()
                 meta_with_image_id["image_id"] = image_obj.getId()
                 metadata.append((annotation_id, meta_with_image_id, row_idx))
+
+            # Build context images parallel list (empty dicts when no context channels)
+            context_images = self._build_context_images(batch_data)
 
             # Set up output paths
             output_path = Path(self.config.output.output_directory)
@@ -492,7 +495,7 @@ class AnnotationPipeline:
             # Run micro-SAM annotation
             model_type = self.config.ai_model.pretrained_from
 
-    
+
             # Run image series annotator with explicit napari.run() call
             viewer = image_series_annotator(
                 images=images,
@@ -504,6 +507,10 @@ class AnnotationPipeline:
                 is_volumetric=self.config.spatial_coverage.three_d,
                 skip_segmented=True,
             )
+
+            # Install context channel sidecar layers (no-op if none configured)
+            if self.config.spatial_coverage.uses_context_channels():
+                self._install_context_channel_hook(viewer, images, context_images)
 
             # Explicitly start the event loop - this will block until viewer is closed
             napari.run()
