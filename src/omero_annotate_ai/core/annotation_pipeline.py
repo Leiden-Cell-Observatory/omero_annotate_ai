@@ -605,6 +605,101 @@ class AnnotationPipeline:
 
         return image_data
 
+    def _build_context_images(self, batch_data: List[Tuple]) -> List[dict]:
+        """Build context_images parallel list for the context channel hook.
+
+        Returns a list of dicts, one per batch item. Each dict maps
+        channel display name -> numpy array. Empty dicts when no context
+        channels are configured.
+        """
+        if not self.config.spatial_coverage.uses_context_channels():
+            return [{} for _ in batch_data]
+
+        specs = self.config.spatial_coverage.get_context_channel_specs()
+        context_images = []
+        for image_obj, _annotation_id, meta, _row_idx in batch_data:
+            per_item = {}
+            for ch_idx, ch_name, _cmap in specs:
+                ctx_meta = {**meta, "channel_override": ch_idx}
+                arr = self._load_image_data(image_obj, ctx_meta)
+                per_item[ch_name] = arr
+            context_images.append(per_item)
+        return context_images
+
+    def _install_context_channel_hook(
+        self,
+        viewer,
+        images: List,
+        context_images: List[dict],
+    ) -> None:
+        """Install a napari events.data hook that keeps context layers in sync.
+
+        When image_series_annotator advances to the next image, updates each
+        context channel sidecar layer to match the new image index.
+        Does nothing when context_images contains only empty dicts.
+        """
+        specs = self.config.spatial_coverage.get_context_channel_specs()
+        if not specs:
+            return
+
+        # Build identity lookup: id(array) -> list index
+        id_to_index = {id(arr): i for i, arr in enumerate(images)}
+
+        def update_context_layers(idx: int) -> None:
+            per_item = context_images[idx]
+            for _ch_idx, ch_name, cmap in specs:
+                arr = per_item.get(ch_name)
+                if arr is None:
+                    continue
+                if ch_name in viewer.layers:
+                    try:
+                        viewer.layers[ch_name].data = arr
+                    except Exception:
+                        del viewer.layers[ch_name]
+                        viewer.add_image(
+                            arr,
+                            name=ch_name,
+                            colormap=cmap,
+                            blending="additive",
+                            visible=True,
+                        )
+                else:
+                    viewer.add_image(
+                        arr,
+                        name=ch_name,
+                        colormap=cmap,
+                        blending="additive",
+                        visible=True,
+                    )
+
+        def on_image_data_changed(event) -> None:
+            try:
+                new_data = viewer.layers["image"].data
+                idx = id_to_index.get(id(new_data))
+                if idx is None:
+                    # Fallback: scan with array identity then equality
+                    for i, arr in enumerate(images):
+                        if arr is new_data or (
+                            arr.shape == new_data.shape
+                            and arr.dtype == new_data.dtype
+                            and np.array_equal(arr, new_data)
+                        ):
+                            idx = i
+                            break
+                if idx is None:
+                    return
+                update_context_layers(idx)
+            except Exception:
+                pass  # Stale viewer reference during shutdown — ignore
+
+        # Handle the initial image (already loaded before napari.run())
+        initial_data = viewer.layers["image"].data
+        initial_idx = id_to_index.get(id(initial_data), 0)
+        update_context_layers(initial_idx)
+
+        # Subscribe for subsequent image transitions
+        viewer.layers["image"].events.data.connect(on_image_data_changed)
+
     def _process_annotation_results(
         self, annotation_results: dict
     ) -> None:
