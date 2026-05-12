@@ -1,6 +1,7 @@
 """Configuration management for OMERO AI annotation workflows."""
 
 import json
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -563,10 +564,28 @@ class TrainingConfig(BaseModel):
                     f"train + validation + test fractions must sum to <= 1.0 (got {total:.2f})"
                 )
             # Note: train_fraction=0 is allowed (inference-only workflows)
+            if self.train_n != 3 or self.validate_n != 2 or self.test_n != 0:
+                warnings.warn(
+                    "train_n/validate_n/test_n are set but ignored because segment_all=True. "
+                    "Use train_fraction/validation_fraction/test_fraction instead.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         else:
             # Count-based mode: validate counts
             if self.train_n < 1:
                 raise ValueError("train_n must be at least 1 when segment_all=False")
+            if (
+                self.train_fraction != 0.7
+                or self.validation_fraction != 0.3
+                or self.test_fraction != 0.0
+            ):
+                warnings.warn(
+                    "train_fraction/validation_fraction/test_fraction are set but ignored "
+                    "because segment_all=False. Use train_n/validate_n/test_n instead.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         return self
 
 

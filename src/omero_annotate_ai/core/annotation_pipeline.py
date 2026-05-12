@@ -266,9 +266,16 @@ class AnnotationPipeline:
             )
         else:
             # Select subset with specific counts
-            n_train = min(self.config.training.train_n, n_total)
-            n_val = min(self.config.training.validate_n, n_total - n_train)
-            n_test = min(self.config.training.test_n, n_total - n_train - n_val)
+            n_train = self.config.training.train_n
+            n_val = self.config.training.validate_n
+            n_test = self.config.training.test_n
+            n_requested = n_train + n_val + n_test
+            if n_requested > n_total:
+                raise ValueError(
+                    f"Not enough images: requested {n_train} training + {n_val} validation"
+                    f" + {n_test} test = {n_requested}, but only {n_total} images available."
+                    f" Reduce train_n, validate_n, or test_n in the annotation settings."
+                )
 
             # Randomly select images
             shuffled_indices = list(range(n_total))
@@ -284,6 +291,12 @@ class AnnotationPipeline:
                 ["validation"] * n_val +
                 ["test"] * n_test
             )
+
+            # Sync fractions to reflect the actual count-mode split
+            if n_total > 0:
+                self.config.training.train_fraction = round(n_train / n_total, 4)
+                self.config.training.validation_fraction = round(n_val / n_total, 4)
+                self.config.training.test_fraction = round(n_test / n_total, 4)
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
@@ -1273,11 +1286,19 @@ class AnnotationPipeline:
             if self.config.training.segment_all:
                 selected_indices = list(range(n_total))
             else:
-                n_train = min(self.config.training.train_n, n_total)
-                n_val = min(self.config.training.validate_n, n_total - n_train)
+                n_train = self.config.training.train_n
+                n_val = self.config.training.validate_n
+                n_test = self.config.training.test_n
+                n_requested = n_train + n_val + n_test
+                if n_requested > n_total:
+                    raise ValueError(
+                        f"Not enough images: requested {n_train} training + {n_val} validation"
+                        f" + {n_test} test = {n_requested}, but only {n_total} images available."
+                        f" Reduce train_n, validate_n, or test_n in the annotation settings."
+                    )
                 shuffled_indices = list(range(n_total))
                 random.shuffle(shuffled_indices)
-                selected_indices = shuffled_indices[: n_train + n_val]
+                selected_indices = shuffled_indices[: n_requested]
 
             selected_image_ids = [image_ids[i] for i in selected_indices]
             images_list = self.get_images_by_ids(selected_image_ids)

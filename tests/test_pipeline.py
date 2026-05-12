@@ -194,6 +194,10 @@ class TestAnnotationPipeline:
         assert title == unique_name
 
         # Test 4: Verify create_or_replace_tracking_table receives the exact config name
+        config.training.train_n = 1
+        config.training.validate_n = 1
+        config.training.test_n = 0
+        config.training.segment_all = False
         mock_images = []
         for i in range(2):
             mock_img = Mock()
@@ -612,6 +616,121 @@ class TestAnnotationPipeline:
                 validation_fraction=0.3,
                 test_fraction=0.3,  # Total = 1.2 > 1.0
             )
+
+
+@pytest.mark.unit
+class TestImageCountValidation:
+    """Test that count-mode split raises an error when images are insufficient."""
+
+    def _make_images(self, n):
+        images = []
+        for i in range(n):
+            img = Mock()
+            img.getId.return_value = i + 1
+            img.getName.return_value = f"img{i + 1}"
+            img.getSizeT.return_value = 1
+            img.getSizeZ.return_value = 1
+            images.append(img)
+        return images
+
+    def _pipeline(self, train_n, validate_n, test_n):
+        config = create_default_config()
+        config.training.segment_all = False
+        config.training.train_n = train_n
+        config.training.validate_n = validate_n
+        config.training.test_n = test_n
+        return AnnotationPipeline(config, conn=Mock())
+
+    def test_exact_count_succeeds(self):
+        pipeline = self._pipeline(train_n=3, validate_n=2, test_n=0)
+        pipeline._prepare_processing_units(self._make_images(5))
+        categories = [a.category for a in pipeline.config.annotations]
+        assert len(categories) == 5
+        assert categories.count("training") == 3
+        assert categories.count("validation") == 2
+
+    def test_surplus_images_succeeds(self):
+        pipeline = self._pipeline(train_n=3, validate_n=2, test_n=1)
+        pipeline._prepare_processing_units(self._make_images(10))
+        categories = [a.category for a in pipeline.config.annotations]
+        assert len(categories) == 6
+        assert categories.count("training") == 3
+        assert categories.count("validation") == 2
+        assert categories.count("test") == 1
+
+    def test_insufficient_raises_error(self):
+        pipeline = self._pipeline(train_n=3, validate_n=2, test_n=0)
+        with pytest.raises(ValueError, match="Not enough images"):
+            pipeline._prepare_processing_units(self._make_images(4))
+
+    def test_train_only_no_val_succeeds(self):
+        pipeline = self._pipeline(train_n=3, validate_n=0, test_n=0)
+        pipeline._prepare_processing_units(self._make_images(3))
+        categories = [a.category for a in pipeline.config.annotations]
+        assert len(categories) == 3
+        assert all(c == "training" for c in categories)
+
+    def test_one_image_short_raises_error(self):
+        pipeline = self._pipeline(train_n=3, validate_n=2, test_n=1)
+        with pytest.raises(ValueError, match="Not enough images"):
+            pipeline._prepare_processing_units(self._make_images(5))
+
+    def test_error_message_content(self):
+        pipeline = self._pipeline(train_n=2, validate_n=2, test_n=0)
+        with pytest.raises(ValueError) as exc_info:
+            pipeline._prepare_processing_units(self._make_images(2))
+        msg = str(exc_info.value)
+        assert "2 training" in msg
+        assert "2 validation" in msg
+        assert "4" in msg
+        assert "2 images available" in msg
+
+
+@pytest.mark.unit
+class TestFractionSync:
+    """Test that count-mode runs sync train_fraction/validation_fraction after the split."""
+
+    def _make_images(self, n):
+        images = []
+        for i in range(n):
+            img = Mock()
+            img.getId.return_value = i + 1
+            img.getName.return_value = f"img{i + 1}"
+            img.getSizeT.return_value = 1
+            img.getSizeZ.return_value = 1
+            images.append(img)
+        return images
+
+    def _pipeline(self, train_n, validate_n, test_n):
+        config = create_default_config()
+        config.training.segment_all = False
+        config.training.train_n = train_n
+        config.training.validate_n = validate_n
+        config.training.test_n = test_n
+        return AnnotationPipeline(config, conn=Mock())
+
+    def test_count_mode_syncs_fractions(self):
+        pipeline = self._pipeline(train_n=3, validate_n=2, test_n=0)
+        pipeline._prepare_processing_units(self._make_images(10))
+        assert pipeline.config.training.train_fraction == pytest.approx(0.3)
+        assert pipeline.config.training.validation_fraction == pytest.approx(0.2)
+        assert pipeline.config.training.test_fraction == pytest.approx(0.0)
+
+    def test_count_mode_fractions_sum_to_one_or_less(self):
+        pipeline = self._pipeline(train_n=3, validate_n=2, test_n=1)
+        pipeline._prepare_processing_units(self._make_images(10))
+        total = (
+            pipeline.config.training.train_fraction
+            + pipeline.config.training.validation_fraction
+            + pipeline.config.training.test_fraction
+        )
+        assert total <= 1.0
+
+    def test_count_mode_no_val_fraction_is_zero(self):
+        pipeline = self._pipeline(train_n=5, validate_n=0, test_n=0)
+        pipeline._prepare_processing_units(self._make_images(10))
+        assert pipeline.config.training.validation_fraction == pytest.approx(0.0)
+        assert pipeline.config.training.test_fraction == pytest.approx(0.0)
 
 
 @pytest.mark.unit

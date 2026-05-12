@@ -45,12 +45,14 @@ class TestFractionModeValidation:
     def test_train_n_zero_allowed_in_fraction_mode(self):
         """train_n=0 should NOT raise error when segment_all=True."""
         # This would fail with old validation that always required train_n >= 1
-        config = TrainingConfig(
-            segment_all=True,
-            train_n=0,
-            validate_n=0,
-            test_n=0,
-        )
+        # A warning is expected because train_n/validate_n differ from their defaults
+        with pytest.warns(UserWarning, match="train_n.*ignored.*segment_all=True"):
+            config = TrainingConfig(
+                segment_all=True,
+                train_n=0,
+                validate_n=0,
+                test_n=0,
+            )
         assert config.train_n == 0
 
     def test_fractions_exactly_one_allowed(self):
@@ -119,16 +121,17 @@ class TestCountModeValidation:
         """Invalid fractions should NOT raise error when segment_all=False.
 
         In count mode, fractions are ignored, so even invalid fractions
-        should not cause validation errors.
+        should not cause validation errors. A warning is expected because
+        non-default fractions are set while in count mode.
         """
-        # This would fail if fraction validation ran in count mode
-        config = TrainingConfig(
-            segment_all=False,
-            train_n=3,
-            train_fraction=0.9,
-            validation_fraction=0.9,
-            test_fraction=0.9,  # Total = 2.7, but should be ignored
-        )
+        with pytest.warns(UserWarning, match="train_fraction.*ignored.*segment_all=False"):
+            config = TrainingConfig(
+                segment_all=False,
+                train_n=3,
+                train_fraction=0.9,
+                validation_fraction=0.9,
+                test_fraction=0.9,  # Total = 2.7, but should be ignored
+            )
         assert config.train_n == 3
 
     def test_train_n_one_is_minimum(self):
@@ -145,37 +148,26 @@ class TestModeSwitch:
 
     def test_same_config_valid_in_fraction_mode_invalid_in_count_mode(self):
         """train_n=0 valid with segment_all=True, invalid with segment_all=False."""
-        # Valid in fraction mode
-        config = TrainingConfig(
-            segment_all=True,
-            train_n=0,
-        )
+        # Valid in fraction mode (warns because train_n differs from default)
+        with pytest.warns(UserWarning, match="train_n.*ignored.*segment_all=True"):
+            config = TrainingConfig(segment_all=True, train_n=0)
         assert config.train_n == 0
 
         # Invalid in count mode
         with pytest.raises(ValueError, match="train_n must be at least 1"):
-            TrainingConfig(
-                segment_all=False,
-                train_n=0,
-            )
+            TrainingConfig(segment_all=False, train_n=0)
 
     def test_invalid_fractions_only_caught_in_fraction_mode(self):
         """Fraction validation only runs when segment_all=True."""
         # Invalid fractions should fail in fraction mode
         with pytest.raises(ValueError, match="must sum to <= 1.0"):
-            TrainingConfig(
-                segment_all=True,
-                train_fraction=0.8,
-                validation_fraction=0.8,
-            )
+            TrainingConfig(segment_all=True, train_fraction=0.8, validation_fraction=0.8)
 
-        # Same invalid fractions should pass in count mode (ignored)
-        config = TrainingConfig(
-            segment_all=False,
-            train_n=5,
-            train_fraction=0.8,
-            validation_fraction=0.8,
-        )
+        # Same invalid fractions should pass in count mode (ignored, with warning)
+        with pytest.warns(UserWarning, match="train_fraction.*ignored.*segment_all=False"):
+            config = TrainingConfig(
+                segment_all=False, train_n=5, train_fraction=0.8, validation_fraction=0.8
+            )
         assert config.train_n == 5
 
 
