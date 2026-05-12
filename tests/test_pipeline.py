@@ -1,9 +1,10 @@
 """Tests for the annotation pipeline."""
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch, Mock, MagicMock
 import tempfile
 from pathlib import Path
+import numpy as np
 
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.core.annotation_config import create_default_config
@@ -934,3 +935,314 @@ class TestAnnotationTimestamps:
         # IDs should remain None when not provided
         assert annotation.roi_id is None
         assert annotation.label_id is None
+
+
+@pytest.mark.unit
+class TestContextChannelHook:
+    """Tests for context channel hook in _run_micro_sam_annotation."""
+
+    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
+    def test_build_context_images_empty_when_no_context_channels(self, mock_dask):
+        """With no context_channels, context_images should be list of empty dicts."""
+        import numpy as np
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        label_arr = np.zeros((64, 64), dtype=np.uint16)
+        mock_dask.return_value = label_arr
+
+        config = create_default_config()
+        config.spatial_coverage.channels = [0]
+        # No context_channels set
+        pipeline = AnnotationPipeline(config, conn=Mock())
+
+        mock_image = Mock()
+        mock_image.getId.return_value = 1
+        mock_image.getSizeX.return_value = 64
+        mock_image.getSizeY.return_value = 64
+        mock_image.getSizeC.return_value = 1
+        mock_image.getSizeZ.return_value = 1
+        mock_image.getSizeT.return_value = 1
+
+        meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
+        batch_data = [(mock_image, "ann1", meta, 0)]
+
+        context_images = pipeline._build_context_images(batch_data)
+        assert context_images == [{}]
+
+    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
+    def test_build_context_images_loads_correct_channel(self, mock_dask):
+        """With context_channels=[1], loads channel 1 for each batch item."""
+        import numpy as np
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        label_arr = np.zeros((64, 64), dtype=np.uint16)
+        ctx_arr = np.ones((64, 64), dtype=np.uint16) * 100
+        # Return label_arr for channel 0, ctx_arr for channel 1
+        def side_effect(**kwargs):
+            if kwargs.get("channels") == [1]:
+                return ctx_arr
+            return label_arr
+        mock_dask.side_effect = side_effect
+
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.context_channels = [1]
+        config.spatial_coverage.context_channel_names = ["DAPI"]
+        pipeline = AnnotationPipeline(config, conn=Mock())
+
+        mock_image = Mock()
+        mock_image.getId.return_value = 1
+        mock_image.getSizeX.return_value = 64
+        mock_image.getSizeY.return_value = 64
+        mock_image.getSizeC.return_value = 2
+        mock_image.getSizeZ.return_value = 1
+        mock_image.getSizeT.return_value = 1
+
+        meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
+        batch_data = [(mock_image, "ann1", meta, 0)]
+
+        context_images = pipeline._build_context_images(batch_data)
+        assert len(context_images) == 1
+        assert "DAPI" in context_images[0]
+        np.testing.assert_array_equal(context_images[0]["DAPI"], ctx_arr)
+
+    def test_install_context_channel_hook_no_op_when_empty(self):
+        """Hook install is a no-op when context_images contains empty dicts."""
+        import numpy as np
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        config = create_default_config()
+        pipeline = AnnotationPipeline(config, conn=Mock())
+
+        mock_viewer = Mock()
+        images = [np.zeros((64, 64))]
+        context_images = [{}]
+
+        # Should not raise; viewer.layers should not be touched
+        pipeline._install_context_channel_hook(mock_viewer, images, context_images)
+        mock_viewer.add_image.assert_not_called()
+
+    def test_install_context_channel_hook_adds_initial_layer(self):
+        """Hook install should add a context layer for the initial image."""
+        import numpy as np
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.context_channels = [1]
+        config.spatial_coverage.context_channel_names = ["DAPI"]
+        config.spatial_coverage.context_channel_colormaps = ["blue"]
+        pipeline = AnnotationPipeline(config, conn=Mock())
+
+        label_arr = np.zeros((64, 64), dtype=np.uint16)
+        dapi_arr = np.ones((64, 64), dtype=np.uint16) * 50
+
+        # Mock viewer: layers["image"].data returns label_arr
+        mock_image_layer = Mock()
+        mock_image_layer.data = label_arr
+
+        mock_layers = MagicMock()
+        mock_layers.__getitem__ = Mock(return_value=mock_image_layer)
+        mock_layers.__contains__ = Mock(return_value=False)  # "DAPI" not in layers
+
+        mock_viewer = Mock()
+        mock_viewer.layers = mock_layers
+
+        images = [label_arr]
+        context_images = [{"DAPI": dapi_arr}]
+
+        pipeline._install_context_channel_hook(mock_viewer, images, context_images)
+
+        # Verify add_image was called with DAPI array and correct kwargs
+        mock_viewer.add_image.assert_called_once_with(
+            dapi_arr, name="DAPI", colormap="blue", blending="additive", visible=True
+        )
+
+    def test_context_hook_callback_updates_layer_on_next_image(self):
+        """Simulating next-image event: callback should update DAPI layer data."""
+        import numpy as np
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        config = create_default_config()
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.context_channels = [1]
+        config.spatial_coverage.context_channel_names = ["DAPI"]
+        config.spatial_coverage.context_channel_colormaps = ["blue"]
+        pipeline = AnnotationPipeline(config, conn=Mock())
+
+        label_arr0 = np.zeros((64, 64), dtype=np.uint16)
+        label_arr1 = np.ones((64, 64), dtype=np.uint16)
+        dapi_arr0 = np.zeros((64, 64), dtype=np.uint16) + 10
+        dapi_arr1 = np.zeros((64, 64), dtype=np.uint16) + 20
+
+        images = [label_arr0, label_arr1]
+        context_images = [{"DAPI": dapi_arr0}, {"DAPI": dapi_arr1}]
+
+        # Simulate viewer: image layer starts at label_arr0, transitions to label_arr1
+        mock_dapi_layer = Mock()
+        mock_image_layer = Mock()
+        mock_image_layer.data = label_arr0  # initial state
+
+        event_callbacks = []
+
+        class MockEvents:
+            def connect(self, cb):
+                event_callbacks.append(cb)
+
+        mock_image_layer.events = Mock()
+        mock_image_layer.events.data = MockEvents()
+
+        def layers_getitem(name):
+            if name == "image":
+                return mock_image_layer
+            if name == "DAPI":
+                return mock_dapi_layer
+            raise KeyError(name)
+
+        def layers_contains(name):
+            return name == "DAPI"  # After first call, DAPI layer exists
+
+        mock_layers = MagicMock()
+        mock_layers.__getitem__ = Mock(side_effect=layers_getitem)
+        mock_layers.__contains__ = Mock(side_effect=layers_contains)
+
+        mock_viewer = Mock()
+        mock_viewer.layers = mock_layers
+
+        pipeline._install_context_channel_hook(mock_viewer, images, context_images)
+
+        # Simulate napari firing events.data when image advances to label_arr1
+        mock_image_layer.data = label_arr1
+        assert len(event_callbacks) == 1
+        event_callbacks[0](Mock())  # fire the callback
+
+        # DAPI layer data should have been updated to dapi_arr1
+        assert mock_dapi_layer.data is dapi_arr1
+
+
+@pytest.mark.unit
+class TestCellposeMultiChannelSaving:
+    """Test that _save_images_for_cellpose saves channels-last multi-channel TIFFs."""
+
+    def _make_pipeline(self, training_channels, label_channel=0):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        config = create_default_config()
+        config.spatial_coverage.channels = list(
+            set([label_channel] + training_channels)
+        )
+        config.spatial_coverage.label_channel = label_channel
+        config.spatial_coverage.training_channels = training_channels
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        return pipeline
+
+    def test_single_channel_saves_as_YXC(self, tmp_path):
+        """Single training channel is saved as (Y, X, 1) channels-last."""
+        pipeline = self._make_pipeline(training_channels=[0])
+        pipeline.config.output.output_directory = str(tmp_path)
+
+        h, w = 32, 32
+        ch0 = np.zeros((h, w), dtype=np.uint16) + 10
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(return_value=ch0)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0])
+        assert stacked.shape == (h, w, 1)
+        np.testing.assert_array_equal(stacked[..., 0], ch0)
+
+    def test_multi_channel_saves_as_YXC(self, tmp_path):
+        """Two training channels are stacked as (Y, X, 2)."""
+        pipeline = self._make_pipeline(training_channels=[0, 1])
+        pipeline.config.output.output_directory = str(tmp_path)
+
+        h, w = 32, 32
+        ch0 = np.zeros((h, w), dtype=np.uint16) + 10
+        ch1 = np.zeros((h, w), dtype=np.uint16) + 20
+
+        def load_side_effect(image_obj, meta):
+            ch = meta.get("channel_override", 0)
+            return ch0 if ch == 0 else ch1
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1])
+        assert stacked.shape == (h, w, 2)
+        np.testing.assert_array_equal(stacked[..., 0], ch0)
+        np.testing.assert_array_equal(stacked[..., 1], ch1)
+
+    def test_3d_multi_channel_saves_as_ZYXC(self, tmp_path):
+        """3D images with two channels are stacked as (Z, Y, X, 2)."""
+        pipeline = self._make_pipeline(training_channels=[0, 1])
+
+        z, h, w = 5, 32, 32
+        ch0 = np.zeros((z, h, w), dtype=np.uint16) + 10
+        ch1 = np.zeros((z, h, w), dtype=np.uint16) + 20
+
+        def load_side_effect(image_obj, meta):
+            ch = meta.get("channel_override", 0)
+            return ch0 if ch == 0 else ch1
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "is_volumetric": True}, [0, 1])
+        assert stacked.shape == (z, h, w, 2)
+
+    def test_all_training_channels_in_output(self, tmp_path):
+        """All channels in training_channels appear in the stacked output — none silently dropped."""
+        pipeline = self._make_pipeline(training_channels=[0, 1, 2])
+
+        h, w = 16, 16
+        arrays = {i: np.full((h, w), i * 10, dtype=np.uint16) for i in range(3)}
+
+        def load_side_effect(image_obj, meta):
+            return arrays[meta.get("channel_override", 0)]
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1, 2])
+        assert stacked.shape == (h, w, 3)
+        for i in range(3):
+            np.testing.assert_array_equal(stacked[..., i], arrays[i])
+
+    def test_label_input_stays_single_channel(self, tmp_path):
+        """label_input/ TIFF is still saved as (Y, X) — not stacked."""
+        pipeline = self._make_pipeline(training_channels=[1], label_channel=0)
+        pipeline.config.output.output_directory = str(tmp_path)
+
+        h, w = 16, 16
+        label_arr = np.zeros((h, w), dtype=np.uint16) + 5
+        train_arr = np.zeros((h, w), dtype=np.uint16) + 9
+
+        def load_side_effect(image_obj, meta):
+            ch = meta.get("channel_override", 0)
+            return label_arr if ch == 0 else train_arr
+
+        mock_conn = Mock()
+        mock_image = Mock()
+        mock_conn.getObject = Mock(return_value=mock_image)
+        pipeline.conn = mock_conn
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        meta = {"timepoint": 0, "z_slice": 0, "channel_override": 0}
+        processing_units = [(1, "img_001", meta, 0)]
+        pipeline._save_images_for_cellpose(processing_units)
+
+        import tifffile
+        label_file = tmp_path / "label_input" / "img_001.tif"
+        assert label_file.exists()
+        saved = tifffile.imread(str(label_file))
+        assert saved.ndim == 2, f"label_input should be 2D, got shape {saved.shape}"
+
+        train_file = tmp_path / "training_input" / "img_001.tif"
+        assert train_file.exists()
+        saved_train = tifffile.imread(str(train_file))
+        assert saved_train.ndim == 3, f"training_input should be 3D (Y,X,C), got shape {saved_train.shape}"
+        assert saved_train.shape == (h, w, 1)

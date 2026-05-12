@@ -474,7 +474,7 @@ class AnnotationPipeline:
             images = []
             metadata = []
 
-            for image_obj, annotation_id, meta, row_idx in batch_data    :
+            for image_obj, annotation_id, meta, row_idx in batch_data:
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
@@ -482,6 +482,9 @@ class AnnotationPipeline:
                 meta_with_image_id = meta.copy()
                 meta_with_image_id["image_id"] = image_obj.getId()
                 metadata.append((annotation_id, meta_with_image_id, row_idx))
+
+            # Build context images parallel list (empty dicts when no context channels)
+            context_images = self._build_context_images(batch_data)
 
             # Set up output paths
             output_path = Path(self.config.output.output_directory)
@@ -492,7 +495,6 @@ class AnnotationPipeline:
             # Run micro-SAM annotation
             model_type = self.config.ai_model.pretrained_from
 
-    
             # Run image series annotator with explicit napari.run() call
             viewer = image_series_annotator(
                 images=images,
@@ -504,6 +506,9 @@ class AnnotationPipeline:
                 is_volumetric=self.config.spatial_coverage.three_d,
                 skip_segmented=True,
             )
+
+            # Install context channel sidecar layers (no-op if none configured)
+            self._install_context_channel_hook(viewer, images, context_images)
 
             # Explicitly start the event loop - this will block until viewer is closed
             napari.run()
@@ -604,6 +609,112 @@ class AnnotationPipeline:
                 ]
 
         return image_data
+
+    def _load_and_stack_channels(self, image_obj, meta: dict, channel_indices: List[int]) -> np.ndarray:
+        """Load multiple channels and stack them channels-last: (Y,X,C) or (Z,Y,X,C)."""
+        arrays = [
+            self._load_image_data(image_obj, {**meta, "channel_override": ch})
+            for ch in channel_indices
+        ]
+        return np.stack(arrays, axis=-1)
+
+    def _build_context_images(self, batch_data: List[Tuple]) -> List[dict]:
+        """Build context_images parallel list for the context channel hook.
+
+        Returns a list of dicts, one per batch item. Each dict maps
+        channel display name -> numpy array. Empty dicts when no context
+        channels are configured.
+        """
+        if not self.config.spatial_coverage.uses_context_channels():
+            return [{} for _ in batch_data]
+
+        specs = self.config.spatial_coverage.get_context_channel_specs()
+        context_images = []
+        for image_obj, _annotation_id, meta, _row_idx in batch_data:
+            per_item = {}
+            for ch_idx, ch_name, _cmap in specs:
+                ctx_meta = {**meta, "channel_override": ch_idx}
+                arr = self._load_image_data(image_obj, ctx_meta)
+                per_item[ch_name] = arr
+            context_images.append(per_item)
+        return context_images
+
+    def _install_context_channel_hook(
+        self,
+        viewer,
+        images: List,
+        context_images: List[dict],
+    ) -> None:
+        """Install a napari events.data hook that keeps context layers in sync.
+
+        When image_series_annotator advances to the next image, updates each
+        context channel sidecar layer to match the new image index.
+        Does nothing when context_images contains only empty dicts.
+        """
+        specs = self.config.spatial_coverage.get_context_channel_specs()
+        if not specs:
+            return
+
+        # Build identity lookup: id(array) -> list index
+        id_to_index = {id(arr): i for i, arr in enumerate(images)}
+
+        def update_context_layers(idx: int) -> None:
+            per_item = context_images[idx]
+            for _ch_idx, ch_name, cmap in specs:
+                arr = per_item.get(ch_name)
+                if arr is None:
+                    continue
+                if ch_name in viewer.layers:
+                    try:
+                        viewer.layers[ch_name].data = arr
+                    except Exception:
+                        del viewer.layers[ch_name]
+                        viewer.add_image(
+                            arr,
+                            name=ch_name,
+                            colormap=cmap,
+                            blending="additive",
+                            visible=True,
+                        )
+                        viewer.layers.move(len(viewer.layers) - 1, 0)
+                else:
+                    viewer.add_image(
+                        arr,
+                        name=ch_name,
+                        colormap=cmap,
+                        blending="additive",
+                        visible=True,
+                    )
+                    viewer.layers.move(len(viewer.layers) - 1, 0)
+
+        def on_image_data_changed(event) -> None:
+            try:
+                new_data = viewer.layers["image"].data
+                idx = id_to_index.get(id(new_data))
+                if idx is None:
+                    # Fallback: scan with array identity then equality
+                    for i, arr in enumerate(images):
+                        if arr is new_data or (
+                            arr.shape == new_data.shape
+                            and arr.dtype == new_data.dtype
+                            and np.array_equal(arr, new_data)
+                        ):
+                            idx = i
+                            break
+                if idx is None:
+                    return
+                update_context_layers(idx)
+            except Exception:
+                pass  # Stale viewer reference during shutdown — ignore
+
+        # Handle the initial image (already loaded before napari.run())
+        initial_data = viewer.layers["image"].data
+        initial_idx = id_to_index.get(id(initial_data))
+        if initial_idx is not None:
+            update_context_layers(initial_idx)
+
+        # Subscribe for subsequent image transitions
+        viewer.layers["image"].events.data.connect(on_image_data_changed)
 
     def _process_annotation_results(
         self, annotation_results: dict
@@ -752,19 +863,21 @@ class AnnotationPipeline:
                     f"Could not save training channel image for {annotation_id}"
                 )
 
-    def _save_image_to_disk(self, image_data: np.ndarray, file_path: Path) -> bool:
+    def _save_image_to_disk(self, image_data: np.ndarray, file_path: Path, axes: Optional[str] = None) -> bool:
         """Save image data to disk using tifffile (preferred) or imageio fallback.
 
         Args:
             image_data: NumPy array of image data to save
             file_path: Path where the image should be saved
+            axes: Optional axes string for tifffile metadata (e.g. 'YXC', 'ZYXC')
 
         Returns:
             True if saved successfully, False otherwise
         """
         try:
             import tifffile
-            tifffile.imwrite(file_path, image_data)
+            kwargs = {"metadata": {"axes": axes}} if axes else {}
+            tifffile.imwrite(file_path, image_data, **kwargs)
             self._debug_print(f"Saved (tifffile): {file_path} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
             return True
         except ImportError:
@@ -1447,13 +1560,17 @@ class AnnotationPipeline:
             image_obj = self.conn.getObject("Image", img_id)
 
             if "label_input" in folders:
-                # Separate-channel: label channel → label_input/, training channel → training_input/
+                # Separate-channel: label channel → label_input/ (single-channel, annotation reference)
                 if self._save_training_image(image_obj, meta, annotation_id, folders["label_input"]) is None:
                     print(f"Warning: Could not save label channel image for {annotation_id}")
 
+                # training_input/ → all training channels stacked channels-last: (Y,X,C) or (Z,Y,X,C)
                 training_channels = self.config.spatial_coverage.get_training_channels()
-                train_meta = {**meta, "channel_override": training_channels[0]}
-                if self._save_training_image(image_obj, train_meta, annotation_id, folders["training_input"]) is None:
+                stacked = self._load_and_stack_channels(image_obj, meta, training_channels)
+                axes_str = "ZYXC" if stacked.ndim == 4 else "YXC"
+                train_file = folders["training_input"] / f"{annotation_id}.tif"
+                folders["training_input"].mkdir(parents=True, exist_ok=True)
+                if not self._save_image_to_disk(stacked, train_file, axes=axes_str):
                     print(f"Warning: Could not save training channel image for {annotation_id}")
             else:
                 # Single-channel: → input/
