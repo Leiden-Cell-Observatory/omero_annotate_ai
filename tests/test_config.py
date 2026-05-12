@@ -958,3 +958,42 @@ class TestAnnotationConfigJSON:
         json_str = config.to_json()
         loaded = type(config).from_json(json_str)
         assert config.to_dict() == loaded.to_dict()
+
+
+@pytest.mark.unit
+class TestTrainingConfigWarnings:
+    """Test that TrainingConfig warns when the inactive split set has non-default values."""
+
+    def test_warns_when_fractions_set_but_count_mode(self):
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        with pytest.warns(UserWarning, match="train_fraction.*ignored.*segment_all=False"):
+            TrainingConfig(segment_all=False, train_n=3, validate_n=2, test_n=0, train_fraction=0.5)
+
+    def test_warns_when_validation_fraction_set_but_count_mode(self):
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        with pytest.warns(UserWarning, match="ignored.*segment_all=False"):
+            TrainingConfig(segment_all=False, train_n=3, validate_n=2, test_n=0, validation_fraction=0.1)
+
+    def test_warns_when_counts_set_but_fraction_mode(self):
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        with pytest.warns(UserWarning, match="train_n.*ignored.*segment_all=True"):
+            TrainingConfig(segment_all=True, train_n=10, validate_n=2, test_n=0)
+
+    def test_no_warning_when_only_active_count_set_changed(self):
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            TrainingConfig(segment_all=False, train_n=5, validate_n=2, test_n=0)
+
+    def test_no_warning_when_only_active_fraction_set_changed(self):
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            TrainingConfig(
+                segment_all=True,
+                train_fraction=0.6,
+                validation_fraction=0.4,
+                test_fraction=0.0,
+            )
