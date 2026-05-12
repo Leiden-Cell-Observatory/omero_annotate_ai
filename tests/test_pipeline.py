@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import patch, Mock, MagicMock
 import tempfile
 from pathlib import Path
+import numpy as np
 
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.core.annotation_config import create_default_config
@@ -1122,3 +1123,126 @@ class TestContextChannelHook:
 
         # DAPI layer data should have been updated to dapi_arr1
         assert mock_dapi_layer.data is dapi_arr1
+
+
+@pytest.mark.unit
+class TestCellposeMultiChannelSaving:
+    """Test that _save_images_for_cellpose saves channels-last multi-channel TIFFs."""
+
+    def _make_pipeline(self, training_channels, label_channel=0):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        config = create_default_config()
+        config.spatial_coverage.channels = list(
+            set([label_channel] + training_channels)
+        )
+        config.spatial_coverage.label_channel = label_channel
+        config.spatial_coverage.training_channels = training_channels
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        return pipeline
+
+    def test_single_channel_saves_as_YXC(self, tmp_path):
+        """Single training channel is saved as (Y, X, 1) channels-last."""
+        pipeline = self._make_pipeline(training_channels=[0])
+        pipeline.config.output.output_directory = str(tmp_path)
+
+        h, w = 32, 32
+        ch0 = np.zeros((h, w), dtype=np.uint16) + 10
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(return_value=ch0)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0])
+        assert stacked.shape == (h, w, 1)
+        np.testing.assert_array_equal(stacked[..., 0], ch0)
+
+    def test_multi_channel_saves_as_YXC(self, tmp_path):
+        """Two training channels are stacked as (Y, X, 2)."""
+        pipeline = self._make_pipeline(training_channels=[0, 1])
+        pipeline.config.output.output_directory = str(tmp_path)
+
+        h, w = 32, 32
+        ch0 = np.zeros((h, w), dtype=np.uint16) + 10
+        ch1 = np.zeros((h, w), dtype=np.uint16) + 20
+
+        def load_side_effect(image_obj, meta):
+            ch = meta.get("channel_override", 0)
+            return ch0 if ch == 0 else ch1
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1])
+        assert stacked.shape == (h, w, 2)
+        np.testing.assert_array_equal(stacked[..., 0], ch0)
+        np.testing.assert_array_equal(stacked[..., 1], ch1)
+
+    def test_3d_multi_channel_saves_as_ZYXC(self, tmp_path):
+        """3D images with two channels are stacked as (Z, Y, X, 2)."""
+        pipeline = self._make_pipeline(training_channels=[0, 1])
+
+        z, h, w = 5, 32, 32
+        ch0 = np.zeros((z, h, w), dtype=np.uint16) + 10
+        ch1 = np.zeros((z, h, w), dtype=np.uint16) + 20
+
+        def load_side_effect(image_obj, meta):
+            ch = meta.get("channel_override", 0)
+            return ch0 if ch == 0 else ch1
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "is_volumetric": True}, [0, 1])
+        assert stacked.shape == (z, h, w, 2)
+
+    def test_all_training_channels_in_output(self, tmp_path):
+        """All channels in training_channels appear in the stacked output — none silently dropped."""
+        pipeline = self._make_pipeline(training_channels=[0, 1, 2])
+
+        h, w = 16, 16
+        arrays = {i: np.full((h, w), i * 10, dtype=np.uint16) for i in range(3)}
+
+        def load_side_effect(image_obj, meta):
+            return arrays[meta.get("channel_override", 0)]
+
+        mock_image = Mock()
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1, 2])
+        assert stacked.shape == (h, w, 3)
+        for i in range(3):
+            np.testing.assert_array_equal(stacked[..., i], arrays[i])
+
+    def test_label_input_stays_single_channel(self, tmp_path):
+        """label_input/ TIFF is still saved as (Y, X) — not stacked."""
+        pipeline = self._make_pipeline(training_channels=[1], label_channel=0)
+        pipeline.config.output.output_directory = str(tmp_path)
+
+        h, w = 16, 16
+        label_arr = np.zeros((h, w), dtype=np.uint16) + 5
+        train_arr = np.zeros((h, w), dtype=np.uint16) + 9
+
+        def load_side_effect(image_obj, meta):
+            ch = meta.get("channel_override", 0)
+            return label_arr if ch == 0 else train_arr
+
+        mock_conn = Mock()
+        mock_image = Mock()
+        mock_conn.getObject = Mock(return_value=mock_image)
+        pipeline.conn = mock_conn
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+
+        meta = {"timepoint": 0, "z_slice": 0, "channel_override": 0}
+        processing_units = [(1, "img_001", meta, 0)]
+        pipeline._save_images_for_cellpose(processing_units)
+
+        import tifffile
+        label_file = tmp_path / "label_input" / "img_001.tif"
+        assert label_file.exists()
+        saved = tifffile.imread(str(label_file))
+        assert saved.ndim == 2, f"label_input should be 2D, got shape {saved.shape}"
+
+        train_file = tmp_path / "training_input" / "img_001.tif"
+        assert train_file.exists()
+        saved_train = tifffile.imread(str(train_file))
+        assert saved_train.ndim == 3, f"training_input should be 3D (Y,X,C), got shape {saved_train.shape}"
+        assert saved_train.shape == (h, w, 1)

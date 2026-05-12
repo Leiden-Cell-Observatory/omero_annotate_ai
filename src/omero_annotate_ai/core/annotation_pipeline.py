@@ -610,6 +610,14 @@ class AnnotationPipeline:
 
         return image_data
 
+    def _load_and_stack_channels(self, image_obj, meta: dict, channel_indices: List[int]) -> np.ndarray:
+        """Load multiple channels and stack them channels-last: (Y,X,C) or (Z,Y,X,C)."""
+        arrays = [
+            self._load_image_data(image_obj, {**meta, "channel_override": ch})
+            for ch in channel_indices
+        ]
+        return np.stack(arrays, axis=-1)
+
     def _build_context_images(self, batch_data: List[Tuple]) -> List[dict]:
         """Build context_images parallel list for the context channel hook.
 
@@ -855,19 +863,21 @@ class AnnotationPipeline:
                     f"Could not save training channel image for {annotation_id}"
                 )
 
-    def _save_image_to_disk(self, image_data: np.ndarray, file_path: Path) -> bool:
+    def _save_image_to_disk(self, image_data: np.ndarray, file_path: Path, axes: Optional[str] = None) -> bool:
         """Save image data to disk using tifffile (preferred) or imageio fallback.
 
         Args:
             image_data: NumPy array of image data to save
             file_path: Path where the image should be saved
+            axes: Optional axes string for tifffile metadata (e.g. 'YXC', 'ZYXC')
 
         Returns:
             True if saved successfully, False otherwise
         """
         try:
             import tifffile
-            tifffile.imwrite(file_path, image_data)
+            kwargs = {"metadata": {"axes": axes}} if axes else {}
+            tifffile.imwrite(file_path, image_data, **kwargs)
             self._debug_print(f"Saved (tifffile): {file_path} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]")
             return True
         except ImportError:
@@ -1550,13 +1560,17 @@ class AnnotationPipeline:
             image_obj = self.conn.getObject("Image", img_id)
 
             if "label_input" in folders:
-                # Separate-channel: label channel → label_input/, training channel → training_input/
+                # Separate-channel: label channel → label_input/ (single-channel, annotation reference)
                 if self._save_training_image(image_obj, meta, annotation_id, folders["label_input"]) is None:
                     print(f"Warning: Could not save label channel image for {annotation_id}")
 
+                # training_input/ → all training channels stacked channels-last: (Y,X,C) or (Z,Y,X,C)
                 training_channels = self.config.spatial_coverage.get_training_channels()
-                train_meta = {**meta, "channel_override": training_channels[0]}
-                if self._save_training_image(image_obj, train_meta, annotation_id, folders["training_input"]) is None:
+                stacked = self._load_and_stack_channels(image_obj, meta, training_channels)
+                axes_str = "ZYXC" if stacked.ndim == 4 else "YXC"
+                train_file = folders["training_input"] / f"{annotation_id}.tif"
+                folders["training_input"].mkdir(parents=True, exist_ok=True)
+                if not self._save_image_to_disk(stacked, train_file, axes=axes_str):
                     print(f"Warning: Could not save training channel image for {annotation_id}")
             else:
                 # Single-channel: → input/
