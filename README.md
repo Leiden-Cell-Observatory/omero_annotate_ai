@@ -26,7 +26,7 @@ Package to support reproducible image annotation workflows for AI training using
 ```bash
 # Recommended: Using pixi
 pixi init myproject && cd myproject
-pixi add micro-sam
+pixi add micro_sam
 pixi add --pypi omero-annotate-ai
 pixi shell
 
