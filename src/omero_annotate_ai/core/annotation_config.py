@@ -470,6 +470,10 @@ class StudyContext(BaseModel):
     imaging_method: Optional[str] = Field(
         default=None, description="Microscopy technique used"
     )
+    funding_statement: Optional[str] = Field(
+        default=None,
+        description="How the study was funded (required by MIFA Study metadata)",
+    )
 
 
 class AIModelConfig(BaseModel):
@@ -1004,17 +1008,75 @@ class AnnotationConfig(BaseModel):
 
             self.add_annotation(ImageAnnotation(**annotation_data))
 
-    def to_mifa_metadata(self) -> dict:
-        """Export MIFA-compatible metadata"""
-        return {
-            "annotation_type": self.annotation_methodology.annotation_type,
-            "annotation_method": self.annotation_methodology.annotation_method
-            or "unknown",
-            "annotation_criteria": self.annotation_methodology.annotation_criteria,
-            "spatial_coverage": self.spatial_coverage.model_dump(),
-            "study_context": self.study.model_dump(),
-            "quality_metrics": self.training.model_dump(),
-        }
+    def to_mifa(
+        self, *, file_id_source: str = "auto", funding_statement: Optional[str] = None
+    ):
+        """Build the three MIFA documents (Study, Annotations, Version) for this config.
+
+        Returns a dict with keys ``"study"``, ``"annotations"`` and ``"version"`` holding
+        upstream ``bia-mifa-models`` dataclass objects. Construction validates required
+        fields. See :mod:`omero_annotate_ai.core.mifa_export` for the mapping details.
+
+        Args:
+            file_id_source: ``"auto"`` (default), ``"omero"`` or ``"local"`` - what the
+                per-image ``annotation_id``/``source_image_id`` reference.
+            funding_statement: Optional override for the Study funding statement.
+        """
+        from .mifa_export import to_mifa as _to_mifa
+
+        return _to_mifa(
+            self, file_id_source=file_id_source, funding_statement=funding_statement
+        )
+
+    def save_mifa(
+        self,
+        directory,
+        *,
+        accession: Optional[str] = None,
+        file_id_source: str = "auto",
+        funding_statement: Optional[str] = None,
+    ) -> Dict[str, Path]:
+        """Write the three MIFA YAML documents to ``directory`` (``<Class>_<accession>.yaml``).
+
+        Returns a dict mapping ``"study"``/``"annotations"``/``"version"`` to written paths.
+        """
+        from .mifa_export import save_mifa as _save_mifa
+
+        return _save_mifa(
+            self,
+            directory,
+            accession=accession,
+            file_id_source=file_id_source,
+            funding_statement=funding_statement,
+        )
+
+    def save_bia_package(
+        self,
+        dest_dir,
+        *,
+        accession: Optional[str] = None,
+        funding_statement: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Assemble a self-contained BioImage Archive submission bundle in ``dest_dir``.
+
+        Writes ``metadata/`` (the MIFA YAMLs), the two BIA ``file_list_*.tsv`` files, and
+        copies the referenced images/masks from ``output.output_directory`` into the
+        bundle. Returns a summary dict (paths + counts).
+        """
+        from .mifa_export import save_bia_package as _save_bia_package
+
+        return _save_bia_package(
+            self,
+            dest_dir,
+            accession=accession,
+            funding_statement=funding_statement,
+        )
+
+    def to_mifa_metadata(self, *, funding_statement: Optional[str] = None) -> dict:
+        """Export the MIFA documents (Study, Annotations, Version) as plain dicts."""
+        from .mifa_export import to_mifa_dicts
+
+        return to_mifa_dicts(self, funding_statement=funding_statement)
 
     def to_bioimage_io_rdf(self) -> dict:
         """Export bioimage.io RDF-compatible structure"""
