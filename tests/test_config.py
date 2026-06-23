@@ -1066,6 +1066,13 @@ class TestModelZooMetadata:
             "name": "U2OS nuclei", "doi": "S-BIAD123", "image_modality": "confocal"
         }
 
+    def test_data_doi_falls_back_to_source_url(self):
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        config.dataset.source_dataset_url = "https://example.org/S-BIAD123"
+        data = config_to_bmz_metadata(config)["data"]
+        assert "S-BIAD123" in data["doi"]
+
     def test_to_micro_sam_kwargs_shape(self):
         from omero_annotate_ai.core.modelzoo_metadata import (
             config_to_bmz_metadata, to_micro_sam_kwargs,
@@ -1073,7 +1080,8 @@ class TestModelZooMetadata:
         config = create_default_config()
         config.ai_model.model_doi = "10.1/x"
         kwargs = to_micro_sam_kwargs(config_to_bmz_metadata(config))
-        assert kwargs["description"] and kwargs["license"] == "CC-BY-4.0"
+        assert kwargs["description"]
+        assert kwargs["license"] == "CC-BY-4.0"
         assert kwargs["cite"] == [{"text": "model", "doi": "10.1/x"}]
         assert "data" not in kwargs
         assert "model_name" not in kwargs
