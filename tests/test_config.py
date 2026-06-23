@@ -1046,6 +1046,13 @@ class TestModelZooMetadata:
             "seg", "micro_sam", "nuclei", "Homo sapiens"
         ]
 
+    def test_tags_include_framework_when_unique(self):
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        config.tags = []
+        config.study.keywords = []
+        assert config_to_bmz_metadata(config)["tags"] == ["micro_sam"]
+
     def test_cite_from_doi(self):
         from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
         config = create_default_config()

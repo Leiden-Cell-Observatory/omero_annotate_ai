@@ -546,17 +546,19 @@ Expected: previous baseline + 10 new tests pass, 0 failures.
 
 - [ ] **Step 2: Confirm the helper stays pure (no heavy imports)**
 
-Run:
+Run (checks the module file's own imports — a `sys.modules` check is unreliable because
+importing the package triggers other modules' guarded `micro_sam` imports):
 ```bash
 pixi run -e dev python -c "
-import sys
-import omero_annotate_ai.core.modelzoo_metadata  # noqa: F401
-assert 'biapy' not in sys.modules, 'helper must not import biapy'
-assert 'micro_sam' not in sys.modules, 'helper must not import micro_sam'
-print('helper is pure')
+import ast, pathlib
+tree = ast.parse(pathlib.Path('src/omero_annotate_ai/core/modelzoo_metadata.py').read_text())
+mods = {n.module.split('.')[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+mods |= {a.name.split('.')[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+assert not (mods & {'biapy', 'micro_sam', 'bioimageio'}), mods
+print('helper file imports are pure')
 "
 ```
-Expected: `helper is pure`.
+Expected: `helper file imports are pure`.
 
 ## Self-Review
 
