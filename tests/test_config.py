@@ -997,3 +997,71 @@ class TestTrainingConfigWarnings:
                 validation_fraction=0.4,
                 test_fraction=0.0,
             )
+
+
+@pytest.mark.unit
+class TestModelZooMetadata:
+    """Map AnnotationConfig -> BioImage Model Zoo metadata (pure helper)."""
+
+    def test_config_to_bmz_metadata_keys_and_fallbacks(self):
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        config.name = "demo_model"
+        meta = config_to_bmz_metadata(config)
+        assert set(meta) == {
+            "model_name", "model_type", "description",
+            "authors", "license", "tags", "cite", "data",
+        }
+        assert meta["model_name"] == "demo_model"   # ai_model.model_name blank -> name
+        assert meta["description"] == "demo_model"  # study blank -> name
+        assert meta["model_type"] == "vit_b_lm"     # ai_model.pretrained_from default
+        assert meta["license"] == "CC-BY-4.0"
+
+    def test_spdx_license_map(self):
+        from omero_annotate_ai.core.modelzoo_metadata import _to_spdx_license
+        assert _to_spdx_license("CC-BY-4.0") == "CC-BY-4.0"
+        assert _to_spdx_license("CC_BY") == "CC-BY-4.0"
+        assert _to_spdx_license("CC0") == "CC0-1.0"
+        assert _to_spdx_license("weird") == "CC-BY-4.0"
+
+    def test_authors_drop_nameless(self):
+        from omero_annotate_ai.core.annotation_config import AuthorInfo
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        config.authors = [
+            AuthorInfo(name="Jane Doe", affiliation="EMBL"),
+            AuthorInfo(name=""),
+        ]
+        assert config_to_bmz_metadata(config)["authors"] == [
+            {"name": "Jane Doe", "affiliation": "EMBL"}
+        ]
+
+    def test_tags_merge_and_dedupe(self):
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        config.tags = ["seg", "micro_sam"]
+        config.study.keywords = ["nuclei", "seg"]
+        config.study.organism = "Homo sapiens"
+        assert config_to_bmz_metadata(config)["tags"] == [
+            "seg", "micro_sam", "nuclei", "Homo sapiens"
+        ]
+
+    def test_cite_from_doi(self):
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        assert config_to_bmz_metadata(config)["cite"] == []
+        config.ai_model.model_doi = "10.1234/abcd"
+        assert config_to_bmz_metadata(config)["cite"] == [
+            {"text": "model", "doi": "10.1234/abcd"}
+        ]
+
+    def test_data_from_dataset(self):
+        from omero_annotate_ai.core.modelzoo_metadata import config_to_bmz_metadata
+        config = create_default_config()
+        assert config_to_bmz_metadata(config)["data"] == {}
+        config.dataset.source_description = "U2OS nuclei"
+        config.dataset.source_dataset_id = "S-BIAD123"
+        config.study.imaging_method = "confocal"
+        assert config_to_bmz_metadata(config)["data"] == {
+            "name": "U2OS nuclei", "doi": "S-BIAD123", "image_modality": "confocal"
+        }
