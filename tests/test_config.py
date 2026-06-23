@@ -1065,3 +1065,41 @@ class TestModelZooMetadata:
         assert config_to_bmz_metadata(config)["data"] == {
             "name": "U2OS nuclei", "doi": "S-BIAD123", "image_modality": "confocal"
         }
+
+    def test_to_micro_sam_kwargs_shape(self):
+        from omero_annotate_ai.core.modelzoo_metadata import (
+            config_to_bmz_metadata, to_micro_sam_kwargs,
+        )
+        config = create_default_config()
+        config.ai_model.model_doi = "10.1/x"
+        kwargs = to_micro_sam_kwargs(config_to_bmz_metadata(config))
+        assert kwargs["description"] and kwargs["license"] == "CC-BY-4.0"
+        assert kwargs["cite"] == [{"text": "model", "doi": "10.1/x"}]
+        assert "data" not in kwargs
+        assert "model_name" not in kwargs
+        assert "model_type" not in kwargs
+
+    def test_to_micro_sam_kwargs_omits_empty_lists(self):
+        from omero_annotate_ai.core.modelzoo_metadata import (
+            config_to_bmz_metadata, to_micro_sam_kwargs,
+        )
+        kwargs = to_micro_sam_kwargs(config_to_bmz_metadata(create_default_config()))
+        assert "authors" not in kwargs  # no authors on a default config
+        assert "cite" not in kwargs     # no DOI on a default config
+
+    def test_to_biapy_bmz_cfg_shape(self):
+        from omero_annotate_ai.core.modelzoo_metadata import (
+            config_to_bmz_metadata, to_biapy_bmz_cfg,
+        )
+        config = create_default_config()
+        config.dataset.source_dataset_id = "S-BIAD123"
+        cfg = to_biapy_bmz_cfg(config_to_bmz_metadata(config))
+        assert {"model_name", "description", "license", "authors", "tags", "cite"} <= set(cfg)
+        assert cfg["data"]["doi"] == "S-BIAD123"
+
+    def test_to_biapy_bmz_cfg_omits_empty_data(self):
+        from omero_annotate_ai.core.modelzoo_metadata import (
+            config_to_bmz_metadata, to_biapy_bmz_cfg,
+        )
+        cfg = to_biapy_bmz_cfg(config_to_bmz_metadata(create_default_config()))
+        assert "data" not in cfg  # blank dataset -> empty data dropped

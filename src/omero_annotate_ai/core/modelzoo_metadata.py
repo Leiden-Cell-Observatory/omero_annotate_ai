@@ -98,3 +98,38 @@ def config_to_bmz_metadata(config) -> Dict[str, Any]:
         "cite": _build_cite(config),
         "data": _build_data(config),
     }
+
+
+def to_micro_sam_kwargs(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Metadata kwargs for ``micro_sam ... export_sam_model(**kwargs)``.
+
+    ``name``/``model_type`` are passed positionally by the caller; the dataset link
+    rides on ``cite`` (export_sam_model has no training_data kwarg). Empty list fields
+    are omitted so micro-sam's defaults apply.
+    """
+    kwargs: Dict[str, Any] = {
+        "description": meta["description"],
+        "license": meta["license"],
+    }
+    if meta["authors"]:
+        kwargs["authors"] = meta["authors"]
+    if meta["tags"]:
+        kwargs["tags"] = meta["tags"]
+    if meta["cite"]:
+        kwargs["cite"] = meta["cite"]
+    return kwargs
+
+
+def to_biapy_bmz_cfg(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``bmz_cfg`` dict for ``BiaPy(...).export_model_to_bmz(folder, bmz_cfg=...)``."""
+    cfg: Dict[str, Any] = {
+        "model_name": meta["model_name"],
+        "description": meta["description"],
+        "license": meta["license"],
+        "authors": meta["authors"],
+        "tags": meta["tags"],
+        "cite": meta["cite"],
+    }
+    if meta["data"]:
+        cfg["data"] = meta["data"]
+    return cfg
