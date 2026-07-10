@@ -465,6 +465,61 @@ class TestAnnotationPipeline:
         assert unprocessed[0].image_id == 1
         assert processed[0].image_id == 2
 
+    def test_process_annotation_results_pairs_tiff_by_name_not_glob_order(self, tmp_path):
+        """seg_0000i.tif must upload to metadata[i]'s image, regardless of glob order.
+
+        Regression: _process_annotation_results paired metadata[i] with the raw
+        glob() result tiff_files[i]. glob() returns arbitrary filesystem order, so
+        when the filesystem yielded files in reverse, image N received image
+        (count-1-N)'s mask. Here glob is forced to return reverse order to
+        reproduce that failure deterministically.
+        """
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        config = create_default_config()
+        config.workflow.read_only_mode = False
+        config.spatial_coverage.use_patches = False
+        pipeline = AnnotationPipeline(config, conn=Mock())
+
+        # Three annotations + parallel seg files + metadata, all in order 0,1,2
+        annotations_path = tmp_path / "annotations"
+        annotations_path.mkdir()
+        metadata = []
+        for i in range(3):
+            config.add_annotation(
+                ImageAnnotation(image_id=100 + i, image_name=f"img{i}", annotation_id=f"ann{i}")
+            )
+            (annotations_path / f"seg_{i:05d}.tif").write_bytes(b"")
+            metadata.append((f"ann{i}", {"image_id": 100 + i}, i))
+
+        captured = []
+
+        def fake_upload(conn, image_id, annotation_file, **kwargs):
+            captured.append((image_id, Path(annotation_file).name))
+            return (image_id * 10, image_id * 100)
+
+        # Force glob to return descending name order, a valid (worst-case)
+        # filesystem ordering that the buggy positional pairing mishandles.
+        real_glob = Path.glob
+
+        def reversed_glob(self, pattern):
+            return sorted(real_glob(self, pattern), reverse=True)
+
+        with patch(
+            'omero_annotate_ai.core.annotation_pipeline.upload_rois_and_labels',
+            side_effect=fake_upload,
+        ), patch.object(Path, 'glob', reversed_glob):
+            pipeline._process_annotation_results(
+                {"metadata": metadata, "annotations_path": annotations_path}
+            )
+
+        # Each seg_0000i.tif must have been uploaded to image 100+i
+        assert captured == [
+            (100, "seg_00000.tif"),
+            (101, "seg_00001.tif"),
+            (102, "seg_00002.tif"),
+        ]
+
     def test_three_way_split_with_counts(self):
         """Test train/validation/test split with specific counts."""
         config = create_default_config()

@@ -748,8 +748,14 @@ class AnnotationPipeline:
             self._debug_print(f"Missing required key: {e}")
             return
 
-        # Get all TIFF files in the annotations directory
-        tiff_files = list(annotations_path.glob("*.tiff")) + list(annotations_path.glob("*.tif"))
+        # Get all TIFF files in the annotations directory.
+        # micro-sam writes seg_00000.tif, seg_00001.tif, ... in the same order
+        # as `images`/`metadata` were passed in. glob() returns arbitrary
+        # filesystem order, so sort by name to realign tiff_files[i] with
+        # metadata[i] (zero-padded names sort numerically).
+        tiff_files = sorted(
+            list(annotations_path.glob("*.tiff")) + list(annotations_path.glob("*.tif"))
+        )
         self._debug_print(f"Found {len(tiff_files)} annotation files for {len(metadata)} metadata entries")
 
         # Process each annotation metadata entry
