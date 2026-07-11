@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 try:
-    from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+    import omero_annotate_ai.omero.simple_connection as sc
 
     CONNECTION_AVAILABLE = True
 except ImportError:
@@ -45,8 +45,6 @@ class FakeKeyring:
 @pytest.fixture
 def fake_keyring(monkeypatch):
     """Replace the real OS keyring with an in-memory one."""
-    import omero_annotate_ai.omero.simple_connection as sc
-
     keyring = FakeKeyring()
     monkeypatch.setattr(sc, "keyring", keyring, raising=False)
     monkeypatch.setattr(sc, "KEYRING_AVAILABLE", True)
@@ -64,7 +62,7 @@ def manager(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
 
-    return SimpleOMEROConnection()
+    return sc.SimpleOMEROConnection()
 
 
 class TestKeychain:
@@ -96,8 +94,6 @@ class TestKeychain:
         assert fake_keyring.store == {}
 
     def test_save_reports_failure_without_a_keyring(self, manager, monkeypatch):
-        import omero_annotate_ai.omero.simple_connection as sc
-
         monkeypatch.setattr(sc, "KEYRING_AVAILABLE", False)
 
         assert manager.save_password("omero.example.org", "alice", "s3cret") is False
@@ -175,6 +171,21 @@ class TestEzomeroConfig:
 
         assert os.environ["OMERO_PASSWORD"] == "from-env"
         assert os.environ["OMERO_HOST"] == "omero.example.org"
+
+    def test_unresolvable_home_directory(self, manager, monkeypatch):
+        """Regression: Path.home() raises on Windows with a cleared environment.
+
+        tests/test_omero_integration.py wipes os.environ, which leaves Windows
+        with no USERPROFILE/HOMEPATH to derive a home from. POSIX falls back to
+        the pwd module, so this only ever failed on Windows CI.
+        """
+
+        def no_home():
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "home", staticmethod(no_home))
+
+        assert manager.load_config_files() == {}
 
 
 class TestConnectionHistory:

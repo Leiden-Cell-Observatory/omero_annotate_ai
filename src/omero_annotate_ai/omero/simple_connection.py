@@ -260,11 +260,13 @@ class SimpleOMEROConnection:
         Returns:
             Dictionary with configuration parameters, empty if none found
         """
-        ezomero_path = Path.home() / ".ezomero"
-        if not ezomero_path.exists():
-            return {}
-
         try:
+            # Path.home() raises RuntimeError on Windows when the environment
+            # has no USERPROFILE/HOMEPATH, so it belongs inside the guard.
+            ezomero_path = Path.home() / ".ezomero"
+            if not ezomero_path.exists():
+                return {}
+
             parser = configparser.ConfigParser()
             parser.read(ezomero_path)
 
