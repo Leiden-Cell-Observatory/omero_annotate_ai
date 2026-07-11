@@ -159,7 +159,7 @@ class WorkflowWidget:
     def _create_directory_tab(self):
         """Create directory selection tab."""
         directory_info = widgets.HTML(
-            value="<p>Select or create a local working directory for your annotation project:</p>"
+            value="<p>Select a local working directory for your annotation project:</p>"
         )
 
         # Directory selection
@@ -313,7 +313,8 @@ class WorkflowWidget:
         )
 
         new_button = widgets.Button(
-            description="Create New",
+            description="Name New Table",
+            tooltip="Pick a name for a new table. The table is created when the pipeline runs.",
             button_style="warning",
             icon="plus",
             layout=widgets.Layout(width="150px"),
@@ -952,7 +953,7 @@ class WorkflowWidget:
             self._update_progress()
 
     def _on_new_table(self, button):
-        """Handle new table creation."""
+        """Pick a name for a new table. The table itself is created at pipeline run."""
         try:
             container_id = self.container_widgets["container"].value
             container_type = self.container_widgets["type"].value
