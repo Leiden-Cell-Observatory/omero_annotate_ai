@@ -1,14 +1,11 @@
 """Simple OMERO connection management with keychain support."""
 
+import configparser
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-
-if TYPE_CHECKING:
-    from omero.gateway import BlitzGateway
-
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import keyring
@@ -18,13 +15,24 @@ except ImportError:
     KEYRING_AVAILABLE = False
 
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from omero.gateway import BlitzGateway
+
 
 class SimpleOMEROConnection:
     """Simple OMERO connection manager with keychain support for passwords."""
 
     SERVICE_NAME = "omero-annotate-ai"
+
+    # Keys read from ~/.ezomero, mapped to their config names. A ``password``
+    # entry in that file is deliberately not listed: passwords belong in the
+    # keychain, and copying one into the config would spread it to every caller.
+    EZOMERO_KEYS = {
+        "host": "host",
+        "user": "username",
+        "group": "group",
+        "port": "port",
+    }
 
     def __init__(self):
         """Initialize the connection manager."""
@@ -141,109 +149,150 @@ class SimpleOMEROConnection:
             return False
 
     def load_config_files(self) -> Dict[str, Any]:
-        """Load configuration from connection history, .env and .ezomero files.
+        """Load configuration from .env, connection history and .ezomero files.
 
-        Priority order: Connection history -> .env -> .ezomero
+        Priority order: .env -> connection history -> .ezomero
+
+        The returned dictionary never contains a password. Passwords are only
+        ever read from the keychain, via :meth:`load_password`.
 
         Returns:
             Dictionary with configuration parameters
         """
-        config = {}
+        return (
+            self._load_env_config()
+            or self._load_history_config()
+            or self._load_ezomero_config()
+        )
 
-        # Try to load .env file (higher priority than connection history for development)
+    @staticmethod
+    def _coerce_port(value: Any) -> Optional[int]:
+        """Convert a port read from a config file or environment to an int."""
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _load_env_config(self) -> Dict[str, Any]:
+        """Read connection settings from a .env file in the working directory.
+
+        Returns:
+            Dictionary with configuration parameters, empty if none found
+        """
         env_path = Path(".env")
-        if env_path.exists():
-            load_dotenv(env_path, override=False)
-            if os.environ.get("HOST") or os.environ.get("USER_NAME"):
-                config.update(
-                    {
-                        "host": os.environ.get("HOST"),
-                        "username": os.environ.get("USER_NAME"),
-                        "group": os.environ.get("GROUP"),
-                        "source": ".env file",
-                    }
-                )
-                print("Loaded configuration from .env file")
+        if not env_path.exists():
+            return {}
 
-        # Try to load from connection history (if no .env file)
-        if not config:
-            connections = self.load_connection_history()
-            if connections:
-                # Use most recent connection
-                recent_conn = connections[0]
-                # Add display_name if not present
-                if "display_name" not in recent_conn:
-                    recent_conn["display_name"] = (
-                        f"{recent_conn['username']}@{recent_conn['host']}"
-                    )
-                    if recent_conn.get("group"):
-                        recent_conn["display_name"] += f" ({recent_conn['group']})"
+        try:
+            # dotenv_values, not load_dotenv: the file may hold a password, and
+            # load_dotenv would export every entry into os.environ where any
+            # subprocess of this kernel could read it.
+            values = dotenv_values(env_path)
 
-                config.update(
-                    {
-                        "host": recent_conn["host"],
-                        "username": recent_conn["username"],
-                        "group": recent_conn.get("group"),
-                        "source": f"connection history (last used: {recent_conn.get('last_used_display', 'unknown')})",
-                    }
-                )
-                print(
-                    f"Loaded configuration from connection history: {recent_conn['display_name']}"
-                )
+            def lookup(key: str) -> Optional[str]:
+                return values.get(key) or os.environ.get(key)
 
-        # Try to load .ezomero file (if no other config found)
-        if not config:
-            try:
-                # Save current environment to restore later
-                original_env = {}
-                env_keys = [
-                    "OMERO_USER",
-                    "OMERO_PASSWORD",
-                    "OMERO_HOST",
-                    "OMERO_GROUP",
-                    "OMERO_PORT",
-                ]
-                for key in env_keys:
-                    original_env[key] = os.environ.get(key)
+            host = lookup("HOST")
+            username = lookup("USER_NAME")
+            if not host and not username:
+                return {}
 
-                # Temporarily clear ezomero environment variables to force config file loading
-                for key in env_keys:
-                    if key in os.environ:
-                        del os.environ[key]
+            config: Dict[str, Any] = {
+                "host": host,
+                "username": username,
+                "group": lookup("GROUP"),
+                "source": ".env file",
+            }
 
-                # This will attempt to load from .ezomero file and return None (no password)
-                # We don't actually want to create a connection, just test config loading
-                ezomero_home = Path.home() / ".ezomero"
-                if ezomero_home.exists():
-                    # Read .ezomero file directly
-                    import configparser
+            port = self._coerce_port(lookup("PORT"))
+            if port is not None:
+                config["port"] = port
 
-                    parser = configparser.ConfigParser()
-                    parser.read(ezomero_home)
+            print("Loaded configuration from .env file")
+            return config
 
-                    if "default" in parser:
-                        ezomero_config = dict(parser["default"])
-                        # Update config with ezomero values
-                        for key, value in ezomero_config.items():
-                            if value and value.strip():
-                                if key == "user":
-                                    config["username"] = value
-                                else:
-                                    config[key] = value
-                        config["source"] = ".ezomero file"
-                        print("Loaded configuration from .ezomero file")
+        except Exception as e:
+            print(f"Could not load .env file: {e}")
+            return {}
 
-                # Restore original environment
-                for key, value in original_env.items():
-                    if value is not None:
-                        os.environ[key] = value
-                    elif key in os.environ:
-                        del os.environ[key]
+    def _load_history_config(self) -> Dict[str, Any]:
+        """Read connection settings from the most recent saved connection.
 
-            except Exception as e:
-                print(f"Could not load .ezomero file: {e}")
+        Returns:
+            Dictionary with configuration parameters, empty if none found
+        """
+        try:
+            connections = self.get_connection_list()
+            if not connections:
+                return {}
 
-        return config
+            recent = connections[0]
+            print(
+                f"Loaded configuration from connection history: {recent['display_name']}"
+            )
+            config: Dict[str, Any] = {
+                "host": recent["host"],
+                "username": recent["username"],
+                "group": recent.get("group"),
+                "source": (
+                    f"connection history (last used: {recent['last_used_display']})"
+                ),
+            }
+
+            port = self._coerce_port(recent.get("port"))
+            if port is not None:
+                config["port"] = port
+
+            return config
+
+        except Exception as e:
+            print(f"Could not load connection history: {e}")
+            return {}
+
+    def _load_ezomero_config(self) -> Dict[str, Any]:
+        """Read connection settings from ~/.ezomero.
+
+        Only the keys in :attr:`EZOMERO_KEYS` are read, so a ``password`` entry
+        in that file is ignored rather than copied into the returned config.
+
+        Returns:
+            Dictionary with configuration parameters, empty if none found
+        """
+        try:
+            # Path.home() raises RuntimeError on Windows when the environment
+            # has no USERPROFILE/HOMEPATH, so it belongs inside the guard.
+            ezomero_path = Path.home() / ".ezomero"
+            if not ezomero_path.exists():
+                return {}
+
+            parser = configparser.ConfigParser()
+            parser.read(ezomero_path)
+
+            if "default" not in parser:
+                return {}
+
+            config: Dict[str, Any] = {}
+            for file_key, config_key in self.EZOMERO_KEYS.items():
+                value = parser["default"].get(file_key)
+                if value and value.strip():
+                    config[config_key] = value.strip()
+
+            if not config:
+                return {}
+
+            port = self._coerce_port(config.pop("port", None))
+            if port is not None:
+                config["port"] = port
+
+            config["source"] = ".ezomero file"
+            print("Loaded configuration from .ezomero file")
+            return config
+
+        except Exception as e:
+            print(f"Could not load .ezomero file: {e}")
+            return {}
 
     def connect(
         self,
@@ -313,6 +362,7 @@ class SimpleOMEROConnection:
         password: str,
         group: Optional[str] = None,
         secure: bool = True,
+        port: Optional[int] = None,
     ) -> Tuple[bool, str]:
         """Test OMERO connection without keeping it open.
 
@@ -322,12 +372,13 @@ class SimpleOMEROConnection:
             password: OMERO password
             group: OMERO group (optional)
             secure: Use secure connection (default True)
+            port: OMERO server port (optional)
 
         Returns:
             Tuple of (success, message)
         """
         try:
-            conn = self.connect(host, username, password, group, secure)
+            conn = self.connect(host, username, password, group, secure, port=port)
             if conn:
                 # Close test connection
                 conn.close()
@@ -342,20 +393,23 @@ class SimpleOMEROConnection:
     ) -> Optional[Any]:
         """Create connection from widget configuration.
 
+        The password is never persisted here. Callers that want to store it
+        must call :meth:`save_password` themselves, so that they can report
+        whether the keychain write actually succeeded.
+
         Args:
             widget_config: Configuration dictionary from widget
 
         Returns:
             BlitzGateway connection object if successful, None otherwise
         """
-        host = widget_config.get("host", "").strip()
-        username = widget_config.get("username", "").strip()
-        password = widget_config.get("password", "").strip()
-        group = widget_config.get("group", "").strip() or None
+        host = (widget_config.get("host") or "").strip()
+        username = (widget_config.get("username") or "").strip()
+        # Not stripped: whitespace can be part of a password.
+        password = widget_config.get("password") or ""
+        group = (widget_config.get("group") or "").strip() or None
         secure = widget_config.get("secure", True)
         port = widget_config.get("port")
-        save_password = widget_config.get("save_password", False)
-        expire_hours = widget_config.get("expire_hours")
 
         # Validate required fields
         if not host or not username or not password:
@@ -374,16 +428,12 @@ class SimpleOMEROConnection:
         )
 
         if connection:
-            # Save password to keychain if requested
-            if save_password:
-                self.save_password(host, username, password, expire_hours)
-
-            # Always save connection details for successful connections
-            self.save_connection_details(host, username, group, verbose=False)
+            # Remember host/username/group/port (never the password) for next time
+            self.save_connection_details(host, username, group, port, verbose=False)
 
         return connection
 
-    def get_last_connection(self) -> Optional["BlitzGateway"]:
+    def get_last_connection(self) -> Optional[BlitzGateway]:
         """Get the last successful connection.
 
         Returns:
@@ -414,14 +464,19 @@ class SimpleOMEROConnection:
         host: str,
         username: str,
         group: Optional[str] = None,
+        port: Optional[int] = None,
         verbose: bool = True,
     ) -> bool:
         """Save connection details to history file.
+
+        Never stores a password: only the keychain does that.
 
         Args:
             host: OMERO server host
             username: OMERO username
             group: OMERO group (optional)
+            port: OMERO server port (optional)
+            verbose: Print a confirmation message
 
         Returns:
             True if saved successfully, False otherwise
@@ -440,6 +495,7 @@ class SimpleOMEROConnection:
                 "host": host,
                 "username": username,
                 "group": group,
+                "port": port,
                 "last_used": datetime.now(timezone.utc).isoformat(),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }

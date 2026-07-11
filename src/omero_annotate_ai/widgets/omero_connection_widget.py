@@ -1,6 +1,6 @@
 """Interactive widget for OMERO server connections with keychain support."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import ipywidgets as widgets
 from IPython.display import clear_output, display
@@ -11,10 +11,14 @@ from ..omero.simple_connection import SimpleOMEROConnection
 class OMEROConnectionWidget:
     """Interactive widget for creating OMERO connections with secure password storage."""
 
+    DEFAULT_PORT = 4064
+
     def __init__(self):
         """Initialize the OMERO connection widget."""
         self.connection_manager = SimpleOMEROConnection()
         self.connection = None
+        self._connections_by_key: Dict[str, Dict[str, Any]] = {}
+        self._suppress_dropdown_events = False
         self._create_widgets()
         self._setup_observers()
         self._load_existing_config()
@@ -24,12 +28,7 @@ class OMEROConnectionWidget:
 
         # Header
         self.header = widgets.HTML(
-            value="""
-                <h3>🔌 OMERO Server Connection</h3>
-                <div style='font-size:90%;color:#888;margin-top:-10px;'>
-                    <b>Note:</b> If your OMERO server uses a non-default port, add it to the host as <code>host:port</code> (e.g., <code>localhost:6064</code>).
-                </div>
-            """,
+            value="<h3>🔌 OMERO Server Connection</h3>",
             layout=widgets.Layout(margin="0 0 20px 0"),
         )
 
@@ -46,6 +45,14 @@ class OMEROConnectionWidget:
         self.host_widget = widgets.Text(
             description="Host:",
             placeholder="omero.server.edu",
+            style={"description_width": "initial"},
+        )
+
+        self.port_widget = widgets.BoundedIntText(
+            value=self.DEFAULT_PORT,
+            min=1,
+            max=65535,
+            description="Port:",
             style={"description_width": "initial"},
         )
 
@@ -78,7 +85,7 @@ class OMEROConnectionWidget:
             value=False,
             description="Save password to keychain",
             style={"description_width": "initial"},
-            tooltip="When checked, your password will be securely saved and auto-loaded for future connections to this server"
+            tooltip="When checked, your password will be securely saved and auto-loaded for future connections to this server",
         )
 
         self.expire_widget = widgets.Dropdown(
@@ -93,13 +100,6 @@ class OMEROConnectionWidget:
             description="Remember for:",
             style={"description_width": "initial"},
             disabled=True,
-        )
-
-        # Show password toggle
-        self.show_password_widget = widgets.Checkbox(
-            value=False,
-            description="Show password",
-            style={"description_width": "initial"},
         )
 
         # Action buttons
@@ -138,6 +138,7 @@ class OMEROConnectionWidget:
         connection_fields = widgets.VBox(
             [
                 self.host_widget,
+                self.port_widget,
                 self.username_widget,
                 self.password_widget,
                 self.group_widget,
@@ -147,10 +148,11 @@ class OMEROConnectionWidget:
 
         password_options = widgets.VBox(
             [
-                widgets.HTML("<b>Password Options</b><br><i>Note: Passwords are only saved to keychain when explicitly requested</i>"),
-                self.save_password_widget, 
-                self.expire_widget, 
-                self.show_password_widget
+                widgets.HTML(
+                    "<b>Password Options</b><br><i>Note: Passwords are only saved to keychain when explicitly requested</i>"
+                ),
+                self.save_password_widget,
+                self.expire_widget,
             ]
         )
 
@@ -185,11 +187,6 @@ class OMEROConnectionWidget:
         # Enable/disable expire dropdown based on save password checkbox
         self.save_password_widget.observe(self._toggle_expire_options, names="value")
 
-        # Show/hide password
-        self.show_password_widget.observe(
-            self._toggle_password_visibility, names="value"
-        )
-
         # Connection dropdown observer
         self.connection_dropdown.observe(self._on_connection_selected, names="value")
 
@@ -204,199 +201,262 @@ class OMEROConnectionWidget:
         """Toggle expiration dropdown based on save password checkbox."""
         self.expire_widget.disabled = not change["new"]
 
-    def _toggle_password_visibility(self, change):
-        """Toggle password visibility."""
-        if change["new"]:
-            # Show password - convert to text widget
-            password_value = self.password_widget.value
-            self.password_widget.close()
+    @staticmethod
+    def _connection_key(host: str, username: str) -> str:
+        """Build the stable identifier used for a saved connection."""
+        return f"{host}:{username}"
 
-            self.password_widget = widgets.Text(
-                value=password_value,
-                description="Password:",
-                placeholder="Enter password",
-                style={"description_width": "initial"},
-            )
-        else:
-            # Hide password - convert to password widget
-            password_value = self.password_widget.value
-            self.password_widget.close()
-
-            self.password_widget = widgets.Password(
-                value=password_value,
-                description="Password:",
-                placeholder="Enter password",
-                style={"description_width": "initial"},
-            )
-
-        # Update the container (find and replace the password widget)
-        connection_fields = self.main_widget.children[3]  # Connection fields VBox
-        children_list = list(connection_fields.children)
-        children_list[2] = self.password_widget  # Password is 3rd field
-        connection_fields.children = tuple(children_list)
+    @staticmethod
+    def _expire_text(expire_hours: Optional[int]) -> str:
+        """Describe a keychain expiry period for display."""
+        if expire_hours:
+            return f" (expires in {expire_hours} hours)"
+        return " (no expiration)"
 
     def _load_existing_config(self):
-        """Load existing configuration and populate connection dropdown."""
-        # Load connection history for dropdown
+        """Load existing configuration and pre-populate the connection fields."""
+        config = self.connection_manager.load_config_files() or {}
+
+        if not config:
+            self.config_info.value = "<i>💡 No existing configuration found</i>"
+            self._populate_connection_dropdown()
+            return
+
+        # `config.get(key, "")` is not enough here: a key can be present with a
+        # None value when only some of the fields are set in .env.
+        self.host_widget.value = (config.get("host") or "").strip()
+        self.username_widget.value = (config.get("username") or "").strip()
+        self.group_widget.value = (config.get("group") or "").strip()
+
+        port = self._parse_port(config.get("port"))
+        if port is not None:
+            self.port_widget.value = port
+
+        # The password is deliberately not loaded here. ipywidgets stores widget
+        # values in the notebook's saved state, so auto-filling it would put a
+        # password the user never typed into the .ipynb. Use "Load from Keychain".
+        source = config.get("source", "configuration files")
+        self.config_info.value = f"<i>Pre-populated from {source}</i>"
+
         self._populate_connection_dropdown()
 
-        # Load default configuration
-        config = self.connection_manager.load_config_files()
-
-        if config:
-            # Pre-populate fields
-            if config.get("host"):
-                self.host_widget.value = config["host"]
-            if config.get("username"):
-                self.username_widget.value = config["username"]
-            if config.get("group"):
-                self.group_widget.value = config["group"]
-
-            # Automatically try to load password from keychain if host and username are available
-            host = config.get("host", "").strip()
-            username = config.get("username", "").strip()
-            password_loaded = False
-
-            if host and username:
-                password = self.connection_manager.load_password(host, username)
-                if password:
-                    self.password_widget.value = password
-                    password_loaded = True
-                    with self.status_output:
-                        clear_output()
-                        print("🔐 Password automatically loaded from keychain")
-
-            # Show config source
-            source = config.get("source", "configuration files")
-            sources = [source]
-            if password_loaded:
-                sources.append("keychain")
-
-            self.config_info.value = (
-                f"<i>Pre-populated from {' + '.join(sources)}</i>"
-            )
-        else:
-            self.config_info.value = "<i>💡 No existing configuration found</i>"
+    def _parse_port(self, value: Any) -> Optional[int]:
+        """Coerce a port from a config file into a value the widget accepts."""
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            return None
+        return port if 1 <= port <= 65535 else None
 
     def _populate_connection_dropdown(self):
         """Populate the connection dropdown with saved connections."""
         connections = self.connection_manager.get_connection_list()
 
-        # Create dropdown options
-        options = [("Manual entry", None)]
+        # Dropdown values are stable "host:username" keys rather than the
+        # connection dicts themselves, which are rebuilt on every refresh.
+        self._connections_by_key = {
+            self._connection_key(conn["host"], conn["username"]): conn
+            for conn in connections
+        }
 
-        for conn in connections:
+        options = [("Manual entry", None)]
+        for key, conn in self._connections_by_key.items():
             display_text = (
                 f"{conn['display_name']} (last used: {conn['last_used_display']})"
             )
-            options.append((display_text, conn))
+            options.append((display_text, key))
 
-        # Update dropdown
-        self.connection_dropdown.options = options
+        # Re-select whichever saved connection matches the current form fields
+        current_key = self._connection_key(
+            self.host_widget.value.strip(), self.username_widget.value.strip()
+        )
+        selected = current_key if current_key in self._connections_by_key else None
 
-        # Check if current form fields match any saved connection
-        current_host = self.host_widget.value.strip()
-        current_username = self.username_widget.value.strip()
+        # Refreshing the dropdown is not a user action, so it must not run the
+        # selection handler - that would read the keychain behind the user's back.
+        self._suppress_dropdown_events = True
+        try:
+            self.connection_dropdown.options = options
+            self.connection_dropdown.value = selected
+        finally:
+            self._suppress_dropdown_events = False
 
-        if current_host and current_username:
-            # Look for matching connection
-            for display_text, conn in options[1:]:  # Skip 'Manual entry'
-                if (
-                    conn
-                    and conn["host"] == current_host
-                    and conn["username"] == current_username
-                ):
-                    self.connection_dropdown.value = conn
-                    self.delete_connection_button.disabled = False
-                    return
+        self.delete_connection_button.disabled = selected is None
 
-        # If no match found, select manual entry
-        self.connection_dropdown.value = None
-        self.delete_connection_button.disabled = True
+    def _on_connection_selected(self, change):
+        """Handle connection selection from dropdown."""
+        if self._suppress_dropdown_events:
+            return
+
+        selected_key = change["new"]
+        connection = (
+            self._connections_by_key.get(selected_key) if selected_key else None
+        )
+
+        if connection is None:
+            # Manual entry selected
+            self.delete_connection_button.disabled = True
+            return
+
+        # Populate fields from selected connection
+        self.host_widget.value = connection["host"]
+        self.username_widget.value = connection["username"]
+        self.group_widget.value = connection.get("group") or ""
+
+        port = self._parse_port(connection.get("port"))
+        self.port_widget.value = port if port is not None else self.DEFAULT_PORT
+
+        self.delete_connection_button.disabled = False
+
+        # Picking a connection is an explicit user action, so loading its stored
+        # password here is expected rather than surprising.
+        self.password_widget.value = ""
+        with self.status_output:
+            clear_output()
+            try:
+                self._load_password_into_field(
+                    connection["host"], connection["username"]
+                )
+            except Exception as e:
+                print(f"❌ Error loading password from keychain: {e}")
+
+    def _load_password_into_field(self, host: str, username: str) -> bool:
+        """Load a stored password from the keychain into the password field.
+
+        Args:
+            host: OMERO server host
+            username: OMERO username
+
+        Returns:
+            True if a password was found and filled in, False otherwise
+        """
+        password = self.connection_manager.load_password(host, username)
+        if not password:
+            print(f"💡 No saved password found for {username}@{host}")
+            return False
+
+        self.password_widget.value = password
+        print(f"🔐 Password loaded from keychain for {username}@{host}")
+        return True
 
     def _load_from_keychain(self, button):
         """Load password from keychain."""
         with self.status_output:
             clear_output()
+            try:
+                host = self.host_widget.value.strip()
+                username = self.username_widget.value.strip()
 
-            host = self.host_widget.value.strip()
-            username = self.username_widget.value.strip()
+                if not host or not username:
+                    print("❌ Please enter host and username first")
+                    return
 
-            if not host or not username:
-                print("Please enter host and username first")
-                return
+                self._load_password_into_field(host, username)
 
-            password = self.connection_manager.load_password(host, username)
-            if password:
-                self.password_widget.value = password
-                print("Password loaded from keychain")
-            else:
-                print("No password found in keychain for this host/username")
+            except Exception as e:
+                print(f"❌ Error loading password from keychain: {e}")
 
     def _test_connection(self, button):
         """Test the OMERO connection."""
         with self.status_output:
             clear_output()
+            try:
+                config = self._get_widget_config()
+                if not self._validate_config(config):
+                    return
 
-            config = self._get_widget_config()
-            if not self._validate_config(config):
-                return
+                print("🔌 Testing connection...")
+                success, message = self.connection_manager.test_connection(
+                    config["host"],
+                    config["username"],
+                    config["password"],
+                    config["group"],
+                    config["secure"],
+                    config["port"],
+                )
 
-            print("🔌 Testing connection...")
-            success, message = self.connection_manager.test_connection(
-                config["host"],
-                config["username"],
-                config["password"],
-                config["group"],
-                config["secure"],
-            )
+                print(f"{'✅' if success else '❌'} {message}")
 
-            if success:
-                print(f"{message}")
-            else:
-                print(f"{message}")
+            except Exception as e:
+                print(f"❌ Error testing connection: {e}")
 
     def _connect(self, button):
         """Create connection and optionally save password if requested."""
         with self.status_output:
             clear_output()
+            try:
+                config = self._get_widget_config()
+                if not self._validate_config(config):
+                    return
 
-            config = self._get_widget_config()
-            if not self._validate_config(config):
-                return
+                # Don't leak the previous gateway and its keep-alive thread
+                self._close_existing_connection()
 
-            print("🔌 Creating connection...")
-            self.connection = self.connection_manager.create_connection_from_config(
-                config
-            )
+                print("🔌 Creating connection...")
+                self.connection = (
+                    self.connection_manager.create_connection_from_config(config)
+                )
 
-            if self.connection:
-                print("Connection created and ready to use!")
-                # Show user info
-                print(f"👤 User: {self.connection.getUser().getName()}")
-                print(f"🏢 Group: {self.connection.getGroupFromContext().getName()}")
+                if not self.connection:
+                    print("❌ Failed to create connection")
+                    return
+
+                print("✅ Connection created and ready to use!")
+                self._print_connection_details()
                 print("💾 Connection details saved to history")
-                
-                # Show password saving status
-                if config["save_password"]:
-                    expire_text = f" (expires in {config['expire_hours']} hours)" if config['expire_hours'] else " (no expiration)"
-                    print(f"🔐 Password saved to keychain{expire_text}")
-                else:
-                    print("🔓 Password not saved (keychain saving was not requested)")
-            else:
-                print("❌ Failed to create connection")
+                self._persist_password(config)
 
-    def _save_and_connect(self, button):
-        """Alias for _connect method for backward compatibility."""
-        return self._connect(button)
+            except Exception as e:
+                print(f"❌ Error creating connection: {e}")
+
+    def _close_existing_connection(self):
+        """Close a connection this widget opened earlier, if any."""
+        if self.connection is None:
+            return
+
+        try:
+            self.connection.close()
+        except Exception as e:
+            print(f"⚠️ Could not close previous connection: {e}")
+        finally:
+            self.connection = None
+
+    def _print_connection_details(self):
+        """Show who we connected as, without failing an otherwise good connection."""
+        try:
+            print(f"👤 User: {self.connection.getUser().getName()}")
+            print(f"🏢 Group: {self.connection.getGroupFromContext().getName()}")
+        except Exception as e:
+            print(f"⚠️ Connected, but could not read user/group details: {e}")
+
+    def _persist_password(self, config: Dict[str, Any]):
+        """Save the password to the keychain if the user asked for it."""
+        if not config["save_password"]:
+            print("🔓 Password not saved (keychain saving was not requested)")
+            return
+
+        saved = self.connection_manager.save_password(
+            config["host"],
+            config["username"],
+            config["password"],
+            config["expire_hours"],
+        )
+
+        if saved:
+            expire_text = self._expire_text(config["expire_hours"])
+            print(f"🔐 Password saved to keychain{expire_text}")
+        else:
+            print("⚠️ Password could NOT be saved to keychain")
 
     def _get_widget_config(self) -> Dict[str, Any]:
-        """Get configuration from widget values."""
+        """Get configuration from widget values, including the plaintext password."""
         return {
             "host": self.host_widget.value.strip(),
             "username": self.username_widget.value.strip(),
-            "password": self.password_widget.value.strip(),
+            # Not stripped: whitespace can be a legitimate part of a password.
+            "password": self.password_widget.value,
             "group": self.group_widget.value.strip(),
+            "port": self.port_widget.value,
             "secure": self.secure_widget.value,
             "save_password": self.save_password_widget.value,
             "expire_hours": self.expire_widget.value,
@@ -415,113 +475,89 @@ class OMEROConnectionWidget:
             return False
         return True
 
-    def _on_connection_selected(self, change):
-        """Handle connection selection from dropdown."""
-        selected_connection = change["new"]
-
-        if selected_connection is None:
-            # Manual entry selected
-            self.delete_connection_button.disabled = True
-            return
-
-        # Populate fields from selected connection
-        self.host_widget.value = selected_connection["host"]
-        self.username_widget.value = selected_connection["username"]
-        self.group_widget.value = selected_connection.get("group", "") or ""
-
-        # Enable delete button
-        self.delete_connection_button.disabled = False
-
-        # Try to load password from keychain
-        host = selected_connection["host"]
-        username = selected_connection["username"]
-        password = self.connection_manager.load_password(host, username)
-
-        if password:
-            self.password_widget.value = password
-            with self.status_output:
-                clear_output()
-                print(f"🔐 Password loaded from keychain for {username}@{host}")
-        else:
-            self.password_widget.value = ""
-            with self.status_output:
-                clear_output()
-                print(f"💡 No saved password found for {username}@{host}")
-
     def _save_connection_only(self, button):
         """Save connection details without creating a connection."""
         with self.status_output:
             clear_output()
+            try:
+                host = self.host_widget.value.strip()
+                username = self.username_widget.value.strip()
+                group = self.group_widget.value.strip() or None
+                port = self.port_widget.value
 
-            host = self.host_widget.value.strip()
-            username = self.username_widget.value.strip()
-            group = self.group_widget.value.strip() or None
+                if not host or not username:
+                    print("❌ Host and username are required to save connection")
+                    return
 
-            if not host or not username:
-                print("❌ Host and username are required to save connection")
-                return
+                if not self.connection_manager.save_connection_details(
+                    host, username, group, port
+                ):
+                    print("❌ Failed to save connection")
+                    return
 
-            # Save connection details
-            success = self.connection_manager.save_connection_details(
-                host, username, group
-            )
-
-            if success:
-                # Save password if requested
-                if self.save_password_widget.value:
-                    password = self.password_widget.value.strip()
-                    if password:
-                        expire_hours = self.expire_widget.value
-                        self.connection_manager.save_password(
-                            host, username, password, expire_hours
-                        )
-                        expire_text = f" (expires in {expire_hours} hours)" if expire_hours else " (no expiration)"
-                        print(f"🔐 Password saved to keychain{expire_text}")
-                    else:
-                        print("⚠️ Password not saved - password field is empty")
-                else:
-                    print("🔓 Password not saved to keychain (not requested)")
+                self._save_password_if_requested(host, username)
 
                 # Refresh dropdown
                 self._populate_connection_dropdown()
                 print("✅ Connection saved successfully!")
-            else:
-                print("❌ Failed to save connection")
+
+            except Exception as e:
+                print(f"❌ Error saving connection: {e}")
+
+    def _save_password_if_requested(self, host: str, username: str):
+        """Save the current password to the keychain if the user asked for it."""
+        if not self.save_password_widget.value:
+            print("🔓 Password not saved to keychain (not requested)")
+            return
+
+        password = self.password_widget.value
+        if not password:
+            print("⚠️ Password not saved - password field is empty")
+            return
+
+        expire_hours = self.expire_widget.value
+        if self.connection_manager.save_password(
+            host, username, password, expire_hours
+        ):
+            print(f"🔐 Password saved to keychain{self._expire_text(expire_hours)}")
+        else:
+            print("⚠️ Password could NOT be saved to keychain")
 
     def _delete_connection(self, button):
         """Delete the selected connection."""
         with self.status_output:
             clear_output()
+            try:
+                selected_key = self.connection_dropdown.value
+                connection = (
+                    self._connections_by_key.get(selected_key) if selected_key else None
+                )
 
-            selected_connection = self.connection_dropdown.value
-            if selected_connection is None:
-                print("❌ No connection selected for deletion")
-                return
+                if connection is None:
+                    print("❌ No connection selected for deletion")
+                    return
 
-            host = selected_connection["host"]
-            username = selected_connection["username"]
+                host = connection["host"]
+                username = connection["username"]
 
-            # Confirm deletion
-            print(f"🗑️ Deleting connection: {username}@{host}")
+                print(f"🗑️ Deleting connection: {username}@{host}")
 
-            success = self.connection_manager.delete_connection(host, username)
+                if not self.connection_manager.delete_connection(host, username):
+                    print("❌ Failed to delete connection")
+                    return
 
-            if success:
-                # Refresh dropdown
-                self._populate_connection_dropdown()
-
-                # Clear fields
+                # Clear fields before refreshing, so nothing re-selects the entry
                 self.host_widget.value = ""
                 self.username_widget.value = ""
                 self.password_widget.value = ""
                 self.group_widget.value = ""
+                self.port_widget.value = self.DEFAULT_PORT
 
-                # Select manual entry
-                self.connection_dropdown.value = None
-
+                self._populate_connection_dropdown()
                 print("✅ Connection deleted successfully!")
-            else:
-                print("❌ Failed to delete connection")
+
+            except Exception as e:
+                print(f"❌ Error deleting connection: {e}")
 
     def display(self):
         """Display the widget."""
@@ -535,13 +571,22 @@ class OMEROConnectionWidget:
         """
         return self.connection
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self, include_password: bool = False) -> Dict[str, Any]:
         """Get the current widget configuration.
+
+        The password is left out by default: printing the returned dictionary in
+        a notebook would otherwise write it into the saved .ipynb.
+
+        Args:
+            include_password: Include the plaintext password in the result
 
         Returns:
             Configuration dictionary
         """
-        return self._get_widget_config()
+        config = self._get_widget_config()
+        if not include_password:
+            config.pop("password", None)
+        return config
 
 
 def create_omero_connection_widget() -> OMEROConnectionWidget:

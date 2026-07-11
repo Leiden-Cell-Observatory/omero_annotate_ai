@@ -104,7 +104,7 @@ class TestOMEROConnectionWidget:
         widget.port_widget = mock_port_widget
         
         # Simulate connect button click
-        widget._save_and_connect(Mock())
+        widget._connect(Mock())
         
         assert widget.connection == mock_conn
         # Check that create_connection_from_config was called instead of direct connect
@@ -152,7 +152,7 @@ class TestOMEROConnectionWidget:
         widget.password_widget = Mock(value="pass")
         widget.port_widget = Mock(value=4064)
         
-        widget._save_and_connect(Mock())
+        widget._connect(Mock())
         
         assert widget.connection is None
     
@@ -194,10 +194,181 @@ class TestOMEROConnectionWidget:
             }.get(key, default)
             
             widget = OMEROConnectionWidget()
-            
+
             # Check that the widget's fields were populated from config
             # Note: The actual population happens during widget initialization
             # through _load_existing_config method
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
+class TestOMEROConnectionWidgetCredentials:
+    """Test how the connection widget handles credentials.
+
+    These tests use the REAL ipywidgets classes and mock only the connection
+    manager. TestOMEROConnectionWidget above mocks ``widgets`` wholesale, which
+    means it cannot catch bugs in how the widgets are wired together.
+    """
+
+    @pytest.fixture
+    def conn_manager(self):
+        """A connection manager with no saved state."""
+        manager = Mock()
+        manager.get_connection_list.return_value = []
+        manager.load_config_files.return_value = {}
+        manager.load_password.return_value = None
+        return manager
+
+    @pytest.fixture
+    def widget(self, conn_manager):
+        with patch(
+            'omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection',
+            return_value=conn_manager,
+        ):
+            yield OMEROConnectionWidget()
+
+    def test_widget_builds_with_real_ipywidgets(self, widget):
+        """The widget tree is constructed and the input fields are all in it."""
+        assert widget.main_widget is not None
+        assert widget.connection is None
+
+        def flatten(box):
+            for child in getattr(box, "children", ()):
+                yield child
+                yield from flatten(child)
+
+        descendants = list(flatten(widget.main_widget))
+        assert widget.password_widget in descendants
+        assert widget.port_widget in descendants
+        assert widget.host_widget in descendants
+
+    def test_no_show_password_toggle(self, widget):
+        """The plaintext show-password toggle must not come back."""
+        assert not hasattr(widget, "show_password_widget")
+        assert not hasattr(widget, "_toggle_password_visibility")
+
+    def test_password_not_auto_loaded_on_construction(self, conn_manager):
+        """Constructing the widget must not read the keychain."""
+        conn_manager.load_config_files.return_value = {
+            "host": "omero.example.org",
+            "username": "alice",
+            "source": ".env file",
+        }
+
+        with patch(
+            'omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection',
+            return_value=conn_manager,
+        ):
+            widget = OMEROConnectionWidget()
+
+        conn_manager.load_password.assert_not_called()
+        assert widget.password_widget.value == ""
+        # host/username are still pre-populated, only the secret is withheld
+        assert widget.host_widget.value == "omero.example.org"
+        assert widget.username_widget.value == "alice"
+
+    def test_config_with_missing_host_does_not_crash(self, conn_manager):
+        """A .env with USER_NAME but no HOST yields host=None, which must not raise."""
+        conn_manager.load_config_files.return_value = {
+            "host": None,
+            "username": "alice",
+            "group": None,
+            "source": ".env file",
+        }
+
+        with patch(
+            'omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection',
+            return_value=conn_manager,
+        ):
+            widget = OMEROConnectionWidget()
+
+        assert widget.host_widget.value == ""
+        assert widget.username_widget.value == "alice"
+
+    def test_get_config_omits_password_by_default(self, widget):
+        """get_config() must not hand back the plaintext password."""
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+
+        config = widget.get_config()
+        assert "password" not in config
+        assert config["host"] == "omero.example.org"
+
+        config = widget.get_config(include_password=True)
+        assert config["password"] == "s3cret"
+
+    def test_password_is_not_stripped(self, widget):
+        """Whitespace can be part of a password and must survive verbatim."""
+        widget.password_widget.value = "  pa ss  "
+
+        assert widget._get_widget_config()["password"] == "  pa ss  "
+
+    def test_port_is_included_in_config(self, widget):
+        """The port field is wired into the config the manager receives."""
+        assert widget.port_widget.value == widget.DEFAULT_PORT
+
+        widget.port_widget.value = 6064
+        assert widget._get_widget_config()["port"] == 6064
+
+    def test_connect_reports_failed_keychain_save(self, widget, conn_manager, capsys):
+        """A keychain write that fails must not be reported as a success."""
+        conn_manager.create_connection_from_config.return_value = Mock()
+        conn_manager.save_password.return_value = False
+
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+        widget.save_password_widget.value = True
+
+        widget._connect(Mock())
+
+        conn_manager.save_password.assert_called_once()
+        # Outside a live kernel, Output falls through to stdout
+        assert "could NOT be saved" in capsys.readouterr().out
+
+    def test_connect_reports_successful_keychain_save(
+        self, widget, conn_manager, capsys
+    ):
+        conn_manager.create_connection_from_config.return_value = Mock()
+        conn_manager.save_password.return_value = True
+
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+        widget.save_password_widget.value = True
+
+        widget._connect(Mock())
+
+        assert "Password saved to keychain" in capsys.readouterr().out
+
+    def test_connect_does_not_save_password_unless_asked(self, widget, conn_manager):
+        conn_manager.create_connection_from_config.return_value = Mock()
+
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+        assert widget.save_password_widget.value is False
+
+        widget._connect(Mock())
+
+        conn_manager.save_password.assert_not_called()
+
+    def test_connect_closes_previous_connection(self, widget, conn_manager):
+        """Reconnecting must not leak the previous gateway."""
+        first, second = Mock(), Mock()
+        conn_manager.create_connection_from_config.side_effect = [first, second]
+
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+
+        widget._connect(Mock())
+        assert widget.connection is first
+
+        widget._connect(Mock())
+        first.close.assert_called_once()
+        assert widget.connection is second
 
 
 @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
@@ -431,7 +602,7 @@ class TestWidgetIntegration:
             
             with patch('builtins.print'):  # Suppress print output
                 with patch('IPython.display.clear_output'):  # Suppress clear_output
-                    conn_widget._save_and_connect(Mock())
+                    conn_widget._connect(Mock())
             
             # Use connection in workflow widget
             workflow_widget = WorkflowWidget(connection=conn_widget.connection)
