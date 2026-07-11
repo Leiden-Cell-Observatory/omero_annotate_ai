@@ -3,7 +3,7 @@ config_file_path: annotations/annotation_config_default_annotation_workflow.yaml
 name: default_annotation_workflow
 version: 1.0.0
 authors: []
-created: 2026-05-12 21:00:12.670540
+created: 2026-07-11 08:40:46.231988
 study:
   title: ''
   description: ''
@@ -51,8 +51,8 @@ spatial_coverage:
   random_patches: true
 training:
   validation_strategy: random_split
-  train_fraction: 0.7
-  validation_fraction: 0.3
+  train_fraction: 1.0
+  validation_fraction: 0.0
   test_fraction: 0.0
   train_n: 3
   validate_n: 0
@@ -83,9 +83,9 @@ omero:
   well_filter_mode: include
   table_id: 12345
 annotations:
-- image_id: 1
-  image_name: image_1
-  annotation_id: '1_0_0'
+- image_id: 3
+  image_name: image_3
+  annotation_id: '3_0_0'
   category: training
   timepoint: 0
   z_slice: 0
@@ -108,9 +108,9 @@ annotations:
   label_input_id: null
   schema_attachment_id: null
   channel_presentation: null
-- image_id: 3
-  image_name: image_3
-  annotation_id: '3_0_0'
+- image_id: 1
+  image_name: image_1
+  annotation_id: '1_0_0'
   category: training
   timepoint: 0
   z_slice: 0
