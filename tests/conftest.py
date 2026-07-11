@@ -27,6 +27,18 @@ except ImportError:
 # Simple Shared Fixtures
 # =============================================================================
 
+@pytest.fixture(autouse=True)
+def isolated_cwd(tmp_path, monkeypatch):
+    """Run every test in a throwaway working directory.
+
+    Several config paths are relative - OutputConfig.output_directory defaults
+    to ./annotations, and SimpleOMEROConnection reads ./.env - so a test that
+    triggers an auto-save would otherwise write into the checked-out repo and
+    dirty the working tree. Isolating the cwd makes that structurally impossible.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 @pytest.fixture
 def sample_config():
     """Basic configuration for testing."""
