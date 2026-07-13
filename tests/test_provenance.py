@@ -164,3 +164,102 @@ class TestComputeLabelIscc:
 
         assert result is None
         get_file_annotation.assert_called_once()
+
+
+def _config_with(annotations):
+    """Build a default config carrying the given annotations."""
+    from omero_annotate_ai.core.annotation_config import create_default_config
+
+    config = create_default_config()
+    for ann in annotations:
+        config.add_annotation(ann)
+    return config
+
+
+@pytest.mark.unit
+class TestStampConfig:
+    """stamp_config() fills codes, and codes each unique id exactly once."""
+
+    def test_fills_source_and_label_codes(self, fake_iscc, monkeypatch):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        monkeypatch.setattr(provenance, "compute_label_iscc", lambda conn, lid: "ISCC:LBL")
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", label_id=99)]
+        )
+
+        provenance.stamp_config(config, MagicMock())
+
+        assert config.annotations[0].source_iscc == "ISCC:AAA"
+        assert config.annotations[0].label_iscc == "ISCC:LBL"
+
+    def test_codes_each_source_image_only_once(self, fake_iscc):
+        """Three patches of one image must trigger exactly one OMERO compute."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        config = _config_with(
+            [
+                ImageAnnotation(image_id=7, image_name="a.tif", is_patch=True, patch_x=0),
+                ImageAnnotation(image_id=7, image_name="a.tif", is_patch=True, patch_x=1),
+                ImageAnnotation(image_id=7, image_name="a.tif", is_patch=True, patch_x=2),
+            ]
+        )
+
+        provenance.stamp_config(config, MagicMock())
+
+        assert fake_iscc.call_count == 1
+        assert all(a.source_iscc == "ISCC:AAA" for a in config.annotations)
+
+    def test_skips_annotations_without_a_label(self, fake_iscc):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        config = _config_with([ImageAnnotation(image_id=7, image_name="a.tif")])
+
+        provenance.stamp_config(config, MagicMock())
+
+        assert config.annotations[0].source_iscc == "ISCC:AAA"
+        assert config.annotations[0].label_iscc is None
+
+    def test_does_not_recompute_existing_codes(self, fake_iscc):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:OLD")]
+        )
+
+        provenance.stamp_config(config, MagicMock())
+
+        assert config.annotations[0].source_iscc == "ISCC:OLD"
+        assert fake_iscc.call_count == 0
+
+    def test_no_op_and_warns_when_iscc_missing(self, no_iscc, caplog):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        config = _config_with([ImageAnnotation(image_id=7, image_name="a.tif")])
+
+        provenance.stamp_config(config, MagicMock())
+
+        assert config.annotations[0].source_iscc is None
+        assert "iscc-bio is not installed" in caplog.text
+
+    def test_one_failing_image_does_not_abort_the_pass(self, fake_iscc):
+        """A broken image must not cost us the codes of the healthy ones."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        def flaky(conn=None, iid=None, **kwargs):
+            if iid == 7:
+                raise RuntimeError("corrupt pixels")
+            return [{"iscc_code": "ISCC:OK"}]
+
+        fake_iscc.side_effect = flaky
+        config = _config_with(
+            [
+                ImageAnnotation(image_id=7, image_name="bad.tif"),
+                ImageAnnotation(image_id=8, image_name="good.tif"),
+            ]
+        )
+
+        provenance.stamp_config(config, MagicMock())
+
+        assert config.annotations[0].source_iscc is None
+        assert config.annotations[1].source_iscc == "ISCC:OK"

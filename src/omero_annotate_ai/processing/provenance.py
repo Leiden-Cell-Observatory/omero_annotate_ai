@@ -110,3 +110,49 @@ def compute_label_iscc(conn, label_id: int) -> Optional[str]:
     except Exception as exc:
         logger.warning(f"Could not compute ISCC for label {label_id}: {exc}")
         return None
+
+
+def stamp_config(config, conn):
+    """Fill in source_iscc and label_iscc for every annotation in the config.
+
+    Safe to re-run: codes that are already present are left alone, so this can
+    be pointed at an existing config.yaml from a previous run to add provenance
+    retroactively.
+
+    Each unique image_id and label_id is coded once and cached - a source image
+    is typically shared by many annotation rows (patches, z-slices, timepoints),
+    and coding it per row would be wasteful.
+
+    Args:
+        config: AnnotationConfig to stamp, mutated in place.
+        conn: OMERO BlitzGateway connection.
+
+    Returns:
+        The same config, for chaining.
+    """
+    if not iscc_available():
+        logger.warning(_MISSING_MSG)
+        return config
+
+    image_cache: Dict[int, Optional[str]] = {}
+    label_cache: Dict[int, Optional[str]] = {}
+
+    for annotation in config.annotations:
+        if annotation.source_iscc is None:
+            image_id = annotation.image_id
+            if image_id not in image_cache:
+                image_cache[image_id] = compute_image_iscc(conn, image_id)
+            annotation.source_iscc = image_cache[image_id]
+
+        if annotation.label_iscc is None and annotation.label_id is not None:
+            label_id = annotation.label_id
+            if label_id not in label_cache:
+                label_cache[label_id] = compute_label_iscc(conn, label_id)
+            annotation.label_iscc = label_cache[label_id]
+
+    coded = sum(1 for a in config.annotations if a.source_iscc is not None)
+    logger.info(
+        f"Stamped ISCC provenance: {coded}/{len(config.annotations)} annotations, "
+        f"{len(image_cache)} unique source image(s)"
+    )
+    return config
