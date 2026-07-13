@@ -51,7 +51,7 @@ def setup_training(
         FileNotFoundError: If training directories don't exist
     """
     # Validate training_result dict
-    required_keys = ['training_input', 'training_label', 'val_input', 'val_label']
+    required_keys = ['train_input', 'train_label', 'val_input', 'val_label']
     missing_keys = [key for key in required_keys if key not in training_result]
     if missing_keys:
         raise ValueError(f"training_result missing required keys: {missing_keys}")
@@ -72,7 +72,7 @@ def setup_training(
         output_dir = Path(training_result['output_dir'])
     else:
         # Infer output directory from training paths
-        training_path = Path(training_result['training_input'])
+        training_path = Path(training_result['train_input'])
         output_dir = training_path.parent
     
     checkpoint_folder = output_dir / "checkpoints"
@@ -89,8 +89,8 @@ def setup_training(
     # Build training configuration
     training_config = {
         # Paths
-        'training_input': Path(training_result['training_input']),
-        'training_label': Path(training_result['training_label']),
+        'train_input': Path(training_result['train_input']),
+        'train_label': Path(training_result['train_label']),
         'val_input': Path(training_result['val_input']),
         'val_label': Path(training_result['val_label']),
         'output_dir': output_dir,
@@ -211,9 +211,9 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
     
     # Create data loaders with correct API
     train_loader = sam_training.default_sam_loader(
-        raw_paths=str(config["training_input"]),
+        raw_paths=str(config["train_input"]),
         raw_key="*.tif",
-        label_paths=str(config["training_label"]),
+        label_paths=str(config["train_label"]),
         label_key="*.tif",
         with_segmentation_decoder=train_instance_segmentation,
         patch_shape=patch_shape_3d,

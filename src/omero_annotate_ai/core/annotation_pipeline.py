@@ -1877,7 +1877,8 @@ class AnnotationPipeline:
         Works entirely offline - no OMERO connection required.
 
         Args:
-            output_dir: Target directory for training structure (default: config.output.output_directory)
+            output_dir: Target directory for the training layout. Must not be inside the
+                annotation directory. Default: the sibling <annotation_dir>_training/.
             file_mode: How to handle files:
                 - "copy": Copy files (keeps originals) - default
                 - "move": Move files (removes originals)
@@ -1898,10 +1899,10 @@ class AnnotationPipeline:
         # Use config's output directory as the annotation source
         annotation_dir = Path(self.config.output.output_directory)
 
-        # Default output_dir to same as annotation_dir if not specified
-        if output_dir is None:
-            output_dir = annotation_dir
-
+        # output_dir stays None here on purpose: reorganize_local_data_for_training
+        # defaults it to the sibling <annotation_dir>_training/. It must not default to
+        # annotation_dir - cleaning the training layout there would delete the source
+        # images, so that case now raises.
         return reorganize_local_data_for_training(
             config=self.config,
             annotation_dir=annotation_dir,
