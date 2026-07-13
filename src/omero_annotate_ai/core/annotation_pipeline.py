@@ -45,6 +45,7 @@ from ..omero.omero_functions import (
 )
 from ..omero.omero_utils import get_dask_image_single, get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
+from ..processing.provenance import stamp_config
 
 
 class AnnotationPipeline:
@@ -1479,12 +1480,31 @@ class AnnotationPipeline:
         
         return processed_count
 
+    def _stamp_provenance(self) -> None:
+        """Record ISCC content provenance for the annotated images and masks.
+
+        No-op unless config.iscc_mode == "on". Best-effort: provenance is a
+        publication concern, and losing it must never cost us the annotations,
+        so any failure is logged and swallowed.
+        """
+        if self.config.iscc_mode != "on":
+            return
+
+        try:
+            stamp_config(self.config, self.conn)
+        except Exception as exc:
+            print(f"⚠️ Could not stamp ISCC provenance: {exc}")
+
     def _finalize_workflow(self, processed_count: int) -> None:
         """Finalize the workflow with cleanup and uploads.
-        
+
         Args:
             processed_count: Number of units that were processed
         """
+        # Stamp ISCC provenance before the config is persisted, so the codes
+        # travel into both config.yaml and the OMERO tracking table.
+        self._stamp_provenance()
+
         # Final config save
         self._auto_save_config()
 

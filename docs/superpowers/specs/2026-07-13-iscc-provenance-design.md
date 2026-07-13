@@ -106,11 +106,15 @@ verify_config(config, conn=None, data_dir=None) -> ValidationResult
     The offline mode is the one that delivers the stated goal, so it is not optional.
     Three outcomes per entry: match / mismatch / missing. Reuses the existing
     ValidationResult shape (annotation_config.py:1145).
+    Raises RuntimeError (not a ValidationResult) if iscc-bio is not installed, in both
+    modes — see "Error handling" below for why this is intentionally NOT best-effort.
 ```
 
 The `data_dir` mode is what a third party actually runs: they hold the published images and the
-`config.yaml`, and nothing else. It maps each annotation's file to `compute_file_iscc` and compares
-against the stored `source_iscc` / `label_iscc`.
+`config.yaml`, and nothing else. It is **content-addressed**: every image file under the directory is
+coded, and each stored `source_iscc` / `label_iscc` must appear somewhere in that set. Filenames are
+never consulted, so renaming a published file does not break verification — which is exactly the
+property a content code is supposed to give us.
 
 ### Schema changes: `src/omero_annotate_ai/core/annotation_config.py`
 
@@ -171,16 +175,28 @@ package.
 
 ## Error handling
 
-Provenance is **best-effort and must never fail an annotation run.**
+Stamping and verifying have **deliberately asymmetric** failure behaviour when `iscc-bio` is missing:
 
-- `iscc-bio` not installed → `iscc_available()` is False, codes stay `None`, one clear warning, the
-  pipeline is otherwise unaffected.
+- **`stamp_config` is best-effort and silent.** `iscc-bio` not installed → `iscc_available()` is
+  False, codes stay `None`, one clear warning is logged, and the pipeline / annotation run is
+  otherwise unaffected. Stamping is a nice-to-have during a run, so losing it must never cost us the
+  annotations.
+- **`verify_config` refuses to run.** If `iscc-bio` is not installed, it **raises `RuntimeError`**
+  with an install hint — in both `conn` and `data_dir` modes — instead of returning a
+  `ValidationResult`. Verifying is the whole point of this feature: with the library absent, nothing
+  can actually be recomputed, so a returned "result" would be a verdict with nothing behind it. (An
+  earlier version of this code returned a result in that case and reported every image as a
+  *mismatch* — i.e. it accused good, untampered data of being tampered with. A verdict you cannot
+  back up is worse than no verdict, so this now raises instead.)
 - `iscc_mode == "off"` (the default) → no computation and no import attempt; zero runtime cost and no
-  behaviour change for existing users.
-- An OMERO fetch or compute error on one image → that entry's code stays `None` with a warning; the
-  run continues.
-- `verify_config` distinguishes **missing** from **mismatch**. A `None` code is an absence of
-  evidence, not evidence of tampering, and must not be reported as a failure.
+  behaviour change for existing users. This only affects the stamping hook; `verify_config` can still
+  be called directly regardless of `iscc_mode`.
+- An OMERO fetch or compute error on one image (library present, one code fails) → that entry's code
+  stays `None` with a warning; the run/verify continues.
+- `verify_config` distinguishes **missing** from **mismatch**. A `None` (or unmatched, in `data_dir`
+  mode) code is an absence of evidence, not evidence of tampering, and is reported as a warning, not
+  an error. In `data_dir` mode, a file that cannot be read is likewise a warning ("verification
+  incomplete"), never a mismatch.
 
 ## Testing
 

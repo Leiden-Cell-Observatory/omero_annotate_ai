@@ -1420,3 +1420,56 @@ class TestCellposeMultiChannelSaving:
         saved_train = tifffile.imread(str(train_file))
         assert saved_train.ndim == 3, f"training_input should be 3D (Y,X,C), got shape {saved_train.shape}"
         assert saved_train.shape == (h, w, 1)
+
+
+@pytest.mark.unit
+class TestIsccPipelineHook:
+    """The pipeline stamps provenance only when iscc_mode is on."""
+
+    def test_stamp_not_called_when_mode_off(self, monkeypatch):
+        from omero_annotate_ai.core import annotation_pipeline
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        called = []
+        monkeypatch.setattr(
+            annotation_pipeline, "stamp_config", lambda c, conn: called.append(c)
+        )
+
+        config = create_default_config()
+        config.iscc_mode = "off"
+        pipeline = annotation_pipeline.AnnotationPipeline(config, MagicMock())
+        pipeline._stamp_provenance()
+
+        assert called == []
+
+    def test_stamp_called_when_mode_on(self, monkeypatch):
+        from omero_annotate_ai.core import annotation_pipeline
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        called = []
+        monkeypatch.setattr(
+            annotation_pipeline, "stamp_config", lambda c, conn: called.append(c)
+        )
+
+        config = create_default_config()
+        config.iscc_mode = "on"
+        pipeline = annotation_pipeline.AnnotationPipeline(config, MagicMock())
+        pipeline._stamp_provenance()
+
+        assert len(called) == 1
+
+    def test_stamp_failure_never_breaks_the_run(self, monkeypatch):
+        """Provenance is best-effort. A failure here must not lose annotations."""
+        from omero_annotate_ai.core import annotation_pipeline
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        def boom(config, conn):
+            raise RuntimeError("iscc exploded")
+
+        monkeypatch.setattr(annotation_pipeline, "stamp_config", boom)
+
+        config = create_default_config()
+        config.iscc_mode = "on"
+        pipeline = annotation_pipeline.AnnotationPipeline(config, MagicMock())
+
+        pipeline._stamp_provenance()  # must not raise

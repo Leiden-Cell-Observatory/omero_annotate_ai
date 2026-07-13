@@ -27050,6 +27050,7 @@ packages:
   - marimo>=0.19.2,<0.20 ; extra == 'notebooks'
   - keyring>=23.0.0 ; extra == 'notebooks'
   - napari>=0.4.15 ; extra == 'microsam'
+  - iscc-bio>=0.1,<0.2 ; extra == 'provenance'
   - pytest>=6.0 ; extra == 'dev'
   - pytest-cov>=2.0 ; extra == 'dev'
   - black>=22.0 ; extra == 'dev'
