@@ -92,51 +92,6 @@ class TestExternalClassificationWorkflow:
 
         np.testing.assert_array_equal(imread(str(dst)), label)
 
-    def test_label_input_id_round_trips_through_dataframe(self):
-        """label_input_id is serialized and deserialized correctly via to/from_dataframe."""
-        config = AnnotationConfig(name="classification_workflow")
-        ann = ImageAnnotation(
-            image_id=42,
-            image_name="test_image",
-            timepoint=0,
-            z_slice=0,
-            channel=0,
-            label_id=101,
-            label_input_id=202,
-            processed=True,
-        )
-        config.annotations.append(ann)
-
-        df = config.to_dataframe()
-        assert "label_input_id" in df.columns
-        assert df.iloc[0]["label_input_id"] == "202"
-
-        config2 = AnnotationConfig(name="classification_workflow")
-        config2.from_dataframe(df)
-        assert config2.annotations[0].label_input_id == 202
-
-    def test_label_input_id_none_round_trips(self):
-        """label_input_id=None serializes as 'None' and deserializes back to None."""
-        config = AnnotationConfig(name="classification_workflow")
-        ann = ImageAnnotation(
-            image_id=42,
-            image_name="test_image",
-            timepoint=0,
-            z_slice=0,
-            channel=0,
-            label_id=101,
-            label_input_id=None,
-            processed=True,
-        )
-        config.annotations.append(ann)
-
-        df = config.to_dataframe()
-        assert df.iloc[0]["label_input_id"] == "None"
-
-        config2 = AnnotationConfig(name="classification_workflow")
-        config2.from_dataframe(df)
-        assert config2.annotations[0].label_input_id is None
-
     def test_classification_annotation_type_is_valid(self):
         """annotation_type='classification' and 'semantic_segmentation' are valid values."""
         from omero_annotate_ai.core.annotation_config import AnnotationMethodology

@@ -228,8 +228,9 @@ class ImageAnnotation(BaseModel):
     label_id: Optional[int] = Field(
         default=None, description="OMERO label file annotation ID"
     )
-    label_input_id: Optional[int] = Field(
-        default=None, description="OMERO file annotation ID for label input image"
+    annotation_input_id: Optional[int] = Field(
+        default=None,
+        description="OMERO file annotation ID for the annotation-channel image",
     )
     schema_attachment_id: Optional[int] = Field(
         default=None, description="OMERO schema attachment ID"
@@ -1005,7 +1006,7 @@ class AnnotationConfig(BaseModel):
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
-                "label_input_id": _optional_int_to_str(annotation.label_input_id),
+                "annotation_input_id": _optional_int_to_str(annotation.annotation_input_id),
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
@@ -1035,7 +1036,7 @@ class AnnotationConfig(BaseModel):
             "annotation_created_at",
             "annotation_updated_at",
             "schema_attachment_id",
-            "label_input_id",
+            "annotation_input_id",
             "z_start",
             "z_end",
             "z_length",
@@ -1130,11 +1131,13 @@ class AnnotationConfig(BaseModel):
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
 
-            label_input_id = _str_to_optional_int(
-                str(row.get("label_input_id", "None"))
+            # Tables written to OMERO before the rename carry label_input_id.
+            # They live on users' servers and cannot be migrated, so read either.
+            annotation_input_id = _str_to_optional_int(
+                str(row.get("annotation_input_id", row.get("label_input_id", "None")))
             )
-            if label_input_id is not None:
-                annotation_data["label_input_id"] = label_input_id
+            if annotation_input_id is not None:
+                annotation_data["annotation_input_id"] = annotation_input_id
 
             # Handle timestamps - keep as string
             created_at_str = str(row.get("annotation_created_at", "None"))

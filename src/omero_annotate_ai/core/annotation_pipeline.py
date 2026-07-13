@@ -1570,7 +1570,7 @@ class AnnotationPipeline:
         """Save images locally for Cellpose training.
 
         Single-channel: saves to input/{annotation_id}.tif
-        Separate-channel: saves label channel to label_input/{annotation_id}.tif
+        Separate-channel: saves the annotation channel to annotation_input/{annotation_id}.tif
                           and training channel to training_input/{annotation_id}.tif
         Category metadata is tracked in config.yaml, not in folder structure.
         """

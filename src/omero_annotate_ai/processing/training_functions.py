@@ -66,7 +66,7 @@ def prepare_training_data_from_table(
     verbose: bool = False,
     label_channel: Optional[int] = None,
     training_channels: Optional[List[int]] = None,
-    upload_label_input: bool = False,
+    upload_annotation_input: bool = False,
 ) -> Dict[str, Any]:
     """
     Prepare training data from OMERO annotation table.
@@ -86,11 +86,11 @@ def prepare_training_data_from_table(
         verbose: If True, show detailed debug information in console output
         label_channel: Optional channel index for label/segmentation images. If provided
             and different from training_channels, downloads label channel images to
-            *_label_input directories alongside the training data.
+            *_annotation_input directories alongside the training data.
         training_channels: Optional list of channel indices for training input images.
             If different from label_channel, downloads from these channels for
             training_input and val_input. Currently uses first channel if multiple specified.
-        upload_label_input: If True and using separate channels, uploads the label_input
+        upload_annotation_input: If True and using separate channels, uploads the annotation-channel
             images back to OMERO as file annotations. Default is False.
 
     Returns:
@@ -99,10 +99,10 @@ def prepare_training_data_from_table(
             'base_dir': Path to base output directory,
             'training_input': Path to training images,
             'training_label': Path to training labels (segmentation masks),
-            'training_label_input': Path to label channel images (only if separate channels),
+            'train_annotation_input': Path to annotation-channel images (separate channels only),
             'val_input': Path to validation images,
             'val_label': Path to validation labels (segmentation masks),
-            'val_label_input': Path to label channel images for validation (only if separate channels),
+            'val_annotation_input': Path to annotation-channel validation images (separate channels only),
             'stats': Statistics about the prepared data
         }
 
@@ -245,8 +245,8 @@ def prepare_training_data_from_table(
     stats["n_missing"] = n_missing
     stats["total_rows_processed"] = len(table)
 
-    label_input_upload_ids = []
-    if uses_separate_channels and upload_label_input:
+    annotation_input_upload_ids = []
+    if uses_separate_channels and upload_annotation_input:
         logger.info("Uploading annotation-channel images to OMERO...")
         rows_by_id = {str(row["annotation_id"]): row for _, row in table.iterrows()}
 
@@ -263,23 +263,23 @@ def prepare_training_data_from_table(
                     continue
                 try:
                     # Lazy import to avoid circular dependency
-                    from ..omero.omero_functions import upload_label_input_image
+                    from ..omero.omero_functions import upload_annotation_input_image
 
-                    file_ann_id = upload_label_input_image(
+                    file_ann_id = upload_annotation_input_image(
                         conn,
                         image_id=int(row["image_id"]),
-                        label_input_file=str(tif_file),
+                        annotation_input_file=str(tif_file),
                         trainingset_name=training_name,
                         channel=label_channel,
                         timepoint=_optional_int(row.get("timepoint")),
                         z_slice=_optional_int(row.get("z_slice")),
                     )
-                    label_input_upload_ids.append(file_ann_id)
+                    annotation_input_upload_ids.append(file_ann_id)
                 except Exception as e:
                     logger.warning(f"Could not upload {tif_file.name}: {e}")
 
-        stats["n_label_input_uploaded"] = len(label_input_upload_ids)
-        logger.info(f"Uploaded {len(label_input_upload_ids)} annotation-channel images")
+        stats["n_annotation_input_uploaded"] = len(annotation_input_upload_ids)
+        logger.info(f"Uploaded {len(annotation_input_upload_ids)} annotation-channel images")
 
     # Clean up temporary directory
     if tmp_dir.exists():
@@ -287,8 +287,8 @@ def prepare_training_data_from_table(
         logger.debug(f"Cleaned up temporary directory: {tmp_dir}")
 
     extra_fields = {}
-    if label_input_upload_ids:
-        extra_fields["label_input_upload_ids"] = label_input_upload_ids
+    if annotation_input_upload_ids:
+        extra_fields["annotation_input_upload_ids"] = annotation_input_upload_ids
 
     result = _build_standard_result(
         base_dir=output_dir, created_dirs=created_dirs, stats=stats, **extra_fields

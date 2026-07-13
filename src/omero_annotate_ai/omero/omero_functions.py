@@ -685,10 +685,10 @@ def upload_rois_and_labels(
     return file_ann_id, roi_id
 
 
-def upload_label_input_image(
+def upload_annotation_input_image(
     conn,
     image_id: int,
-    label_input_file: str,
+    annotation_input_file: str,
     trainingset_name: Optional[str] = None,
     channel: Optional[int] = None,
     timepoint: Optional[int] = None,
@@ -704,7 +704,7 @@ def upload_label_input_image(
     Args:
         conn: OMERO connection
         image_id: ID of OMERO image to attach annotation to
-        label_input_file: Path to the label input image file (TIFF)
+        annotation_input_file: Path to the annotation-channel image file (TIFF)
         trainingset_name: Optional training set name for description
         channel: Optional channel index for description
         timepoint: Optional timepoint for description
@@ -728,9 +728,9 @@ def upload_label_input_image(
 
     file_ann_id = ezomero.post_file_annotation(
         conn,
-        file_path=label_input_file,
+        file_path=annotation_input_file,
         description=description,
-        ns="openmicroscopy.org/omero/annotate/label_input",
+        ns="openmicroscopy.org/omero/annotate/annotation_input",
         object_type="Image",
         object_id=image_id,
     )

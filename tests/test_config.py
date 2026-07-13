@@ -1597,3 +1597,64 @@ class TestAnnotationIdPersistence:
         ids = self._reload(self._legacy_df(config))
         assert ids[0] == "101_0_0"
         assert len(set(ids)) == 2
+
+
+@pytest.mark.unit
+class TestAnnotationInputIdRename:
+    """annotation_input_id replaces label_input_id; old OMERO tables still load."""
+
+    def _config_with_annotation(self, **ann_kwargs):
+        from omero_annotate_ai.core.annotation_config import (
+            ImageAnnotation,
+            create_default_config,
+        )
+
+        config = create_default_config()
+        config.annotations = [
+            ImageAnnotation(
+                image_id=100,
+                image_name="img",
+                annotation_id="0",
+                category="training",
+                processed=True,
+                **ann_kwargs,
+            )
+        ]
+        return config
+
+    def test_new_column_round_trips(self):
+        config = self._config_with_annotation(annotation_input_id=555)
+
+        df = config.to_dataframe()
+        assert "annotation_input_id" in df.columns
+        assert "label_input_id" not in df.columns
+
+        config.annotations = []
+        config.from_dataframe(df)
+        assert config.annotations[0].annotation_input_id == 555
+
+    def test_legacy_label_input_id_column_still_loads(self):
+        """Tables written to OMERO before the rename must not break.
+
+        This is the one backwards-compatibility guarantee in the folder-layout
+        change: the column lives on users' OMERO servers and cannot be migrated.
+        """
+        config = self._config_with_annotation(annotation_input_id=777)
+        df = config.to_dataframe().rename(
+            columns={"annotation_input_id": "label_input_id"}
+        )
+        assert "label_input_id" in df.columns
+
+        config.annotations = []
+        config.from_dataframe(df)
+
+        assert config.annotations[0].annotation_input_id == 777
+
+    def test_absent_column_yields_none(self):
+        config = self._config_with_annotation()
+
+        df = config.to_dataframe()
+        config.annotations = []
+        config.from_dataframe(df)
+
+        assert config.annotations[0].annotation_input_id is None
