@@ -336,6 +336,11 @@ def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].fillna("None").astype(str)
 
+    iscc_columns = ["source_iscc", "label_iscc"]
+    for col in iscc_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna("None").astype(str)
+
     return df
 
 

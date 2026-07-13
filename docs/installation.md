@@ -57,6 +57,22 @@ conda install -c conda-forge micro-sam napari zeroc-ice
 pip install omero-annotate-ai
 ```
 
+## Optional: Content Provenance (ISCC)
+
+To record [ISO 24138](https://www.iso.org/standard/77899.html) content-provenance codes for published annotation datasets, install the `provenance` extra:
+
+```bash
+pip install 'omero-annotate-ai[provenance]'
+
+# Or with pixi
+pixi add --pypi 'omero-annotate-ai[provenance]'
+```
+
+This pulls in `iscc-bio`, pinned tightly (`>=0.1,<0.2`) because it is a proof-of-concept
+library that may ship breaking changes at any time. Without this extra, the package
+works normally — provenance stamping is simply skipped with a warning. See the
+[Content Provenance tutorial](tutorials/provenance.md) for usage.
+
 ## Quick Start
 
 After installation, try connecting to OMERO:

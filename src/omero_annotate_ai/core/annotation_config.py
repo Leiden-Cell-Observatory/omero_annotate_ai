@@ -110,6 +110,16 @@ class ImageAnnotation(BaseModel):
         default=None, description="OMERO schema attachment ID"
     )
 
+    # ISCC content provenance (None until stamped; see processing/provenance.py)
+    source_iscc: Optional[str] = Field(
+        default=None,
+        description="ISO 24138 content code of the source image's raw OMERO pixels",
+    )
+    label_iscc: Optional[str] = Field(
+        default=None,
+        description="ISO 24138 content code of the annotation mask",
+    )
+
     # Channel presentation (how the image was displayed during annotation)
     channel_presentation: Optional[List[ChannelPresentation]] = Field(
         default=None,
@@ -685,7 +695,7 @@ class AnnotationConfig(BaseModel):
 
     # Schema identification
     schema_version: str = Field(
-        default="2.0.0", description="Configuration schema version"
+        default="2.1.0", description="Configuration schema version"
     )
 
     # Config file tracking for persistence
@@ -745,6 +755,13 @@ class AnnotationConfig(BaseModel):
     feature_types: List[FeatureType] = Field(
         default_factory=list,
         description="Annotation classes (e.g. cell, nucleus) with display colors",
+    )
+
+    # ISCC content provenance (ISO 24138)
+    iscc_mode: Literal["off", "on"] = Field(
+        default="off",
+        description="Compute ISCC content provenance during a run. Requires the "
+        "'provenance' extra. Off by default: adds per-image compute cost.",
     )
 
     def model_dump(self, **kwargs):
@@ -879,6 +896,8 @@ class AnnotationConfig(BaseModel):
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
+                "source_iscc": annotation.source_iscc or "None",
+                "label_iscc": annotation.label_iscc or "None",
             }
             rows.append(row)
 
@@ -908,6 +927,8 @@ class AnnotationConfig(BaseModel):
             "z_start",
             "z_end",
             "z_length",
+            "source_iscc",
+            "label_iscc",
         ]
 
         df = pd.DataFrame(rows, columns=columns)
@@ -1001,6 +1022,15 @@ class AnnotationConfig(BaseModel):
             updated_at_str = str(row.get("annotation_updated_at", "None"))
             if updated_at_str != "None":
                 annotation_data["annotation_updated_at"] = updated_at_str
+
+            # ISCC provenance codes - "None" sentinel means not yet stamped
+            source_iscc_str = str(row.get("source_iscc", "None"))
+            if source_iscc_str != "None":
+                annotation_data["source_iscc"] = source_iscc_str
+
+            label_iscc_str = str(row.get("label_iscc", "None"))
+            if label_iscc_str != "None":
+                annotation_data["label_iscc"] = label_iscc_str
 
             self.add_annotation(ImageAnnotation(**annotation_data))
 
@@ -1153,7 +1183,13 @@ class ValidationResult(BaseModel):
     @property
     def summary(self) -> str:
         if self.is_valid:
-            return f"OK: {self.annotation_count} annotations are consistent with config"
+            base = f"OK: {self.annotation_count} annotations are consistent with config"
+            # Warnings must surface even when valid. An unstamped dataset is valid
+            # (absence of evidence is not evidence of tampering) but a bare "OK"
+            # would hide that nothing was actually verified.
+            if self.warnings:
+                return f"{base} ({len(self.warnings)} warning(s))"
+            return base
         parts = []
         if self.errors:
             parts.append(f"{len(self.errors)} error(s)")
@@ -1322,9 +1358,9 @@ def create_default_config() -> AnnotationConfig:
 
 def get_config_template() -> str:
     """Get a YAML template with comments for all configuration options."""
-    template = """# OMERO micro-SAM Configuration Template v2.0.0
+    template = """# OMERO micro-SAM Configuration Template v2.1.0
 
-schema_version: "2.0.0"
+schema_version: "2.1.0"
 
 name: "micro_sam_nuclei_segmentation"
 version: "1.0.0"
@@ -1396,6 +1432,12 @@ ai_model:
 
 output:
   output_directory: "./annotations"
+
+# ISCC content provenance (ISO 24138). Requires: pip install 'omero-annotate-ai[provenance]'
+# When "on", each annotation records the content code of its source image
+# (source_iscc) and mask (label_iscc), so a published dataset can be verified
+# offline. Off by default.
+iscc_mode: "off"
 
 tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """

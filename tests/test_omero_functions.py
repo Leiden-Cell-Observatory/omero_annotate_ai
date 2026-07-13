@@ -647,3 +647,31 @@ class TestGeoJSONPersistence:
         new["channel_presentation"][0]["contrast_end"] = 999
         merged = merge_geojson_patches(existing, new)
         assert merged["channel_presentation"][0]["contrast_end"] == 999
+
+
+@pytest.mark.unit
+class TestIsccColumnTyping:
+    """_prepare_dataframe_for_omero() types the ISCC columns as strings."""
+
+    def test_iscc_columns_typed_as_string(self):
+        import pandas as pd
+
+        from omero_annotate_ai.omero.omero_functions import _prepare_dataframe_for_omero
+
+        df = pd.DataFrame(
+            {
+                "image_id": [1, 2],
+                "source_iscc": ["ISCC:SOURCE", None],
+                "label_iscc": [None, "ISCC:LABEL"],
+            }
+        )
+
+        result = _prepare_dataframe_for_omero(df)
+
+        assert result["source_iscc"].tolist() == ["ISCC:SOURCE", "None"]
+        assert result["label_iscc"].tolist() == ["None", "ISCC:LABEL"]
+        # pandas >=3.0 defaults `.astype(str)` to its dedicated StringDtype rather
+        # than `object` (same as the pre-existing id_columns/datetime_columns
+        # blocks in _prepare_dataframe_for_omero) - assert on the semantic
+        # "string dtype" property so the test holds across pandas versions.
+        assert pd.api.types.is_string_dtype(result["source_iscc"])

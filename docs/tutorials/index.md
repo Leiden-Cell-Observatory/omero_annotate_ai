@@ -38,6 +38,13 @@ Our tutorials are designed to take you from beginner to advanced user:
 <p><a href="training-data-prep.md" class="md-button">View Tutorial</a></p>
 </div>
 
+<div class="tutorial-card">
+<h3>Content Provenance (ISCC)</h3>
+<span class="status-badge planned">Coming Soon</span>
+<p>Record ISO 24138 content codes so a published dataset can be verified offline.</p>
+<p><a href="provenance.md" class="md-button">View Tutorial</a></p>
+</div>
+
 ### 🧠 **Advanced Training**
 
 <div class="tutorial-card">

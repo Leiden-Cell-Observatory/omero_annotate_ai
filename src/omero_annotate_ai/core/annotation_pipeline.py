@@ -45,6 +45,7 @@ from ..omero.omero_functions import (
 )
 from ..omero.omero_utils import get_dask_image_single, get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
+from ..processing.provenance import stamp_config
 
 
 class AnnotationPipeline:
@@ -1479,12 +1480,44 @@ class AnnotationPipeline:
         
         return processed_count
 
+    def _stamp_provenance(self) -> None:
+        """Record ISCC content provenance for the annotated images and masks.
+
+        No-op unless config.iscc_mode == "on". Best-effort: provenance is a
+        publication concern, and losing it must never cost us the annotations,
+        so any failure is logged and swallowed.
+        """
+        if self.config.iscc_mode != "on":
+            return
+
+        try:
+            stamp_config(self.config, self.conn)
+        except Exception as exc:
+            print(f"⚠️ Could not stamp ISCC provenance: {exc}")
+
     def _finalize_workflow(self, processed_count: int) -> None:
         """Finalize the workflow with cleanup and uploads.
-        
+
         Args:
             processed_count: Number of units that were processed
         """
+        # Stamp ISCC provenance before the config is persisted, so the codes
+        # travel into both config.yaml and the OMERO tracking table.
+        self._stamp_provenance()
+
+        # The tracking table was last written inside the batch loop, before
+        # provenance was stamped, so it still has code-less source_iscc/
+        # label_iscc columns. Rewrite it now so the codes actually reach the
+        # table - otherwise they only ever live in config.yaml, and a later
+        # resume (which rebuilds config.annotations FROM the table) would
+        # silently wipe them back out. Provenance must never harm an
+        # annotation run, so a failure here is logged and swallowed.
+        if self.config.iscc_mode == "on" and not self.config.workflow.read_only_mode:
+            try:
+                self._replace_omero_table_from_config()
+            except Exception as exc:
+                print(f"⚠️ Could not write ISCC provenance to OMERO table: {exc}")
+
         # Final config save
         self._auto_save_config()
 

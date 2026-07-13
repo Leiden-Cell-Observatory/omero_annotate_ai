@@ -188,13 +188,22 @@ class TestAnnotationConfig:
         YAML template with the expected content.
         """
         template = get_config_template()
-        
+
         assert isinstance(template, str)
         assert "name:" in template
-        
+
         # Test that template is valid YAML
         parsed = yaml.safe_load(template)
         assert isinstance(parsed, dict)
+
+        # Test that the template actually constructs a valid AnnotationConfig.
+        # A YAML-parses-to-a-dict check alone is not enough: YAML 1.1 parses a
+        # bare `off` as the boolean False, which yaml.safe_load happily
+        # accepts but AnnotationConfig rejects (iscc_mode is a Literal["off",
+        # "on"] string). This assertion is what actually catches that class
+        # of bug.
+        config = AnnotationConfig(**parsed)
+        assert config.iscc_mode == "off"
 
 
 @pytest.mark.unit
@@ -997,3 +1006,123 @@ class TestTrainingConfigWarnings:
                 validation_fraction=0.4,
                 test_fraction=0.0,
             )
+
+
+@pytest.mark.unit
+class TestIsccProvenanceFields:
+    """source_iscc / label_iscc round-trip and iscc_mode toggle."""
+
+    def test_iscc_fields_default_to_none(self):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        ann = ImageAnnotation(image_id=1, image_name="a.tif")
+
+        assert ann.source_iscc is None
+        assert ann.label_iscc is None
+
+    def test_iscc_mode_defaults_to_off(self):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        assert create_default_config().iscc_mode == "off"
+
+    def test_schema_version_bumped(self):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        assert create_default_config().schema_version == "2.1.0"
+
+    def test_old_schema_config_still_loads(self):
+        """A 2.0.0 config predates the ISCC keys entirely; it must still load."""
+        from omero_annotate_ai.core.annotation_config import (
+            AnnotationConfig,
+            ImageAnnotation,
+            create_default_config,
+        )
+
+        config = create_default_config()
+        config.add_annotation(ImageAnnotation(image_id=1, image_name="a.tif"))
+
+        # Shape a genuine pre-2.1.0 config: the ISCC keys did not exist at all,
+        # so remove them rather than setting them to None.
+        old = config.model_dump()
+        old["schema_version"] = "2.0.0"
+        del old["iscc_mode"]
+        for annotation in old["annotations"]:
+            del annotation["source_iscc"]
+            del annotation["label_iscc"]
+
+        loaded = AnnotationConfig(**old)
+
+        assert loaded.iscc_mode == "off"
+        assert loaded.annotations[0].source_iscc is None
+        assert loaded.annotations[0].label_iscc is None
+
+    def test_iscc_fields_survive_yaml_round_trip(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import (
+            AnnotationConfig,
+            ImageAnnotation,
+            create_default_config,
+        )
+
+        config = create_default_config()
+        config.iscc_mode = "on"
+        config.add_annotation(
+            ImageAnnotation(
+                image_id=1,
+                image_name="a.tif",
+                source_iscc="ISCC:SOURCE",
+                label_iscc="ISCC:LABEL",
+            )
+        )
+
+        path = tmp_path / "config.yaml"
+        config.save_yaml(path)
+        loaded = AnnotationConfig.from_yaml(path)
+
+        assert loaded.iscc_mode == "on"
+        assert loaded.annotations[0].source_iscc == "ISCC:SOURCE"
+        assert loaded.annotations[0].label_iscc == "ISCC:LABEL"
+
+    def test_iscc_fields_survive_dataframe_round_trip(self):
+        from omero_annotate_ai.core.annotation_config import (
+            ImageAnnotation,
+            create_default_config,
+        )
+
+        config = create_default_config()
+        config.add_annotation(
+            ImageAnnotation(
+                image_id=1,
+                image_name="a.tif",
+                source_iscc="ISCC:SOURCE",
+                label_iscc="ISCC:LABEL",
+            )
+        )
+
+        df = config.to_dataframe()
+        assert df.loc[0, "source_iscc"] == "ISCC:SOURCE"
+        assert df.loc[0, "label_iscc"] == "ISCC:LABEL"
+
+        reloaded = create_default_config()
+        reloaded.from_dataframe(df)
+
+        assert reloaded.annotations[0].source_iscc == "ISCC:SOURCE"
+        assert reloaded.annotations[0].label_iscc == "ISCC:LABEL"
+
+    def test_absent_codes_round_trip_as_none(self):
+        """An unstamped annotation must come back as None, not the string 'None'."""
+        from omero_annotate_ai.core.annotation_config import (
+            ImageAnnotation,
+            create_default_config,
+        )
+
+        config = create_default_config()
+        config.add_annotation(ImageAnnotation(image_id=1, image_name="a.tif"))
+
+        df = config.to_dataframe()
+        assert df.loc[0, "source_iscc"] == "None"
+
+        reloaded = create_default_config()
+        reloaded.from_dataframe(df)
+
+        assert reloaded.annotations[0].source_iscc is None
+        assert reloaded.annotations[0].label_iscc is None
