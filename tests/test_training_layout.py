@@ -318,7 +318,9 @@ class TestWriteTrainingLayout:
         _, stats = write_training_layout(records, out, file_mode="symlink")
 
         assert stats["file_operations"]["symlink"] == 2  # image + label
-        assert stats["file_mapping"]["1"]["image"].endswith("train_input/1.tif")
+        # Compare as Paths: file_mapping stores str(Path), whose separator is
+        # backslash on Windows.
+        assert Path(stats["file_mapping"]["1"]["image"]) == out / "train_input" / "1.tif"
 
     def test_array_source_records_are_written(self, tmp_path):
         from tifffile import imread

@@ -425,8 +425,10 @@ class TestReorganizeOntoRecords:
         )
 
         mapping = result["stats"]["file_mapping"]["0"]
-        assert mapping["image"].endswith("train_input/0.tif")
-        assert mapping["label"].endswith("train_label/0.tif")
+        # Compare as Paths: file_mapping stores str(Path), whose separator is
+        # backslash on Windows.
+        assert Path(mapping["image"]) == result["train_input"] / "0.tif"
+        assert Path(mapping["label"]) == result["train_label"] / "0.tif"
 
     def test_no_processed_annotations_raises(self, tmp_path):
         annotation_dir = tmp_path / "project"
