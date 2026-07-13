@@ -28,9 +28,10 @@ Creates the vocabulary everything else uses. Pure and fully unit-testable — no
 **Files:**
 - Create: `src/omero_annotate_ai/processing/training_layout.py`
 - Create: `tests/test_training_layout.py`
+- Modify: `src/omero_annotate_ai/processing/training_functions.py` (re-export only, see Step 5)
 
 **Interfaces:**
-- Consumes: `_create_file_link_or_copy` from `processing/training_functions.py` — **copied** here, not cut. The original stays until Task 6 deletes it, so Tasks 1-5 never break an import.
+- Consumes: `_create_file_link_or_copy` — **moved** here from `processing/training_functions.py`. It is cut, not copied: `training_functions.py` imports it back from this module, so the existing `reorganize_local_data_for_training` keeps working through Tasks 2-3 without a second copy of the body existing anywhere.
 - Produces: `FileSource`, `ArraySource`, `AnnotationRecord`, `layout_folders()`, `clean_layout()`, `split_folders_for()`, `assert_output_dir_is_separate()`, `CATEGORIES`.
 
 - [ ] **Step 1: Write the failing test**
@@ -454,10 +455,36 @@ class AnnotationRecord:
 Run: `pixi run -e dev pytest tests/test_training_layout.py -v`
 Expected: PASS — 16 passed
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Move `_create_file_link_or_copy` out of `training_functions.py`**
+
+The function now lives in `training_layout.py` (you wrote it there in Step 3). Delete its
+definition from `training_functions.py` and import it back instead, so exactly one copy of the
+body exists. `reorganize_local_data_for_training` still calls it and must keep working until
+Task 4 rewrites it.
+
+In `src/omero_annotate_ai/processing/training_functions.py`, delete the whole
+`def _create_file_link_or_copy(...)` block (line ~1170) and add to the imports:
+
+```python
+from .training_layout import _create_file_link_or_copy
+```
+
+Confirm exactly one definition remains:
 
 ```bash
-git add src/omero_annotate_ai/processing/training_layout.py tests/test_training_layout.py
+grep -rn "def _create_file_link_or_copy" src/
+```
+Expected: one match, in `training_layout.py`.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `pixi run -e dev pytest tests/ -v`
+Expected: PASS — the existing reorganize tests still pass, now calling the moved function.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/omero_annotate_ai/processing/training_layout.py src/omero_annotate_ai/processing/training_functions.py tests/test_training_layout.py
 git commit -m "feat: add training layout module with sources and records"
 ```
 
@@ -1466,7 +1493,7 @@ Expected: matches only inside `training_functions.py` and the commented-out test
 - `prepare_training_data_from_config()` (~210 lines)
 - `_get_standard_folder_structure()`
 - `_create_training_directories()`
-- `_create_file_link_or_copy()` from `training_functions.py` (now in `training_layout.py`)
+- The `from .training_layout import _create_file_link_or_copy` re-export in `training_functions.py`, if nothing there still calls it (Task 4 rewrote `reorganize_local_data_for_training` to use `FileSource`, so it should be unused — check with `grep -n "_create_file_link_or_copy" src/omero_annotate_ai/processing/training_functions.py` before removing).
 - In `tests/test_training_functions.py`: the 7 commented-out test blocks, and `TestConsistentFolderStructure` (it pins `_get_standard_folder_structure` / `_create_training_directories`, both gone). Its intent — "all producers return consistent keys" — is now covered by `test_result_keys_feed_setup_training` (Task 5) and the Task 4 tests.
 - Update the `tests/test_training_functions.py` import block to drop the deleted names.
 
