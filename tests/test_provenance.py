@@ -475,6 +475,74 @@ class TestVerifyConfigOffline:
 
 
 @pytest.mark.unit
+class TestVerifyConfigDataDirEdgeCases:
+    """data_dir mode must never turn 'nothing found' into a tampering verdict.
+
+    Zero codes scanned means every stored code would otherwise fall into the
+    "not in available_codes" branch and be reported as a mismatch error -
+    even though the data may be perfectly fine and simply wasn't found
+    (wrong path, empty dir, no recognised suffixes, or data_dir being the
+    .zarr store root itself rather than its parent).
+    """
+
+    def test_nonexistent_path_raises_value_error(self, fake_iscc, tmp_path):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        missing = tmp_path / "does_not_exist"
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        with pytest.raises(ValueError, match="does not exist"):
+            provenance.verify_config(config, data_dir=missing)
+
+    def test_empty_directory_raises_runtime_error(self, fake_iscc, tmp_path):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        with pytest.raises(RuntimeError, match="cannot verify"):
+            provenance.verify_config(config, data_dir=empty_dir)
+
+    def test_directory_with_no_recognised_suffixes_raises_runtime_error(
+        self, fake_iscc, tmp_path
+    ):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        (tmp_path / "readme.txt").write_text("not an image")
+        (tmp_path / "notes.json").write_text("{}")
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        with pytest.raises(RuntimeError, match="cannot verify"):
+            provenance.verify_config(config, data_dir=tmp_path)
+
+    def test_data_dir_pointing_directly_at_zarr_root_still_verifies(
+        self, fake_iscc, tmp_path
+    ):
+        """data_dir may BE the .zarr store, not a parent folder containing it."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        zarr_root = tmp_path / "published.zarr"
+        zarr_root.mkdir()
+        (zarr_root / ".zattrs").write_text("{}")
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        result = provenance.verify_config(config, data_dir=zarr_root)
+
+        assert result.is_valid is True
+        assert result.errors == []
+        fake_iscc.assert_called_once_with(source=str(zarr_root))
+
+
+@pytest.mark.unit
 class TestVerifyConfigOmero:
     """conn mode - the author's own check against the live server."""
 

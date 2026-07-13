@@ -8,6 +8,11 @@ edit_uri: edit/main/docs/
 # Fail the build on any warning
 strict: false
 
+# Internal planning/spec artifacts (committed history, read by other tooling)
+# must not be published as orphan public pages on the docs site.
+exclude_docs: |
+  superpowers/
+
 theme:
   name: material
   language: en

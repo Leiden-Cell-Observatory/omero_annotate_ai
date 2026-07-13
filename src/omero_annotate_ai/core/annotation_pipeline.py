@@ -1505,6 +1505,19 @@ class AnnotationPipeline:
         # travel into both config.yaml and the OMERO tracking table.
         self._stamp_provenance()
 
+        # The tracking table was last written inside the batch loop, before
+        # provenance was stamped, so it still has code-less source_iscc/
+        # label_iscc columns. Rewrite it now so the codes actually reach the
+        # table - otherwise they only ever live in config.yaml, and a later
+        # resume (which rebuilds config.annotations FROM the table) would
+        # silently wipe them back out. Provenance must never harm an
+        # annotation run, so a failure here is logged and swallowed.
+        if self.config.iscc_mode == "on" and not self.config.workflow.read_only_mode:
+            try:
+                self._replace_omero_table_from_config()
+            except Exception as exc:
+                print(f"⚠️ Could not write ISCC provenance to OMERO table: {exc}")
+
         # Final config save
         self._auto_save_config()
 

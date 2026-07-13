@@ -64,6 +64,13 @@ Stamping happens once processing is complete (masks already uploaded), and just 
 the config is persisted, so the codes land in both `config.yaml` and the OMERO tracking
 table.
 
+!!! warning "CellPose preparation is not stamped automatically"
+
+    `run_cellpose_preparation()` does not route through the pipeline's finalization
+    step, so `iscc_mode: "on"` has no effect there. Stamp those datasets explicitly
+    with `stamp_config(config, conn)` — see
+    [Retroactively stamp an old config](#2-retroactively-stamp-an-old-config) below.
+
 ## 2. Retroactively stamp an old config
 
 `stamp_config` is idempotent, so it can be pointed at a `config.yaml` from a run that

@@ -1183,7 +1183,13 @@ class ValidationResult(BaseModel):
     @property
     def summary(self) -> str:
         if self.is_valid:
-            return f"OK: {self.annotation_count} annotations are consistent with config"
+            base = f"OK: {self.annotation_count} annotations are consistent with config"
+            # Warnings must surface even when valid. An unstamped dataset is valid
+            # (absence of evidence is not evidence of tampering) but a bare "OK"
+            # would hide that nothing was actually verified.
+            if self.warnings:
+                return f"{base} ({len(self.warnings)} warning(s))"
+            return base
         parts = []
         if self.errors:
             parts.append(f"{len(self.errors)} error(s)")
@@ -1352,7 +1358,7 @@ def create_default_config() -> AnnotationConfig:
 
 def get_config_template() -> str:
     """Get a YAML template with comments for all configuration options."""
-    template = """# OMERO micro-SAM Configuration Template v2.0.0
+    template = """# OMERO micro-SAM Configuration Template v2.1.0
 
 schema_version: "2.1.0"
 
@@ -1431,7 +1437,7 @@ output:
 # When "on", each annotation records the content code of its source image
 # (source_iscc) and mask (label_iscc), so a published dataset can be verified
 # offline. Off by default.
-iscc_mode: off
+iscc_mode: "off"
 
 tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """

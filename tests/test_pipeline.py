@@ -1473,3 +1473,59 @@ class TestIsccPipelineHook:
         pipeline = annotation_pipeline.AnnotationPipeline(config, MagicMock())
 
         pipeline._stamp_provenance()  # must not raise
+
+
+@pytest.mark.unit
+class TestIsccTableRewrite:
+    """_finalize_workflow must mirror stamped codes into the OMERO tracking
+    table, not just config.yaml - otherwise a later resume (which rebuilds
+    config.annotations FROM the table) silently wipes the codes back out."""
+
+    def _make_pipeline(self, iscc_mode="on", read_only=False):
+        from omero_annotate_ai.core import annotation_pipeline
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        config = create_default_config()
+        config.iscc_mode = iscc_mode
+        config.workflow.read_only_mode = read_only
+        pipeline = annotation_pipeline.AnnotationPipeline(config, MagicMock())
+        # Isolate _finalize_workflow from unrelated I/O.
+        pipeline._stamp_provenance = Mock()
+        pipeline._auto_save_config = Mock()
+        pipeline._upload_annotation_config_to_omero = Mock()
+        pipeline._replace_omero_table_from_config = Mock()
+        return pipeline
+
+    def test_table_rewritten_when_mode_on(self):
+        pipeline = self._make_pipeline(iscc_mode="on", read_only=False)
+
+        pipeline._finalize_workflow(processed_count=3)
+
+        pipeline._replace_omero_table_from_config.assert_called_once()
+
+    def test_table_not_rewritten_when_mode_off(self):
+        pipeline = self._make_pipeline(iscc_mode="off", read_only=False)
+
+        pipeline._finalize_workflow(processed_count=3)
+
+        pipeline._replace_omero_table_from_config.assert_not_called()
+
+    def test_table_not_rewritten_in_read_only_mode(self):
+        pipeline = self._make_pipeline(iscc_mode="on", read_only=True)
+
+        pipeline._finalize_workflow(processed_count=3)
+
+        pipeline._replace_omero_table_from_config.assert_not_called()
+
+    def test_table_rewrite_failure_does_not_propagate(self):
+        """A raising table write must not break workflow finalization -
+        provenance must never harm an annotation run."""
+        pipeline = self._make_pipeline(iscc_mode="on", read_only=False)
+        pipeline._replace_omero_table_from_config.side_effect = RuntimeError(
+            "OMERO table write exploded"
+        )
+
+        pipeline._finalize_workflow(processed_count=3)  # must not raise
+
+        pipeline._replace_omero_table_from_config.assert_called_once()
+        pipeline._auto_save_config.assert_called_once()

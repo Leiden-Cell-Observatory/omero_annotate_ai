@@ -97,9 +97,9 @@ def compute_label_iscc(conn, label_id: int) -> Optional[str]:
         logger.warning(_MISSING_MSG)
         return None
 
-    import ezomero
-
     try:
+        import ezomero
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             mask_path = ezomero.get_file_annotation(
                 conn, int(label_id), folder_path=tmp_dir
@@ -245,10 +245,14 @@ def verify_config(config, conn=None, data_dir=None):
         is a warning, because absence of evidence is not evidence of tampering.
 
     Raises:
-        ValueError: if not exactly one of conn/data_dir is given.
+        ValueError: if not exactly one of conn/data_dir is given, or if
+            data_dir does not exist or is not a directory.
         RuntimeError: if iscc-bio is not installed. Without it, nothing can
             actually be recomputed, so returning a verdict (green or red)
-            would be reporting a check that never happened.
+            would be reporting a check that never happened. Also raised if
+            data_dir mode finds nothing codeable at all (no codes, no failed
+            paths) - refusing to return a verdict is safer than returning a
+            false "tampered" one.
     """
     from ..core.annotation_config import ValidationIssue, ValidationResult
 
@@ -268,7 +272,38 @@ def verify_config(config, conn=None, data_dir=None):
     warnings = []
 
     if data_dir is not None:
-        available_codes, failed_paths = _scan_directory_codes(data_dir)
+        data_dir_path = Path(data_dir)
+        if not data_dir_path.is_dir():
+            raise ValueError(
+                f"data_dir does not exist or is not a directory: {data_dir_path}"
+            )
+
+        if data_dir_path.suffix.lower() in _IMAGE_DIR_SUFFIXES:
+            # data_dir IS the .zarr store root itself, not a parent folder
+            # containing it. Code it directly as a single store - do not
+            # walk into it looking for children, and do not treat it as an
+            # ordinary directory to scan (that would find nothing, since a
+            # zarr store's internal chunk files don't match any recognised
+            # image suffix).
+            code = compute_file_iscc(data_dir_path)
+            if code is not None:
+                available_codes, failed_paths = {code}, []
+            else:
+                available_codes, failed_paths = set(), [data_dir_path]
+        else:
+            available_codes, failed_paths = _scan_directory_codes(data_dir_path)
+
+        if not available_codes and not failed_paths:
+            # Nothing codeable was found at all: wrong path, empty directory,
+            # or no recognised image suffixes present. Every stored code
+            # would otherwise fall through to the "not in available_codes"
+            # branch below and be reported as a mismatch - a false tampering
+            # verdict for perfectly good data. Refuse to verify instead.
+            raise RuntimeError(
+                f"No image data could be coded under {data_dir_path}; "
+                "cannot verify."
+            )
+
         for path in failed_paths:
             warnings.append(
                 ValidationIssue(
