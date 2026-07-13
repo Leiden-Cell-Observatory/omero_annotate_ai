@@ -12,6 +12,7 @@ from tifffile import imwrite
 from tqdm import tqdm
 
 from ..utils.logging import create_training_logger
+from .training_layout import _create_file_link_or_copy
 from .utils import validate_table_schema
 
 if TYPE_CHECKING:
@@ -1165,37 +1166,6 @@ def _prepare_dataset_from_table(
                 print(traceback.format_exc())
             raise
     return input_dir, label_dir
-
-
-def _create_file_link_or_copy(src: Path, dst: Path, mode: str, logger=None) -> str:
-    """
-    Create a file at destination using the specified mode.
-
-    Args:
-        src: Source file path
-        dst: Destination file path
-        mode: One of "copy", "move", or "symlink"
-        logger: Optional logger for messages
-
-    Returns:
-        String describing the action taken (e.g., "symlink", "copy", "copy (symlink fallback)")
-    """
-    if mode == "symlink":
-        try:
-            dst.symlink_to(src.resolve())
-            return "symlink"
-        except OSError as e:
-            # Windows without developer mode or elevated privileges, or other OS issues
-            if logger:
-                logger.debug(f"Symlink failed ({e}), falling back to copy")
-            shutil.copy2(src, dst)
-            return "copy (symlink fallback)"
-    elif mode == "move":
-        shutil.move(str(src), str(dst))
-        return "move"
-    else:  # copy (default)
-        shutil.copy2(src, dst)
-        return "copy"
 
 
 def reorganize_local_data_for_training(
