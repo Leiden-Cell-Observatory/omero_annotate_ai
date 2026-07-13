@@ -89,7 +89,7 @@ def prepare_training_data_from_table(
             *_annotation_input directories alongside the training data.
         training_channels: Optional list of channel indices for training input images.
             If different from label_channel, downloads from these channels for
-            training_input and val_input. Currently uses first channel if multiple specified.
+            train_input and val_input. Currently uses first channel if multiple specified.
         upload_annotation_input: If True and using separate channels, uploads the annotation-channel
             images back to OMERO as file annotations. Default is False.
 
@@ -97,8 +97,8 @@ def prepare_training_data_from_table(
         Dictionary with paths to created directories:
         {
             'base_dir': Path to base output directory,
-            'training_input': Path to training images,
-            'training_label': Path to training labels (segmentation masks),
+            'train_input': Path to training images,
+            'train_label': Path to training labels (segmentation masks),
             'train_annotation_input': Path to annotation-channel images (separate channels only),
             'val_input': Path to validation images,
             'val_label': Path to validation labels (segmentation masks),

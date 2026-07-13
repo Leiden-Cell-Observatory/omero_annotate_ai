@@ -1571,7 +1571,7 @@ class AnnotationPipeline:
 
         Single-channel: saves to input/{annotation_id}.tif
         Separate-channel: saves the annotation channel to annotation_input/{annotation_id}.tif
-                          and training channel to training_input/{annotation_id}.tif
+                          and the model channel to model_input/{annotation_id}.tif
         Category metadata is tracked in config.yaml, not in folder structure.
         """
         if self.conn is None:
