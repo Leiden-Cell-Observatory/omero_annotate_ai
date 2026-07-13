@@ -263,3 +263,120 @@ class TestStampConfig:
 
         assert config.annotations[0].source_iscc is None
         assert config.annotations[1].source_iscc == "ISCC:OK"
+
+
+@pytest.mark.unit
+class TestVerifyConfigArguments:
+    """verify_config() demands exactly one source of truth."""
+
+    def test_rejects_neither_conn_nor_data_dir(self, fake_iscc):
+        config = _config_with([])
+
+        with pytest.raises(ValueError, match="exactly one"):
+            provenance.verify_config(config)
+
+    def test_rejects_both_conn_and_data_dir(self, fake_iscc, tmp_path):
+        config = _config_with([])
+
+        with pytest.raises(ValueError, match="exactly one"):
+            provenance.verify_config(config, conn=MagicMock(), data_dir=tmp_path)
+
+
+@pytest.mark.unit
+class TestVerifyConfigOffline:
+    """data_dir mode - the recipient's story. No OMERO connection at all."""
+
+    def test_match_when_published_file_carries_the_stored_code(
+        self, fake_iscc, tmp_path
+    ):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        (tmp_path / "published.tif").write_bytes(b"fake")
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        result = provenance.verify_config(config, data_dir=tmp_path)
+
+        assert result.is_valid is True
+        assert result.errors == []
+
+    def test_mismatch_when_stored_code_absent_from_data(self, fake_iscc, tmp_path):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        (tmp_path / "published.tif").write_bytes(b"fake")
+        config = _config_with(
+            [
+                ImageAnnotation(
+                    image_id=7, image_name="a.tif", source_iscc="ISCC:DIFFERENT"
+                )
+            ]
+        )
+
+        result = provenance.verify_config(config, data_dir=tmp_path)
+
+        assert result.is_valid is False
+        assert len(result.errors) == 1
+        assert "source_iscc" in result.errors[0].field
+
+    def test_missing_is_a_warning_not_an_error(self, fake_iscc, tmp_path):
+        """No stored code is absence of evidence, not evidence of tampering."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        (tmp_path / "published.tif").write_bytes(b"fake")
+        config = _config_with([ImageAnnotation(image_id=7, image_name="a.tif")])
+
+        result = provenance.verify_config(config, data_dir=tmp_path)
+
+        assert result.is_valid is True
+        assert result.errors == []
+        assert len(result.warnings) == 1
+
+    def test_label_code_also_verified(self, fake_iscc, tmp_path):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        (tmp_path / "mask.tif").write_bytes(b"fake")
+        config = _config_with(
+            [
+                ImageAnnotation(
+                    image_id=7,
+                    image_name="a.tif",
+                    source_iscc="ISCC:AAA",
+                    label_iscc="ISCC:NOTPRESENT",
+                )
+            ]
+        )
+
+        result = provenance.verify_config(config, data_dir=tmp_path)
+
+        assert result.is_valid is False
+        assert any("label_iscc" in e.field for e in result.errors)
+
+
+@pytest.mark.unit
+class TestVerifyConfigOmero:
+    """conn mode - the author's own check against the live server."""
+
+    def test_match_when_omero_still_has_the_same_pixels(self, fake_iscc):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        result = provenance.verify_config(config, conn=MagicMock())
+
+        assert result.is_valid is True
+
+    def test_mismatch_when_omero_pixels_changed(self, fake_iscc):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        fake_iscc.return_value = [{"iscc_code": "ISCC:CHANGED"}]
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        result = provenance.verify_config(config, conn=MagicMock())
+
+        assert result.is_valid is False
+        assert len(result.errors) == 1

@@ -156,3 +156,141 @@ def stamp_config(config, conn):
         f"{len(image_cache)} unique source image(s)"
     )
     return config
+
+
+# Image formats iscc-bio can read, used when scanning a published data directory.
+_IMAGE_SUFFIXES = {".tif", ".tiff", ".czi", ".nd2", ".lif", ".dv", ".zarr"}
+
+
+def _scan_directory_codes(data_dir: Union[str, Path]) -> set:
+    """Content-code every image file under data_dir.
+
+    Returns a set of codes, deliberately discarding filenames: verification is
+    content-addressed, so renaming a published file must not break it.
+    """
+    codes = set()
+    for path in sorted(Path(data_dir).rglob("*")):
+        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES:
+            code = compute_file_iscc(path)
+            if code is not None:
+                codes.add(code)
+    return codes
+
+
+def verify_config(config, conn=None, data_dir=None):
+    """Verify the ISCC codes stored in a config against actual data.
+
+    Exactly one source must be given:
+      conn:     recompute from OMERO. The author's check against the live server.
+      data_dir: recompute from local files, fully OFFLINE, no OMERO needed. This
+                is what a recipient of a published dataset runs, and it is the
+                reason this feature exists.
+
+    In data_dir mode the check is content-addressed: every image file under the
+    directory is coded, and each stored code must appear somewhere in that set.
+    Filenames are irrelevant.
+
+    Args:
+        config: AnnotationConfig carrying stamped codes.
+        conn: OMERO BlitzGateway, for the online check.
+        data_dir: Directory of published image files, for the offline check.
+
+    Returns:
+        ValidationResult. A mismatch is an error; a code that was never stamped
+        is a warning, because absence of evidence is not evidence of tampering.
+    """
+    from ..core.annotation_config import ValidationIssue, ValidationResult
+
+    if (conn is None) == (data_dir is None):
+        raise ValueError(
+            "verify_config requires exactly one of 'conn' (verify against OMERO) "
+            "or 'data_dir' (verify offline against published files)"
+        )
+
+    errors = []
+    warnings = []
+
+    available_codes = _scan_directory_codes(data_dir) if data_dir is not None else None
+    image_cache: Dict[int, Optional[str]] = {}
+    label_cache: Dict[int, Optional[str]] = {}
+
+    for annotation in config.annotations:
+        label = f"image {annotation.image_id} ({annotation.image_name})"
+
+        # --- source image ---
+        if annotation.source_iscc is None:
+            warnings.append(
+                ValidationIssue(
+                    field="source_iscc",
+                    message=f"No source ISCC stored for {label}; not verifiable. "
+                    "Run stamp_config() to add provenance.",
+                )
+            )
+        elif available_codes is not None:
+            if annotation.source_iscc not in available_codes:
+                errors.append(
+                    ValidationIssue(
+                        field="source_iscc",
+                        message=f"No file in the data directory matches the recorded "
+                        f"source ISCC for {label}. The data does not match the config.",
+                    )
+                )
+        else:
+            image_id = annotation.image_id
+            if image_id not in image_cache:
+                image_cache[image_id] = compute_image_iscc(conn, image_id)
+            actual = image_cache[image_id]
+            if actual is not None and actual != annotation.source_iscc:
+                errors.append(
+                    ValidationIssue(
+                        field="source_iscc",
+                        message=f"Source ISCC mismatch for {label}: config records "
+                        f"{annotation.source_iscc}, OMERO now yields {actual}.",
+                    )
+                )
+
+        # --- annotation mask ---
+        # A missing label_id means no mask was ever uploaded for this
+        # annotation, so there is nothing to verify or warn about. A missing
+        # label_iscc with a label_id present is the real "missing evidence"
+        # case. Note: verification itself keys off label_iscc, not label_id -
+        # data_dir mode never needs label_id at all.
+        if annotation.label_iscc is None:
+            if annotation.label_id is not None:
+                warnings.append(
+                    ValidationIssue(
+                        field="label_iscc",
+                        message=f"No label ISCC stored for {label}; mask not verifiable.",
+                    )
+                )
+            continue
+
+        if available_codes is not None:
+            if annotation.label_iscc not in available_codes:
+                errors.append(
+                    ValidationIssue(
+                        field="label_iscc",
+                        message=f"No file in the data directory matches the recorded "
+                        f"label ISCC for {label}. The mask does not match the config.",
+                    )
+                )
+        elif annotation.label_id is not None:
+            label_id = annotation.label_id
+            if label_id not in label_cache:
+                label_cache[label_id] = compute_label_iscc(conn, label_id)
+            actual = label_cache[label_id]
+            if actual is not None and actual != annotation.label_iscc:
+                errors.append(
+                    ValidationIssue(
+                        field="label_iscc",
+                        message=f"Label ISCC mismatch for {label}: config records "
+                        f"{annotation.label_iscc}, OMERO now yields {actual}.",
+                    )
+                )
+
+    return ValidationResult(
+        is_valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+        annotation_count=len(config.annotations),
+    )
