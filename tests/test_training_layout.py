@@ -196,3 +196,144 @@ class TestOutputDirGuard:
         annotation_dir.mkdir()
 
         assert_output_dir_is_separate(tmp_path / "project_training", annotation_dir)
+
+
+@pytest.mark.unit
+class TestWriteTrainingLayout:
+    """Records are written into the split layout, paired by annotation_id."""
+
+    def _record(self, tmp_path, annotation_id, category, with_annotation_image=False):
+        image = tmp_path / f"src_{annotation_id}_img.tif"
+        label = tmp_path / f"src_{annotation_id}_lbl.tif"
+        image.write_bytes(b"img")
+        label.write_bytes(b"lbl")
+
+        annotation_image = None
+        if with_annotation_image:
+            ann = tmp_path / f"src_{annotation_id}_ann.tif"
+            ann.write_bytes(b"ann")
+            annotation_image = FileSource(ann)
+
+        return AnnotationRecord(
+            annotation_id=annotation_id,
+            category=category,
+            image=FileSource(image),
+            label=FileSource(label),
+            annotation_image=annotation_image,
+        )
+
+    def test_writes_train_and_val_split(self, tmp_path):
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        records = [
+            self._record(tmp_path, 1, "training"),
+            self._record(tmp_path, 2, "validation"),
+        ]
+
+        created_dirs, stats = write_training_layout(records, out)
+
+        assert (out / "train_input" / "1.tif").read_bytes() == b"img"
+        assert (out / "train_label" / "1.tif").read_bytes() == b"lbl"
+        assert (out / "val_input" / "2.tif").read_bytes() == b"img"
+        assert (out / "val_label" / "2.tif").read_bytes() == b"lbl"
+        assert stats["n_training_images"] == 1
+        assert stats["n_val_images"] == 1
+        assert created_dirs["train_input"] == out / "train_input"
+
+    def test_image_and_label_share_a_name(self, tmp_path):
+        """Pairing is by annotation_id, so a gap cannot shift later pairs.
+
+        The OMERO producer used to name files by loop index and write the image
+        before the label. A missing label left an orphan image, and micro-SAM,
+        which pairs raw_paths to label_paths by sorted filename, then mispaired
+        every subsequent image.
+        """
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        records = [
+            self._record(tmp_path, 10, "training"),
+            self._record(tmp_path, 30, "training"),
+        ]
+
+        write_training_layout(records, out)
+
+        images = sorted(p.name for p in (out / "train_input").glob("*.tif"))
+        labels = sorted(p.name for p in (out / "train_label").glob("*.tif"))
+
+        assert images == labels == ["10.tif", "30.tif"]
+
+    def test_annotation_image_written_for_separate_channels(self, tmp_path):
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        records = [self._record(tmp_path, 1, "training", with_annotation_image=True)]
+
+        write_training_layout(records, out, uses_separate_channels=True)
+
+        assert (out / "train_annotation_input" / "1.tif").read_bytes() == b"ann"
+
+    def test_test_category_skipped_unless_included(self, tmp_path):
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        records = [self._record(tmp_path, 1, "test")]
+
+        _, stats = write_training_layout(records, out, include_test=False)
+
+        assert not (out / "test_input").exists()
+        assert stats["n_skipped"] == 1
+
+    def test_test_category_written_when_included(self, tmp_path):
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        records = [self._record(tmp_path, 1, "test")]
+
+        _, stats = write_training_layout(records, out, include_test=True)
+
+        assert (out / "test_input" / "1.tif").exists()
+        assert stats["n_test_images"] == 1
+
+    def test_clean_existing_removes_stale_data(self, tmp_path):
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        stale = out / "train_input" / "999.tif"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale")
+
+        write_training_layout([self._record(tmp_path, 1, "training")], out, clean_existing=True)
+
+        assert not stale.exists()
+        assert (out / "train_input" / "1.tif").exists()
+
+    def test_records_the_file_operation(self, tmp_path):
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        records = [self._record(tmp_path, 1, "training")]
+
+        _, stats = write_training_layout(records, out, file_mode="symlink")
+
+        assert stats["file_operations"]["symlink"] == 2  # image + label
+        assert stats["file_mapping"]["1"]["image"].endswith("train_input/1.tif")
+
+    def test_array_source_records_are_written(self, tmp_path):
+        from tifffile import imread
+
+        from omero_annotate_ai.processing.training_layout import write_training_layout
+
+        out = tmp_path / "training"
+        array = np.full((2, 2), 7, dtype=np.uint8)
+        record = AnnotationRecord(
+            annotation_id=5,
+            category="training",
+            image=ArraySource(lambda: array),
+            label=ArraySource(lambda: array),
+        )
+
+        write_training_layout([record], out)
+
+        assert np.array_equal(imread(str(out / "train_input" / "5.tif")), array)

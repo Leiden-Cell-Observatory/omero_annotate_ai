@@ -197,3 +197,101 @@ class AnnotationRecord:
             raise ValueError(
                 f"Unknown category: {self.category}. Expected one of {CATEGORIES}"
             )
+
+
+def _empty_stats() -> dict:
+    stats = {}
+    for prefix in ("training", "val", "test"):
+        stats[f"n_{prefix}_images"] = 0
+        stats[f"n_{prefix}_labels"] = 0
+        stats[f"n_{prefix}_annotation_input"] = 0
+    stats["n_skipped"] = 0
+    stats["file_operations"] = {}
+    stats["file_mapping"] = {}
+    return stats
+
+
+# Category -> the prefix used in stats keys
+_STATS_PREFIX = {"training": "training", "validation": "val", "test": "test"}
+
+
+def write_training_layout(
+    records: List[AnnotationRecord],
+    output_dir: Path,
+    layout: str = "split",
+    file_mode: str = "copy",
+    clean_existing: bool = True,
+    include_test: bool = False,
+    uses_separate_channels: bool = False,
+    logger=None,
+) -> tuple:
+    """
+    Write annotation records into a training layout.
+
+    Files are named {annotation_id}.tif in every folder, so an image and its label
+    always pair by name.
+
+    Args:
+        records: Annotation records to write
+        output_dir: Target directory (must not be inside the annotation directory)
+        layout: "split" or "cellpose"
+        file_mode: "copy", "move" or "symlink" (ignored by ArraySource records)
+        clean_existing: Remove the layout's folders before writing
+        include_test: Write the test split; test records are skipped when False
+        uses_separate_channels: Write the annotation-channel image alongside
+        logger: Optional logger
+
+    Returns:
+        (created_dirs, stats)
+    """
+    output_dir = Path(output_dir)
+
+    if clean_existing:
+        clean_layout(output_dir, layout, uses_separate_channels, include_test)
+
+    folder_names = layout_folders(layout, uses_separate_channels, include_test)
+    created_dirs = {}
+    for folder_name in folder_names:
+        folder_path = output_dir / folder_name
+        folder_path.mkdir(parents=True, exist_ok=True)
+        created_dirs[folder_name] = folder_path
+
+    stats = _empty_stats()
+
+    def _record_operation(action: str):
+        stats["file_operations"][action] = stats["file_operations"].get(action, 0) + 1
+
+    for record in records:
+        if record.category == "test" and not include_test:
+            stats["n_skipped"] += 1
+            continue
+
+        image_folder, label_folder, annotation_folder = split_folders_for(record.category)
+        prefix = _STATS_PREFIX[record.category]
+        filename = f"{record.annotation_id}.tif"
+        mapping = {}
+
+        image_dst = created_dirs[image_folder] / filename
+        _record_operation(record.image.write_to(image_dst, file_mode, logger))
+        stats[f"n_{prefix}_images"] += 1
+        mapping["image"] = str(image_dst)
+
+        label_dst = created_dirs[label_folder] / filename
+        _record_operation(record.label.write_to(label_dst, file_mode, logger))
+        stats[f"n_{prefix}_labels"] += 1
+        mapping["label"] = str(label_dst)
+
+        if uses_separate_channels and record.annotation_image is not None:
+            annotation_dst = created_dirs[annotation_folder] / filename
+            _record_operation(
+                record.annotation_image.write_to(annotation_dst, file_mode, logger)
+            )
+            stats[f"n_{prefix}_annotation_input"] += 1
+            mapping["annotation_image"] = str(annotation_dst)
+
+        stats["file_mapping"][str(record.annotation_id)] = mapping
+
+        if logger:
+            logger.debug(f"Wrote annotation {record.annotation_id} to {record.category}")
+
+    return created_dirs, stats
