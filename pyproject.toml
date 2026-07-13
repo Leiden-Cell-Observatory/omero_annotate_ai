@@ -58,6 +58,12 @@ microsam = [
     "napari>=0.4.15",
     # Note: micro-sam is conda-only, install with: conda install -c conda-forge micro-sam
 ]
+provenance = [
+    # ISO 24138 pixel-content codes for dataset provenance.
+    # Pinned tightly: iscc-bio is a proof of concept and declares that breaking
+    # changes may be released at any time.
+    "iscc-bio>=0.1,<0.2",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
