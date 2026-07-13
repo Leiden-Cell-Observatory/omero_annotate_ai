@@ -120,27 +120,26 @@ class AnnotationPipeline:
         """Return input folder paths for the current workflow configuration.
 
         Separate channels (label_channel != training_channels):
-          - 'label_input': fluorescence channel (for annotation)
-          - 'training_input': training channel (e.g. brightfield)
+          - 'annotation_input': the channel you annotate (e.g. fluorescence)
+          - 'model_input': the channel the model consumes (e.g. brightfield)
         Single channel:
-          - 'input': flat folder
+          - 'annotation_input': serves both roles
         """
+        folders = {"annotation_input": output_path / "annotation_input"}
         if self.config.spatial_coverage.uses_separate_channels():
-            return {
-                "label_input": output_path / "label_input",
-                "training_input": output_path / "training_input",
-            }
-        return {"input": output_path / "input"}
+            folders["model_input"] = output_path / "model_input"
+        return folders
 
     def _setup_directories(self):
         """Create output directories for annotation workflow.
 
-        Separate channels:  label_input/  training_input/  output/
-        Single channel:     input/  output/  (+ sam_embeddings/ for micro-SAM)
+        Separate channels:  annotation_input/  model_input/  annotation_output/
+        Single channel:     annotation_input/  annotation_output/
+        micro-SAM adds:     sam_embeddings/
         """
         output_path = Path(self.config.output.output_directory)
 
-        dirs = [output_path, output_path / "output"]
+        dirs = [output_path, output_path / "annotation_output"]
         dirs.extend(self._get_input_folders(output_path).values())
         if self.config.ai_model.framework == "micro_sam":
             dirs.append(output_path / "sam_embeddings")
@@ -786,7 +785,7 @@ class AnnotationPipeline:
                 matching_annotation.mark_processed()
 
                 # Save mask to output folder
-                output_dir = Path(self.config.output.output_directory) / "output"
+                output_dir = Path(self.config.output.output_directory) / "annotation_output"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 local_file = output_dir / f"{annotation_id}_mask.tif"
 
@@ -863,7 +862,7 @@ class AnnotationPipeline:
 
         image_obj = self.conn.getObject("Image", image_id)
         output_path = Path(self.config.output.output_directory)
-        input_folder = output_path / "input"
+        input_folder = output_path / "annotation_input"
 
         # Save label channel image (always)
         saved_path = self._save_training_image(image_obj, meta, annotation_id, input_folder)
@@ -1586,22 +1585,22 @@ class AnnotationPipeline:
 
             image_obj = self.conn.getObject("Image", img_id)
 
-            if "label_input" in folders:
-                # Separate-channel: label channel → label_input/ (single-channel, annotation reference)
-                if self._save_training_image(image_obj, meta, annotation_id, folders["label_input"]) is None:
-                    print(f"Warning: Could not save label channel image for {annotation_id}")
+            if "model_input" in folders:
+                # Separate-channel: the channel you annotate → annotation_input/ (single-channel)
+                if self._save_training_image(image_obj, meta, annotation_id, folders["annotation_input"]) is None:
+                    print(f"Warning: Could not save annotation channel image for {annotation_id}")
 
-                # training_input/ → all training channels stacked channels-last: (Y,X,C) or (Z,Y,X,C)
+                # model_input/ → all training channels stacked channels-last: (Y,X,C) or (Z,Y,X,C)
                 training_channels = self.config.spatial_coverage.get_training_channels()
                 stacked = self._load_and_stack_channels(image_obj, meta, training_channels)
                 axes_str = "ZYXC" if stacked.ndim == 4 else "YXC"
-                train_file = folders["training_input"] / f"{annotation_id}.tif"
-                folders["training_input"].mkdir(parents=True, exist_ok=True)
+                train_file = folders["model_input"] / f"{annotation_id}.tif"
+                folders["model_input"].mkdir(parents=True, exist_ok=True)
                 if not self._save_image_to_disk(stacked, train_file, axes=axes_str):
-                    print(f"Warning: Could not save training channel image for {annotation_id}")
+                    print(f"Warning: Could not save model channel image for {annotation_id}")
             else:
-                # Single-channel: → input/
-                if self._save_training_image(image_obj, meta, annotation_id, folders["input"]) is None:
+                # Single-channel: → annotation_input/ (serves both roles)
+                if self._save_training_image(image_obj, meta, annotation_id, folders["annotation_input"]) is None:
                     print(f"Warning: Could not save image {annotation_id}")
 
     def _process_annotation_file(
@@ -1622,7 +1621,7 @@ class AnnotationPipeline:
         try:
             if self.config.workflow.read_only_mode:
                 # Read-only mode: save locally (category tracked in config, not folders)
-                output_dir = Path(self.config.output.output_directory) / "output"
+                output_dir = Path(self.config.output.output_directory) / "annotation_output"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 local_file = output_dir / f"{annotation_id}_mask.tif"
 
@@ -1682,7 +1681,7 @@ class AnnotationPipeline:
             traceback.print_exc()
             return False
 
-    def collect_annotations_from_disk(self, folder_pattern: str = "output") -> Tuple[int, AnnotationConfig]:
+    def collect_annotations_from_disk(self, folder_pattern: str = "annotation_output") -> Tuple[int, AnnotationConfig]:
         """Collect annotation masks from disk and upload to OMERO.
 
         This method scans output folder(s) for annotation masks, matches them with
@@ -1691,7 +1690,7 @@ class AnnotationPipeline:
 
         Args:
             folder_pattern: Folder name or glob pattern for folders containing annotation masks.
-                           Default is "output" (the standard output folder).
+                           Default is "annotation_output" (the standard output folder).
 
         Returns:
             Tuple of (number_processed, updated_config)
@@ -1768,11 +1767,11 @@ class AnnotationPipeline:
         
         return processed_count, self.config
 
-    def get_annotation_status_from_disk(self, folder_name: str = "output") -> dict:
+    def get_annotation_status_from_disk(self, folder_name: str = "annotation_output") -> dict:
         """Check status of annotations available on disk.
 
         Args:
-            folder_name: Name of the output folder to check. Default is "output".
+            folder_name: Name of the output folder to check. Default is "annotation_output".
 
         Returns:
             Dictionary with status information about available annotations
