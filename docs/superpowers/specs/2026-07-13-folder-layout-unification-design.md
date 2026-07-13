@@ -44,8 +44,9 @@ Three specific defects follow from this:
 ## Non-goals
 
 - CellPose *training* (`_run_cellpose_training`). Out of scope; only the layout seam is designed.
-- Renaming OMERO-side identifiers. See "OMERO compatibility" below.
 - Backwards compatibility for local folder names or the Python API. Explicitly waived.
+- Migrating tracking tables already written to OMERO. They remain readable via a read-side
+  fallback; they are not rewritten. See "OMERO identifiers".
 
 ## Design
 
@@ -152,7 +153,7 @@ Both producers return the same keys, so either can feed `setup_training()`:
 `setup_training()` in `training_utils.py` is updated to require `train_input`, `train_label`,
 `val_input`, `val_label`. This fixes defect 2 by construction.
 
-## OMERO compatibility — decision required
+## OMERO identifiers
 
 `label_input` is not only a folder name. It is also persisted **on the OMERO server**:
 
@@ -161,14 +162,17 @@ Both producers return the same keys, so either can feed `setup_training()`:
 - the `label_input_id` column in tracking tables (`annotation_config.py:106`)
 - the public function `upload_label_input_image()`
 
-These identifiers are attached to images in users' OMERO instances. The waiver on backwards
-compatibility covers local folders and the Python API; it does not safely extend to data
-already written to a server. Renaming them would orphan existing annotations.
+These are renamed to match the disk layout, so there is no asymmetry at the OMERO boundary.
+Renaming is safe because neither identifier is used to *find* existing data:
 
-**Decision: leave OMERO-facing identifiers unchanged.** Rename local folders and Python
-internals only. The resulting asymmetry (disk says `annotation_input`, OMERO says
-`label_input`) is confined to the OMERO boundary and is worth the cost of not breaking
-existing data.
+| Identifier | New name | Why renaming is safe |
+|---|---|---|
+| ns `.../annotate/label_input` | `.../annotate/annotation_input` | Write-only. Nothing queries by this namespace — unlike `CONFIG_NS` and `workflow_status`, which are read back. Old file annotations keep the old namespace and are still reachable, because they are found via the id stored in the tracking table, not by namespace lookup. |
+| column `label_input_id` | `annotation_input_id` | Read via `row.get(...)`, so the reader accepts the legacy name as a fallback: `row.get("annotation_input_id", row.get("label_input_id", "None"))`. Tables written by earlier versions continue to load. |
+| `upload_label_input_image()` | `upload_annotation_input_image()` | Python API. Backwards compatibility explicitly waived. |
+
+New tables are written with `annotation_input_id` only. The legacy fallback is read-side
+only, and is covered by a test that loads a table containing the old column name.
 
 ## Deletions
 
@@ -193,6 +197,8 @@ existing data.
   the coverage the deleted tests were meant to provide.
 - Contract: the result dict of both producers satisfies `setup_training()`'s required keys.
 - `layout="cellpose"` raises `NotImplementedError`.
+- Legacy read: a tracking table containing `label_input_id` still loads, populating
+  `annotation_input_id`.
 
 ## Files affected
 
@@ -201,7 +207,12 @@ existing data.
 | `processing/training_functions.py` | Records + `_write_training_layout`; delete `prepare_training_data_from_config`, `_get_standard_folder_structure`, `_create_training_directories` |
 | `processing/training_utils.py` | `setup_training` required keys → `train_*` |
 | `core/annotation_pipeline.py` | `_get_input_folders`, `_setup_directories`, `_save_images_for_cellpose`, `collect_annotations_from_disk` / `get_annotation_status_from_disk` defaults (`output` → `annotation_output`), `reorganize_for_training` default target |
+| `core/annotation_config.py` | `label_input_id` → `annotation_input_id`, with read-side fallback for legacy tables |
+| `omero/omero_functions.py` | `upload_label_input_image` → `upload_annotation_input_image`; namespace → `.../annotate/annotation_input` |
+| `omero/__init__.py` | Export rename |
 | `tests/test_training_functions.py` | Rewrite; delete dead blocks |
 | `tests/test_pipeline.py` | Folder-name assertions |
+| `tests/test_config.py` | Legacy `label_input_id` read test |
+| `tests/test_omero_functions.py` | Renamed upload function |
 | `notebooks/` | Result-dict keys in the 3 training notebooks + idr demo |
 | `CLAUDE.md` | Folder-design section |
