@@ -102,12 +102,27 @@ def assert_output_dir_is_separate(output_dir: Path, annotation_dir: Path) -> Non
     def _is_inside(child: Path, parent: Path) -> bool:
         if child == parent or parent in child.parents:
             return True
-        # Windows and (by default) macOS have case-insensitive filesystems, so
-        # /Users/x/Project and /Users/x/project are the same directory. resolve()
-        # does not case-fold, so compare again folded.
-        child_folded = Path(str(child).casefold())
-        parent_folded = Path(str(parent).casefold())
-        return child_folded == parent_folded or parent_folded in child_folded.parents
+
+        # Path comparison alone is not enough: on Windows and (by default) macOS the
+        # filesystem is case-insensitive, so /x/Project and /x/project are one
+        # directory, and resolve() does not case-fold. Ask the filesystem instead of
+        # guessing - samefile() answers correctly on case-insensitive AND
+        # case-sensitive filesystems, so a genuine /data/Project vs /data/project on
+        # Linux is still allowed through.
+        if not parent.exists():
+            return False
+        for candidate in (child, *child.parents):
+            if not candidate.exists():
+                continue
+            try:
+                if candidate.samefile(parent):
+                    return True
+            except OSError:
+                pass
+            # Only the nearest existing ancestor is informative; anything above it
+            # is a shared prefix, not containment.
+            break
+        return False
 
     if _is_inside(output_resolved, annotation_resolved):
         raise ValueError(

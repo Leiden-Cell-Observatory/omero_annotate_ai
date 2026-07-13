@@ -342,19 +342,44 @@ class TestWriteTrainingLayout:
 
 
 @pytest.mark.unit
-class TestOutputDirGuardCaseInsensitive:
-    """The guard must hold on case-insensitive filesystems (Windows, macOS)."""
+class TestOutputDirGuardAliases:
+    """The guard asks the filesystem, so aliases of the annotation dir are caught.
 
-    def test_rejects_case_differing_nested_dir(self, tmp_path):
-        annotation_dir = tmp_path / "Project"
+    Plain path comparison is not enough: on case-insensitive filesystems (Windows,
+    macOS) /x/Project and /x/project are one directory, and resolve() does not
+    case-fold. samefile() gets that right without wrongly rejecting /x/Project vs
+    /x/project on a case-SENSITIVE filesystem, where they really are different.
+    """
+
+    def test_rejects_output_under_an_aliased_annotation_dir(self, tmp_path):
+        annotation_dir = tmp_path / "project"
         annotation_dir.mkdir()
+        alias = tmp_path / "alias"
+        alias.symlink_to(annotation_dir, target_is_directory=True)
 
-        # Same directory on Windows/macOS; resolve() does not case-fold.
         with pytest.raises(ValueError, match="must not be inside"):
-            assert_output_dir_is_separate(tmp_path / "project" / "out", annotation_dir)
+            assert_output_dir_is_separate(alias / "out", annotation_dir)
 
-    def test_still_allows_a_genuine_sibling(self, tmp_path):
-        annotation_dir = tmp_path / "Project"
+    def test_rejects_the_aliased_dir_itself(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        alias = tmp_path / "alias"
+        alias.symlink_to(annotation_dir, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="must not be inside"):
+            assert_output_dir_is_separate(alias, annotation_dir)
+
+    def test_allows_a_genuine_sibling(self, tmp_path):
+        annotation_dir = tmp_path / "project"
         annotation_dir.mkdir()
 
-        assert_output_dir_is_separate(tmp_path / "Project_training", annotation_dir)
+        assert_output_dir_is_separate(tmp_path / "project_training", annotation_dir)
+
+    def test_allows_a_sibling_sharing_a_name_prefix(self, tmp_path):
+        """<annotation_dir>_training/ is the default target; it must not be rejected."""
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        sibling = tmp_path / "project_training"
+        sibling.mkdir()
+
+        assert_output_dir_is_separate(sibling, annotation_dir)

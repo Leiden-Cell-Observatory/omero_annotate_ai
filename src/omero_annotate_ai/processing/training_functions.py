@@ -832,16 +832,28 @@ def reorganize_local_data_for_training(
     # An empty training set must be loud. prepare_training_data_from_table() already
     # raises here; without the same guard, a producer/consumer folder mismatch returns
     # valid-looking paths to empty directories and training silently does nothing.
-    if not records:
+    #
+    # Key this off what was actually WRITTEN, not off len(records): a record can be
+    # built and then written nowhere (every annotation is category "test" and
+    # include_test=False), which leaves the layout just as empty.
+    n_written = (
+        stats["n_training_images"] + stats["n_val_images"] + stats["n_test_images"]
+    )
+    if n_written == 0:
+        expected_images = annotation_dir / (
+            "model_input" if uses_separate_channels else "annotation_input"
+        )
         logger.error(
-            f"Reorganization FAILED in {output_dir}: "
-            f"0 annotations written, {n_missing} skipped"
+            f"Reorganization FAILED in {output_dir}: 0 images written "
+            f"({n_missing} skipped as missing, {stats['n_skipped']} skipped by category)"
         )
         raise ValueError(
-            f"Reorganization produced no training data: all {n_missing} processed "
-            f"annotations were skipped because their image or label was missing. "
-            f"Expected images in {annotation_dir / ('model_input' if uses_separate_channels else 'annotation_input')}/ "
-            f"and masks in {annotation_dir / 'annotation_output'}/."
+            f"Reorganization produced no training data: nothing was written.\n"
+            f"  {n_missing} annotation(s) skipped - image or label not found. "
+            f"Expected images in {expected_images}/ and masks in "
+            f"{annotation_dir / 'annotation_output'}/.\n"
+            f"  {stats['n_skipped']} annotation(s) skipped by category "
+            f"(test annotations are skipped unless include_test=True)."
         )
 
     logger.info(

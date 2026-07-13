@@ -622,6 +622,40 @@ class TestEmptyTrainingSetIsLoud:
                 output_dir=tmp_path / "out",
             )
 
+    def test_raises_when_records_exist_but_nothing_is_written(self, tmp_path):
+        """Records can be built and then written nowhere.
+
+        Every annotation is category "test" and include_test=False, so the records are
+        valid but the layout gets nothing. Keying the guard off len(records) would miss
+        this and return empty folders silently.
+        """
+        annotation_dir = tmp_path / "project"
+        (annotation_dir / "annotation_input").mkdir(parents=True)
+        (annotation_dir / "annotation_output").mkdir(parents=True)
+        (annotation_dir / "annotation_input" / "0.tif").write_bytes(b"img")
+        (annotation_dir / "annotation_output" / "0_mask.tif").write_bytes(b"lbl")
+
+        config = create_default_config()
+        config.spatial_coverage.label_channel = None
+        config.spatial_coverage.training_channels = None
+        config.annotations = [
+            ImageAnnotation(
+                image_id=100,
+                image_name="img",
+                annotation_id="0",
+                category="test",
+                processed=True,
+            )
+        ]
+
+        with pytest.raises(ValueError, match="no training data"):
+            reorganize_local_data_for_training(
+                config=config,
+                annotation_dir=annotation_dir,
+                output_dir=tmp_path / "out",
+                include_test=False,
+            )
+
 
 @pytest.mark.unit
 class TestChannelParsing:
