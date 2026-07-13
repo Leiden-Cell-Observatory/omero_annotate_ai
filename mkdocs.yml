@@ -61,6 +61,7 @@ nav:
     - Cellpose Integration: tutorials/cellpose-integration.md
     - Training Data Prep: tutorials/training-data-prep.md
     - BiaPy Integration: tutorials/biapy-integration.md
+    - Content Provenance (ISCC): tutorials/provenance.md
   - API Reference: api/
 
 plugins:

@@ -294,6 +294,34 @@ tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 annotations: []  # List of ImageAnnotation records
 ```
 
+### Content Provenance (ISCC)
+
+Optional [ISO 24138](https://www.iso.org/standard/77899.html) content-provenance codes, computed via the `iscc-bio` library (`pip install 'omero-annotate-ai[provenance]'`):
+
+```yaml
+iscc_mode: "off"    # "off" (default) or "on"
+```
+
+- **`iscc_mode`**: When `"on"`, the pipeline computes an ISCC content code for each
+  annotation's source image and mask after processing, and stores them on the
+  annotation record. When `"off"` (the default), no codes are computed and there is
+  no added per-image compute cost.
+
+When enabled, each entry in `annotations` carries two additional fields:
+
+```yaml
+annotations:
+  - image_id: 101
+    source_iscc: "ISCC:..."   # content code of the source image's raw OMERO pixels
+    label_iscc: "ISCC:..."    # content code of the annotation mask
+```
+
+- **`source_iscc`** / **`label_iscc`**: `Optional[str]`, `null` until stamped. Both
+  round-trip through `config.yaml` and mirror into the OMERO tracking table.
+
+See the [Content Provenance tutorial](tutorials/provenance.md) for the full stamp/verify
+workflow, including fully offline verification.
+
 ## Working with Configuration Files
 
 ### Loading Configurations
