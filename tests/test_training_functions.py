@@ -680,3 +680,184 @@ class TestChannelParsing:
 
         with pytest.raises(ValueError, match="Unparseable channel"):
             _channel_from_row(pd.Series({"channel": "not-a-channel"}))
+
+
+# ---------------------------------------------------------------------------
+# _fetch_plane: 280 lines of OMERO plane-fetching that had no direct coverage.
+#
+# Fake *ezomero*, not OMERO. _fetch_plane only ever calls ezomero.get_image, in
+# two forms, so a small fake serving slices out of a synthetic XYZCT volume makes
+# the whole function testable with no network and no OMERO objects.
+#
+# The volume is deliberately NON-SQUARE (7x5x3). With a square volume a lost
+# np.swapaxes is invisible in the shape - which is how the 3D-patch transpose
+# below survived. Assertions cover both the returned shape and the recorded
+# ezomero call arguments: a shape check alone cannot catch an off-by-one in the
+# patch origin or the wrong channel being requested.
+# ---------------------------------------------------------------------------
+
+from omero_annotate_ai.processing import training_functions as tf
+
+
+
+PLANE_X, PLANE_Y, PLANE_Z = 7, 5, 3  # deliberately non-square: a lost swapaxes changes the shape
+
+
+class _FakePlaneImage:
+    def getSizeX(self): return PLANE_X
+    def getSizeY(self): return PLANE_Y
+    def getSizeZ(self): return PLANE_Z
+
+
+class _FakeEzomero:
+    """Serves planes out of a synthetic XYZCT volume and records every call."""
+
+    def __init__(self):
+        # vol[x, y, z, c, t] - each voxel encodes its own coordinates
+        self.vol = np.zeros((PLANE_X, PLANE_Y, PLANE_Z, 2, 1), dtype=np.uint16)
+        for x in range(PLANE_X):
+            for y in range(PLANE_Y):
+                for z in range(PLANE_Z):
+                    for c in range(2):
+                        self.vol[x, y, z, c, 0] = x + 10 * y + 100 * z + 1000 * c
+        self.calls = []
+
+    def get_image(self, conn, image_id, no_pixels=False, start_coords=None,
+                  axis_lengths=None, xyzct=False):
+        if no_pixels:
+            return _FakePlaneImage(), None
+        self.calls.append({"start_coords": start_coords, "axis_lengths": axis_lengths,
+                           "xyzct": xyzct})
+        x0, y0, z0, c0, t0 = start_coords
+        lx, ly, lz, lc, lt = axis_lengths
+        block = self.vol[x0:x0 + lx, y0:y0 + ly, z0:z0 + lz, c0:c0 + lc, t0:t0 + lt]
+        return None, block
+
+
+def _plane_row(**overrides):
+    base = {
+        "image_id": 1, "z_slice": 0, "channel": 0, "timepoint": 0,
+        "is_volumetric": False, "is_patch": False,
+        "patch_x": 0, "patch_y": 0, "patch_width": 0, "patch_height": 0,
+    }
+    base.update(overrides)
+    return pd.Series(base)
+
+
+@pytest.fixture
+def fake_ezomero():
+    f = _FakeEzomero()
+    with patch.object(tf, "ezomero", f):
+        yield f
+
+
+@pytest.mark.unit
+class TestFetchPlane2D:
+    def test_full_plane_is_returned_as_y_by_x(self, fake_ezomero):
+        """A lost swapaxes would return (7, 5) instead of (5, 7)."""
+        img = tf._fetch_plane(None, _plane_row(), channel=0)
+        assert img.shape == (PLANE_Y, PLANE_X)
+
+    def test_full_plane_content_is_not_transposed(self, fake_ezomero):
+        """The brightest voxel sits at a known (y, x); a transpose moves it."""
+        img = tf._fetch_plane(None, _plane_row(), channel=0)
+        # value = x + 10y, so the max is at x=6, y=4 -> (y=4, x=6)
+        assert np.unravel_index(np.argmax(img), img.shape) == (PLANE_Y - 1, PLANE_X - 1)
+
+    def test_full_plane_requests_the_whole_plane(self, fake_ezomero):
+        tf._fetch_plane(None, _plane_row(z_slice=2, timepoint=0), channel=1)
+        call = fake_ezomero.calls[-1]
+        assert call["start_coords"] == (0, 0, 2, 1, 0)
+        assert call["axis_lengths"] == (PLANE_X, PLANE_Y, 1, 1, 1)
+        assert call["xyzct"] is True
+
+    def test_channel_argument_selects_the_channel(self, fake_ezomero):
+        """channel=1 must reach ezomero, not the _plane_row's channel column."""
+        tf._fetch_plane(None, _plane_row(channel=0), channel=1)
+        assert fake_ezomero.calls[-1]["start_coords"][3] == 1
+
+    def test_patch_uses_the_patch_origin_and_size(self, fake_ezomero):
+        tf._fetch_plane(
+            None,
+            _plane_row(is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            channel=0,
+        )
+        call = fake_ezomero.calls[-1]
+        assert call["start_coords"] == (2, 1, 0, 0, 0)
+        assert call["axis_lengths"] == (3, 2, 1, 1, 1)
+
+    def test_patch_is_returned_as_height_by_width(self, fake_ezomero):
+        img = tf._fetch_plane(
+            None,
+            _plane_row(is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            channel=0,
+        )
+        assert img.shape == (2, 3)  # (height, width)
+
+    def test_normalized_to_8bit_with_max_at_255(self, fake_ezomero):
+        img = tf._fetch_plane(None, _plane_row(), channel=0)
+        assert img.dtype == np.uint8
+        assert img.max() == 255
+
+    def test_all_zero_plane_does_not_divide_by_zero(self, fake_ezomero):
+        fake_ezomero.vol[:] = 0
+        img = tf._fetch_plane(None, _plane_row(), channel=0)
+        assert img.dtype == np.uint8
+        assert img.max() == 0
+
+
+@pytest.mark.unit
+class TestFetchPlane3D:
+    def test_volumetric_all_slices_stack_on_z(self, fake_ezomero):
+        img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
+        assert img.shape == (PLANE_Z, PLANE_Y, PLANE_X)
+
+    def test_volumetric_fetches_every_z(self, fake_ezomero):
+        tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
+        z_requested = [c["start_coords"][2] for c in fake_ezomero.calls]
+        assert z_requested == [0, 1, 2]
+
+    def test_volumetric_single_z_is_a_one_slice_stack(self, fake_ezomero):
+        img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice=1), channel=0)
+        assert img.shape == (1, PLANE_Y, PLANE_X)
+
+    def test_volumetric_normalizes_across_the_whole_stack(self, fake_ezomero):
+        """Per-slice normalization would flatten the z contrast."""
+        img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
+        # the global max lives on the last z; earlier slices must be dimmer
+        assert img[-1].max() == 255
+        assert img[0].max() < 255
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="PRE-EXISTING BUG: the 3D-patch branch is the only one that never "
+        "applies np.swapaxes(0, 1), so volumetric patches come out transposed "
+        "(Z, X, Y) while every other branch returns (Y, X). Predates this PR. "
+        "Remove the xfail when the swapaxes is added.",
+    )
+    def test_volumetric_patch_is_returned_as_z_height_width(self, fake_ezomero):
+        img = tf._fetch_plane(
+            None,
+            _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
+                patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            channel=0,
+        )
+        assert img.shape == (PLANE_Z, 2, 3)  # (Z, height, width)
+
+    def test_volumetric_patch_currently_returns_transposed(self, fake_ezomero):
+        """Locks in today's behaviour so the fix above is a deliberate, visible change."""
+        img = tf._fetch_plane(
+            None,
+            _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
+                patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            channel=0,
+        )
+        assert img.shape == (PLANE_Z, 3, 2)  # (Z, width, height) - transposed
+
+
+@pytest.mark.unit
+class TestFetchPlaneErrors:
+    def test_missing_image_raises(self, fake_ezomero):
+        with patch.object(fake_ezomero, "get_image", return_value=(None, None)):
+            with pytest.raises(ValueError, match="not found in OMERO"):
+                tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
