@@ -137,7 +137,7 @@ def prepare_training_data_from_table(
         raise OSError(f"Failed to create temporary directory {tmp_dir}: {e}")
 
     try:
-        table = ezomero.get_table(conn, table_id)
+        table = _load_table(conn, table_id)
     except Exception as e:
         raise ValueError(f"Failed to load table {table_id}: {e}")
 
@@ -600,6 +600,25 @@ def _optional_int(value) -> Optional[int]:
         return None
 
 
+def _channel_from_row(row) -> int:
+    """
+    The channel for this row, defaulting to 0 when unset.
+
+    A present-but-unparseable value raises rather than silently falling back to
+    channel 0: training on the wrong channel is worse than failing loudly.
+    """
+    raw = row.get("channel")
+    if raw is None or pd.isna(raw):
+        return 0
+    if str(raw).strip() in ("None", "nan", ""):
+        return 0
+
+    parsed = _optional_int(raw)
+    if parsed is None:
+        raise ValueError(f"Unparseable channel value in tracking table: {raw!r}")
+    return parsed
+
+
 def _load_table(conn, table_id: int) -> pd.DataFrame:
     """Fetch the tracking table as a DataFrame."""
     return ezomero.get_table(conn, table_id)
@@ -665,9 +684,7 @@ def _records_from_table(
         category = "training" if bool(row["train"]) else "validation"
 
         image_channel = (
-            train_channel
-            if train_channel is not None
-            else (_optional_int(row.get("channel")) or 0)
+            train_channel if train_channel is not None else _channel_from_row(row)
         )
         # Bind row/channel per iteration: a bare closure would capture the final values.
         image_source = ArraySource(
@@ -811,6 +828,21 @@ def reorganize_local_data_for_training(
         logger=logger,
     )
     stats["n_missing"] = n_missing
+
+    # An empty training set must be loud. prepare_training_data_from_table() already
+    # raises here; without the same guard, a producer/consumer folder mismatch returns
+    # valid-looking paths to empty directories and training silently does nothing.
+    if not records:
+        logger.error(
+            f"Reorganization FAILED in {output_dir}: "
+            f"0 annotations written, {n_missing} skipped"
+        )
+        raise ValueError(
+            f"Reorganization produced no training data: all {n_missing} processed "
+            f"annotations were skipped because their image or label was missing. "
+            f"Expected images in {annotation_dir / ('model_input' if uses_separate_channels else 'annotation_input')}/ "
+            f"and masks in {annotation_dir / 'annotation_output'}/."
+        )
 
     logger.info(
         f"Reorganization complete: {len(records)} annotations written, {n_missing} skipped"

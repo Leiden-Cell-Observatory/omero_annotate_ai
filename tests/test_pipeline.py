@@ -1471,3 +1471,93 @@ class TestAnnotationFolderNames:
         assert (output_path / "annotation_input").exists()
         assert not (output_path / "output").exists()
         assert not (output_path / "input").exists()
+
+
+@pytest.mark.unit
+class TestMicroSamSeparateChannelSaving:
+    """The micro-SAM saver must write where reorganize_local_data_for_training reads.
+
+    The saver used to write the training channel as annotation_input/{id}_train.tif
+    (the legacy flat layout). reorganize now reads model_input/{id}.tif, so every
+    record was dropped and the training set came back silently empty.
+    """
+
+    def _pipeline(self, tmp_path):
+        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+        config = create_default_config()
+        config.output.output_directory = str(tmp_path)
+        config.spatial_coverage.channels = [0, 1]
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1]
+
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline.conn.getObject = Mock(return_value=Mock())
+
+        label_arr = np.full((8, 8), 3, dtype=np.uint16)
+        train_arr = np.full((8, 8), 9, dtype=np.uint16)
+
+        def load_side_effect(image_obj, meta):
+            return train_arr if meta.get("channel_override") == 1 else label_arr
+
+        pipeline._load_image_data = Mock(side_effect=load_side_effect)
+        return pipeline
+
+    def test_training_channel_goes_to_model_input(self, tmp_path):
+        pipeline = self._pipeline(tmp_path)
+        pipeline._setup_directories()
+
+        pipeline._save_original_image_for_annotation(
+            {"image_id": 1, "timepoint": 0, "z_slice": 0}, "img_001"
+        )
+
+        assert (tmp_path / "annotation_input" / "img_001.tif").exists()
+        assert (tmp_path / "model_input" / "img_001.tif").exists()
+        # The legacy suffixed file must be gone: nothing reads it any more.
+        assert not (tmp_path / "annotation_input" / "img_001_train.tif").exists()
+
+    def test_saver_output_feeds_reorganize(self, tmp_path):
+        """The real producer must satisfy the real consumer.
+
+        This is the end-to-end check that was missing: every previous test
+        hand-fabricated model_input/, so the saver could drift from the reader
+        without anything failing.
+        """
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+        from omero_annotate_ai.processing.training_functions import (
+            reorganize_local_data_for_training,
+        )
+
+        pipeline = self._pipeline(tmp_path)
+        pipeline._setup_directories()
+        pipeline._save_original_image_for_annotation(
+            {"image_id": 1, "timepoint": 0, "z_slice": 0}, "img_001"
+        )
+        # The annotation the user would have drawn.
+        import tifffile
+
+        tifffile.imwrite(
+            str(tmp_path / "annotation_output" / "img_001_mask.tif"),
+            np.ones((8, 8), dtype=np.uint8),
+        )
+
+        pipeline.config.annotations = [
+            ImageAnnotation(
+                image_id=1,
+                image_name="img",
+                annotation_id="img_001",
+                category="training",
+                processed=True,
+            )
+        ]
+
+        result = reorganize_local_data_for_training(
+            config=pipeline.config,
+            annotation_dir=tmp_path,
+            output_dir=tmp_path.parent / "out",
+        )
+
+        assert result["stats"]["n_missing"] == 0
+        assert result["stats"]["n_training_images"] == 1
+        assert (result["train_input"] / "img_001.tif").exists()
+        assert (result["train_annotation_input"] / "img_001.tif").exists()

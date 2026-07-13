@@ -339,3 +339,22 @@ class TestWriteTrainingLayout:
         write_training_layout([record], out)
 
         assert np.array_equal(imread(str(out / "train_input" / "5.tif")), array)
+
+
+@pytest.mark.unit
+class TestOutputDirGuardCaseInsensitive:
+    """The guard must hold on case-insensitive filesystems (Windows, macOS)."""
+
+    def test_rejects_case_differing_nested_dir(self, tmp_path):
+        annotation_dir = tmp_path / "Project"
+        annotation_dir.mkdir()
+
+        # Same directory on Windows/macOS; resolve() does not case-fold.
+        with pytest.raises(ValueError, match="must not be inside"):
+            assert_output_dir_is_separate(tmp_path / "project" / "out", annotation_dir)
+
+    def test_still_allows_a_genuine_sibling(self, tmp_path):
+        annotation_dir = tmp_path / "Project"
+        annotation_dir.mkdir()
+
+        assert_output_dir_is_separate(tmp_path / "Project_training", annotation_dir)

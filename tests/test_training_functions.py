@@ -204,6 +204,47 @@ class TestReorganizeOntoRecords:
         labels = sorted(p.name for p in result["train_label"].glob("*.tif"))
         assert images == labels == ["0.tif", "1.tif"]
 
+    def test_separate_channel_stats_count_annotation_input(self, tmp_path):
+        """The *_annotation_input counters were asserted by the old suite and by nothing since."""
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1], separate_channels=True)
+        config = self._config(
+            annotation_dir, ["training", "validation"], separate_channels=True
+        )
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        stats = result["stats"]
+        assert stats["n_training_annotation_input"] == 1
+        assert stats["n_val_annotation_input"] == 1
+
+    def test_result_satisfies_setup_training_contract(self, tmp_path):
+        """Both producers must emit the keys setup_training requires.
+
+        The old suite checked this across both producers; afterwards only the OMERO
+        one was covered. reorganize used to return validation_input/validation_label,
+        so feeding it to setup_training raised ValueError.
+        """
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        config = self._config(annotation_dir, ["training", "validation"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        for key in ("train_input", "train_label", "val_input", "val_label"):
+            assert key in result, f"setup_training requires {key}"
+            assert result[key].exists()
+
     def test_separate_channels_route_model_and_annotation(self, tmp_path):
         """model_input/ feeds train_input/; annotation_input/ feeds train_annotation_input/."""
         annotation_dir = tmp_path / "project"
@@ -544,3 +585,64 @@ class TestPrepareFromTableRecords:
         for key in ("train_input", "train_label", "val_input", "val_label"):
             assert key in result, f"setup_training requires {key}"
         assert (result["val_input"] / "1.tif").exists()
+
+
+@pytest.mark.unit
+class TestEmptyTrainingSetIsLoud:
+    """An empty training set must raise, not return valid-looking empty folders."""
+
+    def test_reorganize_raises_when_every_record_is_dropped(self, tmp_path):
+        """A producer/consumer folder mismatch used to return silently.
+
+        reorganize returned base_dir/train_input/... pointing at empty directories,
+        stats all zero, and no exception - so training ran on nothing.
+        """
+        annotation_dir = tmp_path / "project"
+        (annotation_dir / "annotation_input").mkdir(parents=True)
+        (annotation_dir / "annotation_output").mkdir(parents=True)
+
+        config = create_default_config()
+        config.spatial_coverage.label_channel = None
+        config.spatial_coverage.training_channels = None
+        config.annotations = [
+            ImageAnnotation(
+                image_id=100,
+                image_name="img",
+                annotation_id="0",
+                category="training",
+                processed=True,
+            )
+        ]
+        # No files on disk: every record will be dropped as missing.
+
+        with pytest.raises(ValueError, match="no training data"):
+            reorganize_local_data_for_training(
+                config=config,
+                annotation_dir=annotation_dir,
+                output_dir=tmp_path / "out",
+            )
+
+
+@pytest.mark.unit
+class TestChannelParsing:
+    """The channel column must not fail soft."""
+
+    def test_missing_channel_defaults_to_zero(self):
+        from omero_annotate_ai.processing.training_functions import _channel_from_row
+
+        assert _channel_from_row(pd.Series({"channel": None})) == 0
+        assert _channel_from_row(pd.Series({"channel": "None"})) == 0
+        assert _channel_from_row(pd.Series({})) == 0
+
+    def test_valid_channel_is_parsed(self):
+        from omero_annotate_ai.processing.training_functions import _channel_from_row
+
+        assert _channel_from_row(pd.Series({"channel": 2})) == 2
+        assert _channel_from_row(pd.Series({"channel": "2"})) == 2
+
+    def test_unparseable_channel_raises(self):
+        """Silently fetching channel 0 would train on the wrong channel."""
+        from omero_annotate_ai.processing.training_functions import _channel_from_row
+
+        with pytest.raises(ValueError, match="Unparseable channel"):
+            _channel_from_row(pd.Series({"channel": "not-a-channel"}))

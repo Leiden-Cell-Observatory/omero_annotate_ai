@@ -99,7 +99,17 @@ def assert_output_dir_is_separate(output_dir: Path, annotation_dir: Path) -> Non
     output_resolved = Path(output_dir).resolve()
     annotation_resolved = Path(annotation_dir).resolve()
 
-    if output_resolved == annotation_resolved or annotation_resolved in output_resolved.parents:
+    def _is_inside(child: Path, parent: Path) -> bool:
+        if child == parent or parent in child.parents:
+            return True
+        # Windows and (by default) macOS have case-insensitive filesystems, so
+        # /Users/x/Project and /Users/x/project are the same directory. resolve()
+        # does not case-fold, so compare again folded.
+        child_folded = Path(str(child).casefold())
+        parent_folded = Path(str(parent).casefold())
+        return child_folded == parent_folded or parent_folded in child_folded.parents
+
+    if _is_inside(output_resolved, annotation_resolved):
         raise ValueError(
             f"Training output directory must not be inside the annotation directory.\n"
             f"  annotation_dir: {annotation_resolved}\n"
