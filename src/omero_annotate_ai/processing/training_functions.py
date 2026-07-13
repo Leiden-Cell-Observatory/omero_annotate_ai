@@ -16,7 +16,6 @@ from .training_layout import (
     AnnotationRecord,
     ArraySource,
     FileSource,
-    _create_file_link_or_copy,
     assert_output_dir_is_separate,
     write_training_layout,
 )
@@ -24,124 +23,6 @@ from .utils import validate_table_schema
 
 if TYPE_CHECKING:
     from ..core.annotation_config import AnnotationConfig
-
-
-def _get_standard_folder_structure(
-    uses_separate_channels: bool = False, include_test: bool = False
-) -> Dict[str, str]:
-    """
-    Get the standard folder structure for training data.
-
-    Args:
-        uses_separate_channels: Whether to include label_input folders
-        include_test: Whether to include test folders
-
-    Returns:
-        Dictionary mapping folder purposes to folder names
-    """
-    structure = {
-        "training_input": "train_input",
-        "training_label": "train_label",
-        "validation_input": "val_input",
-        "validation_label": "val_label",
-    }
-
-    if uses_separate_channels:
-        structure.update(
-            {
-                "training_label_input": "train_label_input",
-                "validation_label_input": "val_label_input",
-            }
-        )
-
-    if include_test:
-        structure.update(
-            {
-                "test_input": "test_input",
-                "test_label": "test_label",
-            }
-        )
-
-        if uses_separate_channels:
-            structure["test_label_input"] = "test_label_input"
-
-    return structure
-
-
-def _create_training_directories(
-    output_dir: Path,
-    uses_separate_channels: bool = False,
-    include_test: bool = False,
-    clean_existing: bool = True,
-) -> Dict[str, Path]:
-    """
-    Create the standard training directory structure.
-
-    Args:
-        output_dir: Base output directory
-        uses_separate_channels: Whether to create label_input folders
-        include_test: Whether to create test folders
-        clean_existing: Whether to remove existing directories first
-
-    Returns:
-        Dictionary mapping folder purposes to Path objects
-    """
-    structure = _get_standard_folder_structure(uses_separate_channels, include_test)
-    created_dirs = {}
-
-    # Clean existing directories if requested
-    if clean_existing:
-        for folder_name in structure.values():
-            folder_path = output_dir / folder_name
-            if folder_path.exists():
-                shutil.rmtree(folder_path)
-
-    # Create all directories
-    for purpose, folder_name in structure.items():
-        folder_path = output_dir / folder_name
-        folder_path.mkdir(parents=True, exist_ok=True)
-        created_dirs[purpose] = folder_path
-
-    return created_dirs
-
-
-def _get_dataset_folder_names(uses_separate_channels: bool = False) -> List[str]:
-    """
-    Get the folder names written by _prepare_dataset_from_table.
-
-    These differ from _get_standard_folder_structure(): _prepare_dataset_from_table
-    derives folder names from its ``subset_type`` argument ("training", "val",
-    "training_label", "val_label"), producing ``training_input`` rather than
-    ``train_input``.
-
-    Args:
-        uses_separate_channels: Whether label_input folders are written
-
-    Returns:
-        List of folder names, relative to the output directory
-    """
-    folders = ["training_input", "training_label", "val_input", "val_label"]
-
-    if uses_separate_channels:
-        folders += ["training_label_input", "val_label_input"]
-
-    return folders
-
-
-def _clean_dataset_directories(
-    output_dir: Path, uses_separate_channels: bool = False
-) -> None:
-    """
-    Remove the dataset folders that _prepare_dataset_from_table will repopulate.
-
-    Args:
-        output_dir: Base output directory
-        uses_separate_channels: Whether label_input folders are written
-    """
-    for folder_name in _get_dataset_folder_names(uses_separate_channels):
-        folder_path = output_dir / folder_name
-        if folder_path.exists():
-            shutil.rmtree(folder_path)
 
 
 def _build_standard_result(
