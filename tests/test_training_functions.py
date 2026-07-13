@@ -16,7 +16,7 @@ from omero_annotate_ai.processing.training_functions import (
     _get_dataset_folder_names,
     _clean_dataset_directories,
 )
-from omero_annotate_ai.core.annotation_config import AnnotationConfig, ImageAnnotation
+from omero_annotate_ai.core.annotation_config import AnnotationConfig, ImageAnnotation, create_default_config
 
 
 class TestPrepareTrainingDataFromTable:
@@ -378,365 +378,6 @@ class TestCreateFileLinkOrCopy:
 
 
 @pytest.mark.unit
-class TestReorganizeLocalDataForTraining:
-    """Test the local data reorganization function."""
-
-    @pytest.fixture
-    def mock_config(self):
-        """Create a mock AnnotationConfig with annotations."""
-        config = AnnotationConfig(name="test_training_set")
-
-        # Add processed training annotations
-        for i in range(3):
-            ann = ImageAnnotation(
-                image_id=100 + i,
-                image_name=f"image_{i}",
-                annotation_id=f"100_{0}_{i}",  # Format: {image_id}_{t}_{z}
-                timepoint=0,
-                z_slice=i,
-                category="training",
-                channel=0,
-            )
-            ann.processed = True
-            config.annotations.append(ann)
-
-        # Add processed validation annotations
-        for i in range(2):
-            ann = ImageAnnotation(
-                image_id=200 + i,
-                image_name=f"val_image_{i}",
-                annotation_id=f"200_{0}_{i}",
-                timepoint=0,
-                z_slice=i,
-                category="validation",
-                channel=0,
-            )
-            ann.processed = True
-            config.annotations.append(ann)
-
-        return config
-
-    @pytest.fixture
-    def annotation_dir(self):
-        """Create a mock annotation directory with input and output folders."""
-        temp_dir = Path(tempfile.mkdtemp())
-        input_dir = temp_dir / "input"
-        output_dir = temp_dir / "output"
-        input_dir.mkdir()
-        output_dir.mkdir()
-        yield temp_dir
-        # Cleanup
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-
-    @pytest.fixture
-    def populated_annotation_dir(self, annotation_dir, mock_config):
-        """Create annotation directory populated with test files."""
-        input_dir = annotation_dir / "input"
-        output_dir = annotation_dir / "output"
-
-        # Create files for each annotation
-        for ann in mock_config.annotations:
-            # Create input file
-            input_file = input_dir / f"{ann.annotation_id}.tif"
-            input_file.write_text(f"image data for {ann.annotation_id}")
-
-            # Create mask file
-            mask_file = output_dir / f"{ann.annotation_id}_mask.tif"
-            mask_file.write_text(f"mask data for {ann.annotation_id}")
-
-        return annotation_dir
-
-    def test_reorganize_creates_training_structure(
-        self, populated_annotation_dir, mock_config
-    ):
-        """Test that reorganization creates correct folder structure."""
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="copy",
-            verbose=False,
-        )
-
-        # Check that training folders were created
-        assert (populated_annotation_dir / "train_input").exists()
-        assert (populated_annotation_dir / "train_label").exists()
-        assert (populated_annotation_dir / "val_input").exists()
-        assert (populated_annotation_dir / "val_label").exists()
-
-        # Check stats
-        stats = result["stats"]
-        assert stats["n_training_images"] == 3
-        assert stats["n_training_labels"] == 3
-        assert stats["n_val_images"] == 2
-        assert stats["n_val_labels"] == 2
-
-    def test_reorganize_copy_mode_preserves_originals(
-        self, populated_annotation_dir, mock_config
-    ):
-        """Test that copy mode preserves original files."""
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="copy",
-        )
-
-        # Original files should still exist
-        input_dir = populated_annotation_dir / "input"
-        for ann in mock_config.annotations:
-            assert (input_dir / f"{ann.annotation_id}.tif").exists()
-
-    def test_reorganize_move_mode_removes_originals(
-        self, populated_annotation_dir, mock_config
-    ):
-        """Test that move mode removes original files."""
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="move",
-        )
-
-        # Original files should be gone
-        input_dir = populated_annotation_dir / "input"
-        output_dir = populated_annotation_dir / "output"
-        for ann in mock_config.annotations:
-            assert not (input_dir / f"{ann.annotation_id}.tif").exists()
-            assert not (output_dir / f"{ann.annotation_id}_mask.tif").exists()
-
-    def test_reorganize_sequential_naming(self, populated_annotation_dir, mock_config):
-        """Test that files are renamed with sequential numbering."""
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="copy",
-        )
-
-        training_input = populated_annotation_dir / "train_input"
-
-        # Check sequential naming
-        assert (training_input / "input_00000.tif").exists()
-        assert (training_input / "input_00001.tif").exists()
-        assert (training_input / "input_00002.tif").exists()
-
-    def test_reorganize_handles_missing_input(self, annotation_dir, mock_config):
-        """Test graceful handling of missing input files."""
-        # Only create output files, not input files
-        output_dir = annotation_dir / "output"
-        for ann in mock_config.annotations:
-            mask_file = output_dir / f"{ann.annotation_id}_mask.tif"
-            mask_file.write_text(f"mask data for {ann.annotation_id}")
-
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=annotation_dir,
-            file_mode="copy",
-        )
-
-        stats = result["stats"]
-        assert stats["n_missing_input"] == 5  # All 5 annotations missing input
-        assert stats["n_training_labels"] == 3
-        assert stats["n_val_labels"] == 2
-
-    def test_reorganize_handles_missing_labels(self, annotation_dir, mock_config):
-        """Test graceful handling of missing label files."""
-        # Only create input files, not output files
-        input_dir = annotation_dir / "input"
-        for ann in mock_config.annotations:
-            input_file = input_dir / f"{ann.annotation_id}.tif"
-            input_file.write_text(f"image data for {ann.annotation_id}")
-
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=annotation_dir,
-            file_mode="copy",
-        )
-
-        stats = result["stats"]
-        assert stats["n_missing_label"] == 5  # All 5 annotations missing labels
-        assert stats["n_training_images"] == 3
-        assert stats["n_val_images"] == 2
-
-    def test_reorganize_with_test_category(self, annotation_dir):
-        """Test handling of test category with include_test flag."""
-        config = AnnotationConfig(name="test_set")
-
-        # Add test annotations
-        for i in range(2):
-            ann = ImageAnnotation(
-                image_id=300 + i,
-                image_name=f"test_image_{i}",
-                annotation_id=f"300_{0}_{i}",
-                timepoint=0,
-                z_slice=i,
-                category="test",
-                channel=0,
-            )
-            ann.processed = True
-            config.annotations.append(ann)
-
-        # Create files
-        input_dir = annotation_dir / "input"
-        output_dir = annotation_dir / "output"
-        for ann in config.annotations:
-            (input_dir / f"{ann.annotation_id}.tif").write_text("data")
-            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask")
-
-        # Without include_test, test files should be skipped
-        result_no_test = reorganize_local_data_for_training(
-            config=config,
-            annotation_dir=annotation_dir,
-            file_mode="copy",
-            include_test=False,
-        )
-        assert result_no_test["stats"]["n_test_images"] == 0
-        assert result_no_test["stats"]["n_skipped"] == 2
-
-        # With include_test, test files should be processed
-        result_with_test = reorganize_local_data_for_training(
-            config=config,
-            annotation_dir=annotation_dir,
-            file_mode="copy",
-            include_test=True,
-        )
-        assert result_with_test["stats"]["n_test_images"] == 2
-        assert result_with_test["stats"]["n_test_labels"] == 2
-
-    def test_reorganize_auto_detects_test_annotations(self, annotation_dir):
-        """Test that include_test=None auto-detects test annotations."""
-        config = AnnotationConfig(name="test_set")
-
-        # Add mixed annotations: training, validation, and test
-        for i, category in enumerate(["training", "validation", "test"]):
-            ann = ImageAnnotation(
-                image_id=400 + i,
-                image_name=f"{category}_image_{i}",
-                annotation_id=f"400_{0}_{i}",
-                timepoint=0,
-                z_slice=i,
-                category=category,
-                channel=0,
-            )
-            ann.processed = True
-            config.annotations.append(ann)
-
-        # Create files
-        input_dir = annotation_dir / "input"
-        output_dir = annotation_dir / "output"
-        for ann in config.annotations:
-            (input_dir / f"{ann.annotation_id}.tif").write_text("data")
-            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask")
-
-        # With include_test=None (default), test files should be auto-detected
-        result = reorganize_local_data_for_training(
-            config=config,
-            annotation_dir=annotation_dir,
-            file_mode="copy",
-            # include_test not specified, defaults to None (auto-detect)
-        )
-        assert result["stats"]["n_training_images"] == 1
-        assert result["stats"]["n_val_images"] == 1
-        assert result["stats"]["n_test_images"] == 1
-        assert result["stats"]["n_test_labels"] == 1
-        assert "test_input" in result
-
-    def test_reorganize_auto_detect_no_test_annotations(
-        self, populated_annotation_dir, mock_config
-    ):
-        """Test that include_test=None doesn't create test folders when no test annotations."""
-        # mock_config has only training/validation annotations, no test
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="copy",
-            # include_test not specified, defaults to None (auto-detect)
-        )
-        # No test folders should be created since no test annotations exist
-        assert result["stats"]["n_test_images"] == 0
-        assert "test_input" not in result
-
-    def test_reorganize_clean_existing(self, populated_annotation_dir, mock_config):
-        """Test that clean_existing removes previous training folders."""
-        training_input = populated_annotation_dir / "train_input"
-        training_input.mkdir()
-        old_file = training_input / "old_file.txt"
-        old_file.write_text("old data")
-
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="copy",
-            clean_existing=True,
-        )
-
-        # Old file should be gone
-        assert not old_file.exists()
-        # But new files should exist
-        assert (training_input / "input_00000.tif").exists()
-
-    def test_reorganize_no_annotations_raises_error(self, annotation_dir):
-        """Test that empty config raises ValueError."""
-        config = AnnotationConfig(name="empty_set")  # No annotations
-
-        with pytest.raises(ValueError, match="no annotations"):
-            reorganize_local_data_for_training(
-                config=config,
-                annotation_dir=annotation_dir,
-            )
-
-    def test_reorganize_no_processed_raises_error(self, annotation_dir):
-        """Test that config with only unprocessed annotations raises ValueError."""
-        config = AnnotationConfig(name="unprocessed_set")
-        ann = ImageAnnotation(
-            image_id=100,
-            image_name="test",
-            annotation_id="100_0_0",
-            timepoint=0,
-            z_slice=0,
-            category="training",
-            channel=0,
-        )
-        ann.processed = False
-        config.annotations.append(ann)
-
-        with pytest.raises(ValueError, match="No processed annotations"):
-            reorganize_local_data_for_training(
-                config=config,
-                annotation_dir=annotation_dir,
-            )
-
-    def test_reorganize_missing_directory_raises_error(self, mock_config):
-        """Test that missing annotation directory raises FileNotFoundError."""
-        with pytest.raises(FileNotFoundError, match="not found"):
-            reorganize_local_data_for_training(
-                config=mock_config,
-                annotation_dir="/nonexistent/path",
-            )
-
-    def test_reorganize_file_mapping(self, populated_annotation_dir, mock_config):
-        """Test that file mapping is correctly returned."""
-        result = reorganize_local_data_for_training(
-            config=mock_config,
-            annotation_dir=populated_annotation_dir,
-            file_mode="copy",
-        )
-
-        file_mapping = result["file_mapping"]
-
-        # Check mapping structure
-        assert len(file_mapping) == 5  # 3 training + 2 validation
-
-        # Check a specific mapping
-        first_training_id = mock_config.annotations[0].annotation_id
-        assert first_training_id in file_mapping
-        assert file_mapping[first_training_id]["category"] == "training"
-        assert file_mapping[first_training_id]["index"] == 0
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
-
-
-@pytest.mark.unit
 class TestConsistentFolderStructure:
     """Test that all training data preparation functions use consistent folder structure."""
 
@@ -900,201 +541,6 @@ class TestConsistentFolderStructure:
 
             # Check file_mapping was added
             assert "file_mapping" in result
-        finally:
-            shutil.rmtree(temp_dir)
-
-
-@pytest.mark.unit
-class TestReorganizeSeparateChannels:
-    """Test reorganize_local_data_for_training with separate label/training channels."""
-
-    @pytest.fixture
-    def separate_channel_config(self):
-        """Config with label_channel=0 and training_channels=[1]."""
-        config = AnnotationConfig(name="separate_channel_test")
-        config.spatial_coverage.channels = [0, 1]
-        config.spatial_coverage.label_channel = 0
-        config.spatial_coverage.training_channels = [1]
-
-        for i in range(2):
-            ann = ImageAnnotation(
-                image_id=100 + i,
-                image_name=f"image_{i}",
-                annotation_id=f"ann_{i}",
-                timepoint=0,
-                z_slice=0,
-                category="training",
-                channel=0,
-            )
-            ann.processed = True
-            config.annotations.append(ann)
-
-        ann = ImageAnnotation(
-            image_id=200,
-            image_name="val_image",
-            annotation_id="ann_val",
-            timepoint=0,
-            z_slice=0,
-            category="validation",
-            channel=0,
-        )
-        ann.processed = True
-        config.annotations.append(ann)
-
-        return config
-
-    @pytest.fixture
-    def annotation_dir_with_train_files(self, separate_channel_config):
-        """Directory with both label-channel and training-channel files (new layout)."""
-        temp_dir = Path(tempfile.mkdtemp())
-        label_input_dir = temp_dir / "label_input"
-        training_input_dir = temp_dir / "training_input"
-        output_dir = temp_dir / "output"
-        label_input_dir.mkdir()
-        training_input_dir.mkdir()
-        output_dir.mkdir()
-
-        for ann in separate_channel_config.annotations:
-            (label_input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
-            (training_input_dir / f"{ann.annotation_id}.tif").write_text("train channel data")
-            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
-
-        yield temp_dir
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-
-    @pytest.fixture
-    def annotation_dir_label_only(self, separate_channel_config):
-        """Directory with only label-channel files (training_input/ absent)."""
-        temp_dir = Path(tempfile.mkdtemp())
-        label_input_dir = temp_dir / "label_input"
-        output_dir = temp_dir / "output"
-        label_input_dir.mkdir()
-        output_dir.mkdir()
-
-        for ann in separate_channel_config.annotations:
-            (label_input_dir / f"{ann.annotation_id}.tif").write_text("label channel data")
-            (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
-
-        yield temp_dir
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-
-    def test_detects_separate_channels(self, separate_channel_config):
-        """uses_separate_channels() returns True for this config."""
-        assert separate_channel_config.spatial_coverage.uses_separate_channels() is True
-
-    def test_creates_label_input_dirs(
-        self, annotation_dir_with_train_files, separate_channel_config
-    ):
-        """Reorganization creates *_label_input directories when separate channels."""
-        result = reorganize_local_data_for_training(
-            config=separate_channel_config,
-            annotation_dir=annotation_dir_with_train_files,
-            file_mode="copy",
-        )
-        base = annotation_dir_with_train_files
-        assert (base / "train_label_input").exists()
-        assert (base / "val_label_input").exists()
-
-    def test_label_channel_goes_to_label_input(
-        self, annotation_dir_with_train_files, separate_channel_config
-    ):
-        """Label-channel images (*.tif) are placed in *_label_input/, not *_input/."""
-        reorganize_local_data_for_training(
-            config=separate_channel_config,
-            annotation_dir=annotation_dir_with_train_files,
-            file_mode="copy",
-        )
-        base = annotation_dir_with_train_files
-        label_input_files = list((base / "train_label_input").glob("*.tif"))
-        assert len(label_input_files) == 2
-        # Content should be the label-channel data
-        assert label_input_files[0].read_text() == "label channel data"
-
-    def test_training_channel_goes_to_input(
-        self, annotation_dir_with_train_files, separate_channel_config
-    ):
-        """Training-channel images (*_train.tif) are placed in *_input/."""
-        reorganize_local_data_for_training(
-            config=separate_channel_config,
-            annotation_dir=annotation_dir_with_train_files,
-            file_mode="copy",
-        )
-        base = annotation_dir_with_train_files
-        input_files = list((base / "train_input").glob("*.tif"))
-        assert len(input_files) == 2
-        # Content should be the training-channel data
-        assert input_files[0].read_text() == "train channel data"
-
-    def test_stats_count_label_input(
-        self, annotation_dir_with_train_files, separate_channel_config
-    ):
-        """Stats include n_training_label_input and n_val_label_input counts."""
-        result = reorganize_local_data_for_training(
-            config=separate_channel_config,
-            annotation_dir=annotation_dir_with_train_files,
-            file_mode="copy",
-        )
-        stats = result["stats"]
-        assert stats["n_training_label_input"] == 2
-        assert stats["n_val_label_input"] == 1
-        assert stats["n_training_images"] == 2
-        assert stats["n_val_images"] == 1
-
-    def test_missing_train_files_reported(
-        self, annotation_dir_label_only, separate_channel_config
-    ):
-        """Missing _train.tif files increment n_missing_input and don't crash."""
-        result = reorganize_local_data_for_training(
-            config=separate_channel_config,
-            annotation_dir=annotation_dir_label_only,
-            file_mode="copy",
-        )
-        stats = result["stats"]
-        # Label-channel images should still be placed in label_input
-        assert stats["n_training_label_input"] == 2
-        # Training-channel images are missing
-        assert stats["n_missing_input"] == 3  # 2 training + 1 validation
-
-    def test_single_channel_unchanged(self):
-        """Single-channel config (label == training) preserves existing behaviour."""
-        config = AnnotationConfig(name="single_channel_test")
-        # No separate channels: label_channel and training_channels both None
-        assert config.spatial_coverage.uses_separate_channels() is False
-
-        for i in range(2):
-            ann = ImageAnnotation(
-                image_id=100 + i,
-                image_name=f"image_{i}",
-                annotation_id=f"sc_ann_{i}",
-                timepoint=0,
-                z_slice=0,
-                category="training",
-                channel=0,
-            )
-            ann.processed = True
-            config.annotations.append(ann)
-
-        temp_dir = Path(tempfile.mkdtemp())
-        try:
-            input_dir = temp_dir / "input"
-            output_dir = temp_dir / "output"
-            input_dir.mkdir()
-            output_dir.mkdir()
-
-            for ann in config.annotations:
-                (input_dir / f"{ann.annotation_id}.tif").write_text("image data")
-                (output_dir / f"{ann.annotation_id}_mask.tif").write_text("mask data")
-
-            result = reorganize_local_data_for_training(
-                config=config, annotation_dir=temp_dir, file_mode="copy"
-            )
-            stats = result["stats"]
-            assert stats["n_training_images"] == 2
-            assert stats["n_training_labels"] == 2
-            # No label_input dirs should be created
-            assert not (temp_dir / "train_label_input").exists()
         finally:
             shutil.rmtree(temp_dir)
 
@@ -1389,3 +835,325 @@ class TestDatasetDirectoryCleanup:
 
         for subset_type in ("training", "val"):
             assert f"{subset_type}_label" in cleaned
+
+
+@pytest.mark.unit
+class TestReorganizeOntoRecords:
+    """The offline producer emits the unified layout, paired by annotation_id."""
+
+    def _config(self, tmp_path, categories, separate_channels=False):
+        config = create_default_config()
+        config.output.output_directory = str(tmp_path)
+        if separate_channels:
+            config.spatial_coverage.channels = [0, 1]
+            config.spatial_coverage.label_channel = 0
+            config.spatial_coverage.training_channels = [1]
+        else:
+            config.spatial_coverage.channels = [0]
+            config.spatial_coverage.label_channel = None
+            config.spatial_coverage.training_channels = None
+        config.annotations = [
+            ImageAnnotation(
+                image_id=100 + i,
+                image_name=f"img_{i}",
+                annotation_id=str(i),
+                category=category,
+                processed=True,
+            )
+            for i, category in enumerate(categories)
+        ]
+        return config
+
+    def _populate(self, annotation_dir, ids, separate_channels=False):
+        (annotation_dir / "annotation_input").mkdir(parents=True, exist_ok=True)
+        (annotation_dir / "annotation_output").mkdir(parents=True, exist_ok=True)
+        if separate_channels:
+            (annotation_dir / "model_input").mkdir(parents=True, exist_ok=True)
+        for i in ids:
+            (annotation_dir / "annotation_input" / f"{i}.tif").write_bytes(b"ann")
+            (annotation_dir / "annotation_output" / f"{i}_mask.tif").write_bytes(b"lbl")
+            if separate_channels:
+                (annotation_dir / "model_input" / f"{i}.tif").write_bytes(b"model")
+
+    def test_writes_unified_layout(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        config = self._config(annotation_dir, ["training", "validation"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        assert (result["train_input"] / "0.tif").read_bytes() == b"ann"
+        assert (result["train_label"] / "0.tif").read_bytes() == b"lbl"
+        assert (result["val_input"] / "1.tif").exists()
+        assert "validation_input" not in result
+
+    def test_image_and_label_pair_by_id(self, tmp_path):
+        """Destination files used to be named by a per-category counter."""
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        config = self._config(annotation_dir, ["training", "training"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        images = sorted(p.name for p in result["train_input"].glob("*.tif"))
+        labels = sorted(p.name for p in result["train_label"].glob("*.tif"))
+        assert images == labels == ["0.tif", "1.tif"]
+
+    def test_separate_channels_route_model_and_annotation(self, tmp_path):
+        """model_input/ feeds train_input/; annotation_input/ feeds train_annotation_input/."""
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0], separate_channels=True)
+        config = self._config(annotation_dir, ["training"], separate_channels=True)
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        assert (result["train_input"] / "0.tif").read_bytes() == b"model"
+        assert (result["train_annotation_input"] / "0.tif").read_bytes() == b"ann"
+
+    def test_rejects_output_inside_annotation_dir(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+
+        with pytest.raises(ValueError, match="must not be inside"):
+            reorganize_local_data_for_training(
+                config=config,
+                annotation_dir=annotation_dir,
+                output_dir=annotation_dir,
+            )
+
+    def test_defaults_to_sibling_training_dir(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+
+        result = reorganize_local_data_for_training(
+            config=config, annotation_dir=annotation_dir
+        )
+
+        assert result["base_dir"] == tmp_path / "project_training"
+
+    def test_symlink_mode(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+            file_mode="symlink",
+        )
+
+        assert (result["train_input"] / "0.tif").is_symlink()
+
+    def test_missing_label_drops_the_record(self, tmp_path):
+        """No orphan image without its label."""
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        (annotation_dir / "annotation_output" / "0_mask.tif").unlink()
+        config = self._config(annotation_dir, ["training", "training"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        images = sorted(p.name for p in result["train_input"].glob("*.tif"))
+        labels = sorted(p.name for p in result["train_label"].glob("*.tif"))
+        assert images == labels == ["1.tif"]
+
+    def test_copy_mode_preserves_originals(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+
+        reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+            file_mode="copy",
+        )
+
+        assert (annotation_dir / "annotation_input" / "0.tif").exists()
+
+    def test_move_mode_removes_originals(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+
+        reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+            file_mode="move",
+        )
+
+        assert not (annotation_dir / "annotation_input" / "0.tif").exists()
+
+    def test_stats_count_images_and_labels(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1, 2])
+        config = self._config(annotation_dir, ["training", "training", "validation"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        stats = result["stats"]
+        assert stats["n_training_images"] == 2
+        assert stats["n_training_labels"] == 2
+        assert stats["n_val_images"] == 1
+        assert stats["n_val_labels"] == 1
+        assert stats["n_missing"] == 0
+
+    def test_missing_image_drops_the_record(self, tmp_path):
+        """An orphan label is as bad as an orphan image: drop the pair."""
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        (annotation_dir / "annotation_input" / "0.tif").unlink()
+        config = self._config(annotation_dir, ["training", "training"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        images = sorted(p.name for p in result["train_input"].glob("*.tif"))
+        labels = sorted(p.name for p in result["train_label"].glob("*.tif"))
+        assert images == labels == ["1.tif"]
+        assert result["stats"]["n_missing"] == 1
+
+    def test_test_category_auto_detected(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1, 2])
+        config = self._config(annotation_dir, ["training", "validation", "test"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        assert "test_input" in result
+        assert result["stats"]["n_test_images"] == 1
+
+    def test_no_test_annotations_means_no_test_folders(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        config = self._config(annotation_dir, ["training", "validation"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        assert "test_input" not in result
+        assert result["stats"]["n_test_images"] == 0
+
+    def test_include_test_false_skips_test_annotations(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0, 1])
+        config = self._config(annotation_dir, ["training", "test"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+            include_test=False,
+        )
+
+        assert "test_input" not in result
+        assert result["stats"]["n_skipped"] == 1
+
+    def test_clean_existing_removes_stale_training_data(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+        out = tmp_path / "project_training"
+        stale = out / "train_input" / "999.tif"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale")
+
+        reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=out,
+            clean_existing=True,
+        )
+
+        assert not stale.exists()
+        assert (out / "train_input" / "0.tif").exists()
+
+    def test_file_mapping_records_destinations(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        mapping = result["stats"]["file_mapping"]["0"]
+        assert mapping["image"].endswith("train_input/0.tif")
+        assert mapping["label"].endswith("train_label/0.tif")
+
+    def test_no_processed_annotations_raises(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training"])
+        for ann in config.annotations:
+            ann.processed = False
+
+        with pytest.raises(ValueError, match="No processed annotations"):
+            reorganize_local_data_for_training(
+                config=config,
+                annotation_dir=annotation_dir,
+                output_dir=tmp_path / "project_training",
+            )
+
+    def test_missing_annotation_dir_raises(self, tmp_path):
+        config = self._config(tmp_path / "nope", ["training"])
+
+        with pytest.raises(FileNotFoundError):
+            reorganize_local_data_for_training(
+                config=config,
+                annotation_dir=tmp_path / "nope",
+                output_dir=tmp_path / "out",
+            )

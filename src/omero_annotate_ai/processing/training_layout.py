@@ -9,7 +9,7 @@ layout is defined exactly once.
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 from tifffile import imwrite
@@ -186,7 +186,9 @@ class AnnotationRecord:
     rather than written, which is what keeps the pairing honest.
     """
 
-    annotation_id: int
+    # ImageAnnotation.annotation_id is a str (e.g. "img_001"); the OMERO table may
+    # yield an int. Both are accepted and stringified into the filename.
+    annotation_id: Union[int, str]
     category: str
     image: Source
     label: Source

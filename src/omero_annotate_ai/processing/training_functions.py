@@ -12,7 +12,14 @@ from tifffile import imwrite
 from tqdm import tqdm
 
 from ..utils.logging import create_training_logger
-from .training_layout import _create_file_link_or_copy
+from .training_layout import (
+    AnnotationRecord,
+    ArraySource,
+    FileSource,
+    _create_file_link_or_copy,
+    assert_output_dir_is_separate,
+    write_training_layout,
+)
 from .utils import validate_table_schema
 
 if TYPE_CHECKING:
@@ -1178,347 +1185,119 @@ def reorganize_local_data_for_training(
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """
-    Reorganize locally-stored annotation data into training folder structure.
+    Reorganize locally-stored annotation data into the training layout.
 
-    Works entirely offline - no OMERO connection required. This function takes
-    the flat folder structure from the annotation pipeline (input/, output/) and
-    reorganizes it into the split-based structure expected by training workflows
-    (training_input/, training_label/, val_input/, val_label/).
+    Works entirely offline - no OMERO connection required. Reads the annotation phase's
+    folders (annotation_input/, model_input/, annotation_output/) and writes the training
+    layout (train_input/, train_label/, val_input/, val_label/).
 
     Args:
-        config: AnnotationConfig with populated annotations (contains category info)
-        annotation_dir: Directory containing annotation output (input/, output/ folders)
-        output_dir: Target directory for training structure (default: same as annotation_dir)
-        file_mode: How to handle files:
-            - "copy": Copy files (keeps originals) - default
-            - "move": Move files (removes originals)
-            - "symlink": Create symbolic links (falls back to copy on Windows if symlinks fail)
-        clean_existing: Remove existing training folders before reorganization
-        include_test: Whether to create test_input/test_label folders for test category.
-            - None (default): Auto-detect - include if test annotations exist
-            - True: Always include test folders
-            - False: Never include test folders (skip test annotations)
+        config: AnnotationConfig with populated annotations (carries the category)
+        annotation_dir: Directory containing the annotation phase's output
+        output_dir: Target directory. Must NOT be inside annotation_dir - cleaning the
+            training layout there would delete the source images. Defaults to the sibling
+            <annotation_dir>_training/.
+        file_mode: "copy" (default), "move", or "symlink". Symlinks fall back to a copy
+            where they are unavailable (e.g. Windows without Developer Mode).
+        clean_existing: Remove the training folders before writing
+        include_test: Write a test split. None (default) auto-detects from the annotations.
         verbose: Show detailed progress
 
     Returns:
-        Dictionary with paths to created directories and statistics:
-        {
-            'base_dir': Path to base output directory,
-            'training_input': Path to training images,
-            'training_label': Path to training labels,
-            'training_label_input': Path to label channel images (only if separate channels),
-            'val_input': Path to validation images,
-            'val_label': Path to validation labels,
-            'val_label_input': Path to validation label channel images (only if separate channels),
-            'test_input': Path to test images (only if include_test=True),
-            'test_label': Path to test labels (only if include_test=True),
-            'stats': Statistics about the reorganized data,
-            'file_mapping': Mapping of annotation_id to output files
-        }
+        Dictionary with the created directories and statistics. Keys include base_dir,
+        train_input, train_label, val_input, val_label and stats.
 
     Raises:
-        ValueError: If config has no annotations or no processed annotations
-        FileNotFoundError: If annotation_dir doesn't exist or is missing input/output folders
+        ValueError: If config has no processed annotations, or output_dir is inside annotation_dir
+        FileNotFoundError: If annotation_dir does not exist
     """
-    # Convert paths
     annotation_dir = Path(annotation_dir)
-    output_dir = Path(output_dir) if output_dir else annotation_dir
+    if output_dir is None:
+        output_dir = annotation_dir.parent / f"{annotation_dir.name}_training"
+    output_dir = Path(output_dir)
 
-    # Validate annotation directory structure BEFORE setting up logger
-    # (logger tries to create directories which would fail for invalid paths)
     if not annotation_dir.exists():
         raise FileNotFoundError(f"Annotation directory not found: {annotation_dir}")
 
-    output_source = annotation_dir / "output"
+    assert_output_dir_is_separate(output_dir, annotation_dir)
 
-    # New layout:    label_input/ + training_input/
-    # Legacy layout: input/
-    label_input_source = annotation_dir / "label_input"
-    training_input_source = annotation_dir / "training_input"
-    input_source = annotation_dir / "input"
-
-    if not label_input_source.exists() and not input_source.exists():
-        raise FileNotFoundError(
-            f"No input folder found in: {annotation_dir} "
-            "(expected 'label_input/' or 'input/')"
-        )
-    if not output_source.exists():
-        raise FileNotFoundError(f"Output folder not found: {output_source}")
-
-    # Set up logger (after validation so we know paths are valid)
     logger = create_training_logger(output_dir, verbose=verbose)
     logger.info("Reorganizing local annotation data for training")
-    logger.info(f"Source: {annotation_dir}, Target: {output_dir}, Mode: {file_mode}")
 
-    # Helper to close logger handlers (important for Windows file locks)
-    def _close_logger_handlers():
-        for handler in logger.handlers[:]:
-            handler.close()
-            logger.removeHandler(handler)
-
-    # Validate config has annotations
-    if not config.annotations:
-        _close_logger_handlers()
-        raise ValueError("Config has no annotations. Run annotation workflow first.")
-
-    # Filter to processed annotations only
     processed_annotations = [ann for ann in config.annotations if ann.processed]
     if not processed_annotations:
-        _close_logger_handlers()
         raise ValueError("No processed annotations found in config")
 
-    logger.info(
-        f"Found {len(processed_annotations)} processed annotations out of {len(config.annotations)} total"
-    )
-
-    # Auto-detect test annotations if include_test is None
-    if include_test is None:
-        has_test_annotations = any(
-            ann.category == "test" for ann in processed_annotations
-        )
-        include_test = has_test_annotations
-        if has_test_annotations:
-            logger.info(
-                "Auto-detected test annotations - will create test_input/test_label folders"
-            )
-
-    # Check if using separate channels
     uses_separate_channels = config.spatial_coverage.uses_separate_channels()
-    if uses_separate_channels:
-        logger.info(
-            "Separate channel workflow detected - will create *_label_input folders"
+
+    if include_test is None:
+        include_test = any(ann.category == "test" for ann in processed_annotations)
+
+    annotation_input_source = annotation_dir / "annotation_input"
+    model_input_source = annotation_dir / "model_input"
+    label_source = annotation_dir / "annotation_output"
+
+    if not annotation_input_source.exists():
+        raise FileNotFoundError(
+            f"No annotation_input/ folder found in: {annotation_dir}"
         )
+    if not label_source.exists():
+        raise FileNotFoundError(f"Output folder not found: {label_source}")
 
-    # Determine which categories we have
-    categories = set(ann.category for ann in processed_annotations)
-    logger.info(f"Categories found: {categories}")
-
-    # Create standard directory structure using helper
-    created_dirs = _create_training_directories(
-        output_dir=output_dir,
-        uses_separate_channels=uses_separate_channels,
-        include_test=include_test,
-        clean_existing=clean_existing,
-    )
-
-    # Process annotations by category
-    stats: Dict[str, Any] = {
-        "n_training_images": 0,
-        "n_training_labels": 0,
-        "n_training_label_input": 0,
-        "n_val_images": 0,
-        "n_val_labels": 0,
-        "n_val_label_input": 0,
-        "n_test_images": 0,
-        "n_test_labels": 0,
-        "n_test_label_input": 0,
-        "n_skipped": 0,
-        "n_missing_input": 0,
-        "n_missing_label": 0,
-        "file_operations": {},
-    }
-
-    file_mapping: Dict[str, Dict[str, Any]] = {}
-    category_counters: Dict[str, int] = {"training": 0, "validation": 0, "test": 0}
-
-    # Build folder structure once (consistent with directory creation above)
-    folder_structure = _get_standard_folder_structure(uses_separate_channels, include_test)
-
+    records = []
+    n_missing = 0
     for ann in processed_annotations:
-        category = ann.category
-
-        if category == "test" and not include_test:
-            stats["n_skipped"] += 1
-            continue
-
-        # Only process known categories
-        if category not in ("training", "validation", "test"):
-            stats["n_skipped"] += 1
-            continue
-
         annotation_id = ann.annotation_id
 
-        # label_input/{id}.tif (new) or input/{id}.tif (legacy single-channel)
-        label_input_file = label_input_source / f"{annotation_id}.tif"
-        if not label_input_file.exists():
-            label_input_file = input_source / f"{annotation_id}.tif"
-
-        # training_input/{id}.tif only resolved when needed (separate-channel path)
+        # The model's input is the model_input channel when there is one; in
+        # single-channel mode annotation_input serves both roles.
+        annotation_file = annotation_input_source / f"{annotation_id}.tif"
         if uses_separate_channels:
-            train_input_file = training_input_source / f"{annotation_id}.tif"
-
-        label_file = output_source / f"{annotation_id}_mask.tif"
-
-        # Get sequential index for this category
-        idx = category_counters[category]
-        category_counters[category] += 1
-
-        # Determine destination folder names
-        input_folder = folder_structure.get(f"{category}_input", f"{category}_input")
-        label_folder = folder_structure.get(f"{category}_label", f"{category}_label")
-
-        label_dest = output_dir / label_folder / f"label_{idx:05d}.tif"
-
-        # Track mapping
-        file_mapping[annotation_id] = {
-            "category": category,
-            "index": idx,
-            "label_dest": str(label_dest),
-        }
-
-        if uses_separate_channels:
-            # Separate-channel workflow:
-            #   - label-channel image (fluorescence) → *_label_input/
-            #   - training-channel image (e.g. brightfield) → *_input/
-            label_input_folder = folder_structure.get(
-                f"{category}_label_input", f"{category}_label_input"
-            )
-            label_input_dest = output_dir / label_input_folder / f"input_{idx:05d}.tif"
-            input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
-
-            file_mapping[annotation_id]["input_dest"] = str(input_dest)
-            file_mapping[annotation_id]["label_input_dest"] = str(label_input_dest)
-
-            # Copy label-channel image → *_label_input/
-            if label_input_file.exists():
-                label_input_dest.parent.mkdir(parents=True, exist_ok=True)
-                operation = _create_file_link_or_copy(
-                    label_input_file, label_input_dest, file_mode, logger
-                )
-                stats["file_operations"][operation] = (
-                    stats["file_operations"].get(operation, 0) + 1
-                )
-                if category == "training":
-                    stats["n_training_label_input"] += 1
-                elif category == "validation":
-                    stats["n_val_label_input"] += 1
-                elif category == "test":
-                    stats["n_test_label_input"] += 1
-                logger.debug(
-                    f"[{operation}] {label_input_file.name} -> {label_input_dest.name} (label_input)"
-                )
-            else:
-                logger.warning(f"Label-channel input file not found: {label_input_file}")
-
-            # Copy training-channel image → *_input/
-            if train_input_file.exists():
-                input_dest.parent.mkdir(parents=True, exist_ok=True)
-                operation = _create_file_link_or_copy(
-                    train_input_file, input_dest, file_mode, logger
-                )
-                stats["file_operations"][operation] = (
-                    stats["file_operations"].get(operation, 0) + 1
-                )
-                if category == "training":
-                    stats["n_training_images"] += 1
-                elif category == "validation":
-                    stats["n_val_images"] += 1
-                elif category == "test":
-                    stats["n_test_images"] += 1
-                logger.debug(
-                    f"[{operation}] {train_input_file.name} -> {input_dest.name} (train_input)"
-                )
-            else:
-                stats["n_missing_input"] += 1
-                logger.warning(
-                    f"Training-channel input file not found: {train_input_file}. "
-                    "Re-run the annotation pipeline to generate training channel images."
-                )
+            image_file = model_input_source / f"{annotation_id}.tif"
         else:
-            # Single-channel workflow: label-channel image goes directly to *_input/
-            input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
-            file_mapping[annotation_id]["input_dest"] = str(input_dest)
+            image_file = annotation_file
 
-            if label_input_file.exists():
-                input_dest.parent.mkdir(parents=True, exist_ok=True)
-                operation = _create_file_link_or_copy(
-                    label_input_file, input_dest, file_mode, logger
-                )
-                stats["file_operations"][operation] = (
-                    stats["file_operations"].get(operation, 0) + 1
-                )
-                if category == "training":
-                    stats["n_training_images"] += 1
-                elif category == "validation":
-                    stats["n_val_images"] += 1
-                elif category == "test":
-                    stats["n_test_images"] += 1
-                logger.debug(f"[{operation}] {label_input_file.name} -> {input_dest.name}")
-            else:
-                stats["n_missing_input"] += 1
-                logger.warning(f"Input file not found: {label_input_file}")
+        label_file = label_source / f"{annotation_id}_mask.tif"
 
-        # Process label/mask file (same for both workflows)
-        if label_file.exists():
-            label_dest.parent.mkdir(parents=True, exist_ok=True)
-            operation = _create_file_link_or_copy(
-                label_file, label_dest, file_mode, logger
+        # Drop the record whole if either half is missing. Writing an image without
+        # its label would leave an orphan, and consumers that pair images to labels
+        # by sorted filename would then mispair everything after it.
+        if not image_file.exists() or not label_file.exists():
+            n_missing += 1
+            missing = "image" if not image_file.exists() else "label"
+            logger.warning(f"Skipping annotation {annotation_id}: missing {missing}")
+            continue
+
+        annotation_source = None
+        if uses_separate_channels and annotation_file.exists():
+            annotation_source = FileSource(annotation_file)
+
+        records.append(
+            AnnotationRecord(
+                annotation_id=annotation_id,
+                category=ann.category,
+                image=FileSource(image_file),
+                label=FileSource(label_file),
+                annotation_image=annotation_source,
             )
-            stats["file_operations"][operation] = (
-                stats["file_operations"].get(operation, 0) + 1
-            )
-            if category == "training":
-                stats["n_training_labels"] += 1
-            elif category == "validation":
-                stats["n_val_labels"] += 1
-            elif category == "test":
-                stats["n_test_labels"] += 1
-            logger.debug(f"[{operation}] {label_file.name} -> {label_dest.name}")
-        else:
-            stats["n_missing_label"] += 1
-            logger.warning(f"Label file not found: {label_file}")
+        )
 
-    # Build standard result dictionary
-    result = _build_standard_result(
-        base_dir=output_dir,
-        created_dirs=created_dirs,
-        stats=stats,
-        file_mapping=file_mapping,
+    created_dirs, stats = write_training_layout(
+        records,
+        output_dir,
+        layout="split",
+        file_mode=file_mode,
+        clean_existing=clean_existing,
+        include_test=include_test,
+        uses_separate_channels=uses_separate_channels,
+        logger=logger,
+    )
+    stats["n_missing"] = n_missing
+
+    logger.info(
+        f"Reorganization complete: {len(records)} annotations written, {n_missing} skipped"
     )
 
-    # Log summary
-    total_processed = (
-        stats["n_training_images"] + stats["n_val_images"] + stats["n_test_images"]
+    return _build_standard_result(
+        base_dir=output_dir, created_dirs=created_dirs, stats=stats
     )
-    logger.info(f"Reorganization complete: {total_processed} images processed")
-    if uses_separate_channels:
-        logger.info(
-            f"  Training: {stats['n_training_images']} train images, "
-            f"{stats['n_training_label_input']} label-channel images, "
-            f"{stats['n_training_labels']} labels"
-        )
-        logger.info(
-            f"  Validation: {stats['n_val_images']} train images, "
-            f"{stats['n_val_label_input']} label-channel images, "
-            f"{stats['n_val_labels']} labels"
-        )
-    else:
-        logger.info(
-            f"  Training: {stats['n_training_images']} images, {stats['n_training_labels']} labels"
-        )
-        logger.info(
-            f"  Validation: {stats['n_val_images']} images, {stats['n_val_labels']} labels"
-        )
-    if include_test:
-        logger.info(
-            f"  Test: {stats['n_test_images']} images, {stats['n_test_labels']} labels"
-        )
-    if stats["n_missing_input"] > 0 or stats["n_missing_label"] > 0:
-        logger.warning(
-            f"  Missing files: {stats['n_missing_input']} inputs, {stats['n_missing_label']} labels"
-        )
-    logger.info(f"  File operations: {stats['file_operations']}")
-
-    # After a move, remove empty source folders
-    if file_mode == "move":
-        for src in [label_input_source, training_input_source, input_source, output_source]:
-            try:
-                if src.exists() and not any(src.iterdir()):
-                    src.rmdir()
-                    logger.debug(f"Removed empty source folder: {src.name}/")
-            except OSError:
-                pass
-
-    _close_logger_handlers()
-
-    return result
