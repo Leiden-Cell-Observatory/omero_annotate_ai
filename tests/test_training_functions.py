@@ -10,7 +10,6 @@ import shutil
 
 from omero_annotate_ai.processing.training_functions import (
     prepare_training_data_from_table,
-    _prepare_dataset_from_table,
     reorganize_local_data_for_training,
     _create_file_link_or_copy,
     _get_dataset_folder_names,
@@ -555,138 +554,46 @@ class TestExternalClassificationWorkflow:
     omero_annotate_ai then exports Ch0 as training input and the class label map as
     training ground truth.
     """
+    def test_label_id_as_string_none_is_skipped(self):
+        """label_id stored as the string 'None' (from an OMERO table) must not crash."""
+        from omero_annotate_ai.processing.training_functions import _optional_int
 
-    @pytest.fixture
-    def patch_df(self):
-        """DataFrame using patch mode (avoids the no_pixels image dimension lookup)."""
-        return pd.DataFrame(
-            {
-                "image_id": [1],
-                "z_slice": [0],
-                "channel": [0],
-                "timepoint": [0],
-                "is_patch": [True],   # patch=True avoids get_image(no_pixels=True) call
-                "patch_x": [0],
-                "patch_y": [0],
-                "patch_width": [256],
-                "patch_height": [256],
-                "is_volumetric": [False],
-                "label_id": ["None"],
-            }
-        )
+        assert _optional_int("None") is None
+        assert _optional_int("nan") is None
+        assert _optional_int("") is None
+        assert _optional_int(None) is None
 
-    def test_label_id_as_string_none_is_skipped(self, patch_df):
-        """label_id stored as string 'None' (from OMERO table) should not crash."""
-        from omero_annotate_ai.processing.training_functions import (
-            _prepare_dataset_from_table,
-        )
-        import tempfile
-        from unittest.mock import Mock, patch
+    def test_label_id_as_string_integer_is_used(self):
+        """label_id stored as the string '101' must parse to int 101."""
+        from omero_annotate_ai.processing.training_functions import _optional_int
 
-        temp_dir = Path(tempfile.mkdtemp())
-        try:
-            mock_conn = Mock()
-            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
-            with patch(
-                "omero_annotate_ai.processing.training_functions.ezomero"
-            ) as mock_ez:
-                mock_ez.get_image.return_value = (None, fake_img)
-                input_dir, label_dir = _prepare_dataset_from_table(
-                    conn=mock_conn,
-                    df=patch_df,
-                    output_dir=temp_dir,
-                    subset_type="training",
-                    tmp_dir=temp_dir / "tmp",
-                )
-            # No label downloaded — no crash
-            assert len(list(label_dir.glob("*.tif"))) == 0
-        finally:
-            shutil.rmtree(temp_dir)
+        assert _optional_int("101") == 101
+        assert _optional_int(101.0) == 101
+        assert _optional_int(101) == 101
 
-    def test_label_id_as_string_integer_is_used(self, patch_df):
-        """label_id stored as string '101' (from OMERO table) should be parsed to int."""
-        from omero_annotate_ai.processing.training_functions import (
-            _prepare_dataset_from_table,
-        )
-        import tempfile
-        from unittest.mock import Mock, patch
-        from tifffile import imwrite as tiff_imwrite
+    def test_no_label_id_means_no_download_and_no_record(self, tmp_path):
+        """A row with no label is dropped, not written as an orphan image."""
+        from omero_annotate_ai.processing.training_functions import _download_label
 
-        df = patch_df.copy()
-        df["label_id"] = ["101"]  # String "101" as stored in OMERO table
+        assert _download_label(Mock(), None, tmp_path) is None
 
-        temp_dir = Path(tempfile.mkdtemp())
-        try:
-            label_tiff = temp_dir / "label.tif"
-            label_data = np.array([[0, 1, 2, 3]], dtype=np.uint8)
-            tiff_imwrite(str(label_tiff), label_data)
+    def test_multiclass_label_pixel_values_preserved(self, tmp_path):
+        """Integer pixel values in a multi-class label TIFF are not remapped.
 
-            mock_conn = Mock()
-            mock_file_ann = Mock()
-            mock_file_ann.getFile.return_value.getName.return_value = "label.tif"
-            mock_conn.getObject.return_value = mock_file_ann
+        The label is copied verbatim; only the image plane is normalized to 8-bit.
+        """
+        from tifffile import imread, imwrite
 
-            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
-            with patch(
-                "omero_annotate_ai.processing.training_functions.ezomero"
-            ) as mock_ez:
-                mock_ez.get_image.return_value = (None, fake_img)
-                mock_ez.get_file_annotation.return_value = str(label_tiff)
-                input_dir, label_dir = _prepare_dataset_from_table(
-                    conn=mock_conn,
-                    df=df,
-                    output_dir=temp_dir,
-                    subset_type="training",
-                    tmp_dir=temp_dir / "tmp",
-                )
-            # Label was downloaded — getObject called with int 101
-            mock_conn.getObject.assert_called_once_with("FileAnnotation", 101)
-        finally:
-            shutil.rmtree(temp_dir)
+        from omero_annotate_ai.processing.training_layout import FileSource
 
-    def test_multiclass_label_pixel_values_preserved(self, patch_df):
-        """Integer pixel values in a multi-class label TIFF are not remapped."""
-        from omero_annotate_ai.processing.training_functions import (
-            _prepare_dataset_from_table,
-        )
-        import tempfile
-        from unittest.mock import Mock, patch
-        from tifffile import imwrite as tiff_imwrite, imread as tiff_imread
+        label = np.array([[0, 1], [2, 7]], dtype=np.uint8)
+        src = tmp_path / "src.tif"
+        imwrite(str(src), label)
+        dst = tmp_path / "dst.tif"
 
-        df = patch_df.copy()
-        df["label_id"] = [101]  # integer label_id
+        FileSource(src).write_to(dst)
 
-        temp_dir = Path(tempfile.mkdtemp())
-        try:
-            # Create a class label map with values 0, 1, 2, 3
-            label_tiff = temp_dir / "class_label.tif"
-            label_data = np.array([[0, 1, 2, 3], [3, 2, 1, 0]], dtype=np.uint8)
-            tiff_imwrite(str(label_tiff), label_data)
-
-            mock_conn = Mock()
-            mock_file_ann = Mock()
-            mock_file_ann.getFile.return_value.getName.return_value = "class_label.tif"
-            mock_conn.getObject.return_value = mock_file_ann
-
-            fake_img = np.zeros((256, 256, 1, 1, 1), dtype=np.uint8)
-            with patch(
-                "omero_annotate_ai.processing.training_functions.ezomero"
-            ) as mock_ez:
-                mock_ez.get_image.return_value = (None, fake_img)
-                mock_ez.get_file_annotation.return_value = str(label_tiff)
-                input_dir, label_dir = _prepare_dataset_from_table(
-                    conn=mock_conn,
-                    df=df,
-                    output_dir=temp_dir,
-                    subset_type="training",
-                    tmp_dir=temp_dir / "tmp",
-                )
-
-            # Check saved label has same pixel values
-            saved_label = tiff_imread(str(label_dir / "label_00000.tif"))
-            assert set(np.unique(saved_label)) == {0, 1, 2, 3}
-        finally:
-            shutil.rmtree(temp_dir)
+        np.testing.assert_array_equal(imread(str(dst)), label)
 
     def test_label_input_id_round_trips_through_dataframe(self):
         """label_input_id is serialized and deserialized correctly via to/from_dataframe."""
@@ -1157,3 +1064,93 @@ class TestReorganizeOntoRecords:
                 annotation_dir=tmp_path / "nope",
                 output_dir=tmp_path / "out",
             )
+
+
+@pytest.mark.unit
+class TestPrepareFromTableRecords:
+    """The OMERO producer pairs images and labels by annotation_id."""
+
+    def _table(self):
+        rows = []
+        for i in (0, 1):
+            rows.append(
+                {
+                    "image_id": 100 + i,
+                    "annotation_id": str(i),
+                    "train": True,
+                    "validate": False,
+                    "channel": 0,
+                    "z_slice": 0,
+                    "timepoint": 0,
+                    "label_id": 900 + i,
+                    "is_volumetric": False,
+                    "is_patch": False,
+                    "patch_x": 0,
+                    "patch_y": 0,
+                    "patch_width": 0,
+                    "patch_height": 0,
+                    "processed": True,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def _run(self, tmp_path, table, missing_label_ids=()):
+        from tifffile import imwrite as _imwrite
+
+        from omero_annotate_ai.processing import training_functions as tf
+
+        plane = np.ones((4, 4), dtype=np.uint8)
+
+        def fake_download(conn, label_id, tmp_dir, logger=None):
+            if label_id in missing_label_ids:
+                return None
+            path = Path(tmp_dir) / f"{label_id}.tif"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _imwrite(str(path), plane)
+            return path
+
+        with patch.object(tf, "_fetch_plane", return_value=plane), patch.object(
+            tf, "_download_label", side_effect=fake_download
+        ), patch.object(tf, "_load_table", return_value=table), patch.object(
+            tf.ezomero, "get_table", return_value=table
+        ):
+            return tf.prepare_training_data_from_table(
+                conn=Mock(),
+                table_id=1,
+                output_dir=tmp_path / "training",
+                validation_split=0.0,
+            )
+
+    def test_a_missing_label_does_not_shift_later_pairs(self, tmp_path):
+        """The regression this refactor exists to kill.
+
+        Files used to be named by loop index, and the image was written before the
+        label download could fail. One missing label left an orphan image; consumers
+        pair raw_paths to label_paths by sorted filename, so every subsequent pair
+        silently shifted by one.
+        """
+        result = self._run(tmp_path, self._table(), missing_label_ids=(900,))
+
+        images = sorted(p.name for p in result["train_input"].glob("*.tif"))
+        labels = sorted(p.name for p in result["train_label"].glob("*.tif"))
+
+        # Annotation 0 lost its label, so it is dropped whole - not left as an orphan.
+        assert images == labels == ["1.tif"]
+        assert result["stats"]["n_missing"] == 1
+
+    def test_files_named_by_annotation_id(self, tmp_path):
+        result = self._run(tmp_path, self._table())
+
+        images = sorted(p.name for p in result["train_input"].glob("*.tif"))
+        assert images == ["0.tif", "1.tif"]
+
+    def test_result_keys_feed_setup_training(self, tmp_path):
+        table = self._table()
+        table.loc[1, "train"] = False
+        table.loc[1, "validate"] = True
+
+        result = self._run(tmp_path, table)
+
+        for key in ("train_input", "train_label", "val_input", "val_label"):
+            assert key in result, f"setup_training requires {key}"
+        assert (result["val_input"] / "1.tif").exists()
