@@ -13,6 +13,8 @@ from omero_annotate_ai.processing.training_functions import (
     _prepare_dataset_from_table,
     reorganize_local_data_for_training,
     _create_file_link_or_copy,
+    _get_dataset_folder_names,
+    _clean_dataset_directories,
 )
 from omero_annotate_ai.core.annotation_config import AnnotationConfig, ImageAnnotation
 
@@ -1323,3 +1325,67 @@ class TestExternalClassificationWorkflow:
         assert config2.spatial_coverage.training_channels == [0]
         assert config2.annotation_methodology.annotation_type == "classification"
         assert config2.annotation_methodology.annotation_method == "automatic"
+
+
+@pytest.mark.unit
+class TestDatasetDirectoryCleanup:
+    """Cleaning of the folders that _prepare_dataset_from_table writes to."""
+
+    def test_folder_names_single_channel(self):
+        """Single-channel runs clean the four dataset folders."""
+        assert _get_dataset_folder_names() == [
+            "training_input",
+            "training_label",
+            "val_input",
+            "val_label",
+        ]
+
+    def test_folder_names_separate_channels(self):
+        """Separate-channel runs also clean the label_input folders."""
+        folders = _get_dataset_folder_names(uses_separate_channels=True)
+
+        assert "training_label_input" in folders
+        assert "val_label_input" in folders
+
+    def test_clean_removes_stale_training_data(self, tmp_path):
+        """Stale training images must not survive a clean_existing run.
+
+        Cleanup used to target train_input/, a folder nothing writes to, so images
+        from an earlier run lingered in training_input/ and leaked into the next one.
+        """
+        stale = tmp_path / "training_input" / "old.tif"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale")
+
+        _clean_dataset_directories(tmp_path)
+
+        assert not stale.exists()
+
+    def test_clean_removes_stale_label_input_data(self, tmp_path):
+        """Separate-channel label images are cleaned too."""
+        stale = tmp_path / "training_label_input" / "old.tif"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale")
+
+        _clean_dataset_directories(tmp_path, uses_separate_channels=True)
+
+        assert not stale.exists()
+
+    def test_clean_is_safe_when_directories_absent(self, tmp_path):
+        """A first run has nothing to clean and must not raise."""
+        _clean_dataset_directories(tmp_path, uses_separate_channels=True)
+
+    def test_cleaned_names_match_prepare_dataset_output(self):
+        """Every folder _prepare_dataset_from_table writes to must be cleaned.
+
+        _prepare_dataset_from_table derives its folders from subset_type, as
+        f"{subset_type}_input" and f"{subset_type}_label". If a caller adds a
+        subset_type, this pins the cleanup list to it.
+        """
+        cleaned = _get_dataset_folder_names(uses_separate_channels=True)
+
+        for subset_type in ("training", "val", "training_label", "val_label"):
+            assert f"{subset_type}_input" in cleaned
+
+        for subset_type in ("training", "val"):
+            assert f"{subset_type}_label" in cleaned

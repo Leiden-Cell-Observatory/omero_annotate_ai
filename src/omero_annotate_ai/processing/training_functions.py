@@ -97,6 +97,45 @@ def _create_training_directories(
     return created_dirs
 
 
+def _get_dataset_folder_names(uses_separate_channels: bool = False) -> List[str]:
+    """
+    Get the folder names written by _prepare_dataset_from_table.
+
+    These differ from _get_standard_folder_structure(): _prepare_dataset_from_table
+    derives folder names from its ``subset_type`` argument ("training", "val",
+    "training_label", "val_label"), producing ``training_input`` rather than
+    ``train_input``.
+
+    Args:
+        uses_separate_channels: Whether label_input folders are written
+
+    Returns:
+        List of folder names, relative to the output directory
+    """
+    folders = ["training_input", "training_label", "val_input", "val_label"]
+
+    if uses_separate_channels:
+        folders += ["training_label_input", "val_label_input"]
+
+    return folders
+
+
+def _clean_dataset_directories(
+    output_dir: Path, uses_separate_channels: bool = False
+) -> None:
+    """
+    Remove the dataset folders that _prepare_dataset_from_table will repopulate.
+
+    Args:
+        output_dir: Base output directory
+        uses_separate_channels: Whether label_input folders are written
+    """
+    for folder_name in _get_dataset_folder_names(uses_separate_channels):
+        folder_path = output_dir / folder_name
+        if folder_path.exists():
+            shutil.rmtree(folder_path)
+
+
 def _build_standard_result(
     base_dir: Path, created_dirs: Dict[str, Path], stats: Dict[str, Any], **extra_fields
 ) -> Dict[str, Any]:
@@ -273,13 +312,10 @@ def prepare_training_data_from_table(
     # Determine the effective training channel to use
     effective_train_channel = training_channels[0] if training_channels else None
 
-    # Create standard directory structure
-    created_dirs = _create_training_directories(
-        output_dir=output_dir,
-        uses_separate_channels=uses_separate_channels,
-        include_test=False,  # Table function doesn't support test category
-        clean_existing=clean_existing,
-    )
+    # Clean the folders _prepare_dataset_from_table writes to; it creates them itself
+    if clean_existing:
+        _clean_dataset_directories(output_dir, uses_separate_channels)
+    created_dirs: Dict[str, Path] = {}
 
     # Split data based on existing 'train'/'validate' columns or automatic split
     if "train" in table.columns and "validate" in table.columns:
@@ -562,13 +598,10 @@ def prepare_training_data_from_config(
             f"Using separate channels: label={label_channel}, training={training_channels}"
         )
 
-    # Create standard directory structure
-    created_dirs = _create_training_directories(
-        output_dir=output_dir,
-        uses_separate_channels=uses_separate_channels,
-        include_test=False,  # Config function doesn't support test category
-        clean_existing=clean_existing,
-    )
+    # Clean the folders _prepare_dataset_from_table writes to; it creates them itself
+    if clean_existing:
+        _clean_dataset_directories(output_dir, uses_separate_channels)
+    created_dirs: Dict[str, Path] = {}
 
     # Split data based on 'train'/'validate' columns
     if "train" in df.columns and "validate" in df.columns:
