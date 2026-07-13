@@ -16,9 +16,10 @@ module degrades to None with a warning when it is absent.
 """
 
 import logging
+import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -159,22 +160,66 @@ def stamp_config(config, conn):
 
 
 # Image formats iscc-bio can read, used when scanning a published data directory.
-_IMAGE_SUFFIXES = {".tif", ".tiff", ".czi", ".nd2", ".lif", ".dv", ".zarr"}
+# Plain files are matched by suffix directly. OME-Zarr stores are DIRECTORIES,
+# not files, so they need their own set and their own matching logic (see
+# _scan_directory_codes) - a ".zarr" suffix can never match `path.is_file()`.
+_IMAGE_FILE_SUFFIXES = {".tif", ".tiff", ".czi", ".nd2", ".lif", ".dv"}
+_IMAGE_DIR_SUFFIXES = {".zarr"}
 
 
-def _scan_directory_codes(data_dir: Union[str, Path]) -> set:
-    """Content-code every image file under data_dir.
+def _scan_directory_codes(
+    data_dir: Union[str, Path],
+) -> Tuple[Set[str], List[Path]]:
+    """Content-code every image file (and OME-Zarr store) under data_dir.
 
-    Returns a set of codes, deliberately discarding filenames: verification is
-    content-addressed, so renaming a published file must not break it.
+    Returns (codes, failed_paths):
+      codes:        set of ISCC codes found. Filenames are deliberately
+                    discarded - verification is content-addressed, so renaming
+                    a published file must not break it.
+      failed_paths: paths that matched an image suffix but could not be coded
+                    (unreadable/corrupt/permission error). The caller must
+                    surface these separately from "no match" - a file we
+                    could not read is not evidence that the data disagrees
+                    with the config.
+
+    Uses os.walk (not Path.rglob) so that once a directory is recognized as an
+    OME-Zarr store it can be pruned from further traversal: a zarr store can
+    contain tens of thousands of chunk files, and walking them all would be
+    pointless since the store is coded as a single unit.
     """
-    codes = set()
-    for path in sorted(Path(data_dir).rglob("*")):
-        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES:
-            code = compute_file_iscc(path)
-            if code is not None:
-                codes.add(code)
-    return codes
+    codes: Set[str] = set()
+    failed: List[Path] = []
+
+    for dirpath, dirnames, filenames in os.walk(data_dir):
+        dirpath_obj = Path(dirpath)
+
+        # Detect and code directory-shaped image stores (e.g. .zarr) among the
+        # immediate subdirectories, then prune them so os.walk does not
+        # descend into their internal chunk files.
+        remaining_dirnames = []
+        for dirname in sorted(dirnames):
+            if Path(dirname).suffix.lower() in _IMAGE_DIR_SUFFIXES:
+                dir_path = dirpath_obj / dirname
+                code = compute_file_iscc(dir_path)
+                if code is not None:
+                    codes.add(code)
+                else:
+                    failed.append(dir_path)
+                # Do not add to remaining_dirnames -> pruned from the walk.
+            else:
+                remaining_dirnames.append(dirname)
+        dirnames[:] = remaining_dirnames
+
+        for filename in sorted(filenames):
+            if Path(filename).suffix.lower() in _IMAGE_FILE_SUFFIXES:
+                file_path = dirpath_obj / filename
+                code = compute_file_iscc(file_path)
+                if code is not None:
+                    codes.add(code)
+                else:
+                    failed.append(file_path)
+
+    return codes, failed
 
 
 def verify_config(config, conn=None, data_dir=None):
@@ -198,6 +243,12 @@ def verify_config(config, conn=None, data_dir=None):
     Returns:
         ValidationResult. A mismatch is an error; a code that was never stamped
         is a warning, because absence of evidence is not evidence of tampering.
+
+    Raises:
+        ValueError: if not exactly one of conn/data_dir is given.
+        RuntimeError: if iscc-bio is not installed. Without it, nothing can
+            actually be recomputed, so returning a verdict (green or red)
+            would be reporting a check that never happened.
     """
     from ..core.annotation_config import ValidationIssue, ValidationResult
 
@@ -207,22 +258,39 @@ def verify_config(config, conn=None, data_dir=None):
             "or 'data_dir' (verify offline against published files)"
         )
 
+    if not iscc_available():
+        raise RuntimeError(
+            "Cannot verify ISCC provenance: iscc-bio is not installed. "
+            "Install it with: pip install 'omero-annotate-ai[provenance]'"
+        )
+
     errors = []
     warnings = []
 
-    available_codes = _scan_directory_codes(data_dir) if data_dir is not None else None
-    image_cache: Dict[int, Optional[str]] = {}
-    label_cache: Dict[int, Optional[str]] = {}
+    if data_dir is not None:
+        available_codes, failed_paths = _scan_directory_codes(data_dir)
+        for path in failed_paths:
+            warnings.append(
+                ValidationIssue(
+                    field="data_dir",
+                    message=f"Could not compute an ISCC for {path}; verification "
+                    "may be incomplete because this file could not be read.",
+                )
+            )
+    else:
+        available_codes = None
+        image_cache: Dict[int, Optional[str]] = {}
+        label_cache: Dict[int, Optional[str]] = {}
 
     for annotation in config.annotations:
-        label = f"image {annotation.image_id} ({annotation.image_name})"
+        desc = f"image {annotation.image_id} ({annotation.image_name})"
 
         # --- source image ---
         if annotation.source_iscc is None:
             warnings.append(
                 ValidationIssue(
                     field="source_iscc",
-                    message=f"No source ISCC stored for {label}; not verifiable. "
+                    message=f"No source ISCC stored for {desc}; not verifiable. "
                     "Run stamp_config() to add provenance.",
                 )
             )
@@ -232,7 +300,7 @@ def verify_config(config, conn=None, data_dir=None):
                     ValidationIssue(
                         field="source_iscc",
                         message=f"No file in the data directory matches the recorded "
-                        f"source ISCC for {label}. The data does not match the config.",
+                        f"source ISCC for {desc}. The data does not match the config.",
                     )
                 )
         else:
@@ -244,7 +312,7 @@ def verify_config(config, conn=None, data_dir=None):
                 errors.append(
                     ValidationIssue(
                         field="source_iscc",
-                        message=f"Source ISCC mismatch for {label}: config records "
+                        message=f"Source ISCC mismatch for {desc}: config records "
                         f"{annotation.source_iscc}, OMERO now yields {actual}.",
                     )
                 )
@@ -260,7 +328,7 @@ def verify_config(config, conn=None, data_dir=None):
                 warnings.append(
                     ValidationIssue(
                         field="label_iscc",
-                        message=f"No label ISCC stored for {label}; mask not verifiable.",
+                        message=f"No label ISCC stored for {desc}; mask not verifiable.",
                     )
                 )
             continue
@@ -271,7 +339,7 @@ def verify_config(config, conn=None, data_dir=None):
                     ValidationIssue(
                         field="label_iscc",
                         message=f"No file in the data directory matches the recorded "
-                        f"label ISCC for {label}. The mask does not match the config.",
+                        f"label ISCC for {desc}. The mask does not match the config.",
                     )
                 )
         elif annotation.label_id is not None:
@@ -283,7 +351,7 @@ def verify_config(config, conn=None, data_dir=None):
                 errors.append(
                     ValidationIssue(
                         field="label_iscc",
-                        message=f"Label ISCC mismatch for {label}: config records "
+                        message=f"Label ISCC mismatch for {desc}: config records "
                         f"{annotation.label_iscc}, OMERO now yields {actual}.",
                     )
                 )

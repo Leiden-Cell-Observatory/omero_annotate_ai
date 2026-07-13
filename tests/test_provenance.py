@@ -283,6 +283,83 @@ class TestVerifyConfigArguments:
 
 
 @pytest.mark.unit
+class TestVerifyConfigRequiresIscc:
+    """verify_config() must refuse to give a verdict without iscc-bio.
+
+    Without the library, compute_file_iscc/compute_image_iscc always return
+    None, which would otherwise make every stored code look "absent from the
+    data" - a false mismatch error for every image. A verdict that cannot be
+    backed up must never be returned; this must raise instead, in BOTH modes.
+    """
+
+    def test_raises_in_conn_mode_when_iscc_missing(self, no_iscc):
+        config = _config_with([])
+
+        with pytest.raises(RuntimeError, match="iscc-bio is not installed"):
+            provenance.verify_config(config, conn=MagicMock())
+
+    def test_raises_in_data_dir_mode_when_iscc_missing(self, no_iscc, tmp_path):
+        config = _config_with([])
+
+        with pytest.raises(RuntimeError, match="iscc-bio is not installed"):
+            provenance.verify_config(config, data_dir=tmp_path)
+
+
+@pytest.mark.unit
+class TestScanDirectoryCodes:
+    """_scan_directory_codes() - the offline content scan itself."""
+
+    def test_zarr_store_is_coded_as_a_single_unit(self, fake_iscc, tmp_path):
+        """An OME-Zarr store is a DIRECTORY, not a file - '.zarr' must still match."""
+        zarr_dir = tmp_path / "image.zarr"
+        zarr_dir.mkdir()
+        (zarr_dir / ".zattrs").write_text("{}")
+
+        codes, failed = provenance._scan_directory_codes(tmp_path)
+
+        assert codes == {"ISCC:AAA"}
+        assert failed == []
+        fake_iscc.assert_called_once_with(source=str(zarr_dir))
+
+    def test_does_not_descend_into_a_matched_zarr_store(self, fake_iscc, tmp_path):
+        """A zarr store can hold tens of thousands of chunks; walking them is
+        pointless once the store itself has been coded as a unit."""
+        zarr_dir = tmp_path / "image.zarr"
+        zarr_dir.mkdir()
+        inner = zarr_dir / "0"
+        inner.mkdir()
+        # Would itself match the file-suffix filter if the walk incorrectly
+        # recursed into the zarr store's internals.
+        (inner / "chunk.tif").write_bytes(b"chunk")
+
+        codes, failed = provenance._scan_directory_codes(tmp_path)
+
+        assert codes == {"ISCC:AAA"}
+        assert failed == []
+        fake_iscc.assert_called_once_with(source=str(zarr_dir))
+
+    def test_unreadable_file_is_reported_as_failed_not_silently_dropped(
+        self, fake_iscc, tmp_path
+    ):
+        good = tmp_path / "good.tif"
+        good.write_bytes(b"fake")
+        bad = tmp_path / "bad.tif"
+        bad.write_bytes(b"fake")
+
+        def flaky(source=None, **kwargs):
+            if source == str(bad):
+                raise RuntimeError("corrupt")
+            return [{"iscc_code": "ISCC:AAA"}]
+
+        fake_iscc.side_effect = flaky
+
+        codes, failed = provenance._scan_directory_codes(tmp_path)
+
+        assert codes == {"ISCC:AAA"}
+        assert failed == [bad]
+
+
+@pytest.mark.unit
 class TestVerifyConfigOffline:
     """data_dir mode - the recipient's story. No OMERO connection at all."""
 
@@ -351,6 +428,50 @@ class TestVerifyConfigOffline:
 
         assert result.is_valid is False
         assert any("label_iscc" in e.field for e in result.errors)
+
+    def test_zarr_store_matches_stored_source_code(self, fake_iscc, tmp_path):
+        """OME-Zarr is the headline format-independence case for this feature."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        zarr_dir = tmp_path / "published.zarr"
+        zarr_dir.mkdir()
+        (zarr_dir / ".zattrs").write_text("{}")
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        result = provenance.verify_config(config, data_dir=tmp_path)
+
+        assert result.is_valid is True
+        assert result.errors == []
+
+    def test_unreadable_file_produces_a_warning_not_a_mismatch_error(
+        self, fake_iscc, tmp_path
+    ):
+        """A file we could not read must not masquerade as tampered data."""
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
+        good = tmp_path / "good.tif"
+        good.write_bytes(b"fake")
+        bad = tmp_path / "bad.tif"
+        bad.write_bytes(b"fake")
+
+        def flaky(source=None, **kwargs):
+            if source == str(bad):
+                raise RuntimeError("corrupt")
+            return [{"iscc_code": "ISCC:AAA"}]
+
+        fake_iscc.side_effect = flaky
+
+        config = _config_with(
+            [ImageAnnotation(image_id=7, image_name="a.tif", source_iscc="ISCC:AAA")]
+        )
+
+        result = provenance.verify_config(config, data_dir=tmp_path)
+
+        assert result.is_valid is True
+        assert result.errors == []
+        assert any("bad.tif" in w.message for w in result.warnings)
 
 
 @pytest.mark.unit
