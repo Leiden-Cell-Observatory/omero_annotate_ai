@@ -112,8 +112,10 @@ class TestCreateOrReplaceTrackingTableMultiContainer:
             "processed": [False, False, False]
         })
 
-        with patch('omero_annotate_ai.omero.omero_functions.ezomero') as mock_ezomero:
-            mock_ezomero.post_table.return_value = 100  # Table ID
+        with patch(
+            'omero_annotate_ai.omero.omero_functions.post_typed_table'
+        ) as mock_post_table:
+            mock_post_table.return_value = 100  # Table ID
 
             table_id = create_or_replace_tracking_table(
                 conn=mock_conn,
@@ -125,8 +127,8 @@ class TestCreateOrReplaceTrackingTableMultiContainer:
 
             assert table_id == 100
             # Should create table on first container
-            mock_ezomero.post_table.assert_called_once()
-            call_kwargs = mock_ezomero.post_table.call_args.kwargs
+            mock_post_table.assert_called_once()
+            call_kwargs = mock_post_table.call_args.kwargs
             assert call_kwargs['object_id'] == 1  # Primary container
 
             # Should link to additional containers (2 and 3)
@@ -137,8 +139,10 @@ class TestCreateOrReplaceTrackingTableMultiContainer:
         mock_conn = Mock()
         config_df = pd.DataFrame({"image_id": [1]})
 
-        with patch('omero_annotate_ai.omero.omero_functions.ezomero') as mock_ezomero:
-            mock_ezomero.post_table.return_value = 100
+        with patch(
+            'omero_annotate_ai.omero.omero_functions.post_typed_table'
+        ) as mock_post_table:
+            mock_post_table.return_value = 100
 
             table_id = create_or_replace_tracking_table(
                 conn=mock_conn,
@@ -149,7 +153,7 @@ class TestCreateOrReplaceTrackingTableMultiContainer:
             )
 
             assert table_id == 100
-            call_kwargs = mock_ezomero.post_table.call_args.kwargs
+            call_kwargs = mock_post_table.call_args.kwargs
             assert call_kwargs['object_id'] == 123
 
 
@@ -647,3 +651,163 @@ class TestGeoJSONPersistence:
         new["channel_presentation"][0]["contrast_end"] = 999
         merged = merge_geojson_patches(existing, new)
         assert merged["channel_presentation"][0]["contrast_end"] == 999
+
+
+@pytest.mark.unit
+class TestTypedTableColumns:
+    """Test that the tracking table is written with OMERO semantic link columns.
+
+    OMERO.web only renders a table row in an Image's "Tables" panel when the table
+    has a column *named* ``Image``, and only hyperlinks a cell when that column is
+    *typed* as ImageColumn/RoiColumn. See _build_omero_columns.
+    """
+
+    def _make_df(self):
+        return pd.DataFrame(
+            {
+                "image_id": [101, 102],
+                "image_name": ["a.tif", "bb.tif"],
+                "roi_id": [5012, 0],
+                "label_id": [77, 0],
+                "channel": [0, 1],
+                "processed": [True, False],
+                "annotation_type": ["segmentation_mask", "segmentation_mask"],
+            }
+        )
+
+    def test_image_id_becomes_image_column_named_image(self):
+        """image_id is emitted as an ImageColumn named 'Image'."""
+        from omero.grid import ImageColumn
+        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+
+        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
+
+        assert "Image" in cols, "OMERO.web looks up the column by the name 'Image'"
+        assert isinstance(cols["Image"], ImageColumn)
+        assert cols["Image"].values == [101, 102]
+        assert "image_id" not in cols
+
+    def test_roi_id_becomes_roi_column_named_roi(self):
+        """roi_id is emitted as a RoiColumn named 'Roi'."""
+        from omero.grid import RoiColumn
+        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+
+        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
+
+        assert "Roi" in cols
+        assert isinstance(cols["Roi"], RoiColumn)
+        assert cols["Roi"].values == [5012, 0]
+        assert "roi_id" not in cols
+
+    def test_unannotated_row_carries_roi_sentinel_zero(self):
+        """A row that has not been annotated yet carries Roi == 0, not a string."""
+        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+
+        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
+
+        assert cols["Roi"].values[1] == 0
+
+    def test_remaining_columns_typed_by_dtype(self):
+        """Non-link columns fall back to the plain dtype-based column types."""
+        from omero.grid import BoolColumn, LongColumn, StringColumn
+        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+
+        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
+
+        assert isinstance(cols["label_id"], LongColumn)
+        assert isinstance(cols["channel"], LongColumn)
+        assert isinstance(cols["processed"], BoolColumn)
+        assert isinstance(cols["image_name"], StringColumn)
+
+    def test_string_column_is_sized_to_longest_value(self):
+        """StringColumn size must cover the longest value, or OMERO truncates."""
+        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+
+        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
+
+        assert cols["image_name"].size >= len("bb.tif")
+
+    def test_dataframe_column_order_is_preserved(self):
+        """Unlike ezomero, which regroups columns by dtype, we keep DataFrame order."""
+        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+
+        names = [c.name for c in _build_omero_columns(self._make_df())]
+
+        assert names == [
+            "Image",
+            "image_name",
+            "Roi",
+            "label_id",
+            "channel",
+            "processed",
+            "annotation_type",
+        ]
+
+
+@pytest.mark.unit
+class TestNormalizeOmeroTableDf:
+    """Test the single read-side shim that maps OMERO column names back to internal ones."""
+
+    def test_image_and_roi_are_renamed_back_to_internal_names(self):
+        from omero_annotate_ai.omero.omero_functions import _normalize_omero_table_df
+
+        df = pd.DataFrame({"Image": [101], "Roi": [5012], "processed": [True]})
+
+        out = _normalize_omero_table_df(df)
+
+        assert list(out.columns) == ["image_id", "roi_id", "processed"]
+        assert out["image_id"].tolist() == [101]
+        assert out["roi_id"].tolist() == [5012]
+
+    def test_legacy_table_passes_through_untouched(self):
+        """Tables written before this change already use the internal names."""
+        from omero_annotate_ai.omero.omero_functions import _normalize_omero_table_df
+
+        df = pd.DataFrame({"image_id": [101], "roi_id": ["None"], "processed": [False]})
+
+        out = _normalize_omero_table_df(df)
+
+        assert out["image_id"].tolist() == [101]
+        assert out["roi_id"].tolist() == ["None"]
+
+    def test_non_dataframe_input_is_returned_unchanged(self):
+        """ezomero.get_table returns a list-of-lists when pandas is absent."""
+        from omero_annotate_ai.omero.omero_functions import _normalize_omero_table_df
+
+        rows = [["Image", "Roi"], [101, 5012]]
+
+        assert _normalize_omero_table_df(rows) == rows
+
+
+@pytest.mark.unit
+class TestPrepareDataframeForOmero:
+    """roi_id/label_id must reach OMERO as integers so they can be typed columns."""
+
+    def test_roi_and_label_ids_are_integers_with_zero_sentinel(self):
+        from omero_annotate_ai.omero.omero_functions import _prepare_dataframe_for_omero
+
+        df = pd.DataFrame(
+            {
+                "image_id": [101, 102],
+                "roi_id": [5012, None],
+                "label_id": [77, None],
+            }
+        )
+
+        out = _prepare_dataframe_for_omero(df)
+
+        assert out["roi_id"].tolist() == [5012, 0]
+        assert out["label_id"].tolist() == [77, 0]
+        assert pd.api.types.is_integer_dtype(out["roi_id"])
+        assert pd.api.types.is_integer_dtype(out["label_id"])
+
+    def test_legacy_none_string_is_coerced_to_zero(self):
+        """to_dataframe used to emit the string "None" for an unset id."""
+        from omero_annotate_ai.omero.omero_functions import _prepare_dataframe_for_omero
+
+        df = pd.DataFrame({"image_id": [101], "roi_id": ["None"], "label_id": ["None"]})
+
+        out = _prepare_dataframe_for_omero(df)
+
+        assert out["roi_id"].tolist() == [0]
+        assert out["label_id"].tolist() == [0]

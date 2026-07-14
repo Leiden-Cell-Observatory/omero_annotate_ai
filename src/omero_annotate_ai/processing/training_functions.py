@@ -620,8 +620,10 @@ def _channel_from_row(row) -> int:
 
 
 def _load_table(conn, table_id: int) -> pd.DataFrame:
-    """Fetch the tracking table as a DataFrame."""
-    return ezomero.get_table(conn, table_id)
+    """Fetch the tracking table as a DataFrame, with its columns named as we expect."""
+    from ..omero.omero_functions import read_tracking_table
+
+    return read_tracking_table(conn, table_id)
 
 
 def _download_label(conn, label_id, tmp_dir: Path, logger=None) -> Optional[Path]:
