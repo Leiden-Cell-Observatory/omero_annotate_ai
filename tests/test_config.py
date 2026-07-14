@@ -3,6 +3,7 @@
 import pytest
 import yaml
 import tempfile
+import pandas as pd
 from pathlib import Path
 from dataclasses import asdict
 
@@ -1342,3 +1343,223 @@ class TestBIAExport:
         config.dataset.source_dataset_id = None
         config.save_bia_package(tmp_path / "bundle")
         assert (tmp_path / "bundle" / "metadata" / "Annotations_bia_demo.yaml").exists()
+
+
+@pytest.mark.unit
+class TestAnnotationIdPersistence:
+    """annotation_id survives the OMERO table round-trip and is regenerated for legacy tables."""
+
+    def _config_with(self, annotations):
+        config = create_default_config()
+        config.annotations = list(annotations)
+        return config
+
+    def _legacy_df(self, config) -> pd.DataFrame:
+        """OMERO table as written before annotation_id was persisted."""
+        return config.to_dataframe().drop(columns=["annotation_id"])
+
+    def _reload(self, df) -> list:
+        """Round-trip a DataFrame through from_dataframe, returning the ids."""
+        config = create_default_config()
+        config.from_dataframe(df)
+        return [a.annotation_id for a in config.annotations]
+
+    # --- to_dataframe -------------------------------------------------------
+
+    def test_to_dataframe_has_annotation_id_column(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="img.tif", annotation_id="101_0_0",
+                    timepoint=0, z_slice=0, channel=0,
+                )
+            ]
+        )
+        df = config.to_dataframe()
+        assert "annotation_id" in df.columns
+        assert df["annotation_id"].iloc[0] == "101_0_0"
+
+    def test_annotation_id_survives_round_trip(self):
+        """Stored ids are read back verbatim, even when they don't follow the scheme."""
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif", annotation_id="101_0_0",
+                    timepoint=0, z_slice=0, channel=0,
+                ),
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif", annotation_id="custom_name_xyz",
+                    timepoint=0, z_slice=1, channel=0,
+                ),
+                ImageAnnotation(
+                    image_id=202, image_name="b.tif", annotation_id="202_0_3d",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                ),
+            ]
+        )
+        assert self._reload(config.to_dataframe()) == [
+            "101_0_0",
+            "custom_name_xyz",
+            "202_0_3d",
+        ]
+
+    # --- legacy tables (no annotation_id column) ----------------------------
+
+    def test_legacy_2d_ids_regenerated(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=t, z_slice=z, channel=0,
+                )
+                for t in (0, 1)
+                for z in (0, 2)
+            ]
+        )
+        df = self._legacy_df(config)
+        assert "annotation_id" not in df.columns
+        assert self._reload(df) == ["101_0_0", "101_0_2", "101_1_0", "101_1_2"]
+
+    def test_legacy_patch_ids_indexed_by_sorted_coordinates(self):
+        """Patches on one plane get distinct indices, ordered by (patch_x, patch_y)."""
+        # Rows deliberately out of coordinate order in the table
+        coords = [(256, 256), (0, 0), (256, 0), (0, 256)]
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_patch=True, patch_x=x, patch_y=y,
+                    patch_width=256, patch_height=256,
+                )
+                for x, y in coords
+            ]
+        )
+        ids = self._reload(self._legacy_df(config))
+        # sorted on (x, y): (0,0) -> 0, (0,256) -> 1, (256,0) -> 2, (256,256) -> 3
+        assert ids == ["101_0_0_3", "101_0_0_0", "101_0_0_2", "101_0_0_1"]
+        assert len(set(ids)) == 4
+
+    def test_legacy_patch_indices_restart_per_plane(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=image_id, image_name="a.tif",
+                    timepoint=0, z_slice=z, channel=0,
+                    is_patch=True, patch_x=x, patch_y=0,
+                    patch_width=256, patch_height=256,
+                )
+                for image_id in (101, 202)
+                for z in (0, 1)
+                for x in (0, 256)
+            ]
+        )
+        ids = self._reload(self._legacy_df(config))
+        assert ids == [
+            "101_0_0_0", "101_0_0_1",
+            "101_0_1_0", "101_0_1_1",
+            "202_0_0_0", "202_0_0_1",
+            "202_0_1_0", "202_0_1_1",
+        ]
+        assert len(set(ids)) == len(ids)
+
+    def test_legacy_volumetric_ids_regenerated(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=303, image_name="v.tif",
+                    timepoint=t, z_slice=0, channel=0,
+                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                )
+                for t in (0, 1)
+            ]
+        )
+        assert self._reload(self._legacy_df(config)) == ["303_0_3d", "303_1_3d"]
+
+    def test_legacy_volumetric_patch_ids_regenerated(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=303, image_name="v.tif",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                    is_patch=True, patch_x=x, patch_y=0,
+                    patch_width=256, patch_height=256,
+                )
+                for x in (256, 0)
+            ]
+        )
+        ids = self._reload(self._legacy_df(config))
+        assert ids == ["303_0_3d_1", "303_0_3d_0"]
+
+    # --- empty / stable / unique -------------------------------------------
+
+    def test_empty_annotation_id_column_is_regenerated(self):
+        """A table whose annotation_id column is blank does not stay blank."""
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=0, z_slice=z, channel=0,
+                )
+                for z in (0, 1)
+            ]
+        )
+        df = config.to_dataframe()
+        assert list(df["annotation_id"]) == ["", ""]  # default annotation_id
+        assert self._reload(df) == ["101_0_0", "101_0_1"]
+
+    def test_regeneration_is_stable_across_calls(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_patch=True, patch_x=x, patch_y=y,
+                    patch_width=256, patch_height=256,
+                )
+                for x, y in [(256, 0), (0, 256), (0, 0)]
+            ]
+        )
+        df = self._legacy_df(config)
+        assert self._reload(df) == self._reload(df)
+
+    def test_all_ids_non_empty_and_unique_for_mixed_legacy_table(self):
+        """Post-condition: every reloaded annotation has a non-empty, unique id."""
+        annotations = [
+            ImageAnnotation(
+                image_id=101, image_name="a.tif", timepoint=0, z_slice=0, channel=0,
+            ),
+            ImageAnnotation(
+                image_id=101, image_name="a.tif", timepoint=0, z_slice=1, channel=0,
+            ),
+            ImageAnnotation(
+                image_id=202, image_name="b.tif", timepoint=1, z_slice=0, channel=0,
+                is_patch=True, patch_x=0, patch_y=0, patch_width=256, patch_height=256,
+            ),
+            ImageAnnotation(
+                image_id=202, image_name="b.tif", timepoint=1, z_slice=0, channel=0,
+                is_patch=True, patch_x=256, patch_y=0, patch_width=256, patch_height=256,
+            ),
+            ImageAnnotation(
+                image_id=303, image_name="v.tif", timepoint=0, z_slice=0, channel=0,
+                is_volumetric=True, z_start=0, z_end=4, z_length=5,
+            ),
+        ]
+        ids = self._reload(self._legacy_df(self._config_with(annotations)))
+        assert len(ids) == len(annotations)
+        assert all(i for i in ids)
+        assert len(set(ids)) == len(ids)
+
+    def test_duplicate_rows_still_get_unique_ids(self):
+        """Two identical rows cannot collapse onto the same id."""
+        annotation = dict(
+            image_id=101, image_name="a.tif", timepoint=0, z_slice=0, channel=0,
+        )
+        config = self._config_with(
+            [ImageAnnotation(**annotation), ImageAnnotation(**annotation)]
+        )
+        ids = self._reload(self._legacy_df(config))
+        assert ids[0] == "101_0_0"
+        assert len(set(ids)) == 2

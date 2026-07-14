@@ -291,6 +291,22 @@ class TrainingDataWidget:
                 return table
         return None
 
+    def get_selected_container(self):
+        """Get the container the selected table was scanned from.
+
+        Returns:
+            Dict with 'type' and 'id' of the selected container, or None if no
+            container is selected. Needed to locate the annotation config YAML
+            attached to that container.
+        """
+        container_id = self.container_dropdown.value
+        if not container_id:
+            return None
+        return {
+            "type": self.container_type_dropdown.value,
+            "id": container_id,
+        }
+
 
 def create_training_data_widget(connection=None):
     """Create a training data selection widget.
