@@ -15,7 +15,7 @@ from .processing.training_utils import setup_training, run_training
 # OMERO utilities
 from .omero import omero_utils
 
-__version__ = "0.1.2"
+__version__ = "0.3.2"
 __author__ = "Maarten Paul"
 __email__ = "m.w.paul@lumc.nl"
 
