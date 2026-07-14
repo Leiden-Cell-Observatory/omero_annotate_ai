@@ -253,12 +253,42 @@ def _spatial_information(img) -> str:
     return ",".join(bits)
 
 
+def _source_paths(config, img) -> Tuple[str, str]:
+    """``(mask, image)`` paths relative to ``config.output.output_directory``.
+
+    This is the annotation pipeline's own on-disk layout, whose folder names describe
+    the pipeline's roles for the files: ``input`` is what was fed to the annotation
+    model, ``output`` is the masks it produced.
+    """
+    input_dir = (
+        "label_input" if config.spatial_coverage.uses_separate_channels() else "input"
+    )
+    return (
+        f"output/{img.annotation_id}_mask.tif",
+        f"{input_dir}/{img.annotation_id}.tif",
+    )
+
+
+def _bundle_paths(img) -> Tuple[str, str]:
+    """``(mask, image)`` paths relative to the BIA submission root.
+
+    The BioImage Archive prescribes no folder names - the file lists just carry paths
+    relative to the submission root. So the bundle uses names that describe the content
+    to someone browsing the archive, rather than the pipeline's internal input/output
+    vocabulary.
+    """
+    return (
+        f"{BUNDLE_ANNOTATION_DIR}/{img.annotation_id}_mask.tif",
+        f"{BUNDLE_IMAGE_DIR}/{img.annotation_id}.tif",
+    )
+
+
 def _file_ids(config, img, file_id_source: str) -> Tuple[str, str]:
     """Return ``(annotation_id, source_image_id)`` for one ImageAnnotation record.
 
     ``file_id_source`` is one of ``"omero"``, ``"local"`` or ``"auto"`` (default).
     ``auto`` decides per record: OMERO ids when the record has been uploaded
-    (``label_id`` set), otherwise local file paths matching the pipeline layout.
+    (``label_id`` set), otherwise the file's path inside the BIA submission bundle.
     """
     use_omero = file_id_source == "omero" or (
         file_id_source == "auto" and img.label_id is not None
@@ -268,13 +298,7 @@ def _file_ids(config, img, file_id_source: str) -> Tuple[str, str]:
             str(img.label_id) if img.label_id is not None else img.annotation_id
         )
         return annotation_id, str(img.image_id)
-    input_dir = (
-        "label_input" if config.spatial_coverage.uses_separate_channels() else "input"
-    )
-    return (
-        f"output/{img.annotation_id}_mask.tif",
-        f"{input_dir}/{img.annotation_id}.tif",
-    )
+    return _bundle_paths(img)
 
 
 def build_mifa_file_metadata(config, *, file_id_source: str = "auto") -> List[Any]:
@@ -426,6 +450,10 @@ def to_mifa_dicts(config, *, funding_statement: Optional[str] = None) -> Dict[st
 # BIA file-list columns that are always kept (never dropped as "constant").
 _BIA_REQUIRED_COLUMNS = ("Files", "source_image")
 
+# Folder names inside the submission bundle. See _bundle_paths().
+BUNDLE_IMAGE_DIR = "images"
+BUNDLE_ANNOTATION_DIR = "annotations"
+
 
 def _drop_constant_optional_columns(df: "pd.DataFrame") -> "pd.DataFrame":
     """Drop optional BIA columns with < 2 distinct values (BIA guidance)."""
@@ -479,14 +507,32 @@ def save_bia_package(
     *,
     accession: Optional[str] = None,
     funding_statement: Optional[str] = None,
+    move_data: bool = False,
 ) -> Dict[str, Any]:
     """Assemble a self-contained BioImage Archive submission bundle in ``dest_dir``.
 
     Writes ``metadata/`` (the three MIFA YAMLs), ``file_list_images.tsv`` and
-    ``file_list_annotations.tsv``, and **copies** every referenced image/mask from
-    ``config.output.output_directory`` into the bundle (preserving relative paths).
+    ``file_list_annotations.tsv``, and transfers every referenced image/mask out of
+    ``config.output.output_directory`` into the bundle, from the pipeline's on-disk
+    layout (:func:`_source_paths`) to the bundle's own (:func:`_bundle_paths`):
+
+    - ``input/{id}.tif`` (or ``label_input/{id}.tif``) -> ``images/{id}.tif``
+    - ``output/{id}_mask.tif``                          -> ``annotations/{id}_mask.tif``
+
     Returns a summary dict (paths + counts). Missing source files are skipped with a
     warning rather than failing the whole bundle.
+
+    Args:
+        config: The annotation config describing the submission.
+        dest_dir: Where to build the bundle.
+        accession: Accession used in the MIFA filenames.
+        funding_statement: Optional override for the Study funding statement.
+        move_data: **Moves** the data into the bundle instead of copying it, leaving
+            ``config.output.output_directory`` empty of the transferred files. Only use
+            this when that directory is a disposable staging area (e.g. one just filled
+            by :func:`~omero_annotate_ai.processing.bia_data.prepare_bia_data_from_table`).
+            It is destructive against a real annotation run's output directory, which is
+            why it defaults to copying.
     """
     dest = Path(dest_dir)
     metadata_dir = dest / "metadata"
@@ -502,27 +548,32 @@ def save_bia_package(
     images_df.to_csv(images_path, sep="\t", index=False)
     annotations_df.to_csv(annotations_path, sep="\t", index=False)
 
+    # Map each file from where the pipeline left it to where the bundle wants it.
+    transfers: Dict[str, str] = {}
+    for img in config.annotations:
+        source_mask, source_image = _source_paths(config, img)
+        bundle_mask, bundle_image = _bundle_paths(img)
+        transfers[source_image] = bundle_image
+        transfers[source_mask] = bundle_mask
+
     source_root = Path(config.output.output_directory)
-    rel_paths = (
-        set(images_df["Files"])
-        | set(annotations_df["Files"])
-        | set(annotations_df["source_image"])
-    )
+    transfer = shutil.move if move_data else shutil.copy2
     copied = 0
     missing = 0
-    for rel in sorted(rel_paths):
-        src = source_root / rel
+    for source_rel, bundle_rel in sorted(transfers.items()):
+        src = source_root / source_rel
         if src.exists():
-            target = dest / rel
+            target = dest / bundle_rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
+            transfer(str(src), str(target))
             copied += 1
         else:
             missing += 1
     if missing:
+        verb = "moved" if move_data else "copied"
         warnings.warn(
             f"{missing} referenced data file(s) were not found under {source_root} "
-            "and were not copied into the BIA bundle.",
+            f"and were not {verb} into the BIA bundle.",
             UserWarning,
             stacklevel=2,
         )

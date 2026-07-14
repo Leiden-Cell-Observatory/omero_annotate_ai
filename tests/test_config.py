@@ -1179,8 +1179,8 @@ class TestMIFAExport:
     def test_file_metadata_local_ids(self):
         ann = self._rich_config().to_mifa(file_id_source="local")["annotations"]
         flm = ann.file_metadata[0]
-        assert flm.annotation_id == "output/1_0_0_mask.tif"
-        assert flm.source_image_id == "input/1_0_0.tif"
+        assert flm.annotation_id == "annotations/1_0_0_mask.tif"
+        assert flm.source_image_id == "images/1_0_0.tif"
 
     def test_file_metadata_omero_ids(self):
         config = self._rich_config()
@@ -1196,7 +1196,7 @@ class TestMIFAExport:
         ann = config.to_mifa(file_id_source="auto")["annotations"]
         assert ann.file_metadata[0].annotation_id == "777"
         # second record never uploaded -> local path
-        assert ann.file_metadata[1].annotation_id == "output/2_0_0_mask.tif"
+        assert ann.file_metadata[1].annotation_id == "annotations/2_0_0_mask.tif"
 
     def test_spatial_information_encodes_plane_and_patch(self):
         ann = self._rich_config().to_mifa(file_id_source="local")["annotations"]
@@ -1305,8 +1305,8 @@ class TestBIAExport:
         assert list(annotations.columns)[0] == "Files"
         assert "source_image" in annotations.columns
         assert len(annotations) == 3
-        assert annotations["Files"].iloc[0] == "output/1_0_0_mask.tif"
-        assert annotations["source_image"].iloc[0] == "input/1_0_0.tif"
+        assert annotations["Files"].iloc[0] == "annotations/1_0_0_mask.tif"
+        assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
         assert list(images.columns)[0] == "Files"
         assert len(images) == 3
 
@@ -1319,24 +1319,58 @@ class TestBIAExport:
         assert "Category" in annotations.columns  # training/validation -> 2 distinct
         assert "Files" in annotations.columns and "source_image" in annotations.columns
 
-    def test_separate_channel_uses_label_input(self, tmp_path):
+    def test_separate_channel_image_still_lands_in_images(self, tmp_path):
+        """A label/training channel split is a pipeline detail: the bundle says images/."""
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
-        config = self._config_with_data(tmp_path)
+        store = tmp_path / "store"
+        config = self._config_with_data(store)
         config.spatial_coverage.label_channel = 0
         config.spatial_coverage.training_channels = [1]
+        # separate channels: the pipeline writes the image to label_input/, not input/
+        (store / "label_input").mkdir(parents=True, exist_ok=True)
+        for i in (1, 2, 3):
+            (store / "label_input" / f"{i}_0_0.tif").write_bytes(b"img")
+
         _, annotations = build_bia_file_lists(config)
-        assert annotations["source_image"].iloc[0] == "label_input/1_0_0.tif"
+        assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
+
+        result = config.save_bia_package(tmp_path / "bundle")
+        assert (tmp_path / "bundle" / "images" / "1_0_0.tif").exists()
+        assert result["missing"] == 0
 
     def test_save_bia_package_copies_data_and_writes_lists(self, tmp_path):
-        config = self._config_with_data(tmp_path / "store")
+        store = tmp_path / "store"
+        config = self._config_with_data(store)
         dest = tmp_path / "bundle"
         result = config.save_bia_package(dest, accession="S-BIAD999")
         assert (dest / "file_list_images.tsv").exists()
         assert (dest / "file_list_annotations.tsv").exists()
         assert (dest / "metadata" / "Annotations_S-BIAD999.yaml").exists()
-        assert (dest / "output" / "1_0_0_mask.tif").exists()
-        assert (dest / "input" / "1_0_0.tif").exists()
+        # pipeline's input/ + output/ become the bundle's images/ + annotations/
+        assert (dest / "annotations" / "1_0_0_mask.tif").exists()
+        assert (dest / "images" / "1_0_0.tif").exists()
+        assert not (dest / "input").exists()
+        assert not (dest / "output").exists()
         assert result["n_annotations"] == 3
+        assert result["missing"] == 0
+        # copy by default: the source data survives
+        assert (store / "input" / "1_0_0.tif").exists()
+        assert (store / "output" / "1_0_0_mask.tif").exists()
+
+    def test_save_bia_package_move_data_empties_the_staging_dir(self, tmp_path):
+        """move_data=True transfers rather than copies - for disposable staging dirs only."""
+        store = tmp_path / "store"
+        config = self._config_with_data(store)
+        dest = tmp_path / "bundle"
+
+        result = config.save_bia_package(dest, accession="S-BIAD999", move_data=True)
+
+        assert result["missing"] == 0
+        assert (dest / "images" / "1_0_0.tif").exists()
+        assert (dest / "annotations" / "1_0_0_mask.tif").exists()
+        # the source files are gone - that is the point, and the hazard
+        assert not (store / "input" / "1_0_0.tif").exists()
+        assert not (store / "output" / "1_0_0_mask.tif").exists()
 
     def test_save_bia_package_accession_fallback(self, tmp_path):
         config = self._config_with_data(tmp_path / "store")

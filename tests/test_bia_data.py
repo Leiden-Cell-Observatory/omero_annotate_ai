@@ -244,17 +244,21 @@ def test_skipped_rows_are_pruned_from_the_config(mock_conn, mock_ezomero, tmp_pa
 
     assert [ann.annotation_id for ann in config.annotations] == ["101_0_0"]
 
-    # Every path the file lists reference exists on disk.
+    # Package it: every path the file lists reference must exist inside the bundle.
     config.output.output_directory = tmp_path
+    bundle = tmp_path / "submission"
+    result = config.save_bia_package(bundle, accession="S-BIAD999")
+
     images_df, annotations_df = build_bia_file_lists(config)
     referenced = (
         set(images_df["Files"])
         | set(annotations_df["Files"])
         | set(annotations_df["source_image"])
     )
-    assert referenced == {"input/101_0_0.tif", "output/101_0_0_mask.tif"}
+    assert referenced == {"images/101_0_0.tif", "annotations/101_0_0_mask.tif"}
+    assert result["missing"] == 0
     for rel in referenced:
-        assert (tmp_path / rel).exists(), f"file list references missing file: {rel}"
+        assert (bundle / rel).exists(), f"file list references missing file: {rel}"
 
 
 def test_stats_dict_keys_and_counts(mock_conn, mock_ezomero, tmp_path):

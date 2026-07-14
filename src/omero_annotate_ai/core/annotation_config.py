@@ -33,11 +33,14 @@ def _str_to_optional_int(value: str) -> Optional[int]:
 def _row_int(row, key: str, default: int = -1) -> int:
     """Read an int field from an OMERO table row, tolerating NaN/blank values."""
     value = row.get(key, default)
+    # pd.isna raises on array-like values (a list-valued cell, say). Those are not
+    # missing, so treat them as present and let int() below decide.
     try:
-        if pd.isna(value):
-            return default
+        is_missing = bool(pd.isna(value))
     except (TypeError, ValueError):
-        pass
+        is_missing = False
+    if is_missing:
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -1192,12 +1195,17 @@ class AnnotationConfig(BaseModel):
         *,
         accession: Optional[str] = None,
         funding_statement: Optional[str] = None,
+        move_data: bool = False,
     ) -> Dict[str, Any]:
         """Assemble a self-contained BioImage Archive submission bundle in ``dest_dir``.
 
         Writes ``metadata/`` (the MIFA YAMLs), the two BIA ``file_list_*.tsv`` files, and
-        copies the referenced images/masks from ``output.output_directory`` into the
-        bundle. Returns a summary dict (paths + counts).
+        transfers the referenced images/masks out of ``output.output_directory`` into the
+        bundle as ``images/`` and ``annotations/``. Returns a summary dict (paths + counts).
+
+        ``move_data=True`` moves the files instead of copying them - only safe when
+        ``output.output_directory`` is a disposable staging area, since it strips the
+        transferred files out of it. See :func:`mifa_export.save_bia_package`.
         """
         from .mifa_export import save_bia_package as _save_bia_package
 
@@ -1206,6 +1214,7 @@ class AnnotationConfig(BaseModel):
             dest_dir,
             accession=accession,
             funding_statement=funding_statement,
+            move_data=move_data,
         )
 
     def to_mifa_metadata(self, *, funding_statement: Optional[str] = None) -> dict:
