@@ -154,12 +154,20 @@ griffe-pydantic = ">=1.1.7"
 build = "*"
 twine = "*"
 
+# MIFA export feature (optional) - BioImage Archive annotation metadata models.
+# Git-only package (not on PyPI); pinned to a release tag so poetry-dynamic-versioning
+# can resolve a version. Imported lazily by omero_annotate_ai.core.mifa_export, so the
+# default user environment stays lean and only dev / the `mifa` env pull it in.
+[tool.pixi.feature.mifa.pypi-dependencies]
+bia-mifa-models = { git = "https://github.com/BioImage-Archive/bia-mifa-models.git", tag = "v1.1.5" }
+
 # Environment definitions
 [tool.pixi.environments]
 default = []
-dev = ["dev","all"]
+dev = ["dev","all","mifa"]
 docs = ["docs"]
 dev-docs = ["dev", "docs"]
+mifa = ["mifa"]
 
 [tool.pixi.pypi-dependencies]
 omero-annotate-ai = { path = ".", editable = true }

@@ -3,6 +3,7 @@
 import pytest
 import yaml
 import tempfile
+import pandas as pd
 from pathlib import Path
 from dataclasses import asdict
 
@@ -997,3 +998,602 @@ class TestTrainingConfigWarnings:
                 validation_fraction=0.4,
                 test_fraction=0.0,
             )
+
+
+@pytest.mark.unit
+class TestStudyContextFundingStatement:
+    """The StudyContext gains an optional funding_statement field for MIFA export."""
+
+    def test_funding_statement_defaults_to_none(self):
+        from omero_annotate_ai.core.annotation_config import StudyContext
+        study = StudyContext(title="t", description="d")
+        assert study.funding_statement is None
+
+    def test_funding_statement_is_settable(self):
+        from omero_annotate_ai.core.annotation_config import StudyContext
+        study = StudyContext(title="t", description="d", funding_statement="Funded by X")
+        assert study.funding_statement == "Funded by X"
+
+    def test_funding_statement_round_trips_through_yaml(self, tmp_path):
+        config = create_default_config()
+        config.study.funding_statement = "Grant ABC-123"
+        yaml_path = tmp_path / "config.yaml"
+        config.save_yaml(yaml_path)
+        reloaded = AnnotationConfig.from_yaml(yaml_path)
+        assert reloaded.study.funding_statement == "Grant ABC-123"
+
+
+@pytest.mark.unit
+class TestMIFAExportHelpers:
+    """Pure mapping helpers in mifa_export (no upstream package needed)."""
+
+    def test_map_license(self):
+        from omero_annotate_ai.core.mifa_export import map_license
+        assert map_license("CC-BY-4.0") == "CC_BY"
+        assert map_license("CC-BY") == "CC_BY"
+        assert map_license("CC_BY") == "CC_BY"
+        assert map_license("CC0") == "CC0"
+        assert map_license("CC0-1.0") == "CC0"
+
+    def test_map_license_unknown_falls_back_with_warning(self):
+        from omero_annotate_ai.core.mifa_export import map_license
+        with pytest.warns(UserWarning, match="license"):
+            assert map_license("MIT") == "CC_BY"
+
+    @pytest.mark.parametrize(
+        "ours,mifa",
+        [
+            ("segmentation_mask", "segmentation_mask"),
+            ("semantic_segmentation", "segmentation_mask"),
+            ("bounding_box", "bounding_boxes"),
+            ("point", "point_annotations"),
+            ("classification", "class_labels"),
+        ],
+    )
+    def test_map_annotation_type(self, ours, mifa):
+        from omero_annotate_ai.core.mifa_export import map_annotation_type
+        assert map_annotation_type(ours) == mifa
+
+    def test_map_annotation_type_unknown_falls_back_to_other(self):
+        from omero_annotate_ai.core.mifa_export import map_annotation_type
+        with pytest.warns(UserWarning, match="annotation type"):
+            assert map_annotation_type("nonsense") == "other"
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("Jane Doe", ("Jane", "Doe")),
+            ("Jane", ("Jane", ".")),
+            ("Jane van der Berg", ("Jane", "van der Berg")),
+            ("  Marie  Curie  ", ("Marie", "Curie")),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    def test_split_author_name(self, name, expected):
+        from omero_annotate_ai.core.mifa_export import split_author_name
+        assert split_author_name(name) == expected
+
+    def test_compose_overview_is_nonempty_and_mentions_name(self):
+        from omero_annotate_ai.core.mifa_export import compose_overview
+        config = create_default_config()
+        config.name = "my_nuclei_workflow"
+        overview = compose_overview(config)
+        assert isinstance(overview, str) and overview.strip()
+        assert "my_nuclei_workflow" in overview
+
+    def test_compose_method_is_nonempty_and_mentions_framework(self):
+        from omero_annotate_ai.core.mifa_export import compose_method
+        config = create_default_config()
+        method = compose_method(config)
+        assert isinstance(method, str) and method.strip()
+        assert "micro_sam" in method
+
+    @pytest.mark.parametrize(
+        "version,expected",
+        [("1.0.0", 1.0), ("v1.1.0", 1.1), ("2", 2.0), ("3.4.5", 3.4)],
+    )
+    def test_version_to_float(self, version, expected):
+        from omero_annotate_ai.core.mifa_export import version_to_float
+        assert version_to_float(version) == expected
+
+    def test_version_to_float_garbage_falls_back_with_warning(self):
+        from omero_annotate_ai.core.mifa_export import version_to_float
+        with pytest.warns(UserWarning, match="version"):
+            assert version_to_float("not-a-version") == 1.0
+
+
+@pytest.mark.unit
+class TestMIFAExport:
+    """Build MIFA documents from an AnnotationConfig (needs bia-mifa-models)."""
+
+    @pytest.fixture(autouse=True)
+    def _require_mifa(self):
+        pytest.importorskip("bia_mifa_models")
+
+    def _rich_config(self):
+        from omero_annotate_ai.core.annotation_config import AuthorInfo
+        config = create_default_config()
+        config.name = "nuclei_seg"
+        config.study.title = "Nuclei segmentation"
+        config.study.description = "Annotated nuclei for training."
+        config.study.keywords = ["nuclei", "segmentation"]
+        config.dataset.source_dataset_id = "S-BIAD123"
+        config.annotation_methodology.annotation_criteria = "In-focus nuclei only."
+        config.authors = [
+            AuthorInfo(
+                name="Jane Doe",
+                affiliation="EMBL-EBI",
+                email="jane@example.org",
+                orcid="https://orcid.org/0000-0002-1825-0097",
+            ),
+            AuthorInfo(name="", affiliation="Nowhere"),  # no name -> dropped
+        ]
+        config.annotations = [
+            ImageAnnotation(
+                image_id=1, image_name="a.tif", annotation_id="1_0_0",
+                category="training", timepoint=0, z_slice=0, channel=0,
+                annotation_type="segmentation_mask",
+                annotation_created_at="2026-06-22T11:00:00+00:00",
+            ),
+            ImageAnnotation(
+                image_id=2, image_name="b.tif", annotation_id="2_0_0",
+                category="validation", timepoint=0, z_slice=0, channel=0,
+                annotation_type="segmentation_mask",
+            ),
+            ImageAnnotation(
+                image_id=3, image_name="c.tif", annotation_id="3_0_0",
+                category="training", timepoint=0, z_slice=0, channel=0,
+                is_patch=True, patch_x=10, patch_y=20, patch_width=128, patch_height=128,
+                annotation_type="segmentation_mask",
+            ),
+        ]
+        return config
+
+    def test_to_mifa_returns_three_documents(self):
+        from bia_mifa_models.datamodel.bia_mifa_models import Study, Annotations, Version
+        docs = self._rich_config().to_mifa()
+        assert isinstance(docs["study"], Study)
+        assert isinstance(docs["annotations"], Annotations)
+        assert isinstance(docs["version"], Version)
+
+    def test_annotations_required_fields_present(self):
+        ann = self._rich_config().to_mifa()["annotations"]
+        assert ann.annotation_overview.strip()
+        assert ann.annotation_method.strip()
+
+    def test_study_required_fields_present_from_blank_config(self):
+        # default config has blank study fields - fallbacks must satisfy MIFA requireds
+        st = create_default_config().to_mifa()["study"]
+        assert st.title and st.description
+        assert st.keywords  # required, non-empty
+        assert str(st.license) in ("CC_BY", "CC0")
+        assert st.funding_statement
+        assert st.link_url  # required by the Links mixin, non-empty
+
+    def test_file_metadata_count_matches_annotations(self):
+        ann = self._rich_config().to_mifa()["annotations"]
+        assert len(ann.file_metadata) == 3
+
+    def test_file_metadata_local_ids(self):
+        ann = self._rich_config().to_mifa(file_id_source="local")["annotations"]
+        flm = ann.file_metadata[0]
+        assert flm.annotation_id == "annotations/1_0_0_mask.tif"
+        assert flm.source_image_id == "images/1_0_0.tif"
+
+    def test_file_metadata_omero_ids(self):
+        config = self._rich_config()
+        config.annotations[0].label_id = 555
+        ann = config.to_mifa(file_id_source="omero")["annotations"]
+        flm = ann.file_metadata[0]
+        assert flm.annotation_id == "555"
+        assert flm.source_image_id == "1"
+
+    def test_file_id_source_auto_is_per_record(self):
+        config = self._rich_config()
+        config.annotations[0].label_id = 777  # uploaded -> omero ids
+        ann = config.to_mifa(file_id_source="auto")["annotations"]
+        assert ann.file_metadata[0].annotation_id == "777"
+        # second record never uploaded -> local path
+        assert ann.file_metadata[1].annotation_id == "annotations/2_0_0_mask.tif"
+
+    def test_spatial_information_encodes_plane_and_patch(self):
+        ann = self._rich_config().to_mifa(file_id_source="local")["annotations"]
+        si0 = ann.file_metadata[0].spatial_information
+        assert "t=0" in si0 and "z=0" in si0 and "c=0" in si0
+        assert "patch" in ann.file_metadata[2].spatial_information.lower()
+
+    def test_annotation_creation_time_propagates(self):
+        ann = self._rich_config().to_mifa()["annotations"]
+        assert ann.file_metadata[0].annotation_creation_time is not None
+        assert ann.file_metadata[1].annotation_creation_time is None
+
+    def test_authors_mapped_and_blank_dropped(self):
+        ann = self._rich_config().to_mifa()["annotations"]
+        assert len(ann.authors) == 1
+        author = ann.authors[0]
+        assert author.author_first_name == "Jane"
+        assert author.author_last_name == "Doe"
+        assert str(author.orcid_id).endswith("0000-0002-1825-0097")
+        assert author.organisation[0].organisation_name == "EMBL-EBI"
+
+    def test_license_maps_to_mifa_code(self):
+        config = self._rich_config()
+        config.dataset.license = "CC0"
+        assert str(config.to_mifa()["study"].license) == "CC0"
+
+    def test_version_doc_uses_float_safe_version(self):
+        config = self._rich_config()
+        config.version = "2.3.1"
+        v = config.to_mifa()["version"]
+        assert v.version == 2.3
+        assert v.timestamp is not None
+
+    def test_funding_statement_field_and_kwarg_override(self):
+        config = self._rich_config()
+        config.study.funding_statement = "Funded by EMBO."
+        assert config.to_mifa()["study"].funding_statement == "Funded by EMBO."
+        assert config.to_mifa(funding_statement="Override")["study"].funding_statement == "Override"
+
+    def test_no_annotations_still_builds_valid_annotations_doc(self):
+        ann = create_default_config().to_mifa()["annotations"]
+        assert len(ann.file_metadata or []) == 0
+        assert ann.annotation_overview.strip()
+        assert ann.annotation_method.strip()
+
+    def test_save_mifa_writes_three_yaml_files_that_round_trip(self, tmp_path):
+        from linkml_runtime.loaders import yaml_loader
+        from bia_mifa_models.datamodel.bia_mifa_models import Annotations
+        paths = self._rich_config().save_mifa(tmp_path, accession="S-BIAD123")
+        assert (tmp_path / "Study_S-BIAD123.yaml").exists()
+        assert (tmp_path / "Annotations_S-BIAD123.yaml").exists()
+        assert (tmp_path / "Version_S-BIAD123.yaml").exists()
+        assert set(paths) == {"study", "annotations", "version"}
+        loaded = yaml_loader.load(
+            str(tmp_path / "Annotations_S-BIAD123.yaml"), target_class=Annotations
+        )
+        assert len(loaded.file_metadata) == 3
+
+    def test_save_mifa_accession_fallback_naming(self, tmp_path):
+        # no source_dataset_id -> accession falls back to a slug of the name
+        create_default_config().save_mifa(tmp_path)
+        assert (tmp_path / "Annotations_default_annotation_workflow.yaml").exists()
+
+    def test_to_mifa_metadata_returns_mifa_dicts(self):
+        result = create_default_config().to_mifa_metadata()
+        assert set(result) == {"study", "annotations", "version"}
+        assert isinstance(result["annotations"], dict)
+        assert result["annotations"]["annotation_overview"]
+
+
+@pytest.mark.unit
+class TestBIAExport:
+    """Build a BioImage Archive submission bundle (file lists + MIFA + data copy)."""
+
+    @pytest.fixture(autouse=True)
+    def _require_mifa(self):
+        pytest.importorskip("bia_mifa_models")
+
+    def _config_with_data(self, root):
+        """Config with 3 annotations and matching dummy tifs on disk under ``root``."""
+        config = create_default_config()
+        config.name = "bia_demo"
+        config.study.title = "BIA demo"
+        config.study.description = "desc"
+        config.study.keywords = ["demo"]
+        config.dataset.source_dataset_id = "S-BIAD999"
+        config.output.output_directory = root
+        config.annotations = [
+            ImageAnnotation(
+                image_id=i, image_name=f"img{i}.tif", annotation_id=f"{i}_0_0",
+                category=("training" if i % 2 else "validation"),
+                timepoint=0, z_slice=0, channel=0, annotation_type="segmentation_mask",
+            )
+            for i in (1, 2, 3)
+        ]
+        (root / "input").mkdir(parents=True, exist_ok=True)
+        (root / "output").mkdir(parents=True, exist_ok=True)
+        for i in (1, 2, 3):
+            (root / "input" / f"{i}_0_0.tif").write_bytes(b"img")
+            (root / "output" / f"{i}_0_0_mask.tif").write_bytes(b"mask")
+        return config
+
+    def test_file_lists_headers_and_counts(self, tmp_path):
+        from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+        images, annotations = build_bia_file_lists(self._config_with_data(tmp_path))
+        assert list(annotations.columns)[0] == "Files"
+        assert "source_image" in annotations.columns
+        assert len(annotations) == 3
+        assert annotations["Files"].iloc[0] == "annotations/1_0_0_mask.tif"
+        assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
+        assert list(images.columns)[0] == "Files"
+        assert len(images) == 3
+
+    def test_file_lists_drop_constant_optional_columns(self, tmp_path):
+        from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+        _, annotations = build_bia_file_lists(self._config_with_data(tmp_path))
+        # constant optional columns dropped, varying ones kept, required always kept
+        assert "Channel" not in annotations.columns
+        assert "Timepoint" not in annotations.columns
+        assert "Category" in annotations.columns  # training/validation -> 2 distinct
+        assert "Files" in annotations.columns and "source_image" in annotations.columns
+
+    def test_separate_channel_image_still_lands_in_images(self, tmp_path):
+        """A label/training channel split is a pipeline detail: the bundle says images/."""
+        from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+        store = tmp_path / "store"
+        config = self._config_with_data(store)
+        config.spatial_coverage.label_channel = 0
+        config.spatial_coverage.training_channels = [1]
+        # separate channels: the pipeline writes the image to label_input/, not input/
+        (store / "label_input").mkdir(parents=True, exist_ok=True)
+        for i in (1, 2, 3):
+            (store / "label_input" / f"{i}_0_0.tif").write_bytes(b"img")
+
+        _, annotations = build_bia_file_lists(config)
+        assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
+
+        result = config.save_bia_package(tmp_path / "bundle")
+        assert (tmp_path / "bundle" / "images" / "1_0_0.tif").exists()
+        assert result["missing"] == 0
+
+    def test_save_bia_package_copies_data_and_writes_lists(self, tmp_path):
+        store = tmp_path / "store"
+        config = self._config_with_data(store)
+        dest = tmp_path / "bundle"
+        result = config.save_bia_package(dest, accession="S-BIAD999")
+        assert (dest / "file_list_images.tsv").exists()
+        assert (dest / "file_list_annotations.tsv").exists()
+        assert (dest / "metadata" / "Annotations_S-BIAD999.yaml").exists()
+        # pipeline's input/ + output/ become the bundle's images/ + annotations/
+        assert (dest / "annotations" / "1_0_0_mask.tif").exists()
+        assert (dest / "images" / "1_0_0.tif").exists()
+        assert not (dest / "input").exists()
+        assert not (dest / "output").exists()
+        assert result["n_annotations"] == 3
+        assert result["missing"] == 0
+        # copy by default: the source data survives
+        assert (store / "input" / "1_0_0.tif").exists()
+        assert (store / "output" / "1_0_0_mask.tif").exists()
+
+    def test_save_bia_package_move_data_empties_the_staging_dir(self, tmp_path):
+        """move_data=True transfers rather than copies - for disposable staging dirs only."""
+        store = tmp_path / "store"
+        config = self._config_with_data(store)
+        dest = tmp_path / "bundle"
+
+        result = config.save_bia_package(dest, accession="S-BIAD999", move_data=True)
+
+        assert result["missing"] == 0
+        assert (dest / "images" / "1_0_0.tif").exists()
+        assert (dest / "annotations" / "1_0_0_mask.tif").exists()
+        # the source files are gone - that is the point, and the hazard
+        assert not (store / "input" / "1_0_0.tif").exists()
+        assert not (store / "output" / "1_0_0_mask.tif").exists()
+
+    def test_save_bia_package_accession_fallback(self, tmp_path):
+        config = self._config_with_data(tmp_path / "store")
+        config.dataset.source_dataset_id = None
+        config.save_bia_package(tmp_path / "bundle")
+        assert (tmp_path / "bundle" / "metadata" / "Annotations_bia_demo.yaml").exists()
+
+
+@pytest.mark.unit
+class TestAnnotationIdPersistence:
+    """annotation_id survives the OMERO table round-trip and is regenerated for legacy tables."""
+
+    def _config_with(self, annotations):
+        config = create_default_config()
+        config.annotations = list(annotations)
+        return config
+
+    def _legacy_df(self, config) -> pd.DataFrame:
+        """OMERO table as written before annotation_id was persisted."""
+        return config.to_dataframe().drop(columns=["annotation_id"])
+
+    def _reload(self, df) -> list:
+        """Round-trip a DataFrame through from_dataframe, returning the ids."""
+        config = create_default_config()
+        config.from_dataframe(df)
+        return [a.annotation_id for a in config.annotations]
+
+    # --- to_dataframe -------------------------------------------------------
+
+    def test_to_dataframe_has_annotation_id_column(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="img.tif", annotation_id="101_0_0",
+                    timepoint=0, z_slice=0, channel=0,
+                )
+            ]
+        )
+        df = config.to_dataframe()
+        assert "annotation_id" in df.columns
+        assert df["annotation_id"].iloc[0] == "101_0_0"
+
+    def test_annotation_id_survives_round_trip(self):
+        """Stored ids are read back verbatim, even when they don't follow the scheme."""
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif", annotation_id="101_0_0",
+                    timepoint=0, z_slice=0, channel=0,
+                ),
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif", annotation_id="custom_name_xyz",
+                    timepoint=0, z_slice=1, channel=0,
+                ),
+                ImageAnnotation(
+                    image_id=202, image_name="b.tif", annotation_id="202_0_3d",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                ),
+            ]
+        )
+        assert self._reload(config.to_dataframe()) == [
+            "101_0_0",
+            "custom_name_xyz",
+            "202_0_3d",
+        ]
+
+    # --- legacy tables (no annotation_id column) ----------------------------
+
+    def test_legacy_2d_ids_regenerated(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=t, z_slice=z, channel=0,
+                )
+                for t in (0, 1)
+                for z in (0, 2)
+            ]
+        )
+        df = self._legacy_df(config)
+        assert "annotation_id" not in df.columns
+        assert self._reload(df) == ["101_0_0", "101_0_2", "101_1_0", "101_1_2"]
+
+    def test_legacy_patch_ids_indexed_by_sorted_coordinates(self):
+        """Patches on one plane get distinct indices, ordered by (patch_x, patch_y)."""
+        # Rows deliberately out of coordinate order in the table
+        coords = [(256, 256), (0, 0), (256, 0), (0, 256)]
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_patch=True, patch_x=x, patch_y=y,
+                    patch_width=256, patch_height=256,
+                )
+                for x, y in coords
+            ]
+        )
+        ids = self._reload(self._legacy_df(config))
+        # sorted on (x, y): (0,0) -> 0, (0,256) -> 1, (256,0) -> 2, (256,256) -> 3
+        assert ids == ["101_0_0_3", "101_0_0_0", "101_0_0_2", "101_0_0_1"]
+        assert len(set(ids)) == 4
+
+    def test_legacy_patch_indices_restart_per_plane(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=image_id, image_name="a.tif",
+                    timepoint=0, z_slice=z, channel=0,
+                    is_patch=True, patch_x=x, patch_y=0,
+                    patch_width=256, patch_height=256,
+                )
+                for image_id in (101, 202)
+                for z in (0, 1)
+                for x in (0, 256)
+            ]
+        )
+        ids = self._reload(self._legacy_df(config))
+        assert ids == [
+            "101_0_0_0", "101_0_0_1",
+            "101_0_1_0", "101_0_1_1",
+            "202_0_0_0", "202_0_0_1",
+            "202_0_1_0", "202_0_1_1",
+        ]
+        assert len(set(ids)) == len(ids)
+
+    def test_legacy_volumetric_ids_regenerated(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=303, image_name="v.tif",
+                    timepoint=t, z_slice=0, channel=0,
+                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                )
+                for t in (0, 1)
+            ]
+        )
+        assert self._reload(self._legacy_df(config)) == ["303_0_3d", "303_1_3d"]
+
+    def test_legacy_volumetric_patch_ids_regenerated(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=303, image_name="v.tif",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                    is_patch=True, patch_x=x, patch_y=0,
+                    patch_width=256, patch_height=256,
+                )
+                for x in (256, 0)
+            ]
+        )
+        ids = self._reload(self._legacy_df(config))
+        assert ids == ["303_0_3d_1", "303_0_3d_0"]
+
+    # --- empty / stable / unique -------------------------------------------
+
+    def test_empty_annotation_id_column_is_regenerated(self):
+        """A table whose annotation_id column is blank does not stay blank."""
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=0, z_slice=z, channel=0,
+                )
+                for z in (0, 1)
+            ]
+        )
+        df = config.to_dataframe()
+        assert list(df["annotation_id"]) == ["", ""]  # default annotation_id
+        assert self._reload(df) == ["101_0_0", "101_0_1"]
+
+    def test_regeneration_is_stable_across_calls(self):
+        config = self._config_with(
+            [
+                ImageAnnotation(
+                    image_id=101, image_name="a.tif",
+                    timepoint=0, z_slice=0, channel=0,
+                    is_patch=True, patch_x=x, patch_y=y,
+                    patch_width=256, patch_height=256,
+                )
+                for x, y in [(256, 0), (0, 256), (0, 0)]
+            ]
+        )
+        df = self._legacy_df(config)
+        assert self._reload(df) == self._reload(df)
+
+    def test_all_ids_non_empty_and_unique_for_mixed_legacy_table(self):
+        """Post-condition: every reloaded annotation has a non-empty, unique id."""
+        annotations = [
+            ImageAnnotation(
+                image_id=101, image_name="a.tif", timepoint=0, z_slice=0, channel=0,
+            ),
+            ImageAnnotation(
+                image_id=101, image_name="a.tif", timepoint=0, z_slice=1, channel=0,
+            ),
+            ImageAnnotation(
+                image_id=202, image_name="b.tif", timepoint=1, z_slice=0, channel=0,
+                is_patch=True, patch_x=0, patch_y=0, patch_width=256, patch_height=256,
+            ),
+            ImageAnnotation(
+                image_id=202, image_name="b.tif", timepoint=1, z_slice=0, channel=0,
+                is_patch=True, patch_x=256, patch_y=0, patch_width=256, patch_height=256,
+            ),
+            ImageAnnotation(
+                image_id=303, image_name="v.tif", timepoint=0, z_slice=0, channel=0,
+                is_volumetric=True, z_start=0, z_end=4, z_length=5,
+            ),
+        ]
+        ids = self._reload(self._legacy_df(self._config_with(annotations)))
+        assert len(ids) == len(annotations)
+        assert all(i for i in ids)
+        assert len(set(ids)) == len(ids)
+
+    def test_duplicate_rows_still_get_unique_ids(self):
+        """Two identical rows cannot collapse onto the same id."""
+        annotation = dict(
+            image_id=101, image_name="a.tif", timepoint=0, z_slice=0, channel=0,
+        )
+        config = self._config_with(
+            [ImageAnnotation(**annotation), ImageAnnotation(**annotation)]
+        )
+        ids = self._reload(self._legacy_df(config))
+        assert ids[0] == "101_0_0"
+        assert len(set(ids)) == 2

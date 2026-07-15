@@ -1,5 +1,8 @@
 """Image and file processing functionality."""
 
+from .bia_data import (
+    prepare_bia_data_from_table,
+)
 from .image_functions import (
     generate_patch_coordinates,
     label_to_rois,
@@ -19,6 +22,8 @@ from .utils import (
     validate_table_schema,
 )
 __all__ = [
+    # bia_data
+    "prepare_bia_data_from_table",
     # image_functions
     "generate_patch_coordinates",
     "label_to_rois",
