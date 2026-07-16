@@ -431,6 +431,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                 img_slice = img_slice[
                     :, :, 0, 0, 0
                 ]  # Extract the single z-slice
+                img_slice = np.swapaxes(img_slice, 0, 1)
                 if logger:
                     logger.debug(f"Extracted slice shape: {img_slice.shape}")
                 else:

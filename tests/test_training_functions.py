@@ -828,13 +828,6 @@ class TestFetchPlane3D:
         assert img[-1].max() == 255
         assert img[0].max() < 255
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="PRE-EXISTING BUG: the 3D-patch branch is the only one that never "
-        "applies np.swapaxes(0, 1), so volumetric patches come out transposed "
-        "(Z, X, Y) while every other branch returns (Y, X). Predates this PR. "
-        "Remove the xfail when the swapaxes is added.",
-    )
     def test_volumetric_patch_is_returned_as_z_height_width(self, fake_ezomero):
         img = tf._fetch_plane(
             None,
@@ -843,16 +836,6 @@ class TestFetchPlane3D:
             channel=0,
         )
         assert img.shape == (PLANE_Z, 2, 3)  # (Z, height, width)
-
-    def test_volumetric_patch_currently_returns_transposed(self, fake_ezomero):
-        """Locks in today's behaviour so the fix above is a deliberate, visible change."""
-        img = tf._fetch_plane(
-            None,
-            _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
-                patch_x=2, patch_y=1, patch_width=3, patch_height=2),
-            channel=0,
-        )
-        assert img.shape == (PLANE_Z, 3, 2)  # (Z, width, height) - transposed
 
 
 @pytest.mark.unit
