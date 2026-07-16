@@ -15,7 +15,7 @@ from .omero_functions import (
     sync_omero_table_to_config,
     update_workflow_status_map,
     upload_annotation_config_to_omero,
-    upload_label_input_image,
+    upload_annotation_input_image,
     upload_rois_and_labels,
 )
 
@@ -34,6 +34,6 @@ __all__ = [
     "sync_omero_table_to_config",
     "update_workflow_status_map",
     "upload_annotation_config_to_omero",
-    "upload_label_input_image",
+    "upload_annotation_input_image",
     "upload_rois_and_labels",
 ]

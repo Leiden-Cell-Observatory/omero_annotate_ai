@@ -158,9 +158,13 @@ def backup_table(conn, table_id: int, backup_path: str) -> bool:
         True if successful, False otherwise
     """
     try:
+        # Local import: omero_functions imports this module, so importing it at
+        # module level would be circular.
+        from .omero_functions import read_tracking_table
+
         # Get table data
-        df = ezomero.get_table(conn, table_id)
-        
+        df = read_tracking_table(conn, table_id)
+
         # Create backup directory if needed
         os.makedirs(os.path.dirname(backup_path), exist_ok=True)
         
@@ -188,7 +192,9 @@ def validate_table_schema(conn, table_id: int, expected_columns: List[str]) -> T
         Tuple of (is_valid, missing_columns)
     """
     try:
-        df = ezomero.get_table(conn, table_id)
+        from .omero_functions import read_tracking_table
+
+        df = read_tracking_table(conn, table_id)
         actual_columns = set(df.columns)
         expected_set = set(expected_columns)
         
@@ -227,11 +233,13 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
         New table ID if successful, None otherwise
     """
     try:
+        from .omero_functions import post_typed_table, read_tracking_table
+
         # Load all tables
         dfs = []
         for table_id in table_ids:
             try:
-                df = ezomero.get_table(conn, table_id)
+                df = read_tracking_table(conn, table_id)
                 df['source_table_id'] = table_id  # Track source
                 dfs.append(df)
                 print(f"Loaded table {table_id}: {len(df)} rows")
@@ -257,12 +265,12 @@ def merge_tables(conn, table_ids: List[int], new_title: str,
             if initial_rows != final_rows:
                 print(f"Removed {initial_rows - final_rows} duplicate rows")
         
-        # Create new table
-        new_table_id = ezomero.post_table(
+        # Create new table (typed, so the merged table keeps its Image/Roi links)
+        new_table_id = post_typed_table(
             conn,
-            object_type=container_type.capitalize(),
+            df=merged_df,
+            object_type=container_type,
             object_id=container_id,
-            table=merged_df,
             title=new_title
         )
         

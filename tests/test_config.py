@@ -1597,3 +1597,148 @@ class TestAnnotationIdPersistence:
         ids = self._reload(self._legacy_df(config))
         assert ids[0] == "101_0_0"
         assert len(set(ids)) == 2
+
+
+@pytest.mark.unit
+class TestAnnotationInputIdRename:
+    """annotation_input_id replaces label_input_id; old OMERO tables still load."""
+
+    def _config_with_annotation(self, **ann_kwargs):
+        from omero_annotate_ai.core.annotation_config import (
+            ImageAnnotation,
+            create_default_config,
+        )
+
+        config = create_default_config()
+        config.annotations = [
+            ImageAnnotation(
+                image_id=100,
+                image_name="img",
+                annotation_id="0",
+                category="training",
+                processed=True,
+                **ann_kwargs,
+            )
+        ]
+        return config
+
+    def test_new_column_round_trips(self):
+        config = self._config_with_annotation(annotation_input_id=555)
+
+        df = config.to_dataframe()
+        assert "annotation_input_id" in df.columns
+        assert "label_input_id" not in df.columns
+
+        config.annotations = []
+        config.from_dataframe(df)
+        assert config.annotations[0].annotation_input_id == 555
+
+    def test_legacy_label_input_id_column_still_loads(self):
+        """Tables written to OMERO before the rename must not break.
+
+        This is the one backwards-compatibility guarantee in the folder-layout
+        change: the column lives on users' OMERO servers and cannot be migrated.
+        """
+        config = self._config_with_annotation(annotation_input_id=777)
+        df = config.to_dataframe().rename(
+            columns={"annotation_input_id": "label_input_id"}
+        )
+        assert "label_input_id" in df.columns
+
+        config.annotations = []
+        config.from_dataframe(df)
+
+        assert config.annotations[0].annotation_input_id == 777
+
+    def test_absent_column_yields_none(self):
+        config = self._config_with_annotation()
+
+        df = config.to_dataframe()
+        config.annotations = []
+        config.from_dataframe(df)
+
+        assert config.annotations[0].annotation_input_id is None
+
+
+@pytest.mark.unit
+class TestOmeroIdSerialization:
+    """roi_id/label_id round-trip as integers with a 0 sentinel for 'not yet set'.
+
+    OMERO table columns are non-nullable, so an unset id must be a real integer.
+    0 is used because no OMERO object has id 0.
+    """
+
+    def _config_with_annotation(self, **kwargs):
+        import pandas as pd  # noqa: F401
+
+        config = create_default_config()
+        config.annotations = [
+            ImageAnnotation(image_id=101, image_name="a.tif", **kwargs)
+        ]
+        return config
+
+    def test_unset_ids_serialize_to_zero_not_the_string_none(self):
+        config = self._config_with_annotation()
+
+        df = config.to_dataframe()
+
+        assert df["roi_id"].tolist() == [0]
+        assert df["label_id"].tolist() == [0]
+
+    def test_set_ids_serialize_as_integers(self):
+        config = self._config_with_annotation(roi_id=5012, label_id=77)
+
+        df = config.to_dataframe()
+
+        assert df["roi_id"].tolist() == [5012]
+        assert df["label_id"].tolist() == [77]
+
+    def test_zero_sentinel_reads_back_as_none(self):
+        """A 0 in the typed OMERO column means 'not set', not 'the object with id 0'."""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {
+                "image_id": [101],
+                "image_name": ["a.tif"],
+                "roi_id": [0],
+                "label_id": [0],
+            }
+        )
+
+        config = create_default_config()
+        config.from_dataframe(df)
+
+        assert config.annotations[0].roi_id is None
+        assert config.annotations[0].label_id is None
+
+    def test_real_ids_round_trip(self):
+        config = self._config_with_annotation(roi_id=5012, label_id=77)
+
+        df = config.to_dataframe()
+        reloaded = create_default_config()
+        reloaded.from_dataframe(df)
+
+        assert reloaded.annotations[0].roi_id == 5012
+        assert reloaded.annotations[0].label_id == 77
+
+    def test_legacy_string_encoded_table_still_loads(self):
+        """Tables already on users' servers encode ids as strings with "None"."""
+        import pandas as pd
+
+        legacy = pd.DataFrame(
+            {
+                "image_id": [101, 102],
+                "image_name": ["a.tif", "b.tif"],
+                "roi_id": ["5012", "None"],
+                "label_id": ["77", "None"],
+            }
+        )
+
+        config = create_default_config()
+        config.from_dataframe(legacy)
+
+        assert config.annotations[0].roi_id == 5012
+        assert config.annotations[0].label_id == 77
+        assert config.annotations[1].roi_id is None
+        assert config.annotations[1].label_id is None

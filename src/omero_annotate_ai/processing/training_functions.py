@@ -12,128 +12,17 @@ from tifffile import imwrite
 from tqdm import tqdm
 
 from ..utils.logging import create_training_logger
+from .training_layout import (
+    AnnotationRecord,
+    ArraySource,
+    FileSource,
+    assert_output_dir_is_separate,
+    write_training_layout,
+)
 from .utils import validate_table_schema
 
 if TYPE_CHECKING:
     from ..core.annotation_config import AnnotationConfig
-
-
-def _get_standard_folder_structure(
-    uses_separate_channels: bool = False, include_test: bool = False
-) -> Dict[str, str]:
-    """
-    Get the standard folder structure for training data.
-
-    Args:
-        uses_separate_channels: Whether to include label_input folders
-        include_test: Whether to include test folders
-
-    Returns:
-        Dictionary mapping folder purposes to folder names
-    """
-    structure = {
-        "training_input": "train_input",
-        "training_label": "train_label",
-        "validation_input": "val_input",
-        "validation_label": "val_label",
-    }
-
-    if uses_separate_channels:
-        structure.update(
-            {
-                "training_label_input": "train_label_input",
-                "validation_label_input": "val_label_input",
-            }
-        )
-
-    if include_test:
-        structure.update(
-            {
-                "test_input": "test_input",
-                "test_label": "test_label",
-            }
-        )
-
-        if uses_separate_channels:
-            structure["test_label_input"] = "test_label_input"
-
-    return structure
-
-
-def _create_training_directories(
-    output_dir: Path,
-    uses_separate_channels: bool = False,
-    include_test: bool = False,
-    clean_existing: bool = True,
-) -> Dict[str, Path]:
-    """
-    Create the standard training directory structure.
-
-    Args:
-        output_dir: Base output directory
-        uses_separate_channels: Whether to create label_input folders
-        include_test: Whether to create test folders
-        clean_existing: Whether to remove existing directories first
-
-    Returns:
-        Dictionary mapping folder purposes to Path objects
-    """
-    structure = _get_standard_folder_structure(uses_separate_channels, include_test)
-    created_dirs = {}
-
-    # Clean existing directories if requested
-    if clean_existing:
-        for folder_name in structure.values():
-            folder_path = output_dir / folder_name
-            if folder_path.exists():
-                shutil.rmtree(folder_path)
-
-    # Create all directories
-    for purpose, folder_name in structure.items():
-        folder_path = output_dir / folder_name
-        folder_path.mkdir(parents=True, exist_ok=True)
-        created_dirs[purpose] = folder_path
-
-    return created_dirs
-
-
-def _get_dataset_folder_names(uses_separate_channels: bool = False) -> List[str]:
-    """
-    Get the folder names written by _prepare_dataset_from_table.
-
-    These differ from _get_standard_folder_structure(): _prepare_dataset_from_table
-    derives folder names from its ``subset_type`` argument ("training", "val",
-    "training_label", "val_label"), producing ``training_input`` rather than
-    ``train_input``.
-
-    Args:
-        uses_separate_channels: Whether label_input folders are written
-
-    Returns:
-        List of folder names, relative to the output directory
-    """
-    folders = ["training_input", "training_label", "val_input", "val_label"]
-
-    if uses_separate_channels:
-        folders += ["training_label_input", "val_label_input"]
-
-    return folders
-
-
-def _clean_dataset_directories(
-    output_dir: Path, uses_separate_channels: bool = False
-) -> None:
-    """
-    Remove the dataset folders that _prepare_dataset_from_table will repopulate.
-
-    Args:
-        output_dir: Base output directory
-        uses_separate_channels: Whether label_input folders are written
-    """
-    for folder_name in _get_dataset_folder_names(uses_separate_channels):
-        folder_path = output_dir / folder_name
-        if folder_path.exists():
-            shutil.rmtree(folder_path)
 
 
 def _build_standard_result(
@@ -177,7 +66,7 @@ def prepare_training_data_from_table(
     verbose: bool = False,
     label_channel: Optional[int] = None,
     training_channels: Optional[List[int]] = None,
-    upload_label_input: bool = False,
+    upload_annotation_input: bool = False,
 ) -> Dict[str, Any]:
     """
     Prepare training data from OMERO annotation table.
@@ -197,23 +86,23 @@ def prepare_training_data_from_table(
         verbose: If True, show detailed debug information in console output
         label_channel: Optional channel index for label/segmentation images. If provided
             and different from training_channels, downloads label channel images to
-            *_label_input directories alongside the training data.
+            *_annotation_input directories alongside the training data.
         training_channels: Optional list of channel indices for training input images.
             If different from label_channel, downloads from these channels for
-            training_input and val_input. Currently uses first channel if multiple specified.
-        upload_label_input: If True and using separate channels, uploads the label_input
+            train_input and val_input. Currently uses first channel if multiple specified.
+        upload_annotation_input: If True and using separate channels, uploads the annotation-channel
             images back to OMERO as file annotations. Default is False.
 
     Returns:
         Dictionary with paths to created directories:
         {
             'base_dir': Path to base output directory,
-            'training_input': Path to training images,
-            'training_label': Path to training labels (segmentation masks),
-            'training_label_input': Path to label channel images (only if separate channels),
+            'train_input': Path to training images,
+            'train_label': Path to training labels (segmentation masks),
+            'train_annotation_input': Path to annotation-channel images (separate channels only),
             'val_input': Path to validation images,
             'val_label': Path to validation labels (segmentation masks),
-            'val_label_input': Path to label channel images for validation (only if separate channels),
+            'val_annotation_input': Path to annotation-channel validation images (separate channels only),
             'stats': Statistics about the prepared data
         }
 
@@ -248,7 +137,7 @@ def prepare_training_data_from_table(
         raise OSError(f"Failed to create temporary directory {tmp_dir}: {e}")
 
     try:
-        table = ezomero.get_table(conn, table_id)
+        table = _load_table(conn, table_id)
     except Exception as e:
         raise ValueError(f"Failed to load table {table_id}: {e}")
 
@@ -312,190 +201,108 @@ def prepare_training_data_from_table(
     # Determine the effective training channel to use
     effective_train_channel = training_channels[0] if training_channels else None
 
-    # Clean the folders _prepare_dataset_from_table writes to; it creates them itself
-    if clean_existing:
-        _clean_dataset_directories(output_dir, uses_separate_channels)
-    created_dirs: Dict[str, Path] = {}
-
-    # Split data based on existing 'train'/'validate' columns or automatic split
+    # Split: make sure the table carries a boolean train/validate split, then let
+    # _records_from_table read the category straight off each row.
     if "train" in table.columns and "validate" in table.columns:
-        # Use existing split from table
-        train_images = table[table["train"]]
-        val_images = table[table["validate"]]
-        logger.info(f"Using existing train/validate split from table")
+        logger.info("Using existing train/validate split from table")
     else:
-        # Automatic split
         n_val = int(len(table) * validation_split)
         shuffled_indices = np.random.permutation(len(table))
         val_indices = shuffled_indices[:n_val]
-        train_indices = shuffled_indices[n_val:]
 
-        train_images = table.iloc[train_indices]
-        val_images = table.iloc[val_indices]
+        table = table.copy()
+        table["train"] = True
+        table.iloc[val_indices, table.columns.get_loc("train")] = False
+        table["validate"] = ~table["train"]
         logger.info(f"Applied automatic split with validation_split={validation_split}")
 
-    logger.info(
-        f"Using {len(train_images)} training images and {len(val_images)} validation images"
-    )
+    table = table[table["train"] | table["validate"]].copy()
+    n_train = int(table["train"].sum())
+    n_val_rows = int(table["validate"].sum())
+    logger.info(f"Using {n_train} training images and {n_val_rows} validation images")
 
-    # Prepare training data (uses training channel if specified)
-    training_input_dir, training_label_dir = _prepare_dataset_from_table(
+    # Build records. A row whose label cannot be downloaded is dropped whole: writing
+    # the image without its label would leave an orphan, and consumers pair images to
+    # labels by sorted filename, so one orphan shifts every subsequent pair.
+    records, n_missing = _records_from_table(
         conn,
-        train_images,
-        output_dir,
-        subset_type="training",
-        tmp_dir=tmp_dir,
-        train_channel=effective_train_channel,
-        logger=logger,
-        verbose=verbose,
+        table,
+        tmp_dir,
+        uses_separate_channels,
+        label_channel,
+        effective_train_channel,
+        logger,
     )
 
-    # Prepare validation data (uses training channel if specified)
-    val_input_dir, val_label_dir = _prepare_dataset_from_table(
-        conn,
-        val_images,
+    created_dirs, stats = write_training_layout(
+        records,
         output_dir,
-        subset_type="val",
-        tmp_dir=tmp_dir,
-        train_channel=effective_train_channel,
+        layout="split",
+        clean_existing=clean_existing,
+        uses_separate_channels=uses_separate_channels,
         logger=logger,
-        verbose=verbose,
     )
+    stats["n_missing"] = n_missing
+    stats["total_rows_processed"] = len(table)
 
-    # Update created_dirs with actual paths from _prepare_dataset_from_table
-    created_dirs["training_input"] = training_input_dir
-    created_dirs["training_label"] = training_label_dir
-    created_dirs["val_input"] = val_input_dir
-    created_dirs["val_label"] = val_label_dir
+    annotation_input_upload_ids = []
+    if uses_separate_channels and upload_annotation_input:
+        logger.info("Uploading annotation-channel images to OMERO...")
+        rows_by_id = {str(row["annotation_id"]): row for _, row in table.iterrows()}
 
-    # If using separate channels, also prepare label channel images
-    training_label_input_dir = None
-    val_label_input_dir = None
-    label_input_upload_ids = []
-    if uses_separate_channels:
-        logger.info(
-            f"Preparing label channel ({label_channel}) images for separate channel workflow"
-        )
-        training_label_input_dir, _ = _prepare_dataset_from_table(
-            conn,
-            train_images,
-            output_dir,
-            subset_type="training_label",
-            tmp_dir=tmp_dir,
-            train_channel=label_channel,
-            logger=logger,
-            verbose=verbose,
-        )
-        val_label_input_dir, _ = _prepare_dataset_from_table(
-            conn,
-            val_images,
-            output_dir,
-            subset_type="val_label",
-            tmp_dir=tmp_dir,
-            train_channel=label_channel,
-            logger=logger,
-            verbose=verbose,
-        )
+        for folder_key in ("train_annotation_input", "val_annotation_input"):
+            folder = created_dirs.get(folder_key)
+            if folder is None or not folder.exists():
+                continue
 
-        # Update created_dirs with label_input paths
-        created_dirs["training_label_input"] = training_label_input_dir
-        created_dirs["val_label_input"] = val_label_input_dir
+            for tif_file in sorted(folder.glob("*.tif")):
+                # Files are named {annotation_id}.tif, so this is a direct lookup.
+                row = rows_by_id.get(tif_file.stem)
+                if row is None:
+                    logger.warning(f"No table row for {tif_file.name}; not uploading")
+                    continue
+                try:
+                    # Lazy import to avoid circular dependency
+                    from ..omero.omero_functions import upload_annotation_input_image
 
-        # Upload label_input images to OMERO if requested
-        if upload_label_input:
-            logger.info("Uploading label_input images to OMERO...")
-            all_images = pd.concat([train_images, val_images])
-            all_label_input_dirs = [training_label_input_dir, val_label_input_dir]
+                    file_ann_id = upload_annotation_input_image(
+                        conn,
+                        image_id=int(row["image_id"]),
+                        annotation_input_file=str(tif_file),
+                        trainingset_name=training_name,
+                        channel=label_channel,
+                        timepoint=_optional_int(row.get("timepoint")),
+                        z_slice=_optional_int(row.get("z_slice")),
+                    )
+                    annotation_input_upload_ids.append(file_ann_id)
+                except Exception as e:
+                    logger.warning(f"Could not upload {tif_file.name}: {e}")
 
-            for label_input_dir in all_label_input_dirs:
-                if label_input_dir and label_input_dir.exists():
-                    for tif_file in sorted(label_input_dir.glob("*.tif")):
-                        # Extract index from filename (e.g., input_00001.tif -> 1)
-                        try:
-                            file_idx = int(tif_file.stem.split("_")[-1])
-                            if file_idx < len(all_images):
-                                row = all_images.iloc[file_idx]
-                                image_id = int(row["image_id"])
-                                timepoint = (
-                                    int(row["timepoint"])
-                                    if pd.notna(row.get("timepoint"))
-                                    else None
-                                )
-                                z_slice = (
-                                    int(row["z_slice"])
-                                    if pd.notna(row.get("z_slice"))
-                                    else None
-                                )
-
-                                # Lazy import to avoid circular dependency
-                                from ..omero.omero_functions import (
-                                    upload_label_input_image,
-                                )
-
-                                file_ann_id = upload_label_input_image(
-                                    conn,
-                                    image_id=image_id,
-                                    label_input_file=str(tif_file),
-                                    trainingset_name=training_name,
-                                    channel=label_channel,
-                                    timepoint=timepoint,
-                                    z_slice=z_slice,
-                                )
-                                label_input_upload_ids.append(file_ann_id)
-                        except (ValueError, IndexError) as e:
-                            logger.warning(f"Could not upload {tif_file}: {e}")
-
-            logger.info(
-                f"Uploaded {len(label_input_upload_ids)} label_input images to OMERO"
-            )
+        stats["n_annotation_input_uploaded"] = len(annotation_input_upload_ids)
+        logger.info(f"Uploaded {len(annotation_input_upload_ids)} annotation-channel images")
 
     # Clean up temporary directory
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
         logger.debug(f"Cleaned up temporary directory: {tmp_dir}")
 
-    # Close logger handlers to release file locks (important for Windows)
-    for handler in logger.handlers[:]:
-        handler.close()
-        logger.removeHandler(handler)
-
-    # Collect statistics
-    stats = {
-        "n_training_images": len(list(training_input_dir.glob("*.tif"))),
-        "n_training_labels": len(list(training_label_dir.glob("*.tif"))),
-        "n_val_images": len(list(val_input_dir.glob("*.tif"))),
-        "n_val_labels": len(list(val_label_dir.glob("*.tif"))),
-        "total_rows_processed": len(table),
-    }
-
-    # Add label input stats if using separate channels
-    if uses_separate_channels:
-        stats["n_training_label_input"] = len(
-            list(training_label_input_dir.glob("*.tif"))
-        )
-        stats["n_val_label_input"] = len(list(val_label_input_dir.glob("*.tif")))
-        if label_input_upload_ids:
-            stats["n_label_input_uploaded"] = len(label_input_upload_ids)
-
-    # Build standard result dictionary
     extra_fields = {}
-    if label_input_upload_ids:
-        extra_fields["label_input_upload_ids"] = label_input_upload_ids
+    if annotation_input_upload_ids:
+        extra_fields["annotation_input_upload_ids"] = annotation_input_upload_ids
 
     result = _build_standard_result(
         base_dir=output_dir, created_dirs=created_dirs, stats=stats, **extra_fields
     )
 
-    # Check if preparation actually succeeded
     if stats["n_training_images"] == 0 and stats["n_val_images"] == 0:
         logger.error(f"Training data preparation FAILED in: {output_dir}")
         logger.error(f"Statistics: {stats}")
         raise ValueError(
-            "Training data preparation failed - no images were processed successfully. Check the error messages above."
+            "Training data preparation failed - no images were processed successfully. "
+            "Check the error messages above."
         )
-    else:
-        logger.info(f"Training data prepared successfully in: {output_dir}")
-        logger.info(f"Statistics: {stats}")
+    logger.info(f"Training data prepared successfully in: {output_dir}")
+    logger.info(f"Statistics: {stats}")
 
     # Close logger handlers to release file locks (important for Windows)
     for handler in logger.handlers[:]:
@@ -505,697 +312,405 @@ def prepare_training_data_from_table(
     return result
 
 
-def prepare_training_data_from_config(
-    conn: Any,
-    config: "AnnotationConfig",  # Forward reference to avoid circular import
-    output_dir: Union[str, Path],
-    training_name: str = "micro_sam_training",
-    clean_existing: bool = True,
-    tmp_dir: Optional[Union[str, Path]] = None,
-    verbose: bool = False,
-) -> Dict[str, Any]:
+def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
     """
-    Prepare training data directly from an AnnotationConfig object.
+    Fetch one annotated image from OMERO as an 8-bit array.
 
-    This function allows preparing training data from a AnnotationConfig object that has been
-    loaded from a YAML file with annotations already populated from a previous
-    workflow. It avoids the need to have an OMERO table.
-
-    Args:
-        conn: OMERO connection object (required for downloading images/labels)
-        config: AnnotationConfig with populated annotations list
-        output_dir: Directory to store training data
-        training_name: Name for the training session (used in directory naming)
-        clean_existing: Whether to clean existing output directories
-        tmp_dir: Temporary directory for downloads (optional)
-        verbose: If True, show detailed debug information
-
-    Returns:
-        Dictionary with paths to created directories:
-        {
-            'base_dir': Path to base output directory,
-            'training_input': Path to training images,
-            'training_label': Path to training labels,
-            'val_input': Path to validation images,
-            'val_label': Path to validation labels,
-            'stats': Statistics about the prepared data
-        }
-
-    Raises:
-        ValueError: If config has no annotations or no processed annotations
-    """
-    # Validate config has annotations
-    if not config.annotations:
-        raise ValueError("Config has no annotations. Run annotation workflow first.")
-
-    # Convert config annotations to DataFrame
-    df = config.to_dataframe()
-
-    if df.empty:
-        raise ValueError("Config annotations converted to empty DataFrame")
-
-    # Convert paths
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set up logger
-    logger = create_training_logger(output_dir, verbose=verbose)
-    logger.info(f"Preparing training data from config with {len(df)} annotations")
-
-    if tmp_dir is None:
-        tmp_dir = output_dir / "tmp"
-    tmp_dir = Path(tmp_dir)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-
-    # Validate the DataFrame schema
-    validate_table_schema(df, logger)
-    logger.info("Config DataFrame schema validated")
-
-    # Check if 'processed' column exists and filter to only processed rows
-    if "processed" in df.columns:
-        initial_count = len(df)
-        df = df[df["processed"]].copy()
-        if len(df) == 0:
-            raise ValueError("No processed annotations found in config")
-        logger.info(
-            f"Using {len(df)} processed annotations out of {initial_count} total"
-        )
-
-    # Determine if using separate channels
-    uses_separate_channels = config.spatial_coverage.uses_separate_channels()
-    label_channel = (
-        config.spatial_coverage.get_label_channel() if uses_separate_channels else None
-    )
-    training_channels = (
-        config.spatial_coverage.get_training_channels()
-        if uses_separate_channels
-        else None
-    )
-    effective_train_channel = training_channels[0] if training_channels else None
-
-    if uses_separate_channels:
-        logger.info(
-            f"Using separate channels: label={label_channel}, training={training_channels}"
-        )
-
-    # Clean the folders _prepare_dataset_from_table writes to; it creates them itself
-    if clean_existing:
-        _clean_dataset_directories(output_dir, uses_separate_channels)
-    created_dirs: Dict[str, Path] = {}
-
-    # Split data based on 'train'/'validate' columns
-    if "train" in df.columns and "validate" in df.columns:
-        train_images = df[df["train"]]
-        val_images = df[df["validate"]]
-        logger.info(
-            f"Using train/validate split from config: {len(train_images)} train, {len(val_images)} val"
-        )
-    else:
-        # All data is training data if no split info
-        train_images = df
-        val_images = pd.DataFrame()
-        logger.warning("No train/validate columns - using all data for training")
-
-    logger.info(
-        f"Preparing {len(train_images)} training and {len(val_images)} validation images"
-    )
-
-    # Prepare datasets using existing internal function
-    training_input_dir, training_label_dir = _prepare_dataset_from_table(
-        conn,
-        train_images,
-        output_dir,
-        subset_type="training",
-        tmp_dir=tmp_dir,
-        train_channel=effective_train_channel,
-        logger=logger,
-        verbose=verbose,
-    )
-
-    val_input_dir, val_label_dir = (
-        _prepare_dataset_from_table(
-            conn,
-            val_images,
-            output_dir,
-            subset_type="val",
-            tmp_dir=tmp_dir,
-            train_channel=effective_train_channel,
-            logger=logger,
-            verbose=verbose,
-        )
-        if len(val_images) > 0
-        else (None, None)
-    )
-
-    # Update created_dirs with actual paths from _prepare_dataset_from_table
-    created_dirs["training_input"] = training_input_dir
-    created_dirs["training_label"] = training_label_dir
-    if val_input_dir is not None:
-        created_dirs["val_input"] = val_input_dir
-        created_dirs["val_label"] = val_label_dir
-
-    # Handle separate channel workflow if needed
-    training_label_input_dir = None
-    val_label_input_dir = None
-    if uses_separate_channels:
-        logger.info(f"Preparing label channel ({label_channel}) images")
-        training_label_input_dir, _ = _prepare_dataset_from_table(
-            conn,
-            train_images,
-            output_dir,
-            subset_type="training_label",
-            tmp_dir=tmp_dir,
-            train_channel=label_channel,
-            logger=logger,
-            verbose=verbose,
-        )
-        if len(val_images) > 0:
-            val_label_input_dir, _ = _prepare_dataset_from_table(
-                conn,
-                val_images,
-                output_dir,
-                subset_type="val_label",
-                tmp_dir=tmp_dir,
-                train_channel=label_channel,
-                logger=logger,
-                verbose=verbose,
-            )
-
-        # Update created_dirs with label_input paths
-        created_dirs["training_label_input"] = training_label_input_dir
-        if val_label_input_dir is not None:
-            created_dirs["val_label_input"] = val_label_input_dir
-
-    # Compute statistics
-    stats = {
-        "n_training_images": len(list(training_input_dir.glob("*.tif")))
-        if training_input_dir
-        else 0,
-        "n_training_labels": len(list(training_label_dir.glob("*.tif")))
-        if training_label_dir
-        else 0,
-        "n_val_images": len(list(val_input_dir.glob("*.tif"))) if val_input_dir else 0,
-        "n_val_labels": len(list(val_label_dir.glob("*.tif"))) if val_label_dir else 0,
-    }
-
-    # Build standard result dictionary
-    result = _build_standard_result(
-        base_dir=output_dir, created_dirs=created_dirs, stats=stats
-    )
-
-    if stats["n_training_images"] == 0:
-        logger.error("Training data preparation FAILED - no images processed")
-        raise ValueError("Training data preparation failed - no images were processed")
-
-    logger.info(f"Training data prepared successfully from config: {stats}")
-
-    # Close logger handlers to release file locks (important for Windows)
-    for handler in logger.handlers[:]:
-        handler.close()
-        logger.removeHandler(handler)
-
-    return result
-
-
-def _prepare_dataset_from_table(
-    conn,
-    df: pd.DataFrame,
-    output_dir: Path,
-    subset_type: str = "training",
-    tmp_dir: Optional[Path] = None,
-    train_channel: Optional[int] = None,
-    logger=None,
-    verbose: bool = False,
-) -> Tuple[Path, Path]:
-    """
-    Prepare dataset from annotation table subset.
+    Handles the 2D, 2D-patch and 3D-volumetric cases. Returns the array rather than
+    writing it, so the caller decides where it lands - which is what lets files be
+    named by annotation_id instead of by loop index.
 
     Args:
         conn: OMERO connection
-        df: DataFrame with annotation info
-        output_dir: Base output directory
-        subset_type: "training" or "val"
-        tmp_dir: Temporary directory for downloading annotations
-        train_channel: Optional channel for annotation, then override
-        logger: Logger instance for logging messages
-        verbose: If True, show debug messages when no logger available
+        row: One row of the tracking table
+        channel: Channel to fetch; the caller has resolved label vs training already
+        logger: Optional logger
 
     Returns:
-        (input_dir, label_dir): Paths to the input and label directories
+        The image as an 8-bit numpy array (2D, or 3D for volumetric data)
+
+    Raises:
+        ValueError: If the image is not found in OMERO
     """
+    # Extract metadata
+    image_id = int(row["image_id"])
 
-    def debug_print(message: str, level: str = "debug"):
-        """Helper to print debug messages only if verbose or log to logger."""
-        if logger:
-            if level == "warning":
-                logger.warning(message)
-            elif level == "error":
-                logger.error(message)
-            else:
-                logger.debug(message)
-        elif verbose:
-            print(f"  {message}")
-
-    if tmp_dir is None:
-        tmp_dir = output_dir / "tmp"
+    # Handle z_slice - could be int, string representation of list, or NaN
+    z_slice = row["z_slice"]
+    if pd.isna(z_slice):
+        z_slice = 0
+    elif isinstance(z_slice, str) and z_slice.startswith("["):
         try:
-            tmp_dir.mkdir(exist_ok=True)
-        except Exception as e:
-            raise OSError(f"Failed to create temporary directory {tmp_dir}: {e}")
+            z_slice = eval(z_slice)
+            if isinstance(z_slice, list) and len(z_slice) > 0:
+                z_slice = z_slice[0]  # Use first slice for 2D
+        except Exception:
+            z_slice = 0
 
-    input_dir = output_dir / f"{subset_type}_input"
-    label_dir = output_dir / f"{subset_type}_label"
-    try:
-        input_dir.mkdir(exist_ok=True)
-        label_dir.mkdir(exist_ok=True)
-    except Exception as e:
-        raise OSError(
-            f"Failed to create dataset directories {input_dir}, {label_dir}: {e}"
-        )
+    # channel is supplied by the caller, which has already resolved label vs training
+    timepoint = (
+        int(row["timepoint"]) if pd.notna(row["timepoint"]) else 0
+    )
+    is_volumetric = (
+        bool(row["is_volumetric"])
+        if "is_volumetric" in row
+        and pd.notna(row["is_volumetric"])
+        else False
+    )
+
+    # Get patch information
+    is_patch = bool(row["is_patch"])
+    patch_x = int(row["patch_x"])
+    patch_y = int(row["patch_y"])
+    patch_width = int(row["patch_width"])
+    patch_height = int(row["patch_height"])
 
     if logger:
-        logger.info(f"Preparing {subset_type} dataset: {len(df)} items to process")
+        logger.debug(
+            f"Image {image_id}: patch={is_patch} {patch_width}x{patch_height} "
+            f"at ({patch_x},{patch_y}), volumetric={is_volumetric}, channel={channel}"
+        )
 
-    for n in tqdm(range(len(df)), desc=f"Preparing {subset_type} data"):
-        try:
-            # Extract metadata
-            image_id = int(df.iloc[n]["image_id"])
+    # Process based on whether it's 3D volumetric or 2D
+    if is_volumetric:
+        # Handle 3D volumetric data
+        # Determine which z-slices to load
+        if isinstance(z_slice, list):
+            z_slices = z_slice
+        elif z_slice == "all":
+            # Get image object to determine size
+            omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+            if not omero_image:
+                raise ValueError(f"Image {image_id} not found in OMERO")
+            z_slices = range(omero_image.getSizeZ())
+        else:
+            z_slices = [int(z_slice)]
 
-            # Handle z_slice - could be int, string representation of list, or NaN
-            z_slice = df.iloc[n]["z_slice"]
-            if pd.isna(z_slice):
-                z_slice = 0
-            elif isinstance(z_slice, str) and z_slice.startswith("["):
-                try:
-                    z_slice = eval(z_slice)
-                    if isinstance(z_slice, list) and len(z_slice) > 0:
-                        z_slice = z_slice[0]  # Use first slice for 2D
-                except Exception:
-                    z_slice = 0
+        # Create empty 3D array to hold all z-slices
+        img_3d = []
 
-            # Handle other metadata columns
-            if train_channel is not None:
-                channel = train_channel
-            else:
-                channel = (
-                    int(df.iloc[n]["channel"]) if pd.notna(df.iloc[n]["channel"]) else 0
-                )
-            timepoint = (
-                int(df.iloc[n]["timepoint"]) if pd.notna(df.iloc[n]["timepoint"]) else 0
-            )
-            is_volumetric = (
-                bool(df.iloc[n]["is_volumetric"])
-                if "is_volumetric" in df.columns
-                and pd.notna(df.iloc[n]["is_volumetric"])
-                else False
-            )
+        # Pre-fetch image dimensions for non-patch full plane extraction
+        # (avoids repeated fetches and unreliable locals() check in loop)
+        size_x = None
+        size_y = None
 
-            # Get patch information
-            is_patch = bool(df.iloc[n]["is_patch"])
-            patch_x = int(df.iloc[n]["patch_x"])
-            patch_y = int(df.iloc[n]["patch_y"])
-            patch_width = int(df.iloc[n]["patch_width"])
-            patch_height = int(df.iloc[n]["patch_height"])
-
-            # Debug patch dimensions
-            debug_print(
-                f"Item {n} - Image ID: {image_id}, Patch: {is_patch}, Dimensions: {patch_width}x{patch_height} at ({patch_x},{patch_y}), Volumetric: {is_volumetric}"
-            )
-
-            # Process based on whether it's 3D volumetric or 2D
-            if is_volumetric:
-                # Handle 3D volumetric data
-                # Determine which z-slices to load
-                if isinstance(z_slice, list):
-                    z_slices = z_slice
-                elif z_slice == "all":
-                    # Get image object to determine size
-                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
-                    if not omero_image:
-                        if logger:
-                            logger.warning(f"Image {image_id} not found, skipping")
-                        else:
-                            print(f"Warning: Image {image_id} not found, skipping")
-                        continue
-                    z_slices = range(omero_image.getSizeZ())
-                else:
-                    z_slices = [int(z_slice)]
-
-                # Create empty 3D array to hold all z-slices
-                img_3d = []
-
-                # Pre-fetch image dimensions for non-patch full plane extraction
-                # (avoids repeated fetches and unreliable locals() check in loop)
-                size_x = None
-                size_y = None
-
-                # Load each z-slice using ezomero.get_image
-                for z in z_slices:
-                    z_val = int(z)
-                    if is_patch and patch_width > 0 and patch_height > 0:
-                        # Debug start_coords and axis_lengths
-                        if logger:
-                            logger.debug(
-                                f"3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                            )
-                        else:
-                            print(
-                                f"  3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                            )
-
-                        # Use ezomero.get_image to extract the patch for this z-slice
-                        _, img_slice = ezomero.get_image(
-                            conn,
-                            image_id,
-                            start_coords=(patch_x, patch_y, z_val, channel, timepoint),
-                            axis_lengths=(patch_width, patch_height, 1, 1, 1),
-                            xyzct=True,  # Use XYZCT ordering
-                        )
-
-                        # Check shape of returned array
-                        if logger:
-                            logger.debug(
-                                f"Returned array shape (before extraction): {img_slice.shape}"
-                            )
-                        else:
-                            print(
-                                f"  Returned array shape (before extraction): {img_slice.shape}"
-                            )
-
-                        # The result will be 5D, extract just the 2D slice
-                        img_slice = img_slice[
-                            :, :, 0, 0, 0
-                        ]  # Extract the single z-slice
-                        if logger:
-                            logger.debug(f"Extracted slice shape: {img_slice.shape}")
-                        else:
-                            print(f"  Extracted slice shape: {img_slice.shape}")
-                    else:
-                        # Get full plane for this z-slice
-                        # Get image dimensions if not already obtained
-                        if size_x is None:
-                            omero_image, _ = ezomero.get_image(
-                                conn, image_id, no_pixels=True
-                            )
-                            size_x = omero_image.getSizeX()
-                            size_y = omero_image.getSizeY()
-
-                        _, img_slice = ezomero.get_image(
-                            conn,
-                            image_id,
-                            start_coords=(0, 0, z_val, channel, timepoint),
-                            axis_lengths=(size_x, size_y, 1, 1, 1),
-                            xyzct=True,  # Use XYZCT ordering
-                        )
-                        # Check shape of returned array
-                        if logger:
-                            logger.debug(
-                                f"Full plane shape (before extraction): {img_slice.shape}"
-                            )
-                        else:
-                            print(
-                                f"  Full plane shape (before extraction): {img_slice.shape}"
-                            )
-
-                        # The result will be 5D, extract just the 2D slice
-                        if len(img_slice.shape) == 5:
-                            img_slice = img_slice[:, :, 0, 0, 0]
-                            img_slice = np.swapaxes(img_slice, 0, 1)
-                        if logger:
-                            logger.debug(
-                                f"Extracted full plane shape: {img_slice.shape}"
-                            )
-                        else:
-                            print(f"  Extracted full plane shape: {img_slice.shape}")
-
-                    img_3d.append(img_slice)
-
-                # Convert to numpy array
-                img_3d = np.array(img_3d)
-                if logger:
-                    logger.debug(f"Final 3D array shape: {img_3d.shape}")
-                else:
-                    print(f"  Final 3D array shape: {img_3d.shape}")
-
-                # Normalize to 8-bit
-                max_val = img_3d.max()
-                if max_val > 0:
-                    img_8bit = ((img_3d) * (255.0 / max_val)).astype(np.uint8)
-                else:
-                    img_8bit = img_3d.astype(np.uint8)
-
-                # Save as multi-page TIFF for 3D data
-                output_path = input_dir / f"input_{n:05d}.tif"
-                imwrite(str(output_path), img_8bit)
+        # Load each z-slice using ezomero.get_image
+        for z in z_slices:
+            z_val = int(z)
+            if is_patch and patch_width > 0 and patch_height > 0:
+                # Debug start_coords and axis_lengths
                 if logger:
                     logger.debug(
-                        f"Saved 3D TIFF to {output_path} with shape {img_8bit.shape}"
+                        f"3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
                     )
                 else:
                     print(
-                        f"  Saved 3D TIFF to {output_path} with shape {img_8bit.shape}"
+                        f"  3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
                     )
 
-            else:
-                # Handle 2D data with patch support using ezomero.get_image
-                if is_patch and patch_width > 0 and patch_height > 0:
-                    # Use ezomero.get_image with appropriate coordinates and dimensions
-                    z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+                # Use ezomero.get_image to extract the patch for this z-slice
+                _, img_slice = ezomero.get_image(
+                    conn,
+                    image_id,
+                    start_coords=(patch_x, patch_y, z_val, channel, timepoint),
+                    axis_lengths=(patch_width, patch_height, 1, 1, 1),
+                    xyzct=True,  # Use XYZCT ordering
+                )
 
-                    # Debug start_coords and axis_lengths
-                    if logger:
-                        logger.debug(
-                            f"2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                        )
-                    else:
-                        print(
-                            f"  2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                        )
-
-                    _, img_data = ezomero.get_image(
-                        conn,
-                        image_id,
-                        start_coords=(patch_x, patch_y, int(z_val), channel, timepoint),
-                        axis_lengths=(patch_width, patch_height, 1, 1, 1),
-                        xyzct=True,
+                # Check shape of returned array
+                if logger:
+                    logger.debug(
+                        f"Returned array shape (before extraction): {img_slice.shape}"
                     )
-
-                    # Check shape of returned array
-                    if logger:
-                        logger.debug(f"Returned array shape: {img_data.shape}")
-                    else:
-                        print(f"  Returned array shape: {img_data.shape}")
-
-                    # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
-                    # We just need to remove the trailing dimensions
-                    if len(img_data.shape) == 5:
-                        # Take only the first (and only) z, c, t indices
-                        img_data = img_data[:, :, 0, 0, 0]
-                        # swap x and y dimensions in the numpy array
-                        img_data = np.swapaxes(img_data, 0, 1)
-
-                    if logger:
-                        logger.debug(f"Extracted 2D shape: {img_data.shape}")
-                    else:
-                        print(f"  Extracted 2D shape: {img_data.shape}")
                 else:
-                    # Get full plane
-                    z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+                    print(
+                        f"  Returned array shape (before extraction): {img_slice.shape}"
+                    )
 
-                    # Get image dimensions to specify exact plane size
-                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+                # The result will be 5D, extract just the 2D slice
+                img_slice = img_slice[
+                    :, :, 0, 0, 0
+                ]  # Extract the single z-slice
+                img_slice = np.swapaxes(img_slice, 0, 1)
+                if logger:
+                    logger.debug(f"Extracted slice shape: {img_slice.shape}")
+                else:
+                    print(f"  Extracted slice shape: {img_slice.shape}")
+            else:
+                # Get full plane for this z-slice
+                # Get image dimensions if not already obtained
+                if size_x is None:
+                    omero_image, _ = ezomero.get_image(
+                        conn, image_id, no_pixels=True
+                    )
                     size_x = omero_image.getSizeX()
                     size_y = omero_image.getSizeY()
 
-                    # Debug start_coords
-                    if logger:
-                        logger.debug(
-                            f"2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
-                        )
-                    else:
-                        print(
-                            f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
-                        )
-
-                    _, img_data = ezomero.get_image(
-                        conn,
-                        image_id,
-                        start_coords=(0, 0, int(z_val), channel, timepoint),
-                        axis_lengths=(size_x, size_y, 1, 1, 1),
-                        xyzct=True,
-                    )
-
-                    # Check shape of returned array
-                    if logger:
-                        logger.debug(f"Returned array shape: {img_data.shape}")
-                    else:
-                        print(f"  Returned array shape: {img_data.shape}")
-
-                    # Remove trailing dimensions
-                    if len(img_data.shape) == 5:
-                        img_data = img_data[:, :, 0, 0, 0]
-                        img_data = np.swapaxes(img_data, 0, 1)
-
-                    if logger:
-                        logger.debug(f"Extracted 2D shape: {img_data.shape}")
-                    else:
-                        print(f"  Extracted 2D shape: {img_data.shape}")
-
-                # Normalize to 8-bit
-                # TODO make this optional; not always need 8-bit I guess
-                max_val = img_data.max()
-                if max_val > 0:
-                    img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
-                else:
-                    img_8bit = img_data.astype(np.uint8)
-
-                # Save as TIFF
-                output_path = input_dir / f"input_{n:05d}.tif"
-                imwrite(str(output_path), img_8bit)
+                _, img_slice = ezomero.get_image(
+                    conn,
+                    image_id,
+                    start_coords=(0, 0, z_val, channel, timepoint),
+                    axis_lengths=(size_x, size_y, 1, 1, 1),
+                    xyzct=True,  # Use XYZCT ordering
+                )
+                # Check shape of returned array
                 if logger:
                     logger.debug(
-                        f"Saved 2D TIFF to {output_path} with shape {img_8bit.shape}"
+                        f"Full plane shape (before extraction): {img_slice.shape}"
                     )
                 else:
                     print(
-                        f"  Saved 2D TIFF to {output_path} with shape {img_8bit.shape}"
+                        f"  Full plane shape (before extraction): {img_slice.shape}"
                     )
 
-            # Get label file - label_id may be int, float, or string "None"/"123"
-            label_id_val = df.iloc[n]["label_id"]
-            label_id = None
-            if pd.notna(label_id_val):
-                str_val = str(label_id_val).strip()
-                if str_val not in ("None", "nan", ""):
-                    try:
-                        label_id = int(float(str_val))
-                    except (ValueError, TypeError):
-                        label_id = None
-            if label_id is not None:
-                try:
-                    # First, check if the file annotation exists
-                    if logger:
-                        logger.debug(
-                            f"Attempting to download label with ID: {label_id}"
-                        )
-                    else:
-                        print(f"  Attempting to download label with ID: {label_id}")
-
-                    # Try to get the file annotation object first to validate it exists
-                    try:
-                        file_ann = conn.getObject("FileAnnotation", label_id)
-                        if file_ann is None:
-                            if logger:
-                                logger.warning(
-                                    f"File annotation {label_id} not found in OMERO"
-                                )
-                            else:
-                                print(
-                                    f"  Warning: File annotation {label_id} not found in OMERO"
-                                )
-                            continue
-                        if logger:
-                            logger.debug(
-                                f"File annotation found: {file_ann.getFile().getName()}"
-                            )
-                        else:
-                            print(
-                                f"  File annotation found: {file_ann.getFile().getName()}"
-                            )
-                    except Exception as check_e:
-                        if logger:
-                            logger.error(
-                                f"Error checking file annotation {label_id}: {check_e}"
-                            )
-                        else:
-                            print(
-                                f"  Error checking file annotation {label_id}: {check_e}"
-                            )
-                        continue
-
-                    # Now try to download it using ezomero
-                    file_path = ezomero.get_file_annotation(
-                        conn, label_id, str(tmp_dir)
-                    )
-                    if file_path:
-                        label_dest = label_dir / f"label_{n:05d}.tif"
-                        shutil.move(file_path, str(label_dest))
-
-                        # Check the size of the saved label
-                        from tifffile import imread
-
-                        label_img = imread(str(label_dest))
-                        if logger:
-                            logger.debug(
-                                f"Label shape: {label_img.shape} saved to {label_dest}"
-                            )
-                        else:
-                            print(
-                                f"  Label shape: {label_img.shape} saved to {label_dest}"
-                            )
-                    else:
-                        if logger:
-                            logger.warning(
-                                f"Label file for image {image_id} not downloaded (ezomero returned None)"
-                            )
-                        else:
-                            print(
-                                f"  Warning: Label file for image {image_id} not downloaded (ezomero returned None)"
-                            )
-
-                except Exception as e:
-                    if logger:
-                        logger.error(f"Error downloading label file {label_id}: {e}")
-                        logger.debug(f"Full traceback: {traceback.format_exc()}")
-                    else:
-                        print(f"  Error downloading label file {label_id}: {e}")
-                        # Print more detailed error information for debugging
-                        print(f"  Full traceback: {traceback.format_exc()}")
-            else:
+                # The result will be 5D, extract just the 2D slice
+                if len(img_slice.shape) == 5:
+                    img_slice = img_slice[:, :, 0, 0, 0]
+                    img_slice = np.swapaxes(img_slice, 0, 1)
                 if logger:
-                    logger.warning(f"No label ID for image {image_id}")
+                    logger.debug(
+                        f"Extracted full plane shape: {img_slice.shape}"
+                    )
                 else:
-                    print(f"  Warning: No label ID for image {image_id}")
-        except Exception as e:
+                    print(f"  Extracted full plane shape: {img_slice.shape}")
+
+            img_3d.append(img_slice)
+
+        # Convert to numpy array
+        img_3d = np.array(img_3d)
+        if logger:
+            logger.debug(f"Final 3D array shape: {img_3d.shape}")
+        else:
+            print(f"  Final 3D array shape: {img_3d.shape}")
+
+        # Normalize to 8-bit
+        max_val = img_3d.max()
+        if max_val > 0:
+            img_8bit = ((img_3d) * (255.0 / max_val)).astype(np.uint8)
+        else:
+            img_8bit = img_3d.astype(np.uint8)
+
+        return img_8bit
+
+    else:
+        # Handle 2D data with patch support using ezomero.get_image
+        if is_patch and patch_width > 0 and patch_height > 0:
+            # Use ezomero.get_image with appropriate coordinates and dimensions
+            z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+
+            # Debug start_coords and axis_lengths
             if logger:
-                logger.error(f"Error processing row {n}: {e}")
-                logger.debug(traceback.format_exc())
+                logger.debug(
+                    f"2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
+                )
             else:
-                print(f"Error processing row {n}: {e}")
-                print(traceback.format_exc())
-            raise
-    return input_dir, label_dir
+                print(
+                    f"  2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
+                )
+
+            _, img_data = ezomero.get_image(
+                conn,
+                image_id,
+                start_coords=(patch_x, patch_y, int(z_val), channel, timepoint),
+                axis_lengths=(patch_width, patch_height, 1, 1, 1),
+                xyzct=True,
+            )
+
+            # Check shape of returned array
+            if logger:
+                logger.debug(f"Returned array shape: {img_data.shape}")
+            else:
+                print(f"  Returned array shape: {img_data.shape}")
+
+            # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
+            # We just need to remove the trailing dimensions
+            if len(img_data.shape) == 5:
+                # Take only the first (and only) z, c, t indices
+                img_data = img_data[:, :, 0, 0, 0]
+                # swap x and y dimensions in the numpy array
+                img_data = np.swapaxes(img_data, 0, 1)
+
+            if logger:
+                logger.debug(f"Extracted 2D shape: {img_data.shape}")
+            else:
+                print(f"  Extracted 2D shape: {img_data.shape}")
+        else:
+            # Get full plane
+            z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+
+            # Get image dimensions to specify exact plane size
+            omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+            size_x = omero_image.getSizeX()
+            size_y = omero_image.getSizeY()
+
+            # Debug start_coords
+            if logger:
+                logger.debug(
+                    f"2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
+                )
+            else:
+                print(
+                    f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
+                )
+
+            _, img_data = ezomero.get_image(
+                conn,
+                image_id,
+                start_coords=(0, 0, int(z_val), channel, timepoint),
+                axis_lengths=(size_x, size_y, 1, 1, 1),
+                xyzct=True,
+            )
+
+            # Check shape of returned array
+            if logger:
+                logger.debug(f"Returned array shape: {img_data.shape}")
+            else:
+                print(f"  Returned array shape: {img_data.shape}")
+
+            # Remove trailing dimensions
+            if len(img_data.shape) == 5:
+                img_data = img_data[:, :, 0, 0, 0]
+                img_data = np.swapaxes(img_data, 0, 1)
+
+            if logger:
+                logger.debug(f"Extracted 2D shape: {img_data.shape}")
+            else:
+                print(f"  Extracted 2D shape: {img_data.shape}")
+
+        # Normalize to 8-bit
+        # TODO make this optional; not always need 8-bit I guess
+        max_val = img_data.max()
+        if max_val > 0:
+            img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
+        else:
+            img_8bit = img_data.astype(np.uint8)
+
+        return img_8bit
 
 
-def _create_file_link_or_copy(src: Path, dst: Path, mode: str, logger=None) -> str:
+def _optional_int(value) -> Optional[int]:
+    """Parse a table cell that may be int, float, NaN, or the string 'None'."""
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if text in ("None", "nan", ""):
+        return None
+    try:
+        return int(float(text))
+    except (ValueError, TypeError):
+        return None
+
+
+def _channel_from_row(row) -> int:
     """
-    Create a file at destination using the specified mode.
+    The channel for this row, defaulting to 0 when unset.
 
-    Args:
-        src: Source file path
-        dst: Destination file path
-        mode: One of "copy", "move", or "symlink"
-        logger: Optional logger for messages
+    A present-but-unparseable value raises rather than silently falling back to
+    channel 0: training on the wrong channel is worse than failing loudly.
+    """
+    raw = row.get("channel")
+    if raw is None or pd.isna(raw):
+        return 0
+    if str(raw).strip() in ("None", "nan", ""):
+        return 0
+
+    parsed = _optional_int(raw)
+    if parsed is None:
+        raise ValueError(f"Unparseable channel value in tracking table: {raw!r}")
+    return parsed
+
+
+def _load_table(conn, table_id: int) -> pd.DataFrame:
+    """Fetch the tracking table as a DataFrame, with its columns named as we expect."""
+    from ..omero.omero_functions import read_tracking_table
+
+    return read_tracking_table(conn, table_id)
+
+
+def _download_label(conn, label_id, tmp_dir: Path, logger=None) -> Optional[Path]:
+    """
+    Download a label file annotation. Returns None if it is missing or unreadable.
+
+    Returning None rather than raising lets the caller drop the whole record. Writing
+    the image without its label would leave an orphan, and consumers pair images to
+    labels by sorted filename - so one orphan shifts every subsequent pair.
+    """
+    if label_id is None:
+        return None
+    try:
+        file_ann = conn.getObject("FileAnnotation", label_id)
+        if file_ann is None:
+            if logger:
+                logger.warning(f"File annotation {label_id} not found in OMERO")
+            return None
+        file_path = ezomero.get_file_annotation(conn, label_id, str(tmp_dir))
+        return Path(file_path) if file_path else None
+    except Exception as e:
+        if logger:
+            logger.error(f"Error downloading label {label_id}: {e}")
+        return None
+
+
+def _records_from_table(
+    conn,
+    df: pd.DataFrame,
+    tmp_dir: Path,
+    uses_separate_channels: bool,
+    label_channel: Optional[int],
+    train_channel: Optional[int],
+    logger=None,
+):
+    """
+    Build annotation records from a tracking table.
+
+    A row whose label cannot be downloaded is dropped entirely. The image plane is
+    fetched lazily (ArraySource), so dropping the record costs nothing - and nothing
+    is written for it.
 
     Returns:
-        String describing the action taken (e.g., "symlink", "copy", "copy (symlink fallback)")
+        (records, n_missing)
     """
-    if mode == "symlink":
-        try:
-            dst.symlink_to(src.resolve())
-            return "symlink"
-        except OSError as e:
-            # Windows without developer mode or elevated privileges, or other OS issues
+    records = []
+    n_missing = 0
+
+    for _, row in df.iterrows():
+        annotation_id = row["annotation_id"]
+
+        label_id = _optional_int(row.get("label_id"))
+        label_path = _download_label(conn, label_id, tmp_dir, logger)
+        if label_path is None:
+            n_missing += 1
             if logger:
-                logger.debug(f"Symlink failed ({e}), falling back to copy")
-            shutil.copy2(src, dst)
-            return "copy (symlink fallback)"
-    elif mode == "move":
-        shutil.move(str(src), str(dst))
-        return "move"
-    else:  # copy (default)
-        shutil.copy2(src, dst)
-        return "copy"
+                logger.warning(f"Skipping annotation {annotation_id}: no label")
+            continue
+
+        category = "training" if bool(row["train"]) else "validation"
+
+        image_channel = (
+            train_channel if train_channel is not None else _channel_from_row(row)
+        )
+        # Bind row/channel per iteration: a bare closure would capture the final values.
+        image_source = ArraySource(
+            lambda row=row, ch=image_channel: _fetch_plane(conn, row, ch, logger)
+        )
+
+        annotation_source = None
+        if uses_separate_channels and label_channel is not None:
+            annotation_source = ArraySource(
+                lambda row=row, ch=label_channel: _fetch_plane(conn, row, ch, logger)
+            )
+
+        records.append(
+            AnnotationRecord(
+                annotation_id=annotation_id,
+                category=category,
+                image=image_source,
+                label=FileSource(label_path),
+                annotation_image=annotation_source,
+            )
+        )
+
+    return records, n_missing
 
 
 def reorganize_local_data_for_training(
@@ -1208,347 +723,146 @@ def reorganize_local_data_for_training(
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """
-    Reorganize locally-stored annotation data into training folder structure.
+    Reorganize locally-stored annotation data into the training layout.
 
-    Works entirely offline - no OMERO connection required. This function takes
-    the flat folder structure from the annotation pipeline (input/, output/) and
-    reorganizes it into the split-based structure expected by training workflows
-    (training_input/, training_label/, val_input/, val_label/).
+    Works entirely offline - no OMERO connection required. Reads the annotation phase's
+    folders (annotation_input/, model_input/, annotation_output/) and writes the training
+    layout (train_input/, train_label/, val_input/, val_label/).
 
     Args:
-        config: AnnotationConfig with populated annotations (contains category info)
-        annotation_dir: Directory containing annotation output (input/, output/ folders)
-        output_dir: Target directory for training structure (default: same as annotation_dir)
-        file_mode: How to handle files:
-            - "copy": Copy files (keeps originals) - default
-            - "move": Move files (removes originals)
-            - "symlink": Create symbolic links (falls back to copy on Windows if symlinks fail)
-        clean_existing: Remove existing training folders before reorganization
-        include_test: Whether to create test_input/test_label folders for test category.
-            - None (default): Auto-detect - include if test annotations exist
-            - True: Always include test folders
-            - False: Never include test folders (skip test annotations)
+        config: AnnotationConfig with populated annotations (carries the category)
+        annotation_dir: Directory containing the annotation phase's output
+        output_dir: Target directory. Must NOT be inside annotation_dir - cleaning the
+            training layout there would delete the source images. Defaults to the sibling
+            <annotation_dir>_training/.
+        file_mode: "copy" (default), "move", or "symlink". Symlinks fall back to a copy
+            where they are unavailable (e.g. Windows without Developer Mode).
+        clean_existing: Remove the training folders before writing
+        include_test: Write a test split. None (default) auto-detects from the annotations.
         verbose: Show detailed progress
 
     Returns:
-        Dictionary with paths to created directories and statistics:
-        {
-            'base_dir': Path to base output directory,
-            'training_input': Path to training images,
-            'training_label': Path to training labels,
-            'training_label_input': Path to label channel images (only if separate channels),
-            'val_input': Path to validation images,
-            'val_label': Path to validation labels,
-            'val_label_input': Path to validation label channel images (only if separate channels),
-            'test_input': Path to test images (only if include_test=True),
-            'test_label': Path to test labels (only if include_test=True),
-            'stats': Statistics about the reorganized data,
-            'file_mapping': Mapping of annotation_id to output files
-        }
+        Dictionary with the created directories and statistics. Keys include base_dir,
+        train_input, train_label, val_input, val_label and stats.
 
     Raises:
-        ValueError: If config has no annotations or no processed annotations
-        FileNotFoundError: If annotation_dir doesn't exist or is missing input/output folders
+        ValueError: If config has no processed annotations, or output_dir is inside annotation_dir
+        FileNotFoundError: If annotation_dir does not exist
     """
-    # Convert paths
     annotation_dir = Path(annotation_dir)
-    output_dir = Path(output_dir) if output_dir else annotation_dir
+    if output_dir is None:
+        output_dir = annotation_dir.parent / f"{annotation_dir.name}_training"
+    output_dir = Path(output_dir)
 
-    # Validate annotation directory structure BEFORE setting up logger
-    # (logger tries to create directories which would fail for invalid paths)
     if not annotation_dir.exists():
         raise FileNotFoundError(f"Annotation directory not found: {annotation_dir}")
 
-    output_source = annotation_dir / "output"
+    assert_output_dir_is_separate(output_dir, annotation_dir)
 
-    # New layout:    label_input/ + training_input/
-    # Legacy layout: input/
-    label_input_source = annotation_dir / "label_input"
-    training_input_source = annotation_dir / "training_input"
-    input_source = annotation_dir / "input"
-
-    if not label_input_source.exists() and not input_source.exists():
-        raise FileNotFoundError(
-            f"No input folder found in: {annotation_dir} "
-            "(expected 'label_input/' or 'input/')"
-        )
-    if not output_source.exists():
-        raise FileNotFoundError(f"Output folder not found: {output_source}")
-
-    # Set up logger (after validation so we know paths are valid)
     logger = create_training_logger(output_dir, verbose=verbose)
     logger.info("Reorganizing local annotation data for training")
-    logger.info(f"Source: {annotation_dir}, Target: {output_dir}, Mode: {file_mode}")
 
-    # Helper to close logger handlers (important for Windows file locks)
-    def _close_logger_handlers():
-        for handler in logger.handlers[:]:
-            handler.close()
-            logger.removeHandler(handler)
-
-    # Validate config has annotations
-    if not config.annotations:
-        _close_logger_handlers()
-        raise ValueError("Config has no annotations. Run annotation workflow first.")
-
-    # Filter to processed annotations only
     processed_annotations = [ann for ann in config.annotations if ann.processed]
     if not processed_annotations:
-        _close_logger_handlers()
         raise ValueError("No processed annotations found in config")
 
-    logger.info(
-        f"Found {len(processed_annotations)} processed annotations out of {len(config.annotations)} total"
-    )
-
-    # Auto-detect test annotations if include_test is None
-    if include_test is None:
-        has_test_annotations = any(
-            ann.category == "test" for ann in processed_annotations
-        )
-        include_test = has_test_annotations
-        if has_test_annotations:
-            logger.info(
-                "Auto-detected test annotations - will create test_input/test_label folders"
-            )
-
-    # Check if using separate channels
     uses_separate_channels = config.spatial_coverage.uses_separate_channels()
-    if uses_separate_channels:
-        logger.info(
-            "Separate channel workflow detected - will create *_label_input folders"
+
+    if include_test is None:
+        include_test = any(ann.category == "test" for ann in processed_annotations)
+
+    annotation_input_source = annotation_dir / "annotation_input"
+    model_input_source = annotation_dir / "model_input"
+    label_source = annotation_dir / "annotation_output"
+
+    if not annotation_input_source.exists():
+        raise FileNotFoundError(
+            f"No annotation_input/ folder found in: {annotation_dir}"
         )
+    if not label_source.exists():
+        raise FileNotFoundError(f"Output folder not found: {label_source}")
 
-    # Determine which categories we have
-    categories = set(ann.category for ann in processed_annotations)
-    logger.info(f"Categories found: {categories}")
-
-    # Create standard directory structure using helper
-    created_dirs = _create_training_directories(
-        output_dir=output_dir,
-        uses_separate_channels=uses_separate_channels,
-        include_test=include_test,
-        clean_existing=clean_existing,
-    )
-
-    # Process annotations by category
-    stats: Dict[str, Any] = {
-        "n_training_images": 0,
-        "n_training_labels": 0,
-        "n_training_label_input": 0,
-        "n_val_images": 0,
-        "n_val_labels": 0,
-        "n_val_label_input": 0,
-        "n_test_images": 0,
-        "n_test_labels": 0,
-        "n_test_label_input": 0,
-        "n_skipped": 0,
-        "n_missing_input": 0,
-        "n_missing_label": 0,
-        "file_operations": {},
-    }
-
-    file_mapping: Dict[str, Dict[str, Any]] = {}
-    category_counters: Dict[str, int] = {"training": 0, "validation": 0, "test": 0}
-
-    # Build folder structure once (consistent with directory creation above)
-    folder_structure = _get_standard_folder_structure(uses_separate_channels, include_test)
-
+    records = []
+    n_missing = 0
     for ann in processed_annotations:
-        category = ann.category
-
-        if category == "test" and not include_test:
-            stats["n_skipped"] += 1
-            continue
-
-        # Only process known categories
-        if category not in ("training", "validation", "test"):
-            stats["n_skipped"] += 1
-            continue
-
         annotation_id = ann.annotation_id
 
-        # label_input/{id}.tif (new) or input/{id}.tif (legacy single-channel)
-        label_input_file = label_input_source / f"{annotation_id}.tif"
-        if not label_input_file.exists():
-            label_input_file = input_source / f"{annotation_id}.tif"
-
-        # training_input/{id}.tif only resolved when needed (separate-channel path)
+        # The model's input is the model_input channel when there is one; in
+        # single-channel mode annotation_input serves both roles.
+        annotation_file = annotation_input_source / f"{annotation_id}.tif"
         if uses_separate_channels:
-            train_input_file = training_input_source / f"{annotation_id}.tif"
-
-        label_file = output_source / f"{annotation_id}_mask.tif"
-
-        # Get sequential index for this category
-        idx = category_counters[category]
-        category_counters[category] += 1
-
-        # Determine destination folder names
-        input_folder = folder_structure.get(f"{category}_input", f"{category}_input")
-        label_folder = folder_structure.get(f"{category}_label", f"{category}_label")
-
-        label_dest = output_dir / label_folder / f"label_{idx:05d}.tif"
-
-        # Track mapping
-        file_mapping[annotation_id] = {
-            "category": category,
-            "index": idx,
-            "label_dest": str(label_dest),
-        }
-
-        if uses_separate_channels:
-            # Separate-channel workflow:
-            #   - label-channel image (fluorescence) → *_label_input/
-            #   - training-channel image (e.g. brightfield) → *_input/
-            label_input_folder = folder_structure.get(
-                f"{category}_label_input", f"{category}_label_input"
-            )
-            label_input_dest = output_dir / label_input_folder / f"input_{idx:05d}.tif"
-            input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
-
-            file_mapping[annotation_id]["input_dest"] = str(input_dest)
-            file_mapping[annotation_id]["label_input_dest"] = str(label_input_dest)
-
-            # Copy label-channel image → *_label_input/
-            if label_input_file.exists():
-                label_input_dest.parent.mkdir(parents=True, exist_ok=True)
-                operation = _create_file_link_or_copy(
-                    label_input_file, label_input_dest, file_mode, logger
-                )
-                stats["file_operations"][operation] = (
-                    stats["file_operations"].get(operation, 0) + 1
-                )
-                if category == "training":
-                    stats["n_training_label_input"] += 1
-                elif category == "validation":
-                    stats["n_val_label_input"] += 1
-                elif category == "test":
-                    stats["n_test_label_input"] += 1
-                logger.debug(
-                    f"[{operation}] {label_input_file.name} -> {label_input_dest.name} (label_input)"
-                )
-            else:
-                logger.warning(f"Label-channel input file not found: {label_input_file}")
-
-            # Copy training-channel image → *_input/
-            if train_input_file.exists():
-                input_dest.parent.mkdir(parents=True, exist_ok=True)
-                operation = _create_file_link_or_copy(
-                    train_input_file, input_dest, file_mode, logger
-                )
-                stats["file_operations"][operation] = (
-                    stats["file_operations"].get(operation, 0) + 1
-                )
-                if category == "training":
-                    stats["n_training_images"] += 1
-                elif category == "validation":
-                    stats["n_val_images"] += 1
-                elif category == "test":
-                    stats["n_test_images"] += 1
-                logger.debug(
-                    f"[{operation}] {train_input_file.name} -> {input_dest.name} (train_input)"
-                )
-            else:
-                stats["n_missing_input"] += 1
-                logger.warning(
-                    f"Training-channel input file not found: {train_input_file}. "
-                    "Re-run the annotation pipeline to generate training channel images."
-                )
+            image_file = model_input_source / f"{annotation_id}.tif"
         else:
-            # Single-channel workflow: label-channel image goes directly to *_input/
-            input_dest = output_dir / input_folder / f"input_{idx:05d}.tif"
-            file_mapping[annotation_id]["input_dest"] = str(input_dest)
+            image_file = annotation_file
 
-            if label_input_file.exists():
-                input_dest.parent.mkdir(parents=True, exist_ok=True)
-                operation = _create_file_link_or_copy(
-                    label_input_file, input_dest, file_mode, logger
-                )
-                stats["file_operations"][operation] = (
-                    stats["file_operations"].get(operation, 0) + 1
-                )
-                if category == "training":
-                    stats["n_training_images"] += 1
-                elif category == "validation":
-                    stats["n_val_images"] += 1
-                elif category == "test":
-                    stats["n_test_images"] += 1
-                logger.debug(f"[{operation}] {label_input_file.name} -> {input_dest.name}")
-            else:
-                stats["n_missing_input"] += 1
-                logger.warning(f"Input file not found: {label_input_file}")
+        label_file = label_source / f"{annotation_id}_mask.tif"
 
-        # Process label/mask file (same for both workflows)
-        if label_file.exists():
-            label_dest.parent.mkdir(parents=True, exist_ok=True)
-            operation = _create_file_link_or_copy(
-                label_file, label_dest, file_mode, logger
+        # Drop the record whole if either half is missing. Writing an image without
+        # its label would leave an orphan, and consumers that pair images to labels
+        # by sorted filename would then mispair everything after it.
+        if not image_file.exists() or not label_file.exists():
+            n_missing += 1
+            missing = "image" if not image_file.exists() else "label"
+            logger.warning(f"Skipping annotation {annotation_id}: missing {missing}")
+            continue
+
+        annotation_source = None
+        if uses_separate_channels and annotation_file.exists():
+            annotation_source = FileSource(annotation_file)
+
+        records.append(
+            AnnotationRecord(
+                annotation_id=annotation_id,
+                category=ann.category,
+                image=FileSource(image_file),
+                label=FileSource(label_file),
+                annotation_image=annotation_source,
             )
-            stats["file_operations"][operation] = (
-                stats["file_operations"].get(operation, 0) + 1
-            )
-            if category == "training":
-                stats["n_training_labels"] += 1
-            elif category == "validation":
-                stats["n_val_labels"] += 1
-            elif category == "test":
-                stats["n_test_labels"] += 1
-            logger.debug(f"[{operation}] {label_file.name} -> {label_dest.name}")
-        else:
-            stats["n_missing_label"] += 1
-            logger.warning(f"Label file not found: {label_file}")
+        )
 
-    # Build standard result dictionary
-    result = _build_standard_result(
-        base_dir=output_dir,
-        created_dirs=created_dirs,
-        stats=stats,
-        file_mapping=file_mapping,
+    created_dirs, stats = write_training_layout(
+        records,
+        output_dir,
+        layout="split",
+        file_mode=file_mode,
+        clean_existing=clean_existing,
+        include_test=include_test,
+        uses_separate_channels=uses_separate_channels,
+        logger=logger,
     )
+    stats["n_missing"] = n_missing
 
-    # Log summary
-    total_processed = (
+    # An empty training set must be loud. prepare_training_data_from_table() already
+    # raises here; without the same guard, a producer/consumer folder mismatch returns
+    # valid-looking paths to empty directories and training silently does nothing.
+    #
+    # Key this off what was actually WRITTEN, not off len(records): a record can be
+    # built and then written nowhere (every annotation is category "test" and
+    # include_test=False), which leaves the layout just as empty.
+    n_written = (
         stats["n_training_images"] + stats["n_val_images"] + stats["n_test_images"]
     )
-    logger.info(f"Reorganization complete: {total_processed} images processed")
-    if uses_separate_channels:
-        logger.info(
-            f"  Training: {stats['n_training_images']} train images, "
-            f"{stats['n_training_label_input']} label-channel images, "
-            f"{stats['n_training_labels']} labels"
+    if n_written == 0:
+        expected_images = annotation_dir / (
+            "model_input" if uses_separate_channels else "annotation_input"
         )
-        logger.info(
-            f"  Validation: {stats['n_val_images']} train images, "
-            f"{stats['n_val_label_input']} label-channel images, "
-            f"{stats['n_val_labels']} labels"
+        logger.error(
+            f"Reorganization FAILED in {output_dir}: 0 images written "
+            f"({n_missing} skipped as missing, {stats['n_skipped']} skipped by category)"
         )
-    else:
-        logger.info(
-            f"  Training: {stats['n_training_images']} images, {stats['n_training_labels']} labels"
+        raise ValueError(
+            f"Reorganization produced no training data: nothing was written.\n"
+            f"  {n_missing} annotation(s) skipped - image or label not found. "
+            f"Expected images in {expected_images}/ and masks in "
+            f"{annotation_dir / 'annotation_output'}/.\n"
+            f"  {stats['n_skipped']} annotation(s) skipped by category "
+            f"(test annotations are skipped unless include_test=True)."
         )
-        logger.info(
-            f"  Validation: {stats['n_val_images']} images, {stats['n_val_labels']} labels"
-        )
-    if include_test:
-        logger.info(
-            f"  Test: {stats['n_test_images']} images, {stats['n_test_labels']} labels"
-        )
-    if stats["n_missing_input"] > 0 or stats["n_missing_label"] > 0:
-        logger.warning(
-            f"  Missing files: {stats['n_missing_input']} inputs, {stats['n_missing_label']} labels"
-        )
-    logger.info(f"  File operations: {stats['file_operations']}")
 
-    # After a move, remove empty source folders
-    if file_mode == "move":
-        for src in [label_input_source, training_input_source, input_source, output_source]:
-            try:
-                if src.exists() and not any(src.iterdir()):
-                    src.rmdir()
-                    logger.debug(f"Removed empty source folder: {src.name}/")
-            except OSError:
-                pass
+    logger.info(
+        f"Reorganization complete: {len(records)} annotations written, {n_missing} skipped"
+    )
 
-    _close_logger_handlers()
-
-    return result
+    return _build_standard_result(
+        base_dir=output_dir, created_dirs=created_dirs, stats=stats
+    )

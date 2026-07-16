@@ -1,6 +1,7 @@
 """Configuration management for OMERO AI annotation workflows."""
 
 import json
+import math
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -155,6 +156,31 @@ def _resolve_annotation_ids(df: pd.DataFrame) -> List[str]:
     return _uniquify_annotation_ids(resolved)
 
 
+# OMERO table columns are non-nullable, so an id that is not set yet has to be
+# written as a real integer. 0 is the sentinel: no OMERO object has id 0.
+OMERO_ID_UNSET = 0
+
+
+def _optional_int_to_omero(value: Optional[int]) -> int:
+    """Convert an optional id to the integer an OMERO id column can hold."""
+    return OMERO_ID_UNSET if value is None else int(value)
+
+
+def _omero_id_to_optional_int(value: Any) -> Optional[int]:
+    """Parse an id back from an OMERO table column.
+
+    Accepts both the current integer encoding (0 meaning unset) and the string
+    encoding used by tables written before typed columns ("None" meaning unset).
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return None if parsed in (OMERO_ID_UNSET, -1) else parsed
+
+
 # Sub-models for the configuration
 
 
@@ -228,8 +254,9 @@ class ImageAnnotation(BaseModel):
     label_id: Optional[int] = Field(
         default=None, description="OMERO label file annotation ID"
     )
-    label_input_id: Optional[int] = Field(
-        default=None, description="OMERO file annotation ID for label input image"
+    annotation_input_id: Optional[int] = Field(
+        default=None,
+        description="OMERO file annotation ID for the annotation-channel image",
     )
     schema_attachment_id: Optional[int] = Field(
         default=None, description="OMERO schema attachment ID"
@@ -990,8 +1017,8 @@ class AnnotationConfig(BaseModel):
                 "channel": annotation.channel,
                 "z_slice": annotation.z_slice,
                 "timepoint": annotation.timepoint,
-                "label_id": _optional_int_to_str(annotation.label_id),
-                "roi_id": _optional_int_to_str(annotation.roi_id),
+                "label_id": _optional_int_to_omero(annotation.label_id),
+                "roi_id": _optional_int_to_omero(annotation.roi_id),
                 "is_volumetric": annotation.is_volumetric,
                 "processed": annotation.processed,
                 "is_patch": annotation.is_patch,
@@ -1005,7 +1032,7 @@ class AnnotationConfig(BaseModel):
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
-                "label_input_id": _optional_int_to_str(annotation.label_input_id),
+                "annotation_input_id": _optional_int_to_str(annotation.annotation_input_id),
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
@@ -1035,7 +1062,7 @@ class AnnotationConfig(BaseModel):
             "annotation_created_at",
             "annotation_updated_at",
             "schema_attachment_id",
-            "label_input_id",
+            "annotation_input_id",
             "z_start",
             "z_end",
             "z_length",
@@ -1115,12 +1142,13 @@ class AnnotationConfig(BaseModel):
                 "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
             }
 
-            # Handle optional ID fields
-            roi_id = _str_to_optional_int(str(row.get("roi_id", "None")))
+            # Handle optional ID fields. These reach OMERO as typed link columns
+            # holding 0 for "unset"; older tables encode them as the string "None".
+            roi_id = _omero_id_to_optional_int(row.get("roi_id"))
             if roi_id is not None:
                 annotation_data["roi_id"] = roi_id
 
-            label_id = _str_to_optional_int(str(row.get("label_id", "None")))
+            label_id = _omero_id_to_optional_int(row.get("label_id"))
             if label_id is not None:
                 annotation_data["label_id"] = label_id
 
@@ -1130,11 +1158,13 @@ class AnnotationConfig(BaseModel):
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
 
-            label_input_id = _str_to_optional_int(
-                str(row.get("label_input_id", "None"))
+            # Tables written to OMERO before the rename carry label_input_id.
+            # They live on users' servers and cannot be migrated, so read either.
+            annotation_input_id = _str_to_optional_int(
+                str(row.get("annotation_input_id", row.get("label_input_id", "None")))
             )
-            if label_input_id is not None:
-                annotation_data["label_input_id"] = label_input_id
+            if annotation_input_id is not None:
+                annotation_data["annotation_input_id"] = annotation_input_id
 
             # Handle timestamps - keep as string
             created_at_str = str(row.get("annotation_created_at", "None"))

@@ -302,8 +302,8 @@ def _(
             |-----------|-------|
     {stats_rows}
 
-            - Training images: `{training_result['training_input']}`
-            - Training labels: `{training_result['training_label']}`
+            - Training images: `{training_result['train_input']}`
+            - Training labels: `{training_result['train_label']}`
             - Validation images: `{training_result['val_input']}`
             - Validation labels: `{training_result['val_label']}`
             """))

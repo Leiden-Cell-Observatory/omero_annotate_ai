@@ -9,8 +9,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import omero.grid as omero_grid
 import omero.model as omero_model
 import pandas as pd
+from omero.constants.namespaces import NSBULKANNOTATIONS
+from omero.rtypes import rstring
 
 from .omero_utils import (
     delete_table,
@@ -24,7 +27,7 @@ import ezomero
 import imageio.v3 as imageio
 
 from ..processing.image_functions import label_to_rois
-from ..core.annotation_config import AnnotationConfig
+from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
 
 # Namespace for annotation config file annotations
 CONFIG_NS = "openmicroscopy.org/omero/annotate/config"
@@ -321,7 +324,19 @@ def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].fillna(False).astype(bool)
 
-    id_columns = ["label_id", "roi_id", "schema_attachment_id"]
+    # Link ids reach OMERO as typed, non-nullable integer columns (see
+    # _build_omero_columns). 0 means "not set yet"; a legacy "None" string
+    # coerces to it via to_numeric.
+    link_id_columns = ["label_id", "roi_id"]
+    for col in link_id_columns:
+        if col in df.columns:
+            df[col] = (
+                pd.to_numeric(df[col], errors="coerce")
+                .fillna(OMERO_ID_UNSET)
+                .astype(int)
+            )
+
+    id_columns = ["schema_attachment_id"]
     for col in id_columns:
         if col in df.columns:
             df[col] = df[col].fillna("None").astype(str)
@@ -337,6 +352,83 @@ def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].fillna("None").astype(str)
 
     return df
+
+
+# DataFrame column -> (OMERO column name, OMERO column class).
+#
+# The names are not cosmetic. OMERO.web resolves a row to an object by *name*:
+# selecting an image asks the table for "Image-<id>", which its perform_table_query
+# only matches against a column literally named Image/Roi/Plate/Well. The *type*
+# is what makes the cell render as a hyperlink (an ImageColumn links to the image,
+# a RoiColumn opens the ROI in iviewer).
+_OMERO_LINK_COLUMNS = {
+    "image_id": ("Image", omero_grid.ImageColumn, "Annotated OMERO image"),
+    "roi_id": ("Roi", omero_grid.RoiColumn, "ROI holding the annotation"),
+}
+
+# Reverse of the above, applied when a table is read back off the server.
+_OMERO_LINK_COLUMNS_REVERSED = {
+    omero_name: df_name for df_name, (omero_name, _, _) in _OMERO_LINK_COLUMNS.items()
+}
+
+
+def _build_omero_columns(df: pd.DataFrame) -> List[omero_grid.Column]:
+    """Build OMERO table columns from a prepared DataFrame.
+
+    ezomero.post_table cannot do this: it only emits Bool/Long/Double/String columns,
+    chosen by dtype, so the link columns come out as untyped numbers and OMERO has no
+    idea they point at real objects. Building the columns here also preserves the
+    DataFrame's column order, which ezomero does not (it regroups them by dtype).
+
+    Args:
+        df: DataFrame already passed through _prepare_dataframe_for_omero
+
+    Returns:
+        Columns ready for Table.initialize() and Table.addData()
+    """
+    columns: List[omero_grid.Column] = []
+
+    for name in df.columns:
+        series = df[name]
+
+        link = _OMERO_LINK_COLUMNS.get(name)
+        if link is not None:
+            omero_name, ColumnClass, description = link
+            columns.append(
+                ColumnClass(omero_name, description, [int(v) for v in series])
+            )
+        elif pd.api.types.is_bool_dtype(series):
+            columns.append(omero_grid.BoolColumn(name, "", [bool(v) for v in series]))
+        elif pd.api.types.is_integer_dtype(series):
+            columns.append(omero_grid.LongColumn(name, "", [int(v) for v in series]))
+        elif pd.api.types.is_float_dtype(series):
+            columns.append(omero_grid.DoubleColumn(name, "", [float(v) for v in series]))
+        else:
+            values = [str(v) for v in series]
+            # OMERO truncates silently if size is short of the longest value.
+            size = max([len(v) for v in values] + [1])
+            columns.append(omero_grid.StringColumn(name, "", size, values))
+
+    return columns
+
+
+def _normalize_omero_table_df(df: Any) -> Any:
+    """Map OMERO-side link column names back to the names used inside the codebase.
+
+    This is the single place that knows the tracking table is written with OMERO's
+    names (Image, Roi) while everything downstream — validation, training data prep,
+    the merge dedupe keys — reads image_id/roi_id. Tables written before typed columns
+    already carry the internal names and pass through untouched.
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+
+    renames = {
+        omero_name: df_name
+        for omero_name, df_name in _OMERO_LINK_COLUMNS_REVERSED.items()
+        if omero_name in df.columns
+    }
+    return df.rename(columns=renames) if renames else df
 
 
 # =============================================================================
@@ -403,6 +495,66 @@ def link_table_to_containers(
     return results
 
 
+def post_typed_table(
+    conn,
+    df: pd.DataFrame,
+    object_type: str,
+    object_id: int,
+    title: str,
+) -> int:
+    """Create an OMERO table with typed link columns and attach it to a container.
+
+    Stands in for ezomero.post_table, which cannot emit ImageColumn/RoiColumn. Same
+    contract: returns the FileAnnotation ID, which is what the rest of this module
+    treats as the table ID.
+
+    Args:
+        conn: OMERO connection
+        df: DataFrame to store; column types are normalized for OMERO internally
+        object_type: Container type ('dataset', 'plate', 'project', 'screen')
+        object_id: Container to attach the table to
+        title: Table name
+
+    Returns:
+        The FileAnnotation ID of the new table
+    """
+    columns = _build_omero_columns(_prepare_dataframe_for_omero(df))
+
+    resources = conn.c.sf.sharedResources()
+    repository_id = resources.repositories().descriptions[0].getId().getValue()
+    table = resources.newTable(repository_id, title)
+    try:
+        table.initialize(columns)
+        table.addData(columns)
+        original_file = table.getOriginalFile()
+    finally:
+        table.close()
+
+    file_ann = omero_model.FileAnnotationI()
+    file_ann.setNs(rstring(NSBULKANNOTATIONS))
+    # Reference the file unloaded. The table service has already written it, so
+    # handing back the loaded copy makes the save try to update it a second time
+    # and OMERO rejects that with an OptimisticLockException.
+    file_ann.setFile(
+        omero_model.OriginalFileI(original_file.getId().getValue(), False)
+    )
+    file_ann = conn.getUpdateService().saveAndReturnObject(file_ann)
+    file_ann_id = file_ann.getId().getValue()
+
+    link_table_to_containers(conn, file_ann_id, object_type, [object_id])
+
+    return file_ann_id
+
+
+def read_tracking_table(conn, table_id: int) -> Any:
+    """Read a tracking table off OMERO with its link columns named as we expect.
+
+    Every read of a tracking table goes through here, so _normalize_omero_table_df
+    stays the one place that knows about OMERO's Image/Roi column names.
+    """
+    return _normalize_omero_table_df(ezomero.get_table(conn, table_id))
+
+
 def create_or_replace_tracking_table(
     conn,
     config_df: pd.DataFrame,
@@ -447,11 +599,11 @@ def create_or_replace_tracking_table(
             print(f"Warning: Could not delete existing table: {existing_table_id}")
 
     # Create new table attached to primary container
-    new_table_id = ezomero.post_table(
+    new_table_id = post_typed_table(
         conn,
-        object_type=container_type.capitalize(),
+        df=config_df,
+        object_type=container_type,
         object_id=primary_container_id,
-        table=config_df,
         title=table_title,
     )
 
@@ -525,7 +677,7 @@ def sync_omero_table_to_config(conn, table_id: int, config):
     """
     try:
         # Get table data
-        df = ezomero.get_table(conn, table_id)
+        df = read_tracking_table(conn, table_id)
         if df is None or df.empty:
             print(f"Warning: Table {table_id} is empty or could not be read")
             return
@@ -685,10 +837,10 @@ def upload_rois_and_labels(
     return file_ann_id, roi_id
 
 
-def upload_label_input_image(
+def upload_annotation_input_image(
     conn,
     image_id: int,
-    label_input_file: str,
+    annotation_input_file: str,
     trainingset_name: Optional[str] = None,
     channel: Optional[int] = None,
     timepoint: Optional[int] = None,
@@ -704,7 +856,7 @@ def upload_label_input_image(
     Args:
         conn: OMERO connection
         image_id: ID of OMERO image to attach annotation to
-        label_input_file: Path to the label input image file (TIFF)
+        annotation_input_file: Path to the annotation-channel image file (TIFF)
         trainingset_name: Optional training set name for description
         channel: Optional channel index for description
         timepoint: Optional timepoint for description
@@ -728,9 +880,9 @@ def upload_label_input_image(
 
     file_ann_id = ezomero.post_file_annotation(
         conn,
-        file_path=label_input_file,
+        file_path=annotation_input_file,
         description=description,
-        ns="openmicroscopy.org/omero/annotate/label_input",
+        ns="openmicroscopy.org/omero/annotate/annotation_input",
         object_type="Image",
         object_id=image_id,
     )
@@ -761,7 +913,7 @@ def update_workflow_status_map(
     """
     try:
         # Get current table progress
-        df = ezomero.get_table(conn, table_id)
+        df = read_tracking_table(conn, table_id)
         total_units = len(df)
         completed_units = df["processed"].sum() if "processed" in df.columns else 0
 
@@ -938,7 +1090,7 @@ def analyze_table_completion_status(conn, table_id: int) -> Dict[str, Any]:
     """
     try:
         # Get table data
-        table_data = ezomero.get_table(conn, table_id)
+        table_data = read_tracking_table(conn, table_id)
 
         if table_data is None or table_data.empty:
             return {
