@@ -118,6 +118,9 @@ def assert_output_dir_is_separate(output_dir: Path, annotation_dir: Path) -> Non
                 if candidate.samefile(parent):
                     return True
             except OSError:
+                # Race: candidate existed at the .exists() check above but is gone
+                # (or otherwise unreadable) by the time samefile() runs. Treat it as
+                # not-a-match rather than failing the whole check.
                 pass
             # Only the nearest existing ancestor is informative; anything above it
             # is a shared prefix, not containment.
