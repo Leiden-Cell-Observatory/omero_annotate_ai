@@ -8,6 +8,88 @@ import numpy as np
 
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.core.annotation_config import create_default_config
+from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
+
+
+class FakeImage:
+    """Handle with no OMERO methods: proves the pipeline only talks to the source."""
+
+    def __init__(self, image_id, name):
+        self.image_id = image_id
+        self.name = name
+
+
+class FakeImageSource:
+    """In-memory ImageSource over (t, c, z, y, x) arrays; records read calls."""
+
+    def __init__(self, arrays):
+        self.arrays = arrays  # {image_id: ndarray (t, c, z, y, x)}
+        self.reads = []
+
+    def get_image(self, image_id):
+        if image_id not in self.arrays:
+            raise LookupError(image_id)
+        return FakeImage(image_id, f"img{image_id}")
+
+    def metadata(self, image):
+        t, c, z, y, x = self.arrays[image.image_id].shape
+        return ImageMeta(image.image_id, image.name, t, c, z, y, x,
+                         str(self.arrays[image.image_id].dtype))
+
+    def read_plane(self, image, *, t, c, z, region=None):
+        self.reads.append(("plane", image.image_id, t, c, z, region))
+        plane = self.arrays[image.image_id][t, c, z]
+        if region is not None:
+            x, y, w, h = clamp_region(region, *plane.shape)
+            plane = plane[y:y + h, x:x + w]
+        return plane
+
+    def read_volume(self, image, *, t, c, z_start, z_end, region=None):
+        self.reads.append(("volume", image.image_id, t, c, (z_start, z_end), region))
+        return np.stack([
+            self.read_plane(image, t=t, c=c, z=z, region=region)
+            for z in range(z_start, z_end + 1)
+        ])
+
+
+@pytest.mark.unit
+class TestImageSourceSeam:
+    """The pipeline reads image sizes and pixels only through its ImageSource."""
+
+    def test_default_source_is_omero_on_the_same_connection(self):
+        conn = Mock()
+        pipeline = AnnotationPipeline(create_default_config(), conn=conn)
+        assert isinstance(pipeline.image_source, OmeroImageSource)
+        assert pipeline.image_source.conn is conn
+
+    def test_prepare_units_uses_source_metadata_without_a_connection(self, tmp_path):
+        arrays = {1: np.zeros((2, 1, 3, 32, 32), np.uint16),
+                  2: np.zeros((2, 1, 3, 32, 32), np.uint16)}
+        source = FakeImageSource(arrays)
+        config = create_default_config()
+        config.output.output_directory = tmp_path
+        config.spatial_coverage.timepoint_mode = "all"
+        config.spatial_coverage.z_slice_mode = "all"
+        config.training.segment_all = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+
+        pipeline._prepare_processing_units([source.get_image(1), source.get_image(2)])
+
+        units = {(a.image_id, a.timepoint, a.z_slice) for a in pipeline.config.annotations}
+        assert units == {(i, t, z) for i in (1, 2) for t in range(2) for z in range(3)}
+        assert {a.image_name for a in pipeline.config.annotations} == {"img1", "img2"}
+
+    def test_patch_coordinates_use_source_size(self):
+        source = FakeImageSource({1: np.zeros((1, 1, 1, 50, 80), np.uint16)})
+        config = create_default_config()
+        config.spatial_coverage.patch_size = [20, 30]
+        config.spatial_coverage.patches_per_image = 3
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+
+        coords, _ = pipeline._generate_patch_coordinates(source.get_image(1))
+
+        assert len(coords) == 3
+        assert all(0 <= x <= 80 - 30 and 0 <= y <= 50 - 20 for x, y in coords)
 
 
 @pytest.mark.unit

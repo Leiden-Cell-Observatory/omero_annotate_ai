@@ -45,6 +45,7 @@ from ..omero.omero_functions import (
 )
 from ..omero.omero_utils import get_dask_image_single, get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
+from ..sources import ImageSource, OmeroImageSource
 
 
 class AnnotationPipeline:
@@ -53,16 +54,25 @@ class AnnotationPipeline:
     # DEBUG FLAG - Set to False to disable all debug output
     DEBUG_MODE = True
 
-    def __init__(self, config: AnnotationConfig, conn=None, config_file_path: Optional[Union[str, Path]] = None):
+    def __init__(
+        self,
+        config: AnnotationConfig,
+        conn=None,
+        config_file_path: Optional[Union[str, Path]] = None,
+        image_source: Optional[ImageSource] = None,
+    ):
         """Initialize the pipeline with configuration and OMERO connection.
 
         Args:
             config: AnnotationConfig object containing all parameters
             conn: OMERO connection object (BlitzGateway)
             config_file_path: Optional path to the source YAML configuration file for persistence
+            image_source: Where pixels and image sizes are read from. Defaults to
+                ``OmeroImageSource(conn)``.
         """
         self.config = config
         self.conn = conn
+        self.image_source = image_source if image_source is not None else OmeroImageSource(conn)
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
@@ -113,7 +123,8 @@ class AnnotationPipeline:
 
     def _validate_setup(self):
         """Validate the pipeline setup."""
-        if self.conn is None:
+        # Only the default OMERO source needs a connection to read images.
+        if self.conn is None and isinstance(self.image_source, OmeroImageSource):
             raise ValueError("OMERO connection is required")
 
     def _get_input_folders(self, output_path: Path) -> dict:
@@ -299,8 +310,9 @@ class AnnotationPipeline:
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
-            image_id = image.getId()
-            image_name = image.getName()
+            image_meta = self.image_source.metadata(image)
+            image_id = image_meta.image_id
+            image_name = image_meta.name
 
             # Handle timepoints
             timepoints = self._get_timepoints_for_image(image)
@@ -416,7 +428,7 @@ class AnnotationPipeline:
 
     def _get_timepoints_for_image(self, image) -> List[int]:
         """Get timepoints to process for an image based on configuration."""
-        max_t = image.getSizeT()
+        max_t = self.image_source.metadata(image).size_t
 
         if self.config.spatial_coverage.timepoint_mode == "all":
             return list(range(max_t))
@@ -432,7 +444,7 @@ class AnnotationPipeline:
 
     def _get_z_slices_for_image(self, image) -> List[int]:
         """Get z-slices to process for an image based on configuration."""
-        max_z = image.getSizeZ()
+        max_z = self.image_source.metadata(image).size_z
 
         if self.config.spatial_coverage.z_slice_mode == "all":
             return list(range(max_z))
@@ -452,7 +464,8 @@ class AnnotationPipeline:
         patches_per_image = self.config.spatial_coverage.patches_per_image
         random_patches = self.config.spatial_coverage.random_patches
 
-        image_shape = (image.getSizeY(), image.getSizeX())
+        meta = self.image_source.metadata(image)
+        image_shape = (meta.size_y, meta.size_x)
 
         coordinates, actual_patch_size = generate_patch_coordinates(
             image_shape=image_shape,
@@ -492,7 +505,7 @@ class AnnotationPipeline:
                 images.append(image_data)
                 # Include image_id in metadata for later ROI upload
                 meta_with_image_id = meta.copy()
-                meta_with_image_id["image_id"] = image_obj.getId()
+                meta_with_image_id["image_id"] = self.image_source.metadata(image_obj).image_id
                 metadata.append((annotation_id, meta_with_image_id, row_idx))
 
             # Build context images parallel list (empty dicts when no context channels)
