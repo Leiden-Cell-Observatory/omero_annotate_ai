@@ -34,7 +34,7 @@ classifiers = [
 keywords = ["omero", "microscopy", "segmentation", "ai", "annotation", "sam", "micro-sam"]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.21.0,<2.0",
+    "numpy>=1.21.0",
     "pandas>=1.3.0",
     "imageio>=2.9.0",
     "dask>=2021.6.0",
@@ -124,7 +124,7 @@ zeroc-ice = ">=3.6.4,<3.7"
 kornia = "<0.7"
 ipykernel = ">=6.30.1,<7"
 pip = ">=25.2,<26"
-numpy = ">=1.21.0,<2.0"
+numpy = ">=1.21.0"
 pytorch = ">=2.7.1,<3"
 stackview = ">=0.18.0,<0.19"
 hf-xet = "<1.1.9"
@@ -200,4 +200,4 @@ verify-build = { cmd = "python -m zipfile -l dist/*.whl && tar -tzf dist/*.tar.g
 
 [dependency-groups]
 docs = ["mkdocs-glightbox>=0.5.1,<0.6"]
-dev = ["ty>=0.0.12,<0.0.13"]
+dev = ["ty>=0.0.12,<0.0.13", "aiohttp>=3.14.3,<4", "requests"]
