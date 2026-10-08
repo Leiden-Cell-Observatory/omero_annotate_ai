@@ -123,7 +123,7 @@ def annotation(**overrides):
 def test_writes_input_and_mask_with_annotation_id_names(
     mock_conn, mock_ezomero, tmp_path
 ):
-    """input/{annotation_id}.tif + output/{annotation_id}_mask.tif."""
+    """annotation_input/{annotation_id}.tif + annotation_output/{annotation_id}_mask.tif."""
     table = build_table(
         [
             annotation(image_id=101, label_id=555),
@@ -140,16 +140,20 @@ def test_writes_input_and_mask_with_annotation_id_names(
     ids = [ann.annotation_id for ann in config.annotations]
     assert ids == ["101_0_0", "102_0_3"]  # pipeline scheme: {image}_{t}_{z}
     for annotation_id in ids:
-        assert (tmp_path / "input" / f"{annotation_id}.tif").exists()
-        assert (tmp_path / "output" / f"{annotation_id}_mask.tif").exists()
+        assert (tmp_path / "annotation_input" / f"{annotation_id}.tif").exists()
+        assert (tmp_path / "annotation_output" / f"{annotation_id}_mask.tif").exists()
 
-    assert not (tmp_path / "label_input").exists()
+    assert not (tmp_path / "model_input").exists()
     assert stats["n_images"] == 2
     assert stats["n_masks"] == 2
 
 
-def test_separate_channels_route_image_to_label_input(mock_conn, mock_ezomero, tmp_path):
-    """A label/training channel split puts the image in label_input/, not input/."""
+def test_separate_channels_still_write_the_annotated_channel(mock_conn, mock_ezomero, tmp_path):
+    """A label/training channel split still exports the annotated channel to annotation_input/.
+
+    The BIA source image is the channel the mask was drawn on; model_input/ is a
+    training concern and is not written here.
+    """
     config = create_default_config()
     config.spatial_coverage.channels = [0, 1]
     config.spatial_coverage.label_channel = 0
@@ -161,10 +165,9 @@ def test_separate_channels_route_image_to_label_input(mock_conn, mock_ezomero, t
     stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
 
     annotation_id = config.annotations[0].annotation_id
-    assert (tmp_path / "label_input" / f"{annotation_id}.tif").exists()
-    assert not (tmp_path / "input").exists()
-    # the mask still goes to output/
-    assert (tmp_path / "output" / f"{annotation_id}_mask.tif").exists()
+    assert (tmp_path / "annotation_input" / f"{annotation_id}.tif").exists()
+    assert not (tmp_path / "model_input").exists()
+    assert (tmp_path / "annotation_output" / f"{annotation_id}_mask.tif").exists()
     assert stats["n_images"] == 1
 
 
@@ -184,7 +187,7 @@ def test_uint16_image_is_written_at_native_dtype(mock_conn, mock_ezomero, tmp_pa
     prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
 
     written = imread(
-        str(tmp_path / "input" / f"{config.annotations[0].annotation_id}.tif")
+        str(tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif")
     )
     assert written.dtype == np.uint16
     assert written.max() == plane.max()
@@ -218,8 +221,8 @@ def test_unprocessed_and_maskless_rows_are_skipped_and_counted(
     assert stats["skipped_unprocessed"] == 2
     assert stats["skipped_no_mask"] == 1
 
-    assert sorted(p.name for p in (tmp_path / "input").glob("*.tif")) == ["101_0_0.tif"]
-    assert sorted(p.name for p in (tmp_path / "output").glob("*.tif")) == [
+    assert sorted(p.name for p in (tmp_path / "annotation_input").glob("*.tif")) == ["101_0_0.tif"]
+    assert sorted(p.name for p in (tmp_path / "annotation_output").glob("*.tif")) == [
         "101_0_0_mask.tif"
     ]
 
@@ -323,7 +326,7 @@ def test_patch_row_requests_patch_coords_from_ezomero(mock_conn, mock_ezomero, t
     assert kwargs["xyzct"] is True
 
     written = imread(
-        str(tmp_path / "input" / f"{config.annotations[0].annotation_id}.tif")
+        str(tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif")
     )
     assert written.shape == (3, 4)  # (height, width)
     assert written.dtype == np.uint16
@@ -342,7 +345,7 @@ def test_full_plane_row_requests_image_size(mock_conn, mock_ezomero, tmp_path):
     assert kwargs["axis_lengths"] == (SIZE_X, SIZE_Y, 1, 1, 1)
 
     written = imread(
-        str(tmp_path / "input" / f"{config.annotations[0].annotation_id}.tif")
+        str(tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif")
     )
     assert written.shape == (SIZE_Y, SIZE_X)
 
@@ -358,7 +361,7 @@ def test_volumetric_row_writes_a_stack(mock_conn, mock_ezomero, tmp_path):
 
     annotation_id = config.annotations[0].annotation_id
     assert annotation_id == "101_0_3d"
-    written = imread(str(tmp_path / "input" / f"{annotation_id}.tif"))
+    written = imread(str(tmp_path / "annotation_input" / f"{annotation_id}.tif"))
     assert written.shape == (3, SIZE_Y, SIZE_X)  # (z, y, x)
     assert written.dtype == np.uint16
 
@@ -375,7 +378,7 @@ def test_mask_is_downloaded_from_the_row_label_id(mock_conn, mock_ezomero, tmp_p
 
     mask = imread(
         str(
-            tmp_path / "output" / f"{config.annotations[0].annotation_id}_mask.tif"
+            tmp_path / "annotation_output" / f"{config.annotations[0].annotation_id}_mask.tif"
         )
     )
     assert mask.dtype == np.uint16
@@ -389,7 +392,7 @@ def test_mask_is_downloaded_from_the_row_label_id(mock_conn, mock_ezomero, tmp_p
 
 
 def test_clean_existing_clears_previous_data_dirs(mock_conn, mock_ezomero, tmp_path):
-    for name in ("input", "label_input", "output"):
+    for name in ("annotation_input", "annotation_output"):
         directory = tmp_path / name
         directory.mkdir()
         (directory / "stale.tif").write_bytes(b"stale")
@@ -401,14 +404,13 @@ def test_clean_existing_clears_previous_data_dirs(mock_conn, mock_ezomero, tmp_p
         mock_conn, 42, tmp_path, config=config, clean_existing=True
     )
 
-    assert not (tmp_path / "input" / "stale.tif").exists()
-    assert not (tmp_path / "output" / "stale.tif").exists()
-    assert not (tmp_path / "label_input").exists()  # removed, not recreated
-    assert (tmp_path / "input" / f"{config.annotations[0].annotation_id}.tif").exists()
+    assert not (tmp_path / "annotation_input" / "stale.tif").exists()
+    assert not (tmp_path / "annotation_output" / "stale.tif").exists()
+    assert (tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif").exists()
 
 
 def test_without_clean_existing_previous_files_survive(mock_conn, mock_ezomero, tmp_path):
-    stale = tmp_path / "input" / "stale.tif"
+    stale = tmp_path / "annotation_input" / "stale.tif"
     stale.parent.mkdir()
     stale.write_bytes(b"stale")
 

@@ -256,16 +256,13 @@ def _spatial_information(img) -> str:
 def _source_paths(config, img) -> Tuple[str, str]:
     """``(mask, image)`` paths relative to ``config.output.output_directory``.
 
-    This is the annotation pipeline's own on-disk layout, whose folder names describe
-    the pipeline's roles for the files: ``input`` is what was fed to the annotation
-    model, ``output`` is the masks it produced.
+    This is the annotation pipeline's own on-disk layout: ``annotation_input`` holds
+    the channel the mask was drawn on (in separate-channel workflows too, where the
+    model channel goes to ``model_input``), ``annotation_output`` the masks.
     """
-    input_dir = (
-        "label_input" if config.spatial_coverage.uses_separate_channels() else "input"
-    )
     return (
-        f"output/{img.annotation_id}_mask.tif",
-        f"{input_dir}/{img.annotation_id}.tif",
+        f"annotation_output/{img.annotation_id}_mask.tif",
+        f"annotation_input/{img.annotation_id}.tif",
     )
 
 
@@ -516,8 +513,8 @@ def save_bia_package(
     ``config.output.output_directory`` into the bundle, from the pipeline's on-disk
     layout (:func:`_source_paths`) to the bundle's own (:func:`_bundle_paths`):
 
-    - ``input/{id}.tif`` (or ``label_input/{id}.tif``) -> ``images/{id}.tif``
-    - ``output/{id}_mask.tif``                          -> ``annotations/{id}_mask.tif``
+    - ``annotation_input/{id}.tif``         -> ``images/{id}.tif``
+    - ``annotation_output/{id}_mask.tif``   -> ``annotations/{id}_mask.tif``
 
     Returns a summary dict (paths + counts). Missing source files are skipped with a
     warning rather than failing the whole bundle.
