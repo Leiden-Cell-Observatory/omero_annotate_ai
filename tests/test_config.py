@@ -1267,6 +1267,25 @@ class TestMIFAExport:
         assert result["annotations"]["annotation_overview"]
 
 
+def _write_pipeline_layout(config):
+    """Write dummy files for ``config.annotations`` where AnnotationPipeline puts them.
+
+    The folders come from the pipeline's own ``_setup_directories`` so the BIA export is
+    tested against the layout the pipeline actually writes, not a copy of its names.
+    """
+    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+    pipeline = AnnotationPipeline.__new__(AnnotationPipeline)
+    pipeline.config = config
+    root = pipeline._setup_directories()
+    folders = pipeline._get_input_folders(root)
+    for ann in config.annotations:
+        (folders["annotation_input"] / f"{ann.annotation_id}.tif").write_bytes(b"img")
+        if "model_input" in folders:
+            (folders["model_input"] / f"{ann.annotation_id}.tif").write_bytes(b"model")
+        (root / "annotation_output" / f"{ann.annotation_id}_mask.tif").write_bytes(b"mask")
+
+
 @pytest.mark.unit
 class TestBIAExport:
     """Build a BioImage Archive submission bundle (file lists + MIFA + data copy)."""
@@ -1292,11 +1311,7 @@ class TestBIAExport:
             )
             for i in (1, 2, 3)
         ]
-        (root / "input").mkdir(parents=True, exist_ok=True)
-        (root / "output").mkdir(parents=True, exist_ok=True)
-        for i in (1, 2, 3):
-            (root / "input" / f"{i}_0_0.tif").write_bytes(b"img")
-            (root / "output" / f"{i}_0_0_mask.tif").write_bytes(b"mask")
+        _write_pipeline_layout(config)
         return config
 
     def test_file_lists_headers_and_counts(self, tmp_path):
@@ -1320,22 +1335,23 @@ class TestBIAExport:
         assert "Files" in annotations.columns and "source_image" in annotations.columns
 
     def test_separate_channel_image_still_lands_in_images(self, tmp_path):
-        """A label/training channel split is a pipeline detail: the bundle says images/."""
+        """A label/training channel split is a pipeline detail: the bundle says images/.
+
+        The source image is the annotated channel (annotation_input/), not the model
+        channel the pipeline also writes to model_input/.
+        """
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
         store = tmp_path / "store"
         config = self._config_with_data(store)
         config.spatial_coverage.label_channel = 0
         config.spatial_coverage.training_channels = [1]
-        # separate channels: the pipeline writes the image to label_input/, not input/
-        (store / "label_input").mkdir(parents=True, exist_ok=True)
-        for i in (1, 2, 3):
-            (store / "label_input" / f"{i}_0_0.tif").write_bytes(b"img")
+        _write_pipeline_layout(config)
 
         _, annotations = build_bia_file_lists(config)
         assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
 
         result = config.save_bia_package(tmp_path / "bundle")
-        assert (tmp_path / "bundle" / "images" / "1_0_0.tif").exists()
+        assert (tmp_path / "bundle" / "images" / "1_0_0.tif").read_bytes() == b"img"
         assert result["missing"] == 0
 
     def test_save_bia_package_copies_data_and_writes_lists(self, tmp_path):
@@ -1346,16 +1362,16 @@ class TestBIAExport:
         assert (dest / "file_list_images.tsv").exists()
         assert (dest / "file_list_annotations.tsv").exists()
         assert (dest / "metadata" / "Annotations_S-BIAD999.yaml").exists()
-        # pipeline's input/ + output/ become the bundle's images/ + annotations/
+        # pipeline's annotation_input/ + annotation_output/ become images/ + annotations/
         assert (dest / "annotations" / "1_0_0_mask.tif").exists()
         assert (dest / "images" / "1_0_0.tif").exists()
-        assert not (dest / "input").exists()
-        assert not (dest / "output").exists()
+        assert not (dest / "annotation_input").exists()
+        assert not (dest / "annotation_output").exists()
         assert result["n_annotations"] == 3
         assert result["missing"] == 0
         # copy by default: the source data survives
-        assert (store / "input" / "1_0_0.tif").exists()
-        assert (store / "output" / "1_0_0_mask.tif").exists()
+        assert (store / "annotation_input" / "1_0_0.tif").exists()
+        assert (store / "annotation_output" / "1_0_0_mask.tif").exists()
 
     def test_save_bia_package_move_data_empties_the_staging_dir(self, tmp_path):
         """move_data=True transfers rather than copies - for disposable staging dirs only."""
@@ -1369,8 +1385,8 @@ class TestBIAExport:
         assert (dest / "images" / "1_0_0.tif").exists()
         assert (dest / "annotations" / "1_0_0_mask.tif").exists()
         # the source files are gone - that is the point, and the hazard
-        assert not (store / "input" / "1_0_0.tif").exists()
-        assert not (store / "output" / "1_0_0_mask.tif").exists()
+        assert not (store / "annotation_input" / "1_0_0.tif").exists()
+        assert not (store / "annotation_output" / "1_0_0_mask.tif").exists()
 
     def test_save_bia_package_accession_fallback(self, tmp_path):
         config = self._config_with_data(tmp_path / "store")

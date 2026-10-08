@@ -4,9 +4,9 @@
 of ``config.output.output_directory``, using the paths that
 :func:`omero_annotate_ai.core.mifa_export._file_ids` derives from each annotation:
 
-- ``output/{annotation_id}_mask.tif``
-- ``input/{annotation_id}.tif`` (or ``label_input/{annotation_id}.tif`` when the
-  config annotates one channel and trains on another)
+- ``annotation_output/{annotation_id}_mask.tif``
+- ``annotation_input/{annotation_id}.tif`` - the annotated channel, also when the
+  config annotates one channel and trains on another
 
 That layout is what ``AnnotationPipeline`` leaves behind on the machine that did the
 annotating. A table-driven export starts with the data on OMERO instead, so
@@ -35,18 +35,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["prepare_bia_data_from_table"]
 
 # Directory holding the mask files (mirrors AnnotationPipeline._setup_directories).
-MASK_DIR = "output"
+MASK_DIR = "annotation_output"
 
-# The two possible image directories (mirrors AnnotationPipeline._get_input_folders).
-INPUT_DIR = "input"
-LABEL_INPUT_DIR = "label_input"
-
-
-def _input_dir_name(config: "AnnotationConfig") -> str:
-    """``label_input`` when the config annotates and trains on different channels."""
-    if config.spatial_coverage.uses_separate_channels():
-        return LABEL_INPUT_DIR
-    return INPUT_DIR
+# Directory holding the annotated channel (mirrors AnnotationPipeline._get_input_folders).
+# A separate-channel workflow also writes model_input/, but the BIA source image is the
+# channel the mask was drawn on.
+IMAGE_DIR = "annotation_input"
 
 
 def _non_negative(value: Optional[int], default: int = 0) -> int:
@@ -164,8 +158,8 @@ def _download_mask(conn: Any, label_id: int, dest: Path, tmp_dir: Path) -> bool:
 
 
 def _clean_data_dirs(output_dir: Path) -> None:
-    """Remove any existing input / label_input / output directories."""
-    for name in (INPUT_DIR, LABEL_INPUT_DIR, MASK_DIR):
+    """Remove any existing annotation_input / annotation_output directories."""
+    for name in (IMAGE_DIR, MASK_DIR):
         directory = output_dir / name
         if directory.exists():
             shutil.rmtree(directory)
@@ -184,9 +178,8 @@ def prepare_bia_data_from_table(
     ``annotation_id``) and writes, for every row that is ``processed`` and has a
     ``label_id``:
 
-    - ``{output_dir}/input/{annotation_id}.tif`` - the image plane, patch or volume
-      (``label_input/`` instead when ``config.spatial_coverage.uses_separate_channels()``)
-    - ``{output_dir}/output/{annotation_id}_mask.tif`` - the mask FileAnnotation
+    - ``{output_dir}/annotation_input/{annotation_id}.tif`` - the image plane, patch or volume
+    - ``{output_dir}/annotation_output/{annotation_id}_mask.tif`` - the mask FileAnnotation
 
     which is the layout :meth:`AnnotationConfig.save_bia_package` copies from. Set
     ``config.output.output_directory = output_dir`` afterwards and package it.
@@ -205,12 +198,12 @@ def prepare_bia_data_from_table(
     Args:
         conn: OMERO connection (``BlitzGateway``).
         table_id: OMERO ID of the annotation table (``OriginalFile``).
-        output_dir: Directory to write the ``input``/``label_input`` and ``output`` trees into.
+        output_dir: Directory to write the ``annotation_input`` and ``annotation_output`` trees into.
         config: Annotation config, **mutated in place**: its ``annotations`` are rebuilt from
             the table (as :func:`sync_omero_table_to_config` does), then pruned to the
             exported records, so the ids on disk match the ones the MIFA/BIA file lists
             reference. A default config is used when omitted.
-        clean_existing: Remove existing ``input``/``label_input``/``output`` directories first.
+        clean_existing: Remove existing ``annotation_input``/``annotation_output`` directories first.
 
     Returns:
         Dict with ``output_dir``, ``n_images``, ``n_masks``, ``skipped_unprocessed``
@@ -240,7 +233,7 @@ def prepare_bia_data_from_table(
     if clean_existing:
         _clean_data_dirs(output_dir)
 
-    image_dir = output_dir / _input_dir_name(config)
+    image_dir = output_dir / IMAGE_DIR
     mask_dir = output_dir / MASK_DIR
     tmp_dir = output_dir / "tmp"
     for directory in (image_dir, mask_dir, tmp_dir):
