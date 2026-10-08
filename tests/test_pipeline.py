@@ -84,6 +84,7 @@ class TestImageSourceSeam:
         config = create_default_config()
         config.spatial_coverage.patch_size = [20, 30]
         config.spatial_coverage.patches_per_image = 3
+        config.spatial_coverage.random_patches = False  # random placement may fit fewer
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         coords, _ = pipeline._generate_patch_coordinates(source.get_image(1))
