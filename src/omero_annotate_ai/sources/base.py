@@ -28,7 +28,7 @@ class ImageMeta:
     size_z: int
     size_y: int
     size_x: int
-    dtype: str
+    dtype: str  # numpy dtype name, e.g. "uint16" or "float32"
 
 
 def clamp_region(region: Region, size_y: int, size_x: int) -> Region:

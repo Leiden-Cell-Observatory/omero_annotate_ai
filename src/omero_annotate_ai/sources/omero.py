@@ -8,6 +8,9 @@ import numpy as np
 
 from .base import ImageMeta, Region, clamp_region
 
+# OMERO pixel type names that differ from numpy's (omero.gateway.OMERO_NUMPY_TYPES).
+_OMERO_TO_NUMPY_DTYPE = {"float": "float32", "double": "float64", "bit": "bool"}
+
 
 class OmeroImageSource:
     """Read images from OMERO. Handles are BlitzGateway ``ImageWrapper`` objects."""
@@ -32,7 +35,7 @@ class OmeroImageSource:
             size_z=image.getSizeZ(),
             size_y=image.getSizeY(),
             size_x=image.getSizeX(),
-            dtype=str(image.getPixelsType()),
+            dtype=_OMERO_TO_NUMPY_DTYPE.get(image.getPixelsType(), str(image.getPixelsType())),
         )
 
     def read_plane(

@@ -123,9 +123,12 @@ class AnnotationPipeline:
 
     def _validate_setup(self):
         """Validate the pipeline setup."""
-        # Only the default OMERO source needs a connection to read images.
-        if self.conn is None and isinstance(self.image_source, OmeroImageSource):
-            raise ValueError("OMERO connection is required")
+        # Without a connection nothing can be written back; fail now, not after annotating.
+        if self.conn is None and not self.config.workflow.read_only_mode:
+            raise ValueError("OMERO connection is required unless read_only_mode is set")
+        # An OMERO source needs its own connection to read images.
+        if isinstance(self.image_source, OmeroImageSource) and self.image_source.conn is None:
+            raise ValueError("OMERO connection is required to read images")
 
     def _get_input_folders(self, output_path: Path) -> dict:
         """Return input folder paths for the current workflow configuration.

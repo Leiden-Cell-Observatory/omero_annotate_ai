@@ -11,6 +11,13 @@ from omero_annotate_ai.core.annotation_config import create_default_config
 from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
 
 
+def _read_only_config():
+    """Default config that needs no OMERO connection (nothing is written back)."""
+    config = create_default_config()
+    config.workflow.read_only_mode = True
+    return config
+
+
 class FakeImage:
     """Handle with no OMERO methods: proves the pipeline only talks to the source."""
 
@@ -71,6 +78,7 @@ class TestImageSourceSeam:
         config.spatial_coverage.timepoint_mode = "all"
         config.spatial_coverage.z_slice_mode = "all"
         config.training.segment_all = True
+        config.workflow.read_only_mode = True
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         pipeline._prepare_processing_units([source.get_image(1), source.get_image(2)])
@@ -85,6 +93,7 @@ class TestImageSourceSeam:
         config.spatial_coverage.patch_size = [20, 30]
         config.spatial_coverage.patches_per_image = 3
         config.spatial_coverage.random_patches = False  # random placement may fit fewer
+        config.workflow.read_only_mode = True
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         coords, _ = pipeline._generate_patch_coordinates(source.get_image(1))
@@ -92,10 +101,29 @@ class TestImageSourceSeam:
         assert len(coords) == 3
         assert all(0 <= x <= 80 - 30 and 0 <= y <= 50 - 20 for x, y in coords)
 
+    def test_no_connection_requires_read_only_mode(self):
+        """Without a connection nothing can be written back, so fail before annotating."""
+        source = FakeImageSource({1: np.zeros((1, 1, 1, 4, 4), np.uint16)})
+        with pytest.raises(ValueError, match="OMERO connection is required"):
+            AnnotationPipeline(create_default_config(), conn=None, image_source=source)
+
+    def test_omero_source_with_its_own_connection_is_accepted(self):
+        config = create_default_config()
+        config.workflow.read_only_mode = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=OmeroImageSource(Mock()))
+        assert isinstance(pipeline.image_source, OmeroImageSource)
+
+    def test_default_omero_source_without_connection_raises_in_read_only_mode(self):
+        config = create_default_config()
+        config.workflow.read_only_mode = True
+        with pytest.raises(ValueError, match="OMERO connection is required"):
+            AnnotationPipeline(config, conn=None)
+
     def _pipeline(self, arrays, use_patches=False):
         config = create_default_config()
         config.spatial_coverage.use_patches = use_patches
         source = FakeImageSource(arrays)
+        config.workflow.read_only_mode = True
         return AnnotationPipeline(config, conn=None, image_source=source), source
 
     def test_load_plane(self):
@@ -515,7 +543,7 @@ class TestAnnotationPipeline:
     def test_load_image_data_2d(self):
         """A 2D unit loads one (y, x) plane at its z-slice."""
         source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
-        pipeline = AnnotationPipeline(create_default_config(), conn=None, image_source=source)
+        pipeline = AnnotationPipeline(_read_only_config(), conn=None, image_source=source)
         metadata = {
             "timepoint": 0,
             "z_slice": 5,
@@ -530,7 +558,7 @@ class TestAnnotationPipeline:
     def test_load_image_data_3d(self):
         """A volumetric unit loads its whole z-range as (z, y, x)."""
         source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
-        pipeline = AnnotationPipeline(create_default_config(), conn=None, image_source=source)
+        pipeline = AnnotationPipeline(_read_only_config(), conn=None, image_source=source)
         metadata = {
             "timepoint": 0,
             "z_start": 0,
@@ -1226,6 +1254,7 @@ class TestContextChannelHook:
         config = create_default_config()
         config.spatial_coverage.channels = [0]
         # No context_channels set
+        config.workflow.read_only_mode = True
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
@@ -1250,6 +1279,7 @@ class TestContextChannelHook:
         config.spatial_coverage.channels = [0, 1]
         config.spatial_coverage.context_channels = [1]
         config.spatial_coverage.context_channel_names = ["DAPI"]
+        config.workflow.read_only_mode = True
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}

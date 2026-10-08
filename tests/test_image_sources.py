@@ -79,6 +79,14 @@ class TestOmeroImageSource:
             size_y=10, size_x=12, dtype="uint16",
         )
 
+    @pytest.mark.parametrize(
+        "omero_type, numpy_name",
+        [("uint8", "uint8"), ("uint16", "uint16"), ("float", "float32"), ("double", "float64")],
+    )
+    def test_metadata_dtype_is_a_numpy_name(self, omero_type, numpy_name):
+        image = make_omero_image(self.planes, pixels_type=omero_type)
+        assert self.source.metadata(image).dtype == numpy_name
+
     def test_read_plane_full(self):
         plane = self.source.read_plane(self.image, t=1, c=2, z=3)
         np.testing.assert_array_equal(plane, self.planes[1, 2, 3])
