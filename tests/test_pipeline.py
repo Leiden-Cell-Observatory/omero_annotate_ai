@@ -92,6 +92,44 @@ class TestImageSourceSeam:
         assert len(coords) == 3
         assert all(0 <= x <= 80 - 30 and 0 <= y <= 50 - 20 for x, y in coords)
 
+    def _pipeline(self, arrays, use_patches=False):
+        config = create_default_config()
+        config.spatial_coverage.use_patches = use_patches
+        source = FakeImageSource(arrays)
+        return AnnotationPipeline(config, conn=None, image_source=source), source
+
+    def test_load_plane(self):
+        data = np.arange(2 * 2 * 3 * 8 * 8, dtype=np.uint16).reshape(2, 2, 3, 8, 8)
+        pipeline, source = self._pipeline({1: data})
+        image = source.get_image(1)
+        out = pipeline._load_image_data(image, {"timepoint": 1, "z_slice": 2, "channel_override": 1})
+        np.testing.assert_array_equal(out, data[1, 1, 2])
+
+    def test_load_volume_is_3d(self):
+        data = np.ones((1, 1, 5, 8, 8), dtype=np.uint16)
+        pipeline, source = self._pipeline({1: data})
+        out = pipeline._load_image_data(
+            source.get_image(1),
+            {"timepoint": 0, "is_volumetric": True, "z_start": 1, "z_end": 3, "z_length": 3},
+        )
+        assert out.shape == (3, 8, 8)
+
+    def test_patch_is_read_as_region(self):
+        data = np.arange(64, dtype=np.uint16).reshape(1, 1, 1, 8, 8)
+        pipeline, source = self._pipeline({1: data}, use_patches=True)
+        out = pipeline._load_image_data(
+            source.get_image(1),
+            {"timepoint": 0, "z_slice": 0, "patch_x": 2, "patch_y": 1,
+             "patch_width": 3, "patch_height": 4},
+        )
+        np.testing.assert_array_equal(out, data[0, 0, 0, 1:5, 2:5])
+        assert source.reads[-1][-1] == (2, 1, 3, 4)  # region passed, not cropped afterwards
+
+    def test_get_images_by_ids_uses_source_and_skips_missing(self):
+        pipeline, source = self._pipeline({1: np.zeros((1, 1, 1, 4, 4), np.uint16)})
+        images = pipeline.get_images_by_ids([1, 99])
+        assert [i.image_id for i in images] == [1]
+
 
 @pytest.mark.unit
 class TestAnnotationPipeline:
@@ -474,41 +512,25 @@ class TestAnnotationPipeline:
         assert categories.count("training") == 2  # 2 images × 1 patches each
         assert categories.count("validation") == 1  # 1 image × 1 patches
     
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_load_image_data_2d_with_single_function(self, mock_get_dask_single):
-        """Test loading 2D image data using get_dask_image_single."""
-        import numpy as np
-
-        mock_image_data = np.random.rand(100, 100)
-        mock_get_dask_single.return_value = mock_image_data
-
-        config = create_default_config()
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
+    def test_load_image_data_2d(self):
+        """A 2D unit loads one (y, x) plane at its z-slice."""
+        source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
+        pipeline = AnnotationPipeline(create_default_config(), conn=None, image_source=source)
         metadata = {
             "timepoint": 0,
             "z_slice": 5,
             "is_volumetric": False
         }
 
-        result = pipeline._load_image_data(mock_image, metadata)
+        result = pipeline._load_image_data(source.get_image(1), metadata)
 
         assert result.shape == (100, 100)
-        mock_get_dask_single.assert_called_once()
+        assert len(source.reads) == 1
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_load_image_data_3d_with_single_function(self, mock_get_dask_single):
-        """Test loading 3D volumetric image data using get_dask_image_single."""
-        import numpy as np
-
-        mock_image_data = np.random.rand(10, 100, 100)  # z, y, x
-        mock_get_dask_single.return_value = mock_image_data
-
-        config = create_default_config()
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
+    def test_load_image_data_3d(self):
+        """A volumetric unit loads its whole z-range as (z, y, x)."""
+        source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
+        pipeline = AnnotationPipeline(create_default_config(), conn=None, image_source=source)
         metadata = {
             "timepoint": 0,
             "z_start": 0,
@@ -517,14 +539,9 @@ class TestAnnotationPipeline:
             "is_volumetric": True
         }
 
-        result = pipeline._load_image_data(mock_image, metadata)
+        result = pipeline._load_image_data(source.get_image(1), metadata)
 
         assert result.shape == (10, 100, 100)
-        mock_get_dask_single.assert_called_once()
-
-    # Keep the old test names for backward compatibility but mark them as aliases
-    test_load_image_data_2d = test_load_image_data_2d_with_single_function
-    test_load_image_data_3d = test_load_image_data_3d_with_single_function
     
     def test_config_annotation_management(self):
         """Test config annotation management methods."""
@@ -1198,37 +1215,26 @@ class TestAnnotationTimestamps:
 class TestContextChannelHook:
     """Tests for context channel hook in _run_micro_sam_annotation."""
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_build_context_images_empty_when_no_context_channels(self, mock_dask):
+    def test_build_context_images_empty_when_no_context_channels(self):
         """With no context_channels, context_images should be list of empty dicts."""
         import numpy as np
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
-        label_arr = np.zeros((64, 64), dtype=np.uint16)
-        mock_dask.return_value = label_arr
+        source = FakeImageSource({1: np.zeros((1, 1, 1, 64, 64), dtype=np.uint16)})
 
         config = create_default_config()
         config.spatial_coverage.channels = [0]
         # No context_channels set
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
-        mock_image.getId.return_value = 1
-        mock_image.getSizeX.return_value = 64
-        mock_image.getSizeY.return_value = 64
-        mock_image.getSizeC.return_value = 1
-        mock_image.getSizeZ.return_value = 1
-        mock_image.getSizeT.return_value = 1
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
-        batch_data = [(mock_image, "ann1", meta, 0)]
+        batch_data = [(source.get_image(1), "ann1", meta, 0)]
 
         context_images = pipeline._build_context_images(batch_data)
         assert context_images == [{}]
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_build_context_images_loads_correct_channel(self, mock_dask):
+    def test_build_context_images_loads_correct_channel(self):
         """With context_channels=[1], loads channel 1 for each batch item."""
         import numpy as np
         from omero_annotate_ai.core.annotation_config import create_default_config
@@ -1236,29 +1242,18 @@ class TestContextChannelHook:
 
         label_arr = np.zeros((64, 64), dtype=np.uint16)
         ctx_arr = np.ones((64, 64), dtype=np.uint16) * 100
-        # Return label_arr for channel 0, ctx_arr for channel 1
-        def side_effect(**kwargs):
-            if kwargs.get("channels") == [1]:
-                return ctx_arr
-            return label_arr
-        mock_dask.side_effect = side_effect
+        # Channel 0 is the label channel, channel 1 the context channel
+        data = np.stack([label_arr, ctx_arr])[None, :, None]  # (t, c, z, y, x)
+        source = FakeImageSource({1: data})
 
         config = create_default_config()
         config.spatial_coverage.channels = [0, 1]
         config.spatial_coverage.context_channels = [1]
         config.spatial_coverage.context_channel_names = ["DAPI"]
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
-        mock_image.getId.return_value = 1
-        mock_image.getSizeX.return_value = 64
-        mock_image.getSizeY.return_value = 64
-        mock_image.getSizeC.return_value = 2
-        mock_image.getSizeZ.return_value = 1
-        mock_image.getSizeT.return_value = 1
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
-        batch_data = [(mock_image, "ann1", meta, 0)]
+        batch_data = [(source.get_image(1), "ann1", meta, 0)]
 
         context_images = pipeline._build_context_images(batch_data)
         assert len(context_images) == 1

@@ -43,7 +43,7 @@ from ..omero.omero_functions import (
     upload_annotation_config_to_omero,
     upload_rois_and_labels
 )
-from ..omero.omero_utils import get_dask_image_single, get_table_by_name
+from ..omero.omero_utils import get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
 from ..sources import ImageSource, OmeroImageSource
 
@@ -549,90 +549,37 @@ class AnnotationPipeline:
         }
 
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
-        """Load image data from OMERO based on metadata."""
-
+        """Load the plane or volume an annotation unit refers to, cropped to its patch."""
         timepoint = metadata["timepoint"]
         channel = metadata.get("channel_override", self.config.spatial_coverage.get_label_channel())
-        is_volumetric = metadata.get("is_volumetric", False)
 
-        if is_volumetric:
-            # Load 3D volume: all z-slices at once
-            z_start = metadata.get("z_start", 0)
-            z_end = metadata.get("z_end", 0)
-            z_length = metadata.get("z_length", 1)
-
-            # Generate z-slice list
-            z_slices = list(range(z_start, z_end + 1))
-
-            print(f"Loading 3D volume: z_slices {z_start}-{z_end} (length: {z_length})")
-
-            # Use get_dask_image_single for single image loading
-            image_data = get_dask_image_single(
-                conn=self.conn,
-                image=image_obj,
-                timepoints=[timepoint],
-                channels=[channel],
-                z_slices=z_slices,  # All z-slices for 3D volume
-            )
-
-            # Ensure we have proper data
-            if image_data is None:
-                raise ValueError(f"Failed to load 3D image data for image {image_obj.getId()}")
-            
-            print(f"Loaded 3D data shape: {image_data.shape}")
-
-        else:
-            # Load single z-slice for 2D processing
-            z_slice = metadata["z_slice"]
-            
-            # Use get_dask_image_single for single image loading
-            image_data = get_dask_image_single(
-                conn=self.conn,
-                image=image_obj,
-                timepoints=[timepoint],
-                channels=[channel],
-                z_slices=[z_slice],
-            )
-
-            # Ensure we have proper data
-            if image_data is None:
-                raise ValueError(f"Failed to load 2D image data for image {image_obj.getId()}")
-            
-            print(f"Loaded 2D data shape: {image_data.shape}")
-            
-        # Ensure image data is properly converted to numpy array and has correct dtype
-        if hasattr(image_data, 'compute'):
-            image_data = image_data.compute()
-        
-        # Convert to numpy array and ensure proper dtype
-        image_data = np.asarray(image_data)
-        
-        # Ensure we have valid pixel values (not all zeros)
-        if np.all(image_data == 0):
-            print(f"Warning: Image data appears to be all zeros for image {image_obj.getId()}")
-            print(f"Image info: {image_obj.getSizeX()}x{image_obj.getSizeY()}, {image_obj.getSizeC()} channels, {image_obj.getSizeZ()} z-slices, {image_obj.getSizeT()} timepoints")
-        else:
-            print(f"Image data range: {np.min(image_data)} - {np.max(image_data)}, dtype: {image_data.dtype}")
-
-        # Handle patches if needed (works for both 2D and 3D)
+        region = None
         if self.config.spatial_coverage.use_patches and "patch_x" in metadata:
-            patch_x = metadata["patch_x"]
-            patch_y = metadata["patch_y"]
             # Use the actual patch dimensions from metadata instead of config
-            patch_h = metadata.get("patch_height", self.config.spatial_coverage.patch_size[0])
-            patch_w = metadata.get("patch_width", self.config.spatial_coverage.patch_size[1])
+            region = (
+                metadata["patch_x"],
+                metadata["patch_y"],
+                metadata.get("patch_width", self.config.spatial_coverage.patch_size[1]),
+                metadata.get("patch_height", self.config.spatial_coverage.patch_size[0]),
+            )
 
-            if is_volumetric:
-                # Extract 3D patch: (z, y, x)
-                image_data = image_data[
-                    :, patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
-                ]
-            else:
-                # Extract 2D patch: (y, x)
-                image_data = image_data[
-                    patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
-                ]
+        if metadata.get("is_volumetric", False):
+            image_data = self.image_source.read_volume(
+                image_obj,
+                t=timepoint,
+                c=channel,
+                z_start=metadata.get("z_start", 0),
+                z_end=metadata.get("z_end", 0),
+                region=region,
+            )
+        else:
+            image_data = self.image_source.read_plane(
+                image_obj, t=timepoint, c=channel, z=metadata["z_slice"], region=region
+            )
 
+        if not image_data.any():
+            image_id = self.image_source.metadata(image_obj).image_id
+            print(f"Warning: Image data appears to be all zeros for image {image_id}")
         return image_data
 
     def _load_and_stack_channels(self, image_obj, meta: dict, channel_indices: List[int]) -> np.ndarray:
@@ -873,7 +820,7 @@ class AnnotationPipeline:
             self._debug_print(f"No image_id found for annotation {annotation_id}")
             return
 
-        image_obj = self.conn.getObject("Image", image_id)
+        image_obj = self.image_source.get_image(image_id)
         output_path = Path(self.config.output.output_directory)
         folders = self._get_input_folders(output_path)
 
@@ -1159,11 +1106,13 @@ class AnnotationPipeline:
         return unique_image_ids
 
     def get_images_by_ids(self, image_ids: List[int]) -> List[Any]:
-        """Get OMERO image objects for the given image IDs."""
-        if self.conn is None:
-            raise ValueError("OMERO connection is not set.")
-        images = [self.conn.getObject("Image", img_id) for img_id in image_ids]
-        images = [img for img in images if img is not None]
+        """Get image handles for the given image IDs, skipping ones that do not exist."""
+        images = []
+        for img_id in image_ids:
+            try:
+                images.append(self.image_source.get_image(img_id))
+            except LookupError:
+                self._debug_print(f"Image {img_id} not found; skipped")
         print(f"Loaded {len(images)} images (by ID)")
         return images
 
@@ -1455,11 +1404,9 @@ class AnnotationPipeline:
             
             try:
                 # Load image objects for batch
-                if self.conn is None:
-                    raise ValueError("OMERO connection is not set.")
                 batch_with_images = []
                 for img_id, seq_val, meta, row_idx in batch:
-                    image_obj = self.conn.getObject("Image", img_id)
+                    image_obj = self.image_source.get_image(img_id)
                     batch_with_images.append((image_obj, seq_val, meta, row_idx))
                 
                 # Run the specific annotation function
@@ -1590,16 +1537,13 @@ class AnnotationPipeline:
                           and the model channel to model_input/{annotation_id}.tif
         Category metadata is tracked in config.yaml, not in folder structure.
         """
-        if self.conn is None:
-            raise ValueError("OMERO connection is not set.")
-
         output_path = Path(self.config.output.output_directory)
         folders = self._get_input_folders(output_path)
 
         for img_id, annotation_id, meta, row_idx in processing_units:
             print(f"Processing image {annotation_id} (ID: {img_id})")
 
-            image_obj = self.conn.getObject("Image", img_id)
+            image_obj = self.image_source.get_image(img_id)
 
             if "model_input" in folders:
                 # Separate-channel: the channel you annotate → annotation_input/ (single-channel)
