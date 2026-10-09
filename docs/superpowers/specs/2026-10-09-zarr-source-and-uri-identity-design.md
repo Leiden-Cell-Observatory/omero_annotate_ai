@@ -1,10 +1,17 @@
 # OME-Zarr image source + URI identity (Phase 2, sub-projects A+B)
 
 **Date:** 2026-10-09
-**Status:** draft for review
+**Status:** approved 2026-10-09 (user: "implement it in a minimal reproducible way")
 **Builds on:** Phase 1 `ImageSource` seam (branch `feat/image-source-seam`, plan
 `docs/superpowers/plans/2026-10-08-image-source-seam.md`)
 **Assessment:** `~/.claude/plans/the-package-now-is-glowing-spark.md`
+
+## Minimal-scope rule
+
+The user asked for a minimal, reproducible implementation. So: small tasks, each with
+its own tests; no feature beyond what the success criteria need; existing method names
+kept where a new one would only be a rename. Cuts made for this reason are marked
+*(minimal)*.
 
 ## Goal
 
@@ -67,7 +74,7 @@ zarr:
   uris:                      # each: plate, well, or single image group (http(s) URL or local path)
     - https://livingobjects.ebi.ac.uk/.../781ac3d7-....zarr
   level: 0                   # multiscale level to read; all pixel coordinates are in this level's grid
-  fields: first              # plates/wells only: "first" | "all" | <int n> (n random fields per well)
+  fields: first              # plates/wells only: "first" | "all"
   wells: [B2, C5]            # optional: only these wells (any plate)
   well_metadata: layout.csv  # optional: local path or URL of a CSV with well metadata
   well_filters:              # optional: same semantics as omero.well_filters, on CSV values
@@ -81,7 +88,7 @@ Pydantic model `ZarrConfig` (in `annotation_config.py`):
 |---|---|---|
 | `uris` | `List[str]` | `[]` |
 | `level` | `int`, `ge=0` | `0` |
-| `fields` | `Union[Literal["first","all"], PositiveInt]` | `"first"` |
+| `fields` | `Literal["first","all"]` | `"first"` |
 | `wells` | `Optional[List[str]]` | `None` |
 | `well_metadata` | `Optional[str]` | `None` |
 | `well_filters` | `Optional[Dict[str, List[str]]]` | `None` |
@@ -181,15 +188,15 @@ class ZarrImageRef:
     field: str = ""           # field path, e.g. "0"
     well_metadata: Dict[str, str] = field(default_factory=dict)
 
-def discover_zarr_images(cfg: ZarrConfig, *, rng: random.Random | None = None) -> List[ZarrImageRef]
+def discover_zarr_images(cfg: ZarrConfig) -> List[ZarrImageRef]
 ```
 
 Per URI, read `root_attrs` (0.4 top-level keys, 0.5 under `"ome"`):
 
 - `plate` → wells from `plate.wells[].path` sorted by (rowIndex, columnIndex); keep the
   selected wells (below); for each, read the well's `images` and pick fields
-  (`first` = first listed, `all`, or `n` random via `rng`, without replacement, capped at
-  the number available).
+  (`first` = first listed, or `all`). Random field sampling is left out *(minimal)*; the
+  pipeline's existing random image selection already samples across the list.
 - `well` → its fields, same field rule; plate/well names from the parent path when the
   parent is a plate, otherwise the URI's last two path parts.
 - `multiscales` → a single image ref.
@@ -227,12 +234,14 @@ filters, so the YAML plus `well_matching.csv` show exactly which decision was ma
   works unchanged for Zarr.
 - `OmeroImageSource.get_image` accepts `omero:image:<id>` URIs (and still ints, for the
   OMERO helpers that hold ids).
-- `get_image_ids_from_container()` is renamed `get_image_uris()` and returns URIs:
-  OMERO → the existing container/well-filter logic wrapped with `omero_uri`;
+- New `get_image_uris()` returns URIs and is what `initialize_workflow` calls:
+  OMERO → `[omero_uri(i) for i in self.get_image_ids_from_container()]` (existing method
+  and its tests untouched) *(minimal)*;
   Zarr → `discover_zarr_images`, keeping the refs on the pipeline
   (`self._zarr_refs: Dict[str, ZarrImageRef]`) so `_prepare_processing_units` can fill
   `well`, `field`, `well_metadata` and the name.
-  `get_images_by_ids` → `get_images_by_uris`.
+  `get_images_by_ids` keeps its name and passes whatever it gets to
+  `image_source.get_image` *(minimal)*.
 - `_prepare_processing_units` fills `image_uri`, `image_id` (OMERO only), `level`
   (`config.zarr.level` for Zarr, `0` for OMERO), and uses `uri.annotation_id(...)`.
 - Every place that reads `meta["image_id"]` for an image lookup uses `image_uri`; OMERO
@@ -297,7 +306,7 @@ and a small 0.4 plate (2×3 wells, 2 fields).
   level, missing URI → `LookupError`, handle caching. `TestUri` — omero round trip,
   normalization, stable `uri_key`, `annotation_id` forms.
 - `tests/test_well_filtering.py`: `TestZarrDiscovery` — plate/well/image detection,
-  sorted wells, `fields` first/all/n (seeded), `wells` normalization, CSV matching with
+  sorted wells, `fields` first/all, `wells` normalization, CSV matching with
   and without `plate`, filters include/exclude, `well_matching.csv` contents,
   mismatch warnings. `match_well_filter` unit tests (moved).
 - `tests/test_config.py`: `ZarrConfig` validation, `writes_to_omero`, YAML round trip,
