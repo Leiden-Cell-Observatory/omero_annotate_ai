@@ -1758,3 +1758,59 @@ class TestOmeroIdSerialization:
         assert config.annotations[0].label_id == 77
         assert config.annotations[1].roi_id is None
         assert config.annotations[1].label_id is None
+
+
+@pytest.mark.unit
+class TestImageUriIdentity:
+    def test_uri_is_derived_from_omero_id(self):
+        ann = ImageAnnotation(image_id=7, image_name="a")
+        assert ann.image_uri == "omero:image:7"
+
+    def test_zarr_annotation_has_no_omero_id(self):
+        ann = ImageAnnotation(image_uri="https://h/p.zarr/B/2/0", image_name="p_B2_0")
+        assert ann.image_id is None
+
+    def test_new_columns_round_trip(self):
+        config = create_default_config()
+        config.annotations.append(
+            ImageAnnotation(
+                image_uri="https://h/p.zarr/B/2/0", image_name="p_B2_0",
+                annotation_id="abc_0_0", level=1, well="B2", field="0",
+                well_metadata={"compound": "DMSO"},
+            )
+        )
+        df = config.to_dataframe()
+        assert df.loc[0, "image_uri"] == "https://h/p.zarr/B/2/0"
+        assert df.loc[0, "image_id"] == 0
+        assert df.loc[0, "level"] == 1
+        assert df.loc[0, "well_metadata"] == '{"compound": "DMSO"}'
+
+        restored = create_default_config()
+        restored.from_dataframe(df)
+        ann = restored.annotations[0]
+        assert (ann.image_uri, ann.image_id, ann.level, ann.well, ann.field) == (
+            "https://h/p.zarr/B/2/0", None, 1, "B2", "0"
+        )
+        assert ann.well_metadata == {"compound": "DMSO"}
+
+    def test_csv_round_trip_has_no_nan_strings(self, tmp_path):
+        config = create_default_config()
+        config.annotations.append(
+            ImageAnnotation(image_id=5, image_name="a", annotation_id="x_0_0")
+        )
+        path = tmp_path / "t.csv"
+        config.to_dataframe().to_csv(path, index=False)
+        restored = create_default_config()
+        restored.from_dataframe(pd.read_csv(path))
+        ann = restored.annotations[0]
+        assert ann.image_uri == "omero:image:5"
+        assert (ann.well, ann.field, ann.well_metadata) == ("", "", {})
+
+    def test_legacy_table_without_uri_column(self):
+        df = pd.DataFrame([{"image_id": 101, "image_name": "img",
+                            "annotation_id": "101_0_0", "timepoint": 0, "z_slice": 0}])
+        config = create_default_config()
+        config.from_dataframe(df)
+        ann = config.annotations[0]
+        assert ann.image_uri == "omero:image:101"
+        assert ann.annotation_id == "101_0_0"
