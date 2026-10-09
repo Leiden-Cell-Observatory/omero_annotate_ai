@@ -440,3 +440,113 @@ class TestMultiContainerTableTitle:
         title = pipeline._get_table_title()
 
         assert title == "my_custom_table"
+
+
+import warnings
+from pathlib import Path
+
+import pandas as pd
+
+from omero_annotate_ai.core.annotation_config import ZarrConfig
+from omero_annotate_ai.sources.wells import match_well_filter, normalize_well
+from omero_annotate_ai.sources.zarr_discovery import discover_zarr_images
+
+
+@pytest.mark.unit
+class TestWellHelpers:
+    @pytest.mark.parametrize("raw", ["B2", "b02", "B/2", "B_02", " B 2 "])
+    def test_normalize_well(self, raw):
+        assert normalize_well(raw) == "B2"
+
+    def test_normalize_rejects_garbage(self):
+        with pytest.raises(ValueError, match="well name"):
+            normalize_well("field0")
+
+    def test_match_well_filter_and_logic(self):
+        kv = {"compound": "DMSO", "dose": "0"}
+        assert match_well_filter(kv, {"compound": ["DMSO", "X"]})
+        assert not match_well_filter(kv, {"compound": ["DMSO"], "dose": ["1"]})
+        assert not match_well_filter(kv, {"cellline": ["U2OS"]})
+
+
+@pytest.mark.unit
+class TestZarrDiscovery:
+    @pytest.fixture(autouse=True)
+    def _stores(self, ngff_stores, tmp_path):
+        self.s = ngff_stores
+        self.out = tmp_path / "out"
+
+    def _csv(self, tmp_path, rows):
+        path = tmp_path / "layout.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return str(path)
+
+    def test_single_image(self):
+        refs = discover_zarr_images(ZarrConfig(uris=[self.s["img04"]]))
+        assert [(r.uri, r.well, r.name) for r in refs] == [(self.s["img04"], "", "")]
+
+    def test_plate_first_field_in_row_column_order(self):
+        refs = discover_zarr_images(ZarrConfig(uris=[self.s["plate"]]))
+        plate = self.s["plate"]
+        assert [r.uri for r in refs] == [f"{plate}/A/1/0", f"{plate}/A/2/0", f"{plate}/B/3/0"]
+        assert refs[0].name == "testplate_A1_0"
+
+    def test_plate_all_fields(self):
+        assert len(discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], fields="all"))) == 6
+
+    def test_well_uri(self):
+        (ref,) = discover_zarr_images(ZarrConfig(uris=[self.s["plate"] + "/A/2"]))
+        assert (ref.plate, ref.well, ref.field) == ("testplate", "A2", "0")
+
+    def test_wells_list_normalized_and_unknown_ignored(self):
+        refs = discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], wells=["a02", "H12"]))
+        assert [r.well for r in refs] == ["A2"]
+
+    def test_csv_filter_include_records_the_match(self, tmp_path):
+        csv = self._csv(tmp_path, [{"well": "A1", "compound": "DMSO"},
+                                   {"well": "A02", "compound": "X"},
+                                   {"well": "B3", "compound": "DMSO"}])
+        cfg = ZarrConfig(uris=[self.s["plate"]], well_metadata=csv,
+                         well_filters={"compound": ["DMSO"]})
+        refs = discover_zarr_images(cfg, output_dir=self.out)
+        assert [r.well for r in refs] == ["A1", "B3"]
+        assert refs[0].well_metadata == {"compound": "DMSO"}
+        table = pd.read_csv(self.out / "well_matching.csv")
+        assert list(table["well"]) == ["A1", "A2", "B3"]
+        assert list(table["matched"]) == [True, True, True]
+        assert list(table["included"]) == [True, False, True]
+        assert list(table["compound"]) == ["DMSO", "X", "DMSO"]
+
+    def test_csv_filter_exclude(self, tmp_path):
+        csv = self._csv(tmp_path, [{"well": w, "compound": c}
+                                   for w, c in [("A1", "DMSO"), ("A2", "X"), ("B3", "DMSO")]])
+        cfg = ZarrConfig(uris=[self.s["plate"]], well_metadata=csv,
+                         well_filters={"compound": ["DMSO"]}, well_filter_mode="exclude")
+        assert [r.well for r in discover_zarr_images(cfg)] == ["A2"]
+
+    def test_csv_with_plate_column(self, tmp_path):
+        csv = self._csv(tmp_path, [{"plate": "testplate", "well": "A1", "compound": "DMSO"},
+                                   {"plate": "other", "well": "A2", "compound": "DMSO"}])
+        cfg = ZarrConfig(uris=[self.s["plate"]], well_metadata=csv,
+                         well_filters={"compound": ["DMSO"]})
+        with pytest.warns(UserWarning):
+            refs = discover_zarr_images(cfg)
+        assert [r.well for r in refs] == ["A1"]
+
+    def test_mismatch_warnings(self, tmp_path):
+        csv = self._csv(tmp_path, [{"well": "A1", "c": "1"}, {"well": "A2", "c": "1"},
+                                   {"well": "H12", "c": "1"}])
+        with pytest.warns(UserWarning) as record:
+            discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], well_metadata=csv))
+        messages = " ".join(str(w.message) for w in record)
+        assert "B3" in messages and "H12" in messages
+
+    def test_csv_without_well_column(self, tmp_path):
+        csv = self._csv(tmp_path, [{"position": "A1"}])
+        with pytest.raises(ValueError, match="'well' column"):
+            discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], well_metadata=csv))
+
+    def test_not_ngff(self, tmp_path):
+        (tmp_path / "plain").mkdir()
+        with pytest.raises(ValueError, match="OME-Zarr"):
+            discover_zarr_images(ZarrConfig(uris=[str(tmp_path / "plain")]))

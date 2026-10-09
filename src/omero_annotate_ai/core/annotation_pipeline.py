@@ -47,6 +47,7 @@ from ..omero.omero_utils import get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
 from ..sources import ImageMeta, ImageSource, OmeroImageSource
 from ..sources.uri import annotation_id as make_annotation_id, parse_omero_uri
+from ..sources.wells import match_well_filter
 
 
 class AnnotationPipeline:
@@ -986,18 +987,7 @@ class AnnotationPipeline:
         Returns:
             True if ALL filter conditions are met
         """
-        for filter_key, filter_values in filters.items():
-            # Check if the key exists in well metadata
-            if filter_key not in well_kv_pairs:
-                return False
-
-            # Check if the well's value matches any of the acceptable values
-            well_value = well_kv_pairs[filter_key]
-            if well_value not in filter_values:
-                return False
-
-        # All conditions met
-        return True
+        return match_well_filter(well_kv_pairs, filters)
 
     def _get_image_ids_from_plate(self, container_id: int) -> List[int]:
         """Get image IDs from a single plate, applying well filters if configured.
