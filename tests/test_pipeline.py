@@ -7,8 +7,13 @@ from pathlib import Path
 import numpy as np
 
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-from omero_annotate_ai.core.annotation_config import create_default_config
+from omero_annotate_ai.core.annotation_config import ImageAnnotation, create_default_config
 from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
+from omero_annotate_ai.sources.uri import (
+    annotation_id as make_annotation_id,
+    omero_uri,
+    parse_omero_uri,
+)
 
 
 def _read_only_config():
@@ -34,13 +39,15 @@ class FakeImageSource:
         self.reads = []
 
     def get_image(self, image_id):
+        if isinstance(image_id, str):
+            image_id = parse_omero_uri(image_id)
         if image_id not in self.arrays:
             raise LookupError(image_id)
         return FakeImage(image_id, f"img{image_id}")
 
     def metadata(self, image):
         t, c, z, y, x = self.arrays[image.image_id].shape
-        return ImageMeta(image.image_id, image.name, t, c, z, y, x,
+        return ImageMeta(omero_uri(image.image_id), image.name, t, c, z, y, x,
                          str(self.arrays[image.image_id].dtype))
 
     def read_plane(self, image, *, t, c, z, region=None):
@@ -61,6 +68,36 @@ class FakeImageSource:
 
 @pytest.mark.unit
 class TestImageSourceSeam:
+    def test_annotations_carry_uri_and_hash_ids(self, tmp_path):
+        source = FakeImageSource({1: np.zeros((1, 1, 2, 16, 16), np.uint16)})
+        config = _read_only_config()
+        config.output.output_directory = tmp_path
+        config.spatial_coverage.z_slice_mode = "all"
+        config.training.segment_all = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+
+        pipeline._prepare_processing_units([source.get_image(1)])
+
+        anns = pipeline.config.annotations
+        assert {a.image_uri for a in anns} == {"omero:image:1"}
+        assert {a.image_id for a in anns} == {1}
+        assert sorted(a.annotation_id for a in anns) == sorted(
+            make_annotation_id("omero:image:1", 0, z) for z in (0, 1)
+        )
+
+    def test_processing_units_are_keyed_by_uri(self, tmp_path):
+        config = _read_only_config()
+        config.output.output_directory = tmp_path
+        config.annotations.append(
+            ImageAnnotation(image_id=3, image_name="a", annotation_id="k_0_0")
+        )
+        pipeline = AnnotationPipeline(config, conn=None, image_source=FakeImageSource({}))
+        (key, ann_id, meta, row), = pipeline._convert_annotations_to_processing_units(
+            config.annotations
+        )
+        assert key == "omero:image:3"
+        assert (meta["image_uri"], meta["image_id"]) == ("omero:image:3", 3)
+
     """The pipeline reads image sizes and pixels only through its ImageSource."""
 
     def test_default_source_is_omero_on_the_same_connection(self):
@@ -1114,6 +1151,7 @@ class TestSpatialSampling:
 
         # Mock image with 10 z-slices
         mock_image = Mock()
+        mock_image.getId.return_value = 1
         mock_image.getSizeZ.return_value = 10
 
         z_slices = pipeline._get_z_slices_for_image(mock_image)
@@ -1134,6 +1172,7 @@ class TestSpatialSampling:
         pipeline = AnnotationPipeline(config, conn=mock_conn)
 
         mock_image = Mock()
+        mock_image.getId.return_value = 1
         mock_image.getSizeZ.return_value = 10
 
         z_slices = pipeline._get_z_slices_for_image(mock_image)
@@ -1152,6 +1191,7 @@ class TestSpatialSampling:
         pipeline = AnnotationPipeline(config, conn=mock_conn)
 
         mock_image = Mock()
+        mock_image.getId.return_value = 1
         mock_image.getSizeT.return_value = 12
 
         timepoints = pipeline._get_timepoints_for_image(mock_image)

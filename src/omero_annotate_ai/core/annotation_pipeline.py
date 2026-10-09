@@ -45,7 +45,8 @@ from ..omero.omero_functions import (
 )
 from ..omero.omero_utils import get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
-from ..sources import ImageSource, OmeroImageSource
+from ..sources import ImageMeta, ImageSource, OmeroImageSource
+from ..sources.uri import annotation_id as make_annotation_id, parse_omero_uri
 
 
 class AnnotationPipeline:
@@ -252,6 +253,15 @@ class AnnotationPipeline:
         self.table_id = table_id
         return table_id
 
+    def _identity_fields(self, image_meta: ImageMeta) -> dict:
+        """ImageAnnotation fields that say which image a unit belongs to."""
+        uri = image_meta.image_uri
+        return {
+            "image_uri": uri,
+            "image_id": parse_omero_uri(uri),
+            "image_name": image_meta.name,
+        }
+
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
 
@@ -314,8 +324,8 @@ class AnnotationPipeline:
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
             image_meta = self.image_source.metadata(image)
-            image_id = image_meta.image_id
-            image_name = image_meta.name
+            identity = self._identity_fields(image_meta)
+            image_uri = identity["image_uri"]
 
             # Handle timepoints
             timepoints = self._get_timepoints_for_image(image)
@@ -340,9 +350,8 @@ class AnnotationPipeline:
                         patch_h, patch_w = actual_patch_size
                         for i, (x, y) in enumerate(patch_coords):
                             annotation = ImageAnnotation(
-                                image_id=image_id,
-                                image_name=image_name,
-                                annotation_id=f"{image_id}_{t}_3d_{i}",
+                                **identity,
+                                annotation_id=make_annotation_id(image_uri, t, z_start, volumetric=True, patch=i),
                                 timepoint=t,
                                 z_slice=z_start,  # Start slice for compatibility
                                 z_start=z_start,
@@ -361,9 +370,8 @@ class AnnotationPipeline:
                     else:
                         # Single annotation for full 3D volume
                         annotation = ImageAnnotation(
-                            image_id=image_id,
-                            image_name=image_name,
-                            annotation_id=f"{image_id}_{t}_3d",
+                            **identity,
+                            annotation_id=make_annotation_id(image_uri, t, z_start, volumetric=True),
                             timepoint=t,
                             z_slice=z_start,  # Start slice for compatibility
                             z_start=z_start,
@@ -383,9 +391,8 @@ class AnnotationPipeline:
                             patch_h, patch_w = actual_patch_size
                             for i, (x, y) in enumerate(patch_coords):
                                 annotation = ImageAnnotation(
-                                    image_id=image_id,
-                                    image_name=image_name,
-                                    annotation_id=f"{image_id}_{t}_{z}_{i}",
+                                    **identity,
+                                    annotation_id=make_annotation_id(image_uri, t, z, patch=i),
                                     timepoint=t,
                                     z_slice=z,
                                     z_start=z,
@@ -404,9 +411,8 @@ class AnnotationPipeline:
                         else:
                             # Single annotation for 2D slice
                             annotation = ImageAnnotation(
-                                image_id=image_id,
-                                image_name=image_name,
-                                annotation_id=f"{image_id}_{t}_{z}",
+                                **identity,
+                                annotation_id=make_annotation_id(image_uri, t, z),
                                 timepoint=t,
                                 z_slice=z,
                                 z_start=z,
@@ -506,10 +512,7 @@ class AnnotationPipeline:
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
-                # Include image_id in metadata for later ROI upload
-                meta_with_image_id = meta.copy()
-                meta_with_image_id["image_id"] = self.image_source.metadata(image_obj).image_id
-                metadata.append((annotation_id, meta_with_image_id, row_idx))
+                metadata.append((annotation_id, meta.copy(), row_idx))
 
             # Build context images parallel list (empty dicts when no context channels)
             context_images = self._build_context_images(batch_data)
@@ -581,8 +584,8 @@ class AnnotationPipeline:
             )
 
         if not image_data.any():
-            image_id = self.image_source.metadata(image_obj).image_id
-            print(f"Warning: Image data appears to be all zeros for image {image_id}")
+            image_uri = self.image_source.metadata(image_obj).image_uri
+            print(f"Warning: Image data appears to be all zeros for image {image_uri}")
         return image_data
 
     def _load_and_stack_channels(self, image_obj, meta: dict, channel_indices: List[int]) -> np.ndarray:
@@ -818,12 +821,12 @@ class AnnotationPipeline:
             meta: Metadata dictionary containing image information
             annotation_id: Unique annotation identifier
         """
-        image_id = meta.get("image_id")
-        if not image_id:
-            self._debug_print(f"No image_id found for annotation {annotation_id}")
+        image_key = meta.get("image_uri") or meta.get("image_id")
+        if not image_key:
+            self._debug_print(f"No image found for annotation {annotation_id}")
             return
 
-        image_obj = self.image_source.get_image(image_id)
+        image_obj = self.image_source.get_image(image_key)
         output_path = Path(self.config.output.output_directory)
         folders = self._get_input_folders(output_path)
 
@@ -1144,6 +1147,7 @@ class AnnotationPipeline:
                     {
                         "row_index": row_idx,
                         "image_id": image_id,
+                        "image_uri": meta.get("image_uri", ""),
                         "annotation_id": annotation_id,
                         "timepoint": meta.get("timepoint", -1),
                         "z_slice": meta.get("z_slice", -1),
@@ -1366,6 +1370,7 @@ class AnnotationPipeline:
         for i, annotation in enumerate(annotations):
             metadata = {
                 "image_id": annotation.image_id,
+                "image_uri": annotation.image_uri,
                 "timepoint": annotation.timepoint,
                 "z_slice": annotation.z_slice,
                 "z_start": annotation.z_start,
@@ -1377,7 +1382,7 @@ class AnnotationPipeline:
                 "channel": annotation.channel,
                 "is_volumetric": annotation.is_volumetric,
             }
-            processing_units.append((annotation.image_id, annotation.annotation_id, metadata, i))
+            processing_units.append((annotation.image_uri, annotation.annotation_id, metadata, i))
         return processing_units
 
     def _run_annotation_batches(self, processing_units: List[Tuple], annotation_func) -> int:

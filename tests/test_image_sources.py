@@ -60,6 +60,14 @@ class TestOmeroImageSource:
     def test_satisfies_protocol(self):
         assert isinstance(self.source, ImageSource)
 
+    def test_get_image_accepts_omero_uri(self):
+        assert self.source.get_image("omero:image:7") is self.image
+        self.conn.getObject.assert_called_once_with("Image", 7)
+
+    def test_get_image_rejects_non_omero_uri(self):
+        with pytest.raises(LookupError, match="not an OMERO image"):
+            self.source.get_image("https://h/p.zarr/B/2/0")
+
     def test_get_image_looks_up_by_id(self):
         assert self.source.get_image(7) is self.image
         self.conn.getObject.assert_called_once_with("Image", 7)
@@ -75,7 +83,7 @@ class TestOmeroImageSource:
 
     def test_metadata(self):
         assert self.source.metadata(self.image) == ImageMeta(
-            image_id=7, name="img.tif", size_t=2, size_c=3, size_z=4,
+            image_uri="omero:image:7", name="img.tif", size_t=2, size_c=3, size_z=4,
             size_y=10, size_x=12, dtype="uint16",
         )
 

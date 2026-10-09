@@ -21,7 +21,7 @@ Region = Tuple[int, int, int, int]
 class ImageMeta:
     """Name and 5D size of one image."""
 
-    image_id: Any
+    image_uri: str  # omero:image:<id> or the OME-Zarr image URL
     name: str
     size_t: int
     size_c: int
