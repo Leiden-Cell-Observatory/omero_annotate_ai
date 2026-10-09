@@ -91,6 +91,8 @@ class TestAnnotationConfig:
             'workflow',
             'output',
             'omero',
+            'source',
+            'zarr',
             'annotations',
             'documentation',
             'repository',
@@ -1814,3 +1816,36 @@ class TestImageUriIdentity:
         ann = config.annotations[0]
         assert ann.image_uri == "omero:image:101"
         assert ann.annotation_id == "101_0_0"
+
+
+@pytest.mark.unit
+class TestZarrConfig:
+    def test_default_source_is_omero(self):
+        config = create_default_config()
+        assert config.source == "omero"
+        assert config.zarr.uris == []
+
+    def test_zarr_requires_uris(self):
+        with pytest.raises(ValueError, match="zarr.uris"):
+            AnnotationConfig(name="z", source="zarr")
+
+    def test_filters_require_well_metadata(self):
+        with pytest.raises(ValueError, match="well_metadata"):
+            AnnotationConfig(name="z", source="zarr",
+                             zarr={"uris": ["a.zarr"], "well_filters": {"c": ["x"]}})
+
+    def test_zarr_forces_read_only(self):
+        config = AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
+        assert config.workflow.read_only_mode is True
+
+    def test_yaml_round_trip(self):
+        config = AnnotationConfig(name="z", source="zarr",
+                                  zarr={"uris": ["a.zarr"], "level": 1, "fields": "all",
+                                        "wells": ["B2"]})
+        again = AnnotationConfig.from_yaml(config.to_yaml())
+        assert again.source == "zarr"
+        assert (again.zarr.level, again.zarr.fields, again.zarr.wells) == (1, "all", ["B2"])
+
+    def test_bad_fields_value_rejected(self):
+        with pytest.raises(ValueError):
+            AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a"], "fields": 3})

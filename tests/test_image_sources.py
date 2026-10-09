@@ -172,3 +172,76 @@ class TestUri:
             annotation_id("omero:image:1", 1, 0, volumetric=True, patch=0)
             == f"{key}_1_3d_0"
         )
+
+
+@pytest.mark.unit
+class TestZarrImageSource:
+    @pytest.fixture(autouse=True)
+    def _stores(self, ngff_stores):
+        from omero_annotate_ai.sources.zarr import ZarrImageSource
+
+        self.s = ngff_stores
+        self.source = ZarrImageSource()
+        self.Source = ZarrImageSource
+
+    def test_satisfies_protocol(self):
+        assert isinstance(self.source, ImageSource)
+
+    def test_metadata_cyx_fills_missing_axes_with_one(self):
+        meta = self.source.metadata(self.source.get_image(self.s["img04"]))
+        assert meta == ImageMeta(image_uri=self.s["img04"], name="img04.zarr", size_t=1,
+                                 size_c=2, size_z=1, size_y=64, size_x=80, dtype="uint16")
+
+    def test_metadata_tczyx_v05(self):
+        meta = self.source.metadata(self.source.get_image(self.s["img05"]))
+        assert (meta.size_t, meta.size_c, meta.size_z, meta.size_y, meta.size_x) == (2, 2, 3, 32, 40)
+
+    def test_read_plane_cyx(self):
+        image = self.source.get_image(self.s["img04"])
+        np.testing.assert_array_equal(self.source.read_plane(image, t=0, c=1, z=0),
+                                      self.s["arr04"][1])
+
+    def test_read_plane_region_and_clip(self):
+        image = self.source.get_image(self.s["img04"])
+        np.testing.assert_array_equal(
+            self.source.read_plane(image, t=0, c=0, z=0, region=(10, 5, 8, 4)),
+            self.s["arr04"][0, 5:9, 10:18])
+        assert self.source.read_plane(image, t=0, c=0, z=0, region=(70, 60, 20, 20)).shape == (4, 10)
+
+    def test_read_plane_tczyx(self):
+        image = self.source.get_image(self.s["img05"])
+        np.testing.assert_array_equal(self.source.read_plane(image, t=1, c=1, z=2),
+                                      self.s["arr05"][1, 1, 2])
+
+    def test_read_volume_tczyx(self):
+        image = self.source.get_image(self.s["img05"])
+        vol = self.source.read_volume(image, t=1, c=0, z_start=0, z_end=2)
+        np.testing.assert_array_equal(vol, self.s["arr05"][1, 0, 0:3])
+
+    def test_read_volume_without_z_axis(self):
+        image = self.source.get_image(self.s["img04"])
+        assert self.source.read_volume(image, t=0, c=0, z_start=0, z_end=0).shape == (1, 64, 80)
+
+    def test_level_one(self):
+        meta = self.Source(level=1).metadata(self.Source(level=1).get_image(self.s["img04"]))
+        assert (meta.size_y, meta.size_x) == (32, 40)
+
+    def test_level_too_high(self):
+        with pytest.raises(ValueError, match="2 levels"):
+            self.Source(level=5).get_image(self.s["img04"])
+
+    def test_channel_out_of_range(self):
+        image = self.source.get_image(self.s["img04"])
+        with pytest.raises(IndexError, match="c=5"):
+            self.source.read_plane(image, t=0, c=5, z=0)
+
+    def test_missing_store(self, tmp_path):
+        with pytest.raises(LookupError):
+            self.source.get_image(str(tmp_path / "nope.zarr"))
+
+    def test_plate_is_not_an_image(self):
+        with pytest.raises(LookupError, match="not an image"):
+            self.source.get_image(self.s["plate"])
+
+    def test_handles_are_cached(self):
+        assert self.source.get_image(self.s["img04"]) is self.source.get_image(self.s["img04"] + "/")

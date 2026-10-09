@@ -851,6 +851,27 @@ class OMEROConfig(BaseModel):
         return len(self.get_all_container_ids()) > 1
 
 
+class ZarrConfig(BaseModel):
+    """OME-Zarr image selection (used when ``source == "zarr"``)."""
+
+    uris: List[str] = Field(
+        default_factory=list,
+        description="OME-Zarr plates, wells or images (http(s) URL or local path)",
+    )
+    level: int = Field(default=0, ge=0, description="Multiscale level to read")
+    fields: Literal["first", "all"] = Field(
+        default="first", description="Fields per well: the first one, or all"
+    )
+    wells: Optional[List[str]] = Field(default=None, description="Only these wells, e.g. ['B2']")
+    well_metadata: Optional[str] = Field(
+        default=None, description="CSV with a 'well' column (optional 'plate') and metadata columns"
+    )
+    well_filters: Optional[Dict[str, List[str]]] = Field(
+        default=None, description="Filter wells on well_metadata values (AND logic)"
+    )
+    well_filter_mode: Literal["include", "exclude"] = Field(default="include")
+
+
 class OutputConfig(BaseModel):
     """Output configuration"""
 
@@ -915,6 +936,8 @@ class AnnotationConfig(BaseModel):
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
+    source: Literal["omero", "zarr"] = Field(default="omero", description="Where images come from")
+    zarr: ZarrConfig = Field(default_factory=ZarrConfig)
 
     # Annotation tracking
     annotations: List[ImageAnnotation] = Field(
@@ -934,6 +957,18 @@ class AnnotationConfig(BaseModel):
         default_factory=list,
         description="Annotation classes (e.g. cell, nucleus) with display colors",
     )
+
+    @model_validator(mode="after")
+    def _check_zarr_source(self):
+        if self.source == "zarr":
+            if not self.zarr.uris:
+                raise ValueError("source 'zarr' needs at least one entry in zarr.uris")
+            # A Zarr run never writes to OMERO; read_only_mode is what makes the
+            # pipeline write masks and the table locally instead.
+            self.workflow.read_only_mode = True
+        if self.zarr.well_filters and not self.zarr.well_metadata:
+            raise ValueError("zarr.well_filters needs zarr.well_metadata (a CSV) to filter on")
+        return self
 
     def model_dump(self, **kwargs):
         """Override model_dump to handle Path serialization"""
@@ -1378,7 +1413,8 @@ class AnnotationConfig(BaseModel):
         """Create configuration from YAML string or file path."""
         yaml_path = Path(yaml_source)
 
-        if yaml_path.exists():
+        # A multi-line string is YAML text; Path.exists() raises on long ones.
+        if "\n" not in str(yaml_source) and yaml_path.exists():
             with open(yaml_path, "r", encoding="utf-8") as f:
                 config_dict = yaml.safe_load(f)
             config = cls.from_dict(config_dict)

@@ -1,5 +1,6 @@
 """Simple pytest configuration and fixtures for testing."""
 
+import numpy as np
 import pytest
 import time
 import subprocess
@@ -229,3 +230,44 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "omero" in item.keywords:
                 item.add_marker(skip_omero)
+
+@pytest.fixture(scope="session")
+def ngff_stores(tmp_path_factory):
+    """Small OME-Zarr stores: NGFF 0.4 image (c,y,x), 0.5 image (t,c,z,y,x), 0.4 plate.
+
+    Each image has 2 levels. The plate is named "testplate" with wells A/1, A/2, B/3,
+    two fields ("0", "1") each, every field holding the 0.4 image data.
+    """
+    pytest.importorskip("ome_zarr")
+    import zarr
+    from ome_zarr.format import FormatV04, FormatV05
+    from ome_zarr.writer import write_image, write_plate_metadata, write_well_metadata
+
+    root = tmp_path_factory.mktemp("ngff")
+    arr04 = np.arange(2 * 64 * 80, dtype=np.uint16).reshape(2, 64, 80)
+    arr05 = np.arange(2 * 2 * 3 * 32 * 40, dtype=np.uint16).reshape(2, 2, 3, 32, 40)
+
+    g04 = zarr.open_group(str(root / "img04.zarr"), mode="w", zarr_format=2)
+    write_image(arr04, g04, axes="cyx", fmt=FormatV04(), scale_factors=(2,))
+    g05 = zarr.open_group(str(root / "img05.zarr"), mode="w", zarr_format=3)
+    write_image(arr05, g05, axes="tczyx", fmt=FormatV05(), scale_factors=(2,))
+
+    plate = zarr.open_group(str(root / "plate.zarr"), mode="w", zarr_format=2)
+    well_paths = ["A/1", "A/2", "B/3"]
+    write_plate_metadata(plate, ["A", "B"], ["1", "2", "3"], well_paths,
+                         name="testplate", fmt=FormatV04())
+    for well_path in well_paths:
+        row, col = well_path.split("/")
+        well = plate.require_group(row).require_group(col)
+        write_well_metadata(well, ["0", "1"], fmt=FormatV04())
+        for field_path in ("0", "1"):
+            write_image(arr04, well.require_group(field_path), axes="cyx",
+                        fmt=FormatV04(), scale_factors=(2,))
+
+    return {
+        "img04": str(root / "img04.zarr"),
+        "img05": str(root / "img05.zarr"),
+        "plate": str(root / "plate.zarr"),
+        "arr04": arr04,
+        "arr05": arr05,
+    }
