@@ -76,8 +76,9 @@ docs = [
     "mkdocs-autorefs>=0.5.0",
     "griffe-pydantic>=1.1.7",
 ]
+zarr = ["ome-zarr>=0.16"]
 all = [
-    "omero-annotate-ai[notebooks,microsam]",
+    "omero-annotate-ai[notebooks,microsam,zarr]",
 ]
 
 [project.urls]
@@ -161,10 +162,14 @@ twine = "*"
 [tool.pixi.feature.mifa.pypi-dependencies]
 bia-mifa-models = { git = "https://github.com/BioImage-Archive/bia-mifa-models.git", tag = "v1.1.5" }
 
+# OME-Zarr reading (optional) - ome-zarr-py, imported lazily by sources/zarr.py.
+[tool.pixi.feature.zarr.dependencies]
+ome-zarr = ">=0.16"
+
 # Environment definitions
 [tool.pixi.environments]
-default = []
-dev = ["dev","all","mifa"]
+default = ["zarr"]
+dev = ["dev","all","mifa","zarr"]
 docs = ["docs"]
 dev-docs = ["dev", "docs"]
 mifa = ["mifa"]
