@@ -120,3 +120,47 @@ class TestOmeroImageSource:
         self.image.getPrimaryPixels().getPlane.side_effect = RuntimeError("ice down")
         with pytest.raises(RuntimeError, match="ice down"):
             self.source.read_plane(self.image, t=0, c=0, z=0)
+
+
+from omero_annotate_ai.sources.uri import (
+    annotation_id,
+    normalize_zarr_uri,
+    omero_uri,
+    parse_omero_uri,
+    uri_key,
+)
+
+
+@pytest.mark.unit
+class TestUri:
+    def test_omero_round_trip(self):
+        assert omero_uri(42) == "omero:image:42"
+        assert parse_omero_uri("omero:image:42") == 42
+
+    @pytest.mark.parametrize("value", ["https://x/y.zarr", "omero:image:abc", 42, None])
+    def test_parse_non_omero_returns_none(self, value):
+        assert parse_omero_uri(value) is None
+
+    def test_normalize_http_drops_query_and_trailing_slash(self):
+        assert (
+            normalize_zarr_uri("https://h/p.zarr/B/2/0/?anonymous=true")
+            == "https://h/p.zarr/B/2/0"
+        )
+
+    def test_normalize_local_path_is_absolute(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert normalize_zarr_uri("img.zarr/") == str(tmp_path / "img.zarr")
+
+    def test_uri_key_is_stable_sha1_prefix(self):
+        assert uri_key("omero:image:1") == "4ba674d4"
+        assert uri_key("omero:image:2") != uri_key("omero:image:1")
+
+    def test_annotation_id_forms(self):
+        key = uri_key("omero:image:1")
+        assert annotation_id("omero:image:1", 0, 3) == f"{key}_0_3"
+        assert annotation_id("omero:image:1", 0, 3, patch=2) == f"{key}_0_3_2"
+        assert annotation_id("omero:image:1", 1, 0, volumetric=True) == f"{key}_1_3d"
+        assert (
+            annotation_id("omero:image:1", 1, 0, volumetric=True, patch=0)
+            == f"{key}_1_3d_0"
+        )
