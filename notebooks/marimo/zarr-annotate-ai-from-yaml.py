@@ -53,6 +53,8 @@ def _(mo):
 def _(load_button, load_config_from_yaml, mo, yaml_path):
     mo.stop(not load_button.value, mo.md("Enter a YAML path and click 'Load configuration'"))
     config = load_config_from_yaml(yaml_path.value)
+    # Keep the source YAML untouched; progress and the updated config go to the output directory.
+    config.config_file_path = None
     mo.stop(
         config.source != "zarr",
         mo.md("This configuration reads from OMERO; use `omero-annotate-ai-from-yaml.py`."),

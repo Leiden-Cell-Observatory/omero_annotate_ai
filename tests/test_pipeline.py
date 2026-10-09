@@ -1736,7 +1736,7 @@ class TestZarrWorkflow:
 
     def test_no_images_error_names_the_uris(self, tmp_path, ngff_stores):
         config = _zarr_config(tmp_path, [ngff_stores["plate"]], wells=["H12"])
-        with pytest.raises(ValueError, match="plate.zarr"):
+        with pytest.raises(ValueError, match="plate.zarr"), pytest.warns(UserWarning, match="H12"):
             AnnotationPipeline(config).initialize_workflow()
 
     def test_end_to_end_custom_annotation(self, tmp_path, ngff_stores):

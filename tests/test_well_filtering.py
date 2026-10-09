@@ -499,8 +499,13 @@ class TestZarrDiscovery:
         assert (ref.plate, ref.well, ref.field) == ("testplate", "A2", "0")
 
     def test_wells_list_normalized_and_unknown_ignored(self):
-        refs = discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], wells=["a02", "H12"]))
+        with pytest.warns(UserWarning, match="H12"):
+            refs = discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], wells=["a02", "H12"]))
         assert [r.well for r in refs] == ["A2"]
+
+    def test_unknown_wells_list_entry_warns(self):
+        with pytest.warns(UserWarning, match="H12"):
+            discover_zarr_images(ZarrConfig(uris=[self.s["plate"]], wells=["A2", "H12"]))
 
     def test_csv_filter_include_records_the_match(self, tmp_path):
         csv = self._csv(tmp_path, [{"well": "A1", "compound": "DMSO"},

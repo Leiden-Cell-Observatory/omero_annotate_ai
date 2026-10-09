@@ -159,6 +159,15 @@ class TestUri:
         monkeypatch.chdir(tmp_path)
         assert normalize_zarr_uri("img.zarr/") == str(tmp_path / "img.zarr")
 
+    def test_normalize_windows_path_uses_forward_slashes(self, monkeypatch):
+        import ntpath
+        import types
+
+        import omero_annotate_ai.sources.uri as uri_module
+
+        monkeypatch.setattr(uri_module, "os", types.SimpleNamespace(path=ntpath, sep="\\"))
+        assert normalize_zarr_uri("C:\\data\\p.zarr\\B\\2\\") == "C:/data/p.zarr/B/2"
+
     def test_uri_key_is_stable_sha1_prefix(self):
         assert uri_key("omero:image:1") == "4ba674d4"
         assert uri_key("omero:image:2") != uri_key("omero:image:1")

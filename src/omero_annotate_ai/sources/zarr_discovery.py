@@ -90,6 +90,12 @@ class _Selector:
         return kv if included else None
 
     def report(self, output_dir: Optional[Path]) -> None:
+        if self.wanted is not None:
+            seen_wells = {key[1] if isinstance(key, tuple) else key for key in self.seen}
+            missing = sorted(self.wanted - seen_wells)
+            if missing:
+                warnings.warn(f"{len(missing)} wells in zarr.wells are not in the plate(s): "
+                              f"{', '.join(missing)}")
         if self.cfg.well_metadata:
             no_row = [r["well"] for r in self.records if not r["matched"]]
             if no_row:

@@ -31,10 +31,11 @@ def parse_omero_uri(uri: Any) -> Optional[int]:
 
 def normalize_zarr_uri(uri: str) -> str:
     """Canonical form of a Zarr image URI: no query string or trailing slash for
-    http(s) URLs, an absolute path for local stores."""
+    http(s) URLs, an absolute path with ``/`` separators for local stores (so plate,
+    well and field URIs join the same way on Windows)."""
     if re.match(r"^https?://", uri):
         return uri.split("?", 1)[0].rstrip("/")
-    return os.path.abspath(os.path.expanduser(uri))
+    return os.path.abspath(os.path.expanduser(uri)).replace(os.sep, "/")
 
 
 def uri_key(uri: str) -> str:
