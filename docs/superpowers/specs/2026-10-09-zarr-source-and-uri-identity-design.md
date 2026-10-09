@@ -99,17 +99,20 @@ Validation (model validator on `AnnotationConfig`):
 - `source == "zarr"` requires a non-empty `zarr.uris`.
 - `zarr.well_filters` requires `zarr.well_metadata`.
 
-New config helper: `AnnotationConfig.writes_to_omero -> bool` =
-`source == "omero" and not workflow.read_only_mode`. Every pipeline check of
-`workflow.read_only_mode` that decides "upload to OMERO vs write locally" uses it
-instead. So a Zarr run takes the existing local-output path (masks in
-`annotation_output/`, table as local CSV) without the user setting `read_only_mode`.
+A Zarr run never writes to OMERO, which is exactly what `workflow.read_only_mode`
+already means in the pipeline (masks to `annotation_output/`, table as local CSV, no
+uploads). So the same model validator sets `workflow.read_only_mode = True` when
+`source == "zarr"` *(minimal: replaces a new `writes_to_omero` helper that would have
+touched ~8 call sites)*. The saved YAML then shows `read_only_mode: true`, which is
+truthful.
 
 ### 2. Image identity
 
 `ImageAnnotation`:
 
-- `image_uri: str` (required) — the identity.
+- `image_uri: str = ""` — the identity. A model validator fills it with
+  `omero_uri(image_id)` when it is empty and `image_id` is set, so OMERO code and tests
+  that build `ImageAnnotation(image_id=…)` keep working *(minimal)*.
 - `image_id: Optional[int] = None` — the OMERO image id, set only for OMERO URIs. It is
   kept because the OMERO table's typed `ImageColumn` (PR #50) and ROI/attachment
   uploads need an integer id.
@@ -126,7 +129,9 @@ New module `src/omero_annotate_ai/sources/uri.py` (pure functions, no I/O):
 - `uri_key(uri: str) -> str` → first 8 hex chars of `sha1(uri)`.
 - `annotation_id(uri, t, z, *, volumetric=False, patch=None) -> str` →
   `{key}_{t}_{z}` / `{key}_{t}_3d`, plus `_{patch}` when `patch` is given. Replaces the
-  four f-strings in `_prepare_processing_units` and `_annotation_id_base`.
+  four f-strings in `_prepare_processing_units`. `_annotation_id_base` in
+  `annotation_config.py` is **not** changed: it regenerates ids for legacy tables that
+  never stored one, so it must keep the old `{image_id}_…` form.
 
 Table columns (`to_dataframe` / `from_dataframe`, local CSV and OMERO table):
 
@@ -246,9 +251,9 @@ filters, so the YAML plus `well_matching.csv` show exactly which decision was ma
   (`config.zarr.level` for Zarr, `0` for OMERO), and uses `uri.annotation_id(...)`.
 - Every place that reads `meta["image_id"]` for an image lookup uses `image_uri`; OMERO
   uploads keep using `annotation.image_id` and are only reached when
-  `config.writes_to_omero`.
-- `_validate_setup`: a connection is required only when `config.source == "omero"` and
-  the source is the default `OmeroImageSource` (Phase 1 rule otherwise unchanged).
+  `config.workflow.read_only_mode` is false (never for Zarr).
+- `_validate_setup` needs no change: Zarr configs are read-only (section 1) and the
+  default source for them is not an `OmeroImageSource`.
 - The "No images found in {container_type} {container_id}" error names the Zarr URIs for
   Zarr runs.
 
@@ -309,7 +314,7 @@ and a small 0.4 plate (2×3 wells, 2 fields).
   sorted wells, `fields` first/all, `wells` normalization, CSV matching with
   and without `plate`, filters include/exclude, `well_matching.csv` contents,
   mismatch warnings. `match_well_filter` unit tests (moved).
-- `tests/test_config.py`: `ZarrConfig` validation, `writes_to_omero`, YAML round trip,
+- `tests/test_config.py`: `ZarrConfig` validation, Zarr forces `read_only_mode`, YAML round trip,
   new table columns, `from_dataframe` without `image_uri`.
 - `tests/test_pipeline.py`: an end-to-end Zarr run on the plate fixture with a fake
   annotation function (`run_custom_annotation`): annotation ids are hash-based, masks and
