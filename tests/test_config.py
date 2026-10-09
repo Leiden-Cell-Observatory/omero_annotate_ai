@@ -12,6 +12,7 @@ from omero_annotate_ai.core.annotation_config import (
     ImageAnnotation,
     create_default_config,
     load_config,
+    load_config_from_yaml,
     get_config_template,
     validate_annotations_against_config,
     ValidationResult,
@@ -1849,3 +1850,11 @@ class TestZarrConfig:
     def test_bad_fields_value_rejected(self):
         with pytest.raises(ValueError):
             AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a"], "fields": 3})
+
+    def test_example_yaml_loads(self):
+        root = Path(__file__).resolve().parents[1]
+        config = load_config_from_yaml(
+            str(root / "notebooks/marimo/configs/zarr-s-biad855-example.yaml"))
+        assert config.source == "zarr"
+        assert config.zarr.level == 1
+        assert config.workflow.read_only_mode is True

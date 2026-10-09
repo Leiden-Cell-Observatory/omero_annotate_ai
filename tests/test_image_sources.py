@@ -245,3 +245,28 @@ class TestZarrImageSource:
 
     def test_handles_are_cached(self):
         assert self.source.get_image(self.s["img04"]) is self.source.get_image(self.s["img04"] + "/")
+
+
+S_BIAD855 = ("https://livingobjects.ebi.ac.uk/bioimaging-integrator-data/S-BIAD855/"
+             "781ac3d7-673f-47be-a4d2-3fdf3f477047/781ac3d7-673f-47be-a4d2-3fdf3f477047.zarr")
+
+
+@pytest.mark.slow
+class TestZarrRemote:
+    def test_discover_and_read_patch(self, tmp_path):
+        pytest.importorskip("ome_zarr")
+        requests = pytest.importorskip("requests")
+        try:
+            requests.head(S_BIAD855 + "/.zattrs", timeout=10).raise_for_status()
+        except Exception as exc:
+            pytest.skip(f"S-BIAD855 not reachable: {exc}")
+        from omero_annotate_ai.core.annotation_config import ZarrConfig
+        from omero_annotate_ai.sources.zarr import ZarrImageSource
+        from omero_annotate_ai.sources.zarr_discovery import discover_zarr_images
+
+        (ref,) = discover_zarr_images(ZarrConfig(uris=[S_BIAD855], wells=["B2"]))
+        assert (ref.plate, ref.well, ref.field) == ("20585", "B2", "0")
+        source = ZarrImageSource(level=1)
+        image = source.get_image(ref.uri)
+        patch = source.read_plane(image, t=0, c=2, z=0, region=(0, 0, 64, 64))
+        assert patch.shape == (64, 64) and patch.dtype == np.uint16
