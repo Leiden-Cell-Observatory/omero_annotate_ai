@@ -5,9 +5,15 @@ from unittest.mock import patch, Mock, MagicMock
 import tempfile
 from pathlib import Path
 import numpy as np
+import pandas as pd
+import tifffile
 
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-from omero_annotate_ai.core.annotation_config import ImageAnnotation, create_default_config
+from omero_annotate_ai.core.annotation_config import (
+    AnnotationConfig,
+    ImageAnnotation,
+    create_default_config,
+)
 from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
 from omero_annotate_ai.sources.uri import (
     annotation_id as make_annotation_id,
@@ -1709,3 +1715,58 @@ class TestMicroSamSeparateChannelSaving:
         assert result["stats"]["n_training_images"] == 1
         assert (result["train_input"] / "img_001.tif").exists()
         assert (result["train_annotation_input"] / "img_001.tif").exists()
+
+
+def _zarr_config(tmp_path, uris, **zarr):
+    config = AnnotationConfig(name="zarr_run", source="zarr", zarr={"uris": uris, **zarr})
+    config.output.output_directory = tmp_path / "out"
+    config.training.segment_all = True
+    config.spatial_coverage.use_patches = False
+    return config
+
+
+@pytest.mark.integration
+class TestZarrWorkflow:
+    def test_default_source_for_zarr_config(self, tmp_path, ngff_stores):
+        from omero_annotate_ai.sources import ZarrImageSource
+
+        pipeline = AnnotationPipeline(_zarr_config(tmp_path, [ngff_stores["plate"]], level=1))
+        assert isinstance(pipeline.image_source, ZarrImageSource)
+        assert pipeline.image_source.level == 1
+
+    def test_no_images_error_names_the_uris(self, tmp_path, ngff_stores):
+        config = _zarr_config(tmp_path, [ngff_stores["plate"]], wells=["H12"])
+        with pytest.raises(ValueError, match="plate.zarr"):
+            AnnotationPipeline(config).initialize_workflow()
+
+    def test_end_to_end_custom_annotation(self, tmp_path, ngff_stores):
+        config = _zarr_config(tmp_path, [ngff_stores["plate"]], level=1, wells=["A1", "B3"])
+        pipeline = AnnotationPipeline(config)
+        seg_dir = tmp_path / "seg"
+
+        def fake_annotate(batch):
+            seg_dir.mkdir(exist_ok=True)
+            metadata = []
+            for i, (image_obj, ann_id, meta, row_idx) in enumerate(batch):
+                plane = pipeline._load_image_data(image_obj, meta)
+                tifffile.imwrite(seg_dir / f"seg_{i:05d}.tif",
+                                 (plane > plane.mean()).astype(np.uint32))
+                metadata.append((ann_id, meta, row_idx))
+            return {"metadata": metadata, "annotations_path": seg_dir}
+
+        pipeline.run_custom_annotation(fake_annotate)
+
+        anns = pipeline.config.annotations
+        assert [(a.well, a.field, a.level, a.image_id) for a in anns] == [
+            ("A1", "0", 1, None), ("B3", "0", 1, None)]
+        assert anns[0].image_name == "testplate_A1_0"
+        assert anns[0].annotation_id == make_annotation_id(anns[0].image_uri, 0, 0)
+        out = tmp_path / "out"
+        for ann in anns:
+            mask = tifffile.imread(out / "annotation_output" / f"{ann.annotation_id}_mask.tif")
+            assert mask.shape == (32, 40)  # level 1 grid
+            assert (out / "annotation_input" / f"{ann.annotation_id}.tif").exists()
+        table = pd.read_csv(out / "tracking_table.csv")
+        assert list(table["image_uri"]) == [a.image_uri for a in anns]
+        assert table["processed"].all()
+        assert (out / "well_matching.csv").exists()

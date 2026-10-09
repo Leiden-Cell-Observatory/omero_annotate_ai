@@ -45,8 +45,9 @@ from ..omero.omero_functions import (
 )
 from ..omero.omero_utils import get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
-from ..sources import ImageMeta, ImageSource, OmeroImageSource
-from ..sources.uri import annotation_id as make_annotation_id, parse_omero_uri
+from ..sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
+from ..sources.uri import annotation_id as make_annotation_id, omero_uri, parse_omero_uri
+from ..sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 from ..sources.wells import match_well_filter
 
 
@@ -70,11 +71,14 @@ class AnnotationPipeline:
             conn: OMERO connection object (BlitzGateway)
             config_file_path: Optional path to the source YAML configuration file for persistence
             image_source: Where pixels and image sizes are read from. Defaults to
-                ``OmeroImageSource(conn)``.
+                the source the config asks for (``make_image_source``).
         """
         self.config = config
         self.conn = conn
-        self.image_source = image_source if image_source is not None else OmeroImageSource(conn)
+        self.image_source = (
+            image_source if image_source is not None else make_image_source(config, conn)
+        )
+        self._zarr_refs: Dict[str, ZarrImageRef] = {}
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
@@ -257,11 +261,21 @@ class AnnotationPipeline:
     def _identity_fields(self, image_meta: ImageMeta) -> dict:
         """ImageAnnotation fields that say which image a unit belongs to."""
         uri = image_meta.image_uri
-        return {
+        fields = {
             "image_uri": uri,
             "image_id": parse_omero_uri(uri),
             "image_name": image_meta.name,
+            "level": self.config.zarr.level if self.config.source == "zarr" else 0,
         }
+        ref = self._zarr_refs.get(uri)
+        if ref is not None:
+            fields.update(
+                image_name=ref.name or image_meta.name,
+                well=ref.well,
+                field=ref.field,
+                well_metadata=dict(ref.well_metadata),
+            )
+        return fields
 
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
@@ -1068,6 +1082,17 @@ class AnnotationPipeline:
         else:
             raise ValueError(f"Unsupported container type: {container_type}")
 
+    def get_image_uris(self) -> List[str]:
+        """URIs of the images the config selects (OMERO container or OME-Zarr URIs)."""
+        if self.config.source == "zarr":
+            refs = discover_zarr_images(
+                self.config.zarr, output_dir=Path(self.config.output.output_directory)
+            )
+            self._zarr_refs = {ref.uri: ref for ref in refs}
+            print(f"Found {len(refs)} OME-Zarr images")
+            return list(self._zarr_refs)
+        return [omero_uri(i) for i in self.get_image_ids_from_container()]
+
     def get_image_ids_from_container(self) -> List[int]:
         """Get image IDs from the configured OMERO container(s).
 
@@ -1242,12 +1267,15 @@ class AnnotationPipeline:
 
         # If images_list is not provided, select only required images
         if images_list is None:
-            image_ids = self.get_image_ids_from_container()
+            image_ids = self.get_image_uris()
             n_total = len(image_ids)
             if n_total == 0:
-                raise ValueError(
-                    f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
+                where = (
+                    f"OME-Zarr URIs {self.config.zarr.uris}"
+                    if self.config.source == "zarr"
+                    else f"{self.config.omero.container_type} {self.config.omero.container_id}"
                 )
+                raise ValueError(f"No images found in {where}")
 
             # Determine which images to process (mimic _prepare_processing_units logic)
             if self.config.training.segment_all:
@@ -1425,6 +1453,8 @@ class AnnotationPipeline:
                     self._debug_print("   Updating OMERO table...")
                     self._replace_omero_table_from_config()
                     self._debug_print(f"   OMERO table updated (ID: {self.table_id})")
+                else:
+                    self._save_local_progress_from_annotations(self.config.get_processed())
                 
                 self._debug_print("   Auto-saving config...")
                 self._auto_save_config()
@@ -1520,7 +1550,9 @@ class AnnotationPipeline:
         # Update tracking
         if not self.config.workflow.read_only_mode:
             self._replace_omero_table_from_config()
-        
+        else:
+            self._save_local_progress_from_annotations(self.config.get_processed())
+
         self._auto_save_config()
         print(f"Cellpose preparation completed: {len(unprocessed_annotations)} images saved")
         
