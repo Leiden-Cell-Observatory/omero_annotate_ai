@@ -4,6 +4,36 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.core.annotation_config import AnnotationConfig
+from omero_annotate_ai.sources import ImageMeta
+
+
+def _map_annotation(kv):
+    ann = Mock()
+    ann.OMERO_TYPE.__name__ = "MapAnnotationI"
+    ann.getMapValue.return_value = [Mock(name=k, value=v) for k, v in kv.items()]
+    for item, k in zip(ann.getMapValue.return_value, kv):
+        item.name = k
+    return ann
+
+
+def _plate_conn(wells):
+    """Mock connection whose getObject("Well", id) returns gateway-like wells.
+
+    ``wells`` maps well id -> (row, column, image ids in field order, key-value pairs).
+    """
+    def well(well_id):
+        row, column, image_ids, kv = wells[well_id]
+        obj = Mock()
+        obj.row, obj.column = row, column
+        obj.listChildren.return_value = [
+            Mock(**{"getImage.return_value.getId.return_value": i}) for i in image_ids
+        ]
+        obj.listAnnotations.return_value = [_map_annotation(kv)] if kv else []
+        return obj
+
+    conn = Mock()
+    conn.getObject.side_effect = lambda kind, oid: well(oid) if kind == "Well" else None
+    return conn
 
 
 @pytest.mark.unit
@@ -176,66 +206,73 @@ class TestWellFilteringIntegration:
                 "well_filter_mode": "include"
             }
         )
+        conn = _plate_conn({
+            101: (0, 0, [1, 2], {"cellline": "U2OS"}),
+            102: (0, 1, [3, 4], {"cellline": "HeLa"}),
+            103: (1, 2, [5, 6], {"cellline": "U2OS"}),
+        })
+        pipeline = AnnotationPipeline(config, conn=conn)
 
-        # Mock OMERO connection and ezomero functions
-        mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
-
-        # Mock well IDs and well objects
         with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
             mock_ezomero.get_well_ids.return_value = [101, 102, 103]
-
-            # Mock get_image_ids to return different images per well
-            def mock_get_image_ids(conn, well=None):
-                if well == 101:
-                    return [1, 2]
-                elif well == 102:
-                    return [3, 4]
-                elif well == 103:
-                    return [5, 6]
-                return []
-
-            mock_ezomero.get_image_ids.side_effect = mock_get_image_ids
-
-            # Mock well map annotations
-            def mock_get_well_annotations(well_id):
-                if well_id == 101:
-                    return {"cellline": "U2OS"}  # Match
-                elif well_id == 102:
-                    return {"cellline": "HeLa"}  # No match
-                elif well_id == 103:
-                    return {"cellline": "U2OS"}  # Match
-                return {}
-
-            pipeline._get_well_map_annotations = mock_get_well_annotations
-
-            # Run the method
             image_ids = pipeline.get_image_ids_from_container()
 
-            # Should only include images from wells 101 and 103 (U2OS)
-            assert set(image_ids) == {1, 2, 5, 6}
+        assert image_ids == [1, 2, 5, 6]
 
     def test_get_image_ids_without_well_filtering(self):
         """Test that get_image_ids_from_container works without filtering."""
         config = AnnotationConfig(
             name="test",
-            omero={
-                "container_type": "plate",
-                "container_id": 1,
-                # No well_filters specified
-            }
+            omero={"container_type": "plate", "container_id": 1},
         )
-
-        mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        conn = _plate_conn({
+            101: (0, 0, [1, 2], {}),
+            102: (0, 1, [3], {}),
+        })
+        pipeline = AnnotationPipeline(config, conn=conn)
 
         with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
-            mock_ezomero.get_image_ids.return_value = [1, 2, 3, 4, 5, 6]
-
+            mock_ezomero.get_well_ids.return_value = [101, 102]
             image_ids = pipeline.get_image_ids_from_container()
 
-            # Should include all images
-            assert image_ids == [1, 2, 3, 4, 5, 6]
+        assert image_ids == [1, 2, 3]
+
+    def test_plate_images_carry_well_field_and_metadata(self):
+        """OMERO plate images record their well, field index and well key-value pairs."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "plate", "container_id": 1},
+        )
+        conn = _plate_conn({
+            101: (1, 1, [7, 8], {"cellline": "U2OS"}),
+            102: (27, 11, [9], {}),
+        })
+        pipeline = AnnotationPipeline(config, conn=conn)
+
+        with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
+            mock_ezomero.get_well_ids.return_value = [101, 102]
+            pipeline.get_image_ids_from_container()
+
+        def identity(image_id):
+            meta = ImageMeta(f"omero:image:{image_id}", f"img{image_id}", 1, 1, 1, 8, 8, "uint16")
+            return pipeline._identity_fields(meta)
+
+        assert identity(8)["well"] == "B2"
+        assert identity(8)["field"] == "1"
+        assert identity(8)["well_metadata"] == {"cellline": "U2OS"}
+        assert identity(8)["image_name"] == "img8"
+        assert identity(9)["well"] == "AB12"
+        assert identity(9)["field"] == "0"
+
+    def test_dataset_images_have_no_well(self):
+        """Images outside a plate leave well and field empty."""
+        config = AnnotationConfig(
+            name="test",
+            omero={"container_type": "dataset", "container_id": 1},
+        )
+        pipeline = AnnotationPipeline(config, conn=Mock())
+        meta = ImageMeta("omero:image:5", "img5", 1, 1, 1, 8, 8, "uint16")
+        assert "well" not in pipeline._identity_fields(meta)
 
 
 @pytest.mark.unit
@@ -345,48 +382,21 @@ class TestMultiContainerImageRetrieval:
                 "well_filter_mode": "include"
             }
         )
-        mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        conn = _plate_conn({
+            101: (0, 0, [1001], {"cellline": "U2OS"}),
+            102: (0, 1, [1002], {"cellline": "HeLa"}),
+            201: (0, 0, [2001], {"cellline": "U2OS"}),
+            202: (0, 1, [2002], {"cellline": "HeLa"}),
+        })
+        pipeline = AnnotationPipeline(config, conn=conn)
 
         with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
-            # Mock well IDs for each plate
-            def mock_get_well_ids(conn, plate=None):
-                if plate == 1:
-                    return [101, 102]  # Plate 1 wells
-                elif plate == 2:
-                    return [201, 202]  # Plate 2 wells
-                return []
-
-            mock_ezomero.get_well_ids.side_effect = mock_get_well_ids
-
-            # Mock image IDs for each well
-            def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
-                well_images = {
-                    101: [1001],  # U2OS
-                    102: [1002],  # HeLa
-                    201: [2001],  # U2OS
-                    202: [2002],  # HeLa
-                }
-                return well_images.get(well, [])
-
-            mock_ezomero.get_image_ids.side_effect = mock_get_image_ids
-
-            # Mock map annotations for wells
-            def mock_annotations(well_id):
-                annotations = {
-                    101: {"cellline": "U2OS"},
-                    102: {"cellline": "HeLa"},
-                    201: {"cellline": "U2OS"},
-                    202: {"cellline": "HeLa"},
-                }
-                return annotations.get(well_id, {})
-
-            pipeline._get_well_map_annotations = mock_annotations
-
+            mock_ezomero.get_well_ids.side_effect = (
+                lambda conn, plate=None: {1: [101, 102], 2: [201, 202]}[plate]
+            )
             image_ids = pipeline.get_image_ids_from_container()
 
-            # Should only include U2OS wells from both plates
-            assert set(image_ids) == {1001, 2001}
+        assert set(image_ids) == {1001, 2001}
 
 
 @pytest.mark.unit

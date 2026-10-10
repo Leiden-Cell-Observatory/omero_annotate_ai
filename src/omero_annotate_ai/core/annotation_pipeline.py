@@ -51,6 +51,17 @@ from ..sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 from ..sources.wells import match_well_filter
 
 
+
+def _well_name(row: int, column: int) -> str:
+    """Well name from 0-based plate indices: (1, 1) -> B2, (27, 11) -> AB12."""
+    letters = ""
+    row += 1
+    while row:
+        row, rest = divmod(row - 1, 26)
+        letters = chr(ord("A") + rest) + letters
+    return f"{letters}{column + 1}"
+
+
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
     
@@ -79,6 +90,8 @@ class AnnotationPipeline:
             image_source if image_source is not None else make_image_source(config, conn)
         )
         self._zarr_refs: Dict[str, ZarrImageRef] = {}
+        # OMERO plate images: URI -> well, field and well key-value pairs
+        self._omero_wells: Dict[str, dict] = {}
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
@@ -275,6 +288,9 @@ class AnnotationPipeline:
                 field=ref.field,
                 well_metadata=dict(ref.well_metadata),
             )
+        well = self._omero_wells.get(uri)
+        if well is not None:
+            fields.update(well, well_metadata=dict(well["well_metadata"]))
         return fields
 
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
@@ -978,8 +994,11 @@ class AnnotationPipeline:
         well_obj = self.conn.getObject("Well", well_id)
         if not well_obj:
             return {}
+        return self._well_kv(well_obj)
 
-        # Collect all map annotations into a single dict
+    @staticmethod
+    def _well_kv(well_obj) -> dict:
+        """Key-value pairs of all map annotations on an OMERO well."""
         kv_pairs = {}
         for ann in well_obj.listAnnotations():
             if hasattr(ann, 'OMERO_TYPE') and ann.OMERO_TYPE.__name__ == 'MapAnnotationI':
@@ -1012,44 +1031,41 @@ class AnnotationPipeline:
         Returns:
             List of image IDs from the plate (filtered if well_filters configured).
         """
-        if self.config.omero.well_filters:
-            print(f"Applying well filters: {self.config.omero.well_filters}")
+        filters = self.config.omero.well_filters
+        if filters:
+            print(f"Applying well filters: {filters}")
             print(f"Filter mode: {self.config.omero.well_filter_mode}")
 
-            # Get all wells in the plate
-            well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
-            print(f"Found {len(well_ids)} wells in plate {container_id}")
+        well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
+        print(f"Found {len(well_ids)} wells in plate {container_id}")
 
-            filtered_image_ids = []
-            matched_wells = 0
-
-            for well_id in well_ids:
-                # Get map annotations from the well
-                well_kv_pairs = self._get_well_map_annotations(well_id)
-
-                # Check if well matches filter criteria
-                matches_filter = self._check_well_filter(well_kv_pairs, self.config.omero.well_filters)
-
-                # Apply include/exclude logic
-                should_include = (
-                    (self.config.omero.well_filter_mode == "include" and matches_filter) or
-                    (self.config.omero.well_filter_mode == "exclude" and not matches_filter)
-                )
-
-                if should_include:
-                    matched_wells += 1
-                    # Get all images from this well
-                    well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
-                    filtered_image_ids.extend(well_image_ids)
-                    self._debug_print(f"  Well {well_id}: matched filter, adding {len(well_image_ids)} images")
-                else:
+        image_ids = []
+        matched_wells = 0
+        for well_id in well_ids:
+            well_obj = self.conn.getObject("Well", well_id)
+            if well_obj is None:
+                continue
+            well_kv_pairs = self._well_kv(well_obj)
+            if filters:
+                matches_filter = self._check_well_filter(well_kv_pairs, filters)
+                if matches_filter != (self.config.omero.well_filter_mode == "include"):
                     self._debug_print(f"  Well {well_id}: filtered out")
+                    continue
+            matched_wells += 1
+            well_name = _well_name(well_obj.row, well_obj.column)
+            # The field is the WellSample index, as BlitzGateway's Well.getImage(index) uses it.
+            for field, sample in enumerate(well_obj.listChildren()):
+                image_id = sample.getImage().getId()
+                image_ids.append(image_id)
+                self._omero_wells[omero_uri(image_id)] = {
+                    "well": well_name,
+                    "field": str(field),
+                    "well_metadata": dict(well_kv_pairs),
+                }
 
-            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(filtered_image_ids)} images selected")
-            return filtered_image_ids
-        else:
-            # No filters - get all images from plate
-            return list(ezomero.get_image_ids(self.conn, plate=container_id))
+        if filters:
+            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(image_ids)} images selected")
+        return image_ids
 
     def _get_image_ids_from_single_container(self, container_type: str, container_id: int) -> List[int]:
         """Get image IDs from a single OMERO container.
