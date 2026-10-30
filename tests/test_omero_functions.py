@@ -862,6 +862,28 @@ class TestUploadRoisAndLabels:
         assert Path(kwargs["file_path"]).name == "gt_set_5_3_0_mask.tif"
         assert kwargs["description"] == "Training set: gt_set | t=3 | z=0 | c=0"
 
+    def test_label_file_is_compressed_losslessly(self, tmp_path):
+        from tifffile import TiffFile, imwrite
+
+        mask = np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) % 7
+        mask_file = tmp_path / "1_0_0_mask.tif"
+        imwrite(mask_file, mask)
+        uploaded = {}
+
+        def capture(conn, file_path, **kwargs):
+            with TiffFile(file_path) as tif:
+                uploaded["compression"] = tif.pages[0].compression.name
+                uploaded["data"] = tif.asarray()
+            return 7
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            side_effect=capture,
+        ):
+            upload_rois_and_labels(Mock(), 1, str(mask_file), create_rois=False)
+        assert uploaded["compression"] == "ADOBE_DEFLATE"
+        np.testing.assert_array_equal(uploaded["data"], mask)
+
     def test_label_file_only(self, tmp_path):
         ids, post_file, post_roi = self._upload(tmp_path, create_rois=False)
         assert ids == (7, None)

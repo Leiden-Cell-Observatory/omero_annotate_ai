@@ -3,7 +3,6 @@
 import json
 import os
 import random
-import shutil
 import string
 import tempfile
 from datetime import datetime, timezone
@@ -26,6 +25,7 @@ from .omero_utils import (
 import ezomero
 
 import imageio.v3 as imageio
+import tifffile
 
 from ..processing.image_functions import label_to_rois
 from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
@@ -812,13 +812,13 @@ def upload_rois_and_labels(
         desc_parts.append(f"Patch offset: ({patch_offset[0]}, {patch_offset[1]})")
     label_desc = " | ".join(desc_parts)
 
-    # Prefix the file name with the training set, so label files of different sets on
-    # the same image can be told apart in OMERO
+    # The uploaded file is written losslessly compressed (label images compress well), and
+    # its name starts with the training set, so label files of different sets on the same
+    # image can be told apart in OMERO
     with tempfile.TemporaryDirectory() as tmp:
-        upload_path = annotation_file
-        if trainingset_name:
-            upload_path = os.path.join(tmp, f"{trainingset_name}_{os.path.basename(annotation_file)}")
-            shutil.copyfile(annotation_file, upload_path)
+        prefix = f"{trainingset_name}_" if trainingset_name else ""
+        upload_path = os.path.join(tmp, prefix + os.path.basename(annotation_file))
+        tifffile.imwrite(upload_path, label_img, compression="zlib")
         file_ann_id = ezomero.post_file_annotation(
             conn,
             file_path=upload_path,
