@@ -586,6 +586,17 @@ class TestPrepareFromTableRecords:
             assert key in result, f"setup_training requires {key}"
         assert (result["val_input"] / "1.tif").exists()
 
+    def test_category_column_exports_test_split(self, tmp_path):
+        table = self._table()
+        table["category"] = ["training", "test"]
+        table.loc[1, "train"] = False
+
+        result = self._run(tmp_path, table)
+
+        assert (result["train_input"] / "0.tif").exists()
+        assert (tmp_path / "training" / "test_input" / "1.tif").exists()
+        assert (tmp_path / "training" / "test_label" / "1.tif").exists()
+
 
 @pytest.mark.unit
 class TestEmptyTrainingSetIsLoud:

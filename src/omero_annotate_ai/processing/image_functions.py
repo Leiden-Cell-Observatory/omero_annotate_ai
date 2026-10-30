@@ -1,7 +1,7 @@
 """Image processing functions for annotation workflows."""
 
 import random as rnd
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 # Optional dependencies for ROI functionality
 import cv2
@@ -14,6 +14,7 @@ def generate_patch_coordinates(
     patch_size: List[int],
     n_patches: int,
     random_patch: bool = True,
+    rng: Optional[rnd.Random] = None,
 ) -> Tuple[List[Tuple[int, int]], Tuple[int, int]]:
     """Generate non-overlapping patch coordinates for an image.
 
@@ -24,6 +25,7 @@ def generate_patch_coordinates(
         patch_size: (height, width) of patches
         n_patches: Number of patches to generate
         random_patch: Whether to generate random patches or grid-based patches
+        rng: Random generator for reproducible patch positions (default: module-level)
 
     Returns:
         Tuple containing:
@@ -57,8 +59,8 @@ def generate_patch_coordinates(
 
         while len(coordinates) < n_patches and attempts < max_attempts:
             attempts += 1
-            x = rnd.randint(0, max_x)
-            y = rnd.randint(0, max_y)
+            x = (rng or rnd).randint(0, max_x)
+            y = (rng or rnd).randint(0, max_y)
 
             # Check if this patch overlaps with any existing patch
             new_rect = (x, y, x + patch_w, y + patch_h)

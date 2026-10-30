@@ -261,6 +261,30 @@ training:
   # Fractions must sum to <= 1.0
 ```
 
+#### Split Grouping, Stratification and Seed
+
+Annotations that come from the same frame, image or well are highly correlated. If
+they end up on both sides of a split, validation and test scores are inflated
+(data leakage). `split_level` sets the unit that is always kept in one category:
+
+```yaml
+training:
+  split_level: "well"                   # "timepoint", "image" (default) or "well"
+  stratify_by: ["cellline", "treatment"] # spread these well-metadata combinations over the splits
+  random_seed: 42                       # generated and recorded when left empty
+```
+
+- **`timepoint`**: each frame is assigned on its own, so frames of the same field of view can
+  be in training and test. This is the leakiest option; use it only as a baseline.
+- **`image`**: all timepoints, z-slices and patches of an image share a category.
+- **`well`**: all images of a well share a category (plates only).
+
+In count mode, `train_n`/`validate_n`/`test_n` count units at the split level (wells for
+`split_level: "well"`). The same seed and image list give the same split. Every annotation
+records its well (`well_id`, `well`) and the well's key-value metadata (`well_metadata`), so
+`config.split_leakage_report()` can list frames, images, wells or metadata values that span
+several categories.
+
 ### Workflow Control
 
 ```yaml
@@ -292,6 +316,18 @@ tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 
 # Annotation tracking (auto-populated during processing)
 annotations: []  # List of ImageAnnotation records
+```
+
+### Notes and Custom Metadata
+
+Anything the structured schema does not cover can be recorded in two open fields. Both
+are stored with the configuration; `notes` is also added to the MIFA annotation overview.
+
+```yaml
+notes: "Wells A1-B2 use the key 'celline' instead of 'cellline' in OMERO."
+custom_metadata:
+  instrument: "Incucyte SX5"
+  objective: "10x"
 ```
 
 ## Working with Configuration Files

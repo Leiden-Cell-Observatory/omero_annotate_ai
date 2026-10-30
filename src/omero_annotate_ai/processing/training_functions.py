@@ -11,6 +11,7 @@ import pandas as pd
 from tifffile import imwrite
 from tqdm import tqdm
 
+from ..core.annotation_config import _category_from_row
 from ..utils.logging import create_training_logger
 from .training_layout import (
     AnnotationRecord,
@@ -216,10 +217,20 @@ def prepare_training_data_from_table(
         table["validate"] = ~table["train"]
         logger.info(f"Applied automatic split with validation_split={validation_split}")
 
-    table = table[table["train"] | table["validate"]].copy()
-    n_train = int(table["train"].sum())
-    n_val_rows = int(table["validate"].sum())
-    logger.info(f"Using {n_train} training images and {n_val_rows} validation images")
+    # Tables with a category column carry the test split as well; older tables only
+    # mark train/validate, and their remaining rows are not exported.
+    if "category" in table.columns:
+        table = table.copy()
+        table["category"] = [_category_from_row(row) for _, row in table.iterrows()]
+    else:
+        table = table[table["train"] | table["validate"]].copy()
+        table["category"] = ["training" if t else "validation" for t in table["train"]]
+    include_test = bool((table["category"] == "test").any())
+    counts = table["category"].value_counts()
+    logger.info(
+        f"Using {counts.get('training', 0)} training, {counts.get('validation', 0)} "
+        f"validation and {counts.get('test', 0)} test images"
+    )
 
     # Build records. A row whose label cannot be downloaded is dropped whole: writing
     # the image without its label would leave an orphan, and consumers pair images to
@@ -240,6 +251,7 @@ def prepare_training_data_from_table(
         layout="split",
         clean_existing=clean_existing,
         uses_separate_channels=uses_separate_channels,
+        include_test=include_test,
         logger=logger,
     )
     stats["n_missing"] = n_missing
@@ -684,7 +696,7 @@ def _records_from_table(
                 logger.warning(f"Skipping annotation {annotation_id}: no label")
             continue
 
-        category = "training" if bool(row["train"]) else "validation"
+        category = row["category"] if "category" in row else _category_from_row(row)
 
         image_channel = (
             train_channel if train_channel is not None else _channel_from_row(row)

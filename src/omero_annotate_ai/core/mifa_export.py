@@ -150,6 +150,8 @@ def compose_overview(config) -> str:
     src = dataset.source_dataset_id or dataset.source_description
     if src:
         parts.append(f"Source dataset: {src}.")
+    if config.notes:
+        parts.append(f"Notes: {config.notes.strip().rstrip('.')}.")
     return " ".join(parts)
 
 
@@ -177,7 +179,26 @@ def compose_method(config) -> str:
         parts.append(f"Model URL: {ai.model_url}.")
     if ai.model_doi:
         parts.append(f"Model DOI: {ai.model_doi}.")
+    parts.append(compose_split(config))
     return " ".join(parts)
+
+
+def compose_split(config) -> str:
+    """Describe how annotations were split into training/validation/test."""
+    training = config.training
+    counts = {c: 0 for c in ("training", "validation", "test")}
+    for annotation in config.annotations:
+        counts[annotation.category] += 1
+    text = (
+        f"Data split ({training.validation_strategy}): "
+        f"{counts['training']} training, {counts['validation']} validation and "
+        f"{counts['test']} test annotations, kept together per {training.split_level}"
+    )
+    if training.stratify_by:
+        text += f", stratified by {', '.join(training.stratify_by)}"
+    if training.random_seed is not None:
+        text += f", random seed {training.random_seed}"
+    return text + "."
 
 
 def _slugify(text: Optional[str]) -> str:
