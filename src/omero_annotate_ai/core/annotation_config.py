@@ -672,7 +672,7 @@ class AIModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     # Framework information
-    framework: Literal["micro_sam", "cellpose", "web_annotation"] = Field(
+    framework: Literal["micro_sam", "cellpose", "stardist", "web_annotation"] = Field(
         default="micro_sam", description="AI framework"
     )
     framework_version: Optional[str] = Field(
