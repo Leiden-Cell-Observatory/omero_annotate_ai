@@ -3,6 +3,7 @@
 import json
 import os
 import random
+import shutil
 import string
 import tempfile
 from datetime import datetime, timezone
@@ -802,20 +803,30 @@ def upload_rois_and_labels(
     # Upload label file as attachment
     print("Step 3: Uploading label file as attachment")
 
-    # Build description
-    label_desc = trainingset_description or ""
+    # Build description: training set and the plane the labels belong to
+    desc_parts = [trainingset_description] if trainingset_description else []
+    for key, value in (("t", timepoint), ("z", z_start if is_volumetric else z_slice), ("c", channel)):
+        if value is not None:
+            desc_parts.append(f"{key}={value}")
     if patch_offset:
-        separator = " | " if label_desc else ""
-        label_desc += f"{separator}Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
+        desc_parts.append(f"Patch offset: ({patch_offset[0]}, {patch_offset[1]})")
+    label_desc = " | ".join(desc_parts)
 
-    file_ann_id = ezomero.post_file_annotation(
-        conn,
-        file_path=annotation_file,
-        description=label_desc,
-        ns="openmicroscopy.org/omero/annotate/labels",
-        object_type="Image",
-        object_id=image_id,
-    )
+    # Prefix the file name with the training set, so label files of different sets on
+    # the same image can be told apart in OMERO
+    with tempfile.TemporaryDirectory() as tmp:
+        upload_path = annotation_file
+        if trainingset_name:
+            upload_path = os.path.join(tmp, f"{trainingset_name}_{os.path.basename(annotation_file)}")
+            shutil.copyfile(annotation_file, upload_path)
+        file_ann_id = ezomero.post_file_annotation(
+            conn,
+            file_path=upload_path,
+            description=label_desc,
+            ns="openmicroscopy.org/omero/annotate/labels",
+            object_type="Image",
+            object_id=image_id,
+        )
     print(f"File annotation uploaded with ID: {file_ann_id}")
 
     # Upload ROI shapes if any were created

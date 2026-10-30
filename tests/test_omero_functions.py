@@ -844,6 +844,24 @@ class TestUploadRoisAndLabels:
         post_file.assert_called_once()
         assert len(post_roi.call_args.args[2]) == 2
 
+    def test_label_file_named_after_training_set(self, tmp_path):
+        from tifffile import imwrite
+
+        mask_file = tmp_path / "5_3_0_mask.tif"
+        imwrite(mask_file, np.ones((4, 4), dtype=np.uint16))
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            return_value=7,
+        ) as post_file:
+            upload_rois_and_labels(
+                Mock(), 5, str(mask_file), trainingset_name="gt_set",
+                trainingset_description="Training set: gt_set",
+                timepoint=3, z_slice=0, channel=0, create_rois=False,
+            )
+        kwargs = post_file.call_args.kwargs
+        assert Path(kwargs["file_path"]).name == "gt_set_5_3_0_mask.tif"
+        assert kwargs["description"] == "Training set: gt_set | t=3 | z=0 | c=0"
+
     def test_label_file_only(self, tmp_path):
         ids, post_file, post_roi = self._upload(tmp_path, create_rois=False)
         assert ids == (7, None)
