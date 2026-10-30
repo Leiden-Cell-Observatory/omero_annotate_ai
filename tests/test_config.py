@@ -87,6 +87,7 @@ class TestAnnotationConfig:
             'annotation_methodology',
             'spatial_coverage',
             'training',
+            'normalization',
             'ai_model',
             'workflow',
             'output',

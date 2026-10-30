@@ -180,7 +180,21 @@ def compose_method(config) -> str:
     if ai.model_doi:
         parts.append(f"Model DOI: {ai.model_doi}.")
     parts.append(compose_split(config))
+    parts.append(compose_normalization(config))
     return " ".join(parts)
+
+
+def compose_normalization(config) -> str:
+    """Describe the intensity normalisation of model input images."""
+    norm = config.normalization
+    if norm.method == "none":
+        return "Model input: raw intensities, no normalisation."
+    where = "applied at export (float32)" if norm.apply_at_export else "applied by the trainer"
+    clip = "clipped to [0, 1]" if norm.clip else "not clipped"
+    return (
+        f"Model input normalisation: per-image percentiles {norm.percentile_low}-"
+        f"{norm.percentile_high} mapped to [0, 1], {clip}, {where}."
+    )
 
 
 def compose_split(config) -> str:

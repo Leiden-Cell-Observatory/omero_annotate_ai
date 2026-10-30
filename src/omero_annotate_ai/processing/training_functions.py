@@ -3,16 +3,17 @@
 import shutil
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import ezomero
 import numpy as np
 import pandas as pd
-from tifffile import imwrite
+from tifffile import imread, imwrite
 from tqdm import tqdm
 
-from ..core.annotation_config import _category_from_row
+from ..core.annotation_config import NormalizationConfig, _category_from_row
 from ..utils.logging import create_training_logger
+from .normalization import NormalizationRecorder, write_native_sidecar
 from .training_layout import (
     AnnotationRecord,
     ArraySource,
@@ -68,6 +69,7 @@ def prepare_training_data_from_table(
     label_channel: Optional[int] = None,
     training_channels: Optional[List[int]] = None,
     upload_annotation_input: bool = False,
+    normalization: Optional[Union["NormalizationConfig", Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Prepare training data from OMERO annotation table.
@@ -93,6 +95,10 @@ def prepare_training_data_from_table(
             train_input and val_input. Currently uses first channel if multiple specified.
         upload_annotation_input: If True and using separate channels, uploads the annotation-channel
             images back to OMERO as file annotations. Default is False.
+        normalization: Normalisation spec (``config.normalization`` or an equivalent dict).
+            Images are written at native bit depth unless ``apply_at_export`` is set, in
+            which case they are written as float32 and the bounds per image are recorded.
+            When given, the spec is saved as ``normalization.json`` in output_dir.
 
     Returns:
         Dictionary with paths to created directories:
@@ -235,6 +241,9 @@ def prepare_training_data_from_table(
     # Build records. A row whose label cannot be downloaded is dropped whole: writing
     # the image without its label would leave an orphan, and consumers pair images to
     # labels by sorted filename, so one orphan shifts every subsequent pair.
+    spec = NormalizationConfig.model_validate(normalization) if normalization is not None else None
+    recorder = NormalizationRecorder(spec) if spec is not None and spec.apply_at_export else None
+
     records, n_missing = _records_from_table(
         conn,
         table,
@@ -243,6 +252,7 @@ def prepare_training_data_from_table(
         label_channel,
         effective_train_channel,
         logger,
+        transform=recorder,
     )
 
     created_dirs, stats = write_training_layout(
@@ -256,6 +266,10 @@ def prepare_training_data_from_table(
     )
     stats["n_missing"] = n_missing
     stats["total_rows_processed"] = len(table)
+    if recorder is not None:
+        recorder.write_sidecar(output_dir)
+    elif spec is not None:
+        write_native_sidecar(spec, output_dir)
 
     annotation_input_upload_ids = []
     if uses_separate_channels and upload_annotation_input:
@@ -326,7 +340,7 @@ def prepare_training_data_from_table(
 
 def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
     """
-    Fetch one annotated image from OMERO as an 8-bit array.
+    Fetch one annotated image from OMERO at its native bit depth.
 
     Handles the 2D, 2D-patch and 3D-volumetric cases. Returns the array rather than
     writing it, so the caller decides where it lands - which is what lets files be
@@ -339,7 +353,8 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         logger: Optional logger
 
     Returns:
-        The image as an 8-bit numpy array (2D, or 3D for volumetric data)
+        The image as a numpy array (2D, or 3D for volumetric data), unscaled.
+        Normalisation is defined in the config and applied by the caller or the trainer.
 
     Raises:
         ValueError: If the image is not found in OMERO
@@ -495,14 +510,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         else:
             print(f"  Final 3D array shape: {img_3d.shape}")
 
-        # Normalize to 8-bit
-        max_val = img_3d.max()
-        if max_val > 0:
-            img_8bit = ((img_3d) * (255.0 / max_val)).astype(np.uint8)
-        else:
-            img_8bit = img_3d.astype(np.uint8)
-
-        return img_8bit
+        return img_3d
 
     else:
         # Handle 2D data with patch support using ezomero.get_image
@@ -589,15 +597,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
             else:
                 print(f"  Extracted 2D shape: {img_data.shape}")
 
-        # Normalize to 8-bit
-        # TODO make this optional; not always need 8-bit I guess
-        max_val = img_data.max()
-        if max_val > 0:
-            img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
-        else:
-            img_8bit = img_data.astype(np.uint8)
-
-        return img_8bit
+        return img_data
 
 
 def _optional_int(value) -> Optional[int]:
@@ -671,9 +671,13 @@ def _records_from_table(
     label_channel: Optional[int],
     train_channel: Optional[int],
     logger=None,
+    transform: Optional[Callable[[str, np.ndarray], np.ndarray]] = None,
 ):
     """
     Build annotation records from a tracking table.
+
+    ``transform(annotation_id, image)`` is applied to the model input image (used for
+    normalisation at export); the label and annotation-channel images are untouched.
 
     A row whose label cannot be downloaded is dropped entirely. The image plane is
     fetched lazily (ArraySource), so dropping the record costs nothing - and nothing
@@ -702,9 +706,11 @@ def _records_from_table(
             train_channel if train_channel is not None else _channel_from_row(row)
         )
         # Bind row/channel per iteration: a bare closure would capture the final values.
-        image_source = ArraySource(
-            lambda row=row, ch=image_channel: _fetch_plane(conn, row, ch, logger)
-        )
+        def load_image(row=row, ch=image_channel, annotation_id=str(annotation_id)):
+            image = _fetch_plane(conn, row, ch, logger)
+            return transform(annotation_id, image) if transform else image
+
+        image_source = ArraySource(load_image)
 
         annotation_source = None
         if uses_separate_channels and label_channel is not None:
@@ -753,6 +759,11 @@ def reorganize_local_data_for_training(
         include_test: Write a test split. None (default) auto-detects from the annotations.
         verbose: Show detailed progress
 
+    Normalisation follows ``config.normalization``: with ``apply_at_export`` the model
+    input images are written as float32 (file_mode then applies to labels only) and the
+    bounds per image go to ``normalization.json``; otherwise images keep their native bit
+    depth and ``normalization.json`` records what the trainer should apply.
+
     Returns:
         Dictionary with the created directories and statistics. Keys include base_dir,
         train_input, train_label, val_input, val_label and stats.
@@ -794,6 +805,9 @@ def reorganize_local_data_for_training(
     if not label_source.exists():
         raise FileNotFoundError(f"Output folder not found: {label_source}")
 
+    spec = config.normalization
+    recorder = NormalizationRecorder(spec) if spec.apply_at_export else None
+
     records = []
     n_missing = 0
     for ann in processed_annotations:
@@ -822,11 +836,18 @@ def reorganize_local_data_for_training(
         if uses_separate_channels and annotation_file.exists():
             annotation_source = FileSource(annotation_file)
 
+        if recorder is not None:
+            image_source = ArraySource(
+                lambda f=image_file, a=str(annotation_id): recorder(a, imread(f))
+            )
+        else:
+            image_source = FileSource(image_file)
+
         records.append(
             AnnotationRecord(
                 annotation_id=annotation_id,
                 category=ann.category,
-                image=FileSource(image_file),
+                image=image_source,
                 label=FileSource(label_file),
                 annotation_image=annotation_source,
             )
@@ -843,6 +864,10 @@ def reorganize_local_data_for_training(
         logger=logger,
     )
     stats["n_missing"] = n_missing
+    if recorder is not None:
+        recorder.write_sidecar(output_dir)
+    else:
+        write_native_sidecar(spec, output_dir)
 
     # An empty training set must be loud. prepare_training_data_from_table() already
     # raises here; without the same guard, a producer/consumer folder mismatch returns
