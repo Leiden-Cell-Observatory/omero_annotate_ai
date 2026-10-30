@@ -755,6 +755,7 @@ def upload_rois_and_labels(
     channel: Optional[int] = None,
     is_volumetric: Optional[bool] = False,
     z_start: Optional[int] = 0,
+    create_rois: bool = True,
 ):
     """Upload ROIs and labels to OMERO image.
 
@@ -770,6 +771,8 @@ def upload_rois_and_labels(
         channel: Optional channel for positioning the roi properly in OMERO
         is_volumetric: check if we need to handle roi as 3D
         z_start: use for volumetric to use z_start as offset in the stack
+        create_rois: Also store the objects as ROI shapes; when False only the
+            label file is attached and roi_id is None
 
     Returns:
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
@@ -782,17 +785,19 @@ def upload_rois_and_labels(
     print(f"Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")
 
     # Create ROI shapes from label image
-    print("Step 2: Converting labels to ROI shapes...")
-    effective_z = z_start if is_volumetric else z_slice
-    shapes = label_to_rois(
-        label_img=label_img,
-        z_slice=effective_z,
-        channel=channel,
-        timepoint=timepoint,
-        is_volumetric=is_volumetric,
-        patch_offset=patch_offset,
-    )
-    print(f"Created {len(shapes)} ROI shapes from labels")
+    shapes = []
+    if create_rois:
+        print("Step 2: Converting labels to ROI shapes...")
+        effective_z = z_start if is_volumetric else z_slice
+        shapes = label_to_rois(
+            label_img=label_img,
+            z_slice=effective_z,
+            channel=channel,
+            timepoint=timepoint,
+            is_volumetric=is_volumetric,
+            patch_offset=patch_offset,
+        )
+        print(f"Created {len(shapes)} ROI shapes from labels")
 
     # Upload label file as attachment
     print("Step 3: Uploading label file as attachment")
@@ -824,7 +829,7 @@ def upload_rois_and_labels(
             conn, image_id, shapes, name=roi_name, description=roi_description
         )
         print(f"Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}")
-    else:
+    elif create_rois:
         print(f"No ROI shapes created from {annotation_file}")
 
     print(f"Uploaded annotations from {annotation_file} to image {image_id}")

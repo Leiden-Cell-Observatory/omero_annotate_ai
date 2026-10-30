@@ -812,6 +812,11 @@ class WorkflowConfig(BaseModel):
         default=False, description="Read-only mode for viewing results"
     )
     batch_size: int = Field(default=0, ge=0, description="Batch size (0 = all)")
+    upload_rois: bool = Field(
+        default=True,
+        description="Also store masks as OMERO ROIs (one polygon per object). The label "
+        "file is always attached; disable for large automated sets.",
+    )
 
 
 class OMEROConfig(BaseModel):
@@ -1758,6 +1763,7 @@ workflow:
   resume_from_table: false
   read_only_mode: false
   batch_size: 8
+  upload_rois: true
 
 ai_model:
   framework: "micro_sam"

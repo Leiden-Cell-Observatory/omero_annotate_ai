@@ -811,3 +811,41 @@ class TestPrepareDataframeForOmero:
 
         assert out["roi_id"].tolist() == [0]
         assert out["label_id"].tolist() == [0]
+
+
+@pytest.mark.unit
+class TestUploadRoisAndLabels:
+    """The label file is always attached; ROI shapes only when requested."""
+
+    def _upload(self, tmp_path, create_rois):
+        from tifffile import imwrite
+
+        mask = np.zeros((16, 16), dtype=np.uint16)
+        mask[2:6, 2:6] = 1
+        mask[8:12, 8:12] = 2
+        mask_file = tmp_path / "img_mask.tif"
+        imwrite(mask_file, mask)
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            return_value=7,
+        ) as post_file, patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_roi",
+            return_value=9,
+        ) as post_roi:
+            ids = upload_rois_and_labels(
+                Mock(), 1, str(mask_file), timepoint=0, z_slice=0, channel=0,
+                create_rois=create_rois,
+            )
+        return ids, post_file, post_roi
+
+    def test_rois_created_by_default(self, tmp_path):
+        ids, post_file, post_roi = self._upload(tmp_path, create_rois=True)
+        assert ids == (7, 9)
+        post_file.assert_called_once()
+        assert len(post_roi.call_args.args[2]) == 2
+
+    def test_label_file_only(self, tmp_path):
+        ids, post_file, post_roi = self._upload(tmp_path, create_rois=False)
+        assert ids == (7, None)
+        post_file.assert_called_once()
+        post_roi.assert_not_called()

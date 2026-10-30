@@ -316,10 +316,12 @@ types guess the bit depth from the image maximum, so exporting with
 workflow:
   resume_from_table: false      # Resume from existing OMERO annotation table
   read_only_mode: false         # View results without uploading changes
+  upload_rois: true             # Also store masks as OMERO ROIs
 ```
 
 - **`resume_from_table`**: When `true`, loads existing annotations from an OMERO table and resumes processing from where it left off. Useful for continuing interrupted workflows.
 - **`read_only_mode`**: When `true`, prevents any uploads to OMERO. Use this to review existing results without modifications.
+- **`upload_rois`**: Each mask is always attached to its image as a label file, which is what training data export reads. With `true` (default) the objects are also stored as ROIs, so they can be viewed and edited in OMERO. Set it to `false` for large automated sets, where thousands of objects per frame would add millions of shapes to the server.
 
 ### Output Configuration
 

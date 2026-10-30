@@ -827,7 +827,8 @@ class AnnotationPipeline:
                         channel=meta.get("channel"),
                         timepoint=meta.get("timepoint"),
                         is_volumetric=meta.get("is_volumetric"),
-                        z_start=meta.get("z_start")
+                        z_start=meta.get("z_start"),
+                        create_rois=self.config.workflow.upload_rois,
                     )
 
                     # Update config annotation with OMERO IDs
@@ -1691,7 +1692,8 @@ class AnnotationPipeline:
                     channel=matching_annotation.channel,
                     timepoint=matching_annotation.timepoint,
                     is_volumetric=matching_annotation.is_volumetric,
-                    z_start=matching_annotation.z_start
+                    z_start=matching_annotation.z_start,
+                    create_rois=self.config.workflow.upload_rois,
                 )
 
                 # Update config annotation with OMERO IDs
@@ -1776,8 +1778,8 @@ class AnnotationPipeline:
                 print(f"Warning: No matching annotation for {annotation_id}, skipping")
                 continue
             
-            if matching_annotation.processed and matching_annotation.roi_id is not None:
-                print(f"Skipping {annotation_id}: already uploaded (ROI: {matching_annotation.roi_id})")
+            if matching_annotation.processed and matching_annotation.label_id is not None:
+                print(f"Skipping {annotation_id}: already uploaded (label: {matching_annotation.label_id})")
                 continue
             
             # Process the annotation file
@@ -1792,7 +1794,11 @@ class AnnotationPipeline:
             
             print("Saving updated config...")
             self._auto_save_config()
-            
+
+            # Attach the config to the container, as the micro-SAM workflow does
+            if not self.config.workflow.read_only_mode and self.config_file_path:
+                self._upload_annotation_config_to_omero()
+
             print(f"Successfully processed {processed_count} annotations")
         else:
             print("No new annotations to process")
