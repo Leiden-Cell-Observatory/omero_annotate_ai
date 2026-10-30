@@ -181,6 +181,23 @@ def _omero_id_to_optional_int(value: Any) -> Optional[int]:
     return None if parsed in (OMERO_ID_UNSET, -1) else parsed
 
 
+def _category_from_row(row) -> str:
+    """Read the split category of a table row.
+
+    Tables carry a ``category`` column since test splits were added; older tables
+    only have the train/validate booleans, where a row with neither set is a test row.
+    """
+    category = str(row.get("category", ""))
+    if category in ("training", "validation", "test"):
+        return category
+    if bool(row.get("train", True)):
+        return "training"
+    validate = row.get("validate")
+    if validate is None or bool(validate):
+        return "validation"
+    return "test"
+
+
 # Sub-models for the configuration
 
 
@@ -221,6 +238,14 @@ class ImageAnnotation(BaseModel):
     timepoint: int = Field(default=-1, description="Timepoint index")
     z_slice: int = Field(default=-1, description="Z-slice index")
     channel: int = Field(default=-1, description="Channel index")
+
+    # Experimental context (plate images only)
+    well_id: Optional[int] = Field(default=None, description="OMERO well ID")
+    well: Optional[str] = Field(default=None, description="Well position, e.g. 'C3'")
+    well_metadata: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Key-value pairs from the well's map annotations (e.g. cell line, treatment)",
+    )
 
     # 3D/volumetric processing
     is_volumetric: bool = Field(
@@ -401,26 +426,6 @@ class SpatialCoverage(BaseModel):
         "Defaults to cycle ['blue', 'magenta', 'green', 'yellow', 'cyan'].",
     )
 
-    # Image normalization settings (applied per-image, not per-patch)
-    normalization_method: Literal["percentile", "none"] = Field(
-        default="percentile",
-        description="How to normalize image intensities. "
-        "'percentile' computes per-image percentile bounds. "
-        "'none' uses the full intensity range without normalization.",
-    )
-    percentile_low: float = Field(
-        default=0.5,
-        ge=0,
-        le=100,
-        description="Lower percentile for intensity normalization (used when normalization_method='percentile')",
-    )
-    percentile_high: float = Field(
-        default=99.5,
-        ge=0,
-        le=100,
-        description="Upper percentile for intensity normalization (used when normalization_method='percentile')",
-    )
-
     # Patch processing settings (moved from ProcessingConfig)
     use_patches: bool = Field(
         default=False, description="Extract patches vs full images"
@@ -599,6 +604,39 @@ class SpatialCoverage(BaseModel):
         return self
 
 
+class NormalizationConfig(BaseModel):
+    """Intensity normalisation of model input images.
+
+    Defined once and applied either when exporting training data
+    (``apply_at_export``) or by the trainer, which is configured from the same values
+    (see :mod:`omero_annotate_ai.processing.normalization`).
+    """
+
+    method: Literal["percentile", "none"] = Field(
+        default="percentile",
+        description="'percentile': per-image percentile bounds mapped to [0, 1]. "
+        "'none': raw intensities.",
+    )
+    percentile_low: float = Field(
+        default=1.0, ge=0, le=100, description="Lower percentile, mapped to 0"
+    )
+    percentile_high: float = Field(
+        default=99.8, ge=0, le=100, description="Upper percentile, mapped to 1"
+    )
+    clip: bool = Field(default=True, description="Clip normalised values to [0, 1]")
+    apply_at_export: bool = Field(
+        default=False,
+        description="Write float32 normalised images (bounds recorded in normalization.json) "
+        "instead of native bit depth",
+    )
+
+    @model_validator(mode="after")
+    def validate_percentiles(self):
+        if self.percentile_low >= self.percentile_high:
+            raise ValueError("percentile_low must be below percentile_high")
+        return self
+
+
 class DatasetInfo(BaseModel):
     """Dataset identification and linking (both schemas)"""
 
@@ -634,7 +672,7 @@ class AIModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     # Framework information
-    framework: Literal["micro_sam", "cellpose", "web_annotation"] = Field(
+    framework: Literal["micro_sam", "cellpose", "stardist", "web_annotation"] = Field(
         default="micro_sam", description="AI framework"
     )
     framework_version: Optional[str] = Field(
@@ -705,6 +743,25 @@ class TrainingConfig(BaseModel):
     )
 
     segment_all: bool = Field(default=False, description="Process all images vs subset")
+
+    # Split grouping and reproducibility
+    split_level: Literal["timepoint", "image", "well"] = Field(
+        default="image",
+        description="Unit kept together in one split category: 'timepoint' (one frame), "
+        "'image' (all frames of an image) or 'well' (all images of a plate well). "
+        "In count mode train_n/validate_n/test_n count units at this level.",
+    )
+    stratify_by: List[str] = Field(
+        default_factory=list,
+        description="Well metadata keys (e.g. ['cellline', 'treatment']) whose value "
+        "combinations are spread proportionally over the split categories.",
+    )
+    random_seed: Optional[int] = Field(
+        default=None,
+        description="Seed for split assignment and random timepoint/z-slice selection. "
+        "Generated and recorded on first use when not set.",
+    )
+
     quality_threshold: Optional[float] = Field(
         default=None, description="Minimum quality score"
     )
@@ -755,6 +812,11 @@ class WorkflowConfig(BaseModel):
         default=False, description="Read-only mode for viewing results"
     )
     batch_size: int = Field(default=0, ge=0, description="Batch size (0 = all)")
+    upload_rois: bool = Field(
+        default=True,
+        description="Also store masks as OMERO ROIs (one polygon per object). The label "
+        "file is always attached; disable for large automated sets.",
+    )
 
 
 class OMEROConfig(BaseModel):
@@ -841,7 +903,7 @@ class AnnotationConfig(BaseModel):
 
     # Schema identification
     schema_version: str = Field(
-        default="2.0.0", description="Configuration schema version"
+        default="2.1.0", description="Configuration schema version"
     )
 
     # Config file tracking for persistence
@@ -877,6 +939,7 @@ class AnnotationConfig(BaseModel):
         )
     )
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
 
     # Technical configuration
     ai_model: AIModelConfig = Field(default_factory=AIModelConfig)
@@ -902,6 +965,40 @@ class AnnotationConfig(BaseModel):
         default_factory=list,
         description="Annotation classes (e.g. cell, nucleus) with display colors",
     )
+
+    # Open fields for anything the structured schema does not cover
+    notes: Optional[str] = Field(
+        default=None,
+        description="Free-text notes about the annotation set (context, caveats, known issues)",
+    )
+    custom_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional key-value metadata not covered by the schema",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_normalization(cls, data: Any) -> Any:
+        """Move normalisation settings from spatial_coverage (schema < 2.1.0)."""
+        if not isinstance(data, dict):
+            return data
+        spatial = data.get("spatial_coverage")
+        if not isinstance(spatial, dict):
+            return data
+        legacy = {
+            "normalization_method": "method",
+            "percentile_low": "percentile_low",
+            "percentile_high": "percentile_high",
+        }
+        if not any(key in spatial for key in legacy):
+            return data
+        data = dict(data)
+        spatial = dict(spatial)
+        moved = {new: spatial.pop(old) for old, new in legacy.items() if old in spatial}
+        data["spatial_coverage"] = spatial
+        if "normalization" not in data:
+            data["normalization"] = moved
+        return data
 
     def model_dump(self, **kwargs):
         """Override model_dump to handle Path serialization"""
@@ -995,6 +1092,22 @@ class AnnotationConfig(BaseModel):
             "progress_percent": round(100 * completed / total, 1) if total > 0 else 0,
         }
 
+    def split_leakage_report(
+        self,
+        levels: Tuple[str, ...] = ("timepoint", "image", "well"),
+        metadata_keys: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Report which frames, images, wells (and metadata values) span several splits.
+
+        See :func:`omero_annotate_ai.core.splits.split_leakage_report`. By default the
+        ``stratify_by`` keys are checked as metadata keys.
+        """
+        from .splits import split_leakage_report
+
+        if metadata_keys is None:
+            metadata_keys = list(self.training.stratify_by)
+        return split_leakage_report(self.annotations, levels, metadata_keys)
+
     def to_dataframe(self) -> pd.DataFrame:
         """Convert annotations to OMERO-compatible DataFrame.
 
@@ -1036,6 +1149,10 @@ class AnnotationConfig(BaseModel):
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
+                "category": annotation.category,
+                "well_id": annotation.well_id if annotation.well_id is not None else -1,
+                "well": annotation.well or "None",
+                "well_metadata": json.dumps(annotation.well_metadata, sort_keys=True),
             }
             rows.append(row)
 
@@ -1066,6 +1183,10 @@ class AnnotationConfig(BaseModel):
             "z_start",
             "z_end",
             "z_length",
+            "category",
+            "well_id",
+            "well",
+            "well_metadata",
         ]
 
         df = pd.DataFrame(rows, columns=columns)
@@ -1082,6 +1203,7 @@ class AnnotationConfig(BaseModel):
             "z_start",
             "z_end",
             "z_length",
+            "well_id",
         ]
         for col in numeric_columns:
             if col in df.columns:
@@ -1125,7 +1247,7 @@ class AnnotationConfig(BaseModel):
                 "image_id": int(row.get("image_id", -1)),
                 "image_name": str(row.get("image_name", "")),
                 "annotation_id": annotation_ids[position],
-                "category": "training" if row.get("train", True) else "validation",
+                "category": _category_from_row(row),
                 "timepoint": int(row.get("timepoint", -1)),
                 "z_slice": int(row.get("z_slice", -1)),
                 "channel": int(row.get("channel", -1)),
@@ -1174,6 +1296,17 @@ class AnnotationConfig(BaseModel):
             updated_at_str = str(row.get("annotation_updated_at", "None"))
             if updated_at_str != "None":
                 annotation_data["annotation_updated_at"] = updated_at_str
+
+            # Well context (absent from tables written before it was recorded)
+            well_id = _omero_id_to_optional_int(row.get("well_id"))
+            if well_id is not None:
+                annotation_data["well_id"] = well_id
+            well = str(row.get("well", "None"))
+            if well not in ("None", "nan", ""):
+                annotation_data["well"] = well
+            well_metadata = row.get("well_metadata")
+            if isinstance(well_metadata, str) and well_metadata.startswith("{"):
+                annotation_data["well_metadata"] = json.loads(well_metadata)
 
             self.add_annotation(ImageAnnotation(**annotation_data))
 
@@ -1559,9 +1692,9 @@ def create_default_config() -> AnnotationConfig:
 
 def get_config_template() -> str:
     """Get a YAML template with comments for all configuration options."""
-    template = """# OMERO micro-SAM Configuration Template v2.0.0
+    template = """# OMERO micro-SAM Configuration Template v2.1.0
 
-schema_version: "2.0.0"
+schema_version: "2.1.0"
 
 name: "micro_sam_nuclei_segmentation"
 version: "1.0.0"
@@ -1614,12 +1747,23 @@ training:
   train_n: 3
   validation_fraction: 0.3
   validate_n: 3
+  split_level: "image"         # keep together per "timepoint", "image" or "well"
+  stratify_by: []              # well metadata keys, e.g. ["cellline", "treatment"]
+  random_seed: null            # generated and recorded on first use
   segment_all: false
+
+normalization:
+  method: "percentile"         # "percentile" or "none" (raw intensities)
+  percentile_low: 1.0          # mapped to 0
+  percentile_high: 99.8        # mapped to 1
+  clip: true
+  apply_at_export: false       # true: write float32 normalised images + normalization.json
 
 workflow:
   resume_from_table: false
   read_only_mode: false
   batch_size: 8
+  upload_rois: true
 
 ai_model:
   framework: "micro_sam"

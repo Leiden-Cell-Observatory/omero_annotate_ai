@@ -37,6 +37,7 @@ except Exception:
 
 # Local imports
 from .annotation_config import AnnotationConfig, ImageAnnotation, validate_annotations_against_config
+from .splits import assign_split_categories, group_key
 from ..omero.omero_functions import (
     create_or_replace_tracking_table,
     sync_omero_table_to_config,
@@ -65,6 +66,10 @@ class AnnotationPipeline:
         self.conn = conn
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
+        # Seeded random generator (see _get_rng) and well context per image id,
+        # filled while listing plate images
+        self._rng: Optional[random.Random] = None
+        self._well_info: Dict[int, Dict[str, Any]] = {}
         self.config_file_path = Path(config_file_path) if config_file_path else None
         # If no explicit path, derive from config name and output directory
         if self.config_file_path is None and config.name and config.output.output_directory:
@@ -239,169 +244,161 @@ class AnnotationPipeline:
         return table_id
 
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
-        """Prepare processing units by populating config.annotations."""
+        """Prepare processing units by populating config.annotations.
 
-        # Clear existing annotations first
+        Every image is expanded into units (timepoints, z-slices, patches), which are
+        then assigned to training/validation/test in groups set by
+        ``training.split_level``, optionally stratified on well metadata
+        (see :mod:`omero_annotate_ai.core.splits`). The seed is recorded in the config.
+        """
         self.config.annotations.clear()
-        n_total = len(images_list)
+        training = self.config.training
+        self._rng = random.Random(self._ensure_seed())
 
-        # Determine which images to process
-        if self.config.training.segment_all:
-            # Use all images with fraction-based split
-            selected_images = images_list
-            n_train = int(n_total * self.config.training.train_fraction)
-            n_val = int(n_total * self.config.training.validation_fraction)
-            n_test = int(n_total * self.config.training.test_fraction)
+        units: List[ImageAnnotation] = []
+        for image in images_list:
+            units.extend(self._units_for_image(image))
 
-            # Handle rounding remainder: assign to training (largest category typically)
-            remainder = n_total - n_train - n_val - n_test
-            n_train += remainder
-
-            # Create categories for all images
-            image_categories = (
-                ["training"] * n_train +
-                ["validation"] * n_val +
-                ["test"] * n_test
+        if training.segment_all:
+            kept = assign_split_categories(
+                units,
+                level=training.split_level,
+                seed=training.random_seed,
+                fractions=(
+                    training.train_fraction,
+                    training.validation_fraction,
+                    training.test_fraction,
+                ),
+                stratify_by=training.stratify_by,
             )
         else:
-            # Select subset with specific counts
-            n_train = self.config.training.train_n
-            n_val = self.config.training.validate_n
-            n_test = self.config.training.test_n
-            n_requested = n_train + n_val + n_test
-            if n_requested > n_total:
-                raise ValueError(
-                    f"Not enough images: requested {n_train} training + {n_val} validation"
-                    f" + {n_test} test = {n_requested}, but only {n_total} images available."
-                    f" Reduce train_n, validate_n, or test_n in the annotation settings."
-                )
-
-            # Randomly select images
-            shuffled_indices = list(range(n_total))
-            random.shuffle(shuffled_indices)
-
-            train_indices = shuffled_indices[:n_train]
-            val_indices = shuffled_indices[n_train : n_train + n_val]
-            test_indices = shuffled_indices[n_train + n_val : n_train + n_val + n_test]
-
-            selected_images = [images_list[i] for i in train_indices + val_indices + test_indices]
-            image_categories = (
-                ["training"] * n_train +
-                ["validation"] * n_val +
-                ["test"] * n_test
+            n_groups = len({group_key(u, training.split_level) for u in units})
+            kept = assign_split_categories(
+                units,
+                level=training.split_level,
+                seed=training.random_seed,
+                counts=(training.train_n, training.validate_n, training.test_n),
+                stratify_by=training.stratify_by,
             )
-
             # Sync fractions to reflect the actual count-mode split
-            if n_total > 0:
-                self.config.training.train_fraction = round(n_train / n_total, 4)
-                self.config.training.validation_fraction = round(n_val / n_total, 4)
-                self.config.training.test_fraction = round(n_test / n_total, 4)
+            if n_groups > 0:
+                training.train_fraction = round(training.train_n / n_groups, 4)
+                training.validation_fraction = round(training.validate_n / n_groups, 4)
+                training.test_fraction = round(training.test_n / n_groups, 4)
 
-        # Create ImageAnnotation objects for each processing unit
-        for image, category in zip(selected_images, image_categories):
-            image_id = image.getId()
-            image_name = image.getName()
+        for annotation in kept:
+            self.config.add_annotation(annotation)
 
-            # Handle timepoints
-            timepoints = self._get_timepoints_for_image(image)
+    def _units_for_image(self, image) -> List[ImageAnnotation]:
+        """Expand one image into annotation units, with its well context if known."""
+        units: List[ImageAnnotation] = []
+        image_id = image.getId()
+        image_name = image.getName()
 
-            # Handle z-slices based on processing mode
-            z_slices = self._get_z_slices_for_image(image)
-            
-            # Check if we're doing volumetric 3D processing
-            is_volumetric = self.config.spatial_coverage.three_d
+        # Handle timepoints
+        timepoints = self._get_timepoints_for_image(image)
 
-            # Create annotations based on processing mode
-            for t in timepoints:
-                if is_volumetric:
-                    # 3D volumetric mode: one annotation per timepoint (includes all z-slices)
-                    z_start = min(z_slices) if z_slices else 0
-                    z_end = max(z_slices) if z_slices else 0 
-                    z_length = len(z_slices) if z_slices else 1
-                    
+        # Handle z-slices based on processing mode
+        z_slices = self._get_z_slices_for_image(image)
+        
+        # Check if we're doing volumetric 3D processing
+        is_volumetric = self.config.spatial_coverage.three_d
+
+        # Create annotations based on processing mode
+        for t in timepoints:
+            if is_volumetric:
+                # 3D volumetric mode: one annotation per timepoint (includes all z-slices)
+                z_start = min(z_slices) if z_slices else 0
+                z_end = max(z_slices) if z_slices else 0 
+                z_length = len(z_slices) if z_slices else 1
+                
+                if self.config.spatial_coverage.use_patches:
+                    # Create multiple annotations for 3D patches
+                    patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                    patch_h, patch_w = actual_patch_size
+                    for i, (x, y) in enumerate(patch_coords):
+                        annotation = ImageAnnotation(
+                            image_id=image_id,
+                            image_name=image_name,
+                            annotation_id=f"{image_id}_{t}_3d_{i}",
+                            timepoint=t,
+                            z_slice=z_start,  # Start slice for compatibility
+                            z_start=z_start,
+                            z_end=z_end,
+                            z_length=z_length,
+                            is_patch=True,
+                            patch_x=x,
+                            patch_y=y,
+                            patch_width=patch_w,
+                            patch_height=patch_h,
+                                channel=self.config.spatial_coverage.get_label_channel(),
+                            is_volumetric=True,
+                        )
+                        units.append(annotation)
+                else:
+                    # Single annotation for full 3D volume
+                    annotation = ImageAnnotation(
+                        image_id=image_id,
+                        image_name=image_name,
+                        annotation_id=f"{image_id}_{t}_3d",
+                        timepoint=t,
+                        z_slice=z_start,  # Start slice for compatibility
+                        z_start=z_start,
+                        z_end=z_end,
+                        z_length=z_length,
+                        channel=self.config.spatial_coverage.get_label_channel(),
+                        is_volumetric=True,
+                    )
+                    units.append(annotation)
+            else:
+                # 2D mode: create annotations per z-slice (existing behavior)
+                for z in z_slices:
                     if self.config.spatial_coverage.use_patches:
-                        # Create multiple annotations for 3D patches
+                        # Create multiple annotations for 2D patches
                         patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
                         patch_h, patch_w = actual_patch_size
                         for i, (x, y) in enumerate(patch_coords):
                             annotation = ImageAnnotation(
                                 image_id=image_id,
                                 image_name=image_name,
-                                annotation_id=f"{image_id}_{t}_3d_{i}",
-                                timepoint=t,
-                                z_slice=z_start,  # Start slice for compatibility
-                                z_start=z_start,
-                                z_end=z_end,
-                                z_length=z_length,
-                                is_patch=True,
-                                patch_x=x,
-                                patch_y=y,
-                                patch_width=patch_w,
-                                patch_height=patch_h,
-                                category=category,
-                                channel=self.config.spatial_coverage.get_label_channel(),
-                                is_volumetric=True,
-                            )
-                            self.config.add_annotation(annotation)
-                    else:
-                        # Single annotation for full 3D volume
-                        annotation = ImageAnnotation(
-                            image_id=image_id,
-                            image_name=image_name,
-                            annotation_id=f"{image_id}_{t}_3d",
-                            timepoint=t,
-                            z_slice=z_start,  # Start slice for compatibility
-                            z_start=z_start,
-                            z_end=z_end,
-                            z_length=z_length,
-                            category=category,
-                            channel=self.config.spatial_coverage.get_label_channel(),
-                            is_volumetric=True,
-                        )
-                        self.config.add_annotation(annotation)
-                else:
-                    # 2D mode: create annotations per z-slice (existing behavior)
-                    for z in z_slices:
-                        if self.config.spatial_coverage.use_patches:
-                            # Create multiple annotations for 2D patches
-                            patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
-                            patch_h, patch_w = actual_patch_size
-                            for i, (x, y) in enumerate(patch_coords):
-                                annotation = ImageAnnotation(
-                                    image_id=image_id,
-                                    image_name=image_name,
-                                    annotation_id=f"{image_id}_{t}_{z}_{i}",
-                                    timepoint=t,
-                                    z_slice=z,
-                                    z_start=z,
-                                    z_end=z,
-                                    z_length=1,
-                                    patch_x=x,
-                                    patch_y=y,
-                                    is_patch=True,
-                                    patch_width=patch_w,
-                                    patch_height=patch_h,
-                                    category=category,
-                                    channel=self.config.spatial_coverage.get_label_channel(),
-                                    is_volumetric=False,
-                                )
-                                self.config.add_annotation(annotation)
-                        else:
-                            # Single annotation for 2D slice
-                            annotation = ImageAnnotation(
-                                image_id=image_id,
-                                image_name=image_name,
-                                annotation_id=f"{image_id}_{t}_{z}",
+                                annotation_id=f"{image_id}_{t}_{z}_{i}",
                                 timepoint=t,
                                 z_slice=z,
                                 z_start=z,
                                 z_end=z,
                                 z_length=1,
-                                category=category,
-                                channel=self.config.spatial_coverage.get_label_channel(),
+                                patch_x=x,
+                                patch_y=y,
+                                is_patch=True,
+                                patch_width=patch_w,
+                                patch_height=patch_h,
+                                        channel=self.config.spatial_coverage.get_label_channel(),
                                 is_volumetric=False,
                             )
-                            self.config.add_annotation(annotation)
+                            units.append(annotation)
+                    else:
+                        # Single annotation for 2D slice
+                        annotation = ImageAnnotation(
+                            image_id=image_id,
+                            image_name=image_name,
+                            annotation_id=f"{image_id}_{t}_{z}",
+                            timepoint=t,
+                            z_slice=z,
+                            z_start=z,
+                            z_end=z,
+                            z_length=1,
+                                channel=self.config.spatial_coverage.get_label_channel(),
+                            is_volumetric=False,
+                        )
+                        units.append(annotation)
+
+        well_info = self._well_info.get(image_id)
+        if well_info:
+            for annotation in units:
+                annotation.well_id = well_info["well_id"]
+                annotation.well = well_info["well"]
+                annotation.well_metadata = dict(well_info["well_metadata"])
+        return units
 
     def _upload_annotation_config_to_omero(self) -> int: 
         container_type_str = str(self.config.omero.container_type).capitalize()
@@ -413,6 +410,18 @@ class AnnotationPipeline:
             file_path=file_path
         )
         return id
+
+    def _ensure_seed(self) -> int:
+        """Return the configured random seed, generating and recording one if unset."""
+        if self.config.training.random_seed is None:
+            self.config.training.random_seed = random.SystemRandom().randrange(2**31)
+        return self.config.training.random_seed
+
+    def _get_rng(self) -> random.Random:
+        """Seeded random generator for timepoint, z-slice and patch selection."""
+        if self._rng is None:
+            self._rng = random.Random(self._ensure_seed())
+        return self._rng
 
     def _get_timepoints_for_image(self, image) -> List[int]:
         """Get timepoints to process for an image based on configuration."""
@@ -426,7 +435,7 @@ class AnnotationPipeline:
                 n_points = min(self.config.spatial_coverage.n_timepoints, max_t)
             else:
                 n_points = min(len(self.config.spatial_coverage.timepoints), max_t)
-            return random.sample(range(max_t), n_points)
+            return sorted(self._get_rng().sample(range(max_t), n_points))
         else: # specific
             return [t for t in self.config.spatial_coverage.timepoints if t < max_t]
 
@@ -442,7 +451,7 @@ class AnnotationPipeline:
                 n_slices = min(self.config.spatial_coverage.n_slices, max_z)
             else:
                 n_slices = min(len(self.config.spatial_coverage.z_slices), max_z)
-            return random.sample(range(max_z), n_slices)
+            return sorted(self._get_rng().sample(range(max_z), n_slices))
         else: # specific
             return [z for z in self.config.spatial_coverage.z_slices if z < max_z]
 
@@ -459,6 +468,7 @@ class AnnotationPipeline:
             patch_size=patch_size,
             n_patches=patches_per_image,
             random_patch=random_patches,
+            rng=self._get_rng(),
         )
         
         return coordinates, actual_patch_size
@@ -817,7 +827,8 @@ class AnnotationPipeline:
                         channel=meta.get("channel"),
                         timepoint=meta.get("timepoint"),
                         is_volumetric=meta.get("is_volumetric"),
-                        z_start=meta.get("z_start")
+                        z_start=meta.get("z_start"),
+                        create_rois=self.config.workflow.upload_rois,
                     )
 
                     # Update config annotation with OMERO IDs
@@ -1033,8 +1044,19 @@ class AnnotationPipeline:
         # All conditions met
         return True
 
+    def _get_well_position(self, well_id: int) -> Optional[str]:
+        """Return the position label of a well (e.g. 'C3'), or None if unavailable."""
+        try:
+            position = self.conn.getObject("Well", well_id).getWellPos()
+        except Exception:
+            return None
+        return position if isinstance(position, str) else None
+
     def _get_image_ids_from_plate(self, container_id: int) -> List[int]:
         """Get image IDs from a single plate, applying well filters if configured.
+
+        Also records each image's well (id, position and map-annotation metadata) in
+        ``self._well_info``, so annotation units carry their experimental context.
 
         Args:
             container_id: The plate ID to get images from.
@@ -1042,44 +1064,45 @@ class AnnotationPipeline:
         Returns:
             List of image IDs from the plate (filtered if well_filters configured).
         """
-        if self.config.omero.well_filters:
-            print(f"Applying well filters: {self.config.omero.well_filters}")
+        filters = self.config.omero.well_filters
+        if filters:
+            print(f"Applying well filters: {filters}")
             print(f"Filter mode: {self.config.omero.well_filter_mode}")
 
-            # Get all wells in the plate
-            well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
-            print(f"Found {len(well_ids)} wells in plate {container_id}")
+        well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
+        print(f"Found {len(well_ids)} wells in plate {container_id}")
 
-            filtered_image_ids = []
-            matched_wells = 0
+        image_ids = []
+        matched_wells = 0
 
-            for well_id in well_ids:
-                # Get map annotations from the well
-                well_kv_pairs = self._get_well_map_annotations(well_id)
+        for well_id in well_ids:
+            well_kv_pairs = self._get_well_map_annotations(well_id)
 
-                # Check if well matches filter criteria
-                matches_filter = self._check_well_filter(well_kv_pairs, self.config.omero.well_filters)
-
-                # Apply include/exclude logic
+            if filters:
+                matches_filter = self._check_well_filter(well_kv_pairs, filters)
                 should_include = (
                     (self.config.omero.well_filter_mode == "include" and matches_filter) or
                     (self.config.omero.well_filter_mode == "exclude" and not matches_filter)
                 )
-
-                if should_include:
-                    matched_wells += 1
-                    # Get all images from this well
-                    well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
-                    filtered_image_ids.extend(well_image_ids)
-                    self._debug_print(f"  Well {well_id}: matched filter, adding {len(well_image_ids)} images")
-                else:
+                if not should_include:
                     self._debug_print(f"  Well {well_id}: filtered out")
+                    continue
 
-            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(filtered_image_ids)} images selected")
-            return filtered_image_ids
-        else:
-            # No filters - get all images from plate
-            return list(ezomero.get_image_ids(self.conn, plate=container_id))
+            matched_wells += 1
+            well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
+            well_position = self._get_well_position(well_id)
+            for image_id in well_image_ids:
+                self._well_info[image_id] = {
+                    "well_id": well_id,
+                    "well": well_position,
+                    "well_metadata": dict(well_kv_pairs),
+                }
+            image_ids.extend(well_image_ids)
+            self._debug_print(f"  Well {well_id}: adding {len(well_image_ids)} images")
+
+        if filters:
+            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(image_ids)} images selected")
+        return image_ids
 
     def _get_image_ids_from_single_container(self, container_type: str, container_id: int) -> List[int]:
         """Get image IDs from a single OMERO container.
@@ -1290,8 +1313,15 @@ class AnnotationPipeline:
                     f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
                 )
 
-            # Determine which images to process (mimic _prepare_processing_units logic)
-            if self.config.training.segment_all:
+            # Determine which images to process. Count mode at image level can
+            # load only the images it needs; grouped or stratified splits need all
+            # images, and _prepare_processing_units selects the groups.
+            training = self.config.training
+            if (
+                training.segment_all
+                or training.split_level != "image"
+                or training.stratify_by
+            ):
                 selected_indices = list(range(n_total))
             else:
                 n_train = self.config.training.train_n
@@ -1305,7 +1335,7 @@ class AnnotationPipeline:
                         f" Reduce train_n, validate_n, or test_n in the annotation settings."
                     )
                 shuffled_indices = list(range(n_total))
-                random.shuffle(shuffled_indices)
+                random.Random(self._ensure_seed()).shuffle(shuffled_indices)
                 selected_indices = shuffled_indices[: n_requested]
 
             selected_image_ids = [image_ids[i] for i in selected_indices]
@@ -1662,7 +1692,8 @@ class AnnotationPipeline:
                     channel=matching_annotation.channel,
                     timepoint=matching_annotation.timepoint,
                     is_volumetric=matching_annotation.is_volumetric,
-                    z_start=matching_annotation.z_start
+                    z_start=matching_annotation.z_start,
+                    create_rois=self.config.workflow.upload_rois,
                 )
 
                 # Update config annotation with OMERO IDs
@@ -1747,8 +1778,8 @@ class AnnotationPipeline:
                 print(f"Warning: No matching annotation for {annotation_id}, skipping")
                 continue
             
-            if matching_annotation.processed and matching_annotation.roi_id is not None:
-                print(f"Skipping {annotation_id}: already uploaded (ROI: {matching_annotation.roi_id})")
+            if matching_annotation.processed and matching_annotation.label_id is not None:
+                print(f"Skipping {annotation_id}: already uploaded (label: {matching_annotation.label_id})")
                 continue
             
             # Process the annotation file
@@ -1763,7 +1794,11 @@ class AnnotationPipeline:
             
             print("Saving updated config...")
             self._auto_save_config()
-            
+
+            # Attach the config to the container, as the micro-SAM workflow does
+            if not self.config.workflow.read_only_mode and self.config_file_path:
+                self._upload_annotation_config_to_omero()
+
             print(f"Successfully processed {processed_count} annotations")
         else:
             print("No new annotations to process")

@@ -811,3 +811,81 @@ class TestPrepareDataframeForOmero:
 
         assert out["roi_id"].tolist() == [0]
         assert out["label_id"].tolist() == [0]
+
+
+@pytest.mark.unit
+class TestUploadRoisAndLabels:
+    """The label file is always attached; ROI shapes only when requested."""
+
+    def _upload(self, tmp_path, create_rois):
+        from tifffile import imwrite
+
+        mask = np.zeros((16, 16), dtype=np.uint16)
+        mask[2:6, 2:6] = 1
+        mask[8:12, 8:12] = 2
+        mask_file = tmp_path / "img_mask.tif"
+        imwrite(mask_file, mask)
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            return_value=7,
+        ) as post_file, patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_roi",
+            return_value=9,
+        ) as post_roi:
+            ids = upload_rois_and_labels(
+                Mock(), 1, str(mask_file), timepoint=0, z_slice=0, channel=0,
+                create_rois=create_rois,
+            )
+        return ids, post_file, post_roi
+
+    def test_rois_created_by_default(self, tmp_path):
+        ids, post_file, post_roi = self._upload(tmp_path, create_rois=True)
+        assert ids == (7, 9)
+        post_file.assert_called_once()
+        assert len(post_roi.call_args.args[2]) == 2
+
+    def test_label_file_named_after_training_set(self, tmp_path):
+        from tifffile import imwrite
+
+        mask_file = tmp_path / "5_3_0_mask.tif"
+        imwrite(mask_file, np.ones((4, 4), dtype=np.uint16))
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            return_value=7,
+        ) as post_file:
+            upload_rois_and_labels(
+                Mock(), 5, str(mask_file), trainingset_name="gt_set",
+                trainingset_description="Training set: gt_set",
+                timepoint=3, z_slice=0, channel=0, create_rois=False,
+            )
+        kwargs = post_file.call_args.kwargs
+        assert Path(kwargs["file_path"]).name == "gt_set_5_3_0_mask.tif"
+        assert kwargs["description"] == "Training set: gt_set | t=3 | z=0 | c=0"
+
+    def test_label_file_is_compressed_losslessly(self, tmp_path):
+        from tifffile import TiffFile, imwrite
+
+        mask = np.arange(64 * 64, dtype=np.uint16).reshape(64, 64) % 7
+        mask_file = tmp_path / "1_0_0_mask.tif"
+        imwrite(mask_file, mask)
+        uploaded = {}
+
+        def capture(conn, file_path, **kwargs):
+            with TiffFile(file_path) as tif:
+                uploaded["compression"] = tif.pages[0].compression.name
+                uploaded["data"] = tif.asarray()
+            return 7
+
+        with patch(
+            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
+            side_effect=capture,
+        ):
+            upload_rois_and_labels(Mock(), 1, str(mask_file), create_rois=False)
+        assert uploaded["compression"] == "ADOBE_DEFLATE"
+        np.testing.assert_array_equal(uploaded["data"], mask)
+
+    def test_label_file_only(self, tmp_path):
+        ids, post_file, post_roi = self._upload(tmp_path, create_rois=False)
+        assert ids == (7, None)
+        post_file.assert_called_once()
+        post_roi.assert_not_called()

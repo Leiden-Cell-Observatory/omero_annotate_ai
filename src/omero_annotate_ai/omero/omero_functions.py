@@ -25,6 +25,7 @@ from .omero_utils import (
 import ezomero
 
 import imageio.v3 as imageio
+import tifffile
 
 from ..processing.image_functions import label_to_rois
 from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
@@ -755,6 +756,7 @@ def upload_rois_and_labels(
     channel: Optional[int] = None,
     is_volumetric: Optional[bool] = False,
     z_start: Optional[int] = 0,
+    create_rois: bool = True,
 ):
     """Upload ROIs and labels to OMERO image.
 
@@ -770,6 +772,8 @@ def upload_rois_and_labels(
         channel: Optional channel for positioning the roi properly in OMERO
         is_volumetric: check if we need to handle roi as 3D
         z_start: use for volumetric to use z_start as offset in the stack
+        create_rois: Also store the objects as ROI shapes; when False only the
+            label file is attached and roi_id is None
 
     Returns:
         tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
@@ -782,35 +786,47 @@ def upload_rois_and_labels(
     print(f"Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")
 
     # Create ROI shapes from label image
-    print("Step 2: Converting labels to ROI shapes...")
-    effective_z = z_start if is_volumetric else z_slice
-    shapes = label_to_rois(
-        label_img=label_img,
-        z_slice=effective_z,
-        channel=channel,
-        timepoint=timepoint,
-        is_volumetric=is_volumetric,
-        patch_offset=patch_offset,
-    )
-    print(f"Created {len(shapes)} ROI shapes from labels")
+    shapes = []
+    if create_rois:
+        print("Step 2: Converting labels to ROI shapes...")
+        effective_z = z_start if is_volumetric else z_slice
+        shapes = label_to_rois(
+            label_img=label_img,
+            z_slice=effective_z,
+            channel=channel,
+            timepoint=timepoint,
+            is_volumetric=is_volumetric,
+            patch_offset=patch_offset,
+        )
+        print(f"Created {len(shapes)} ROI shapes from labels")
 
     # Upload label file as attachment
     print("Step 3: Uploading label file as attachment")
 
-    # Build description
-    label_desc = trainingset_description or ""
+    # Build description: training set and the plane the labels belong to
+    desc_parts = [trainingset_description] if trainingset_description else []
+    for key, value in (("t", timepoint), ("z", z_start if is_volumetric else z_slice), ("c", channel)):
+        if value is not None:
+            desc_parts.append(f"{key}={value}")
     if patch_offset:
-        separator = " | " if label_desc else ""
-        label_desc += f"{separator}Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
+        desc_parts.append(f"Patch offset: ({patch_offset[0]}, {patch_offset[1]})")
+    label_desc = " | ".join(desc_parts)
 
-    file_ann_id = ezomero.post_file_annotation(
-        conn,
-        file_path=annotation_file,
-        description=label_desc,
-        ns="openmicroscopy.org/omero/annotate/labels",
-        object_type="Image",
-        object_id=image_id,
-    )
+    # The uploaded file is written losslessly compressed (label images compress well), and
+    # its name starts with the training set, so label files of different sets on the same
+    # image can be told apart in OMERO
+    with tempfile.TemporaryDirectory() as tmp:
+        prefix = f"{trainingset_name}_" if trainingset_name else ""
+        upload_path = os.path.join(tmp, prefix + os.path.basename(annotation_file))
+        tifffile.imwrite(upload_path, label_img, compression="zlib")
+        file_ann_id = ezomero.post_file_annotation(
+            conn,
+            file_path=upload_path,
+            description=label_desc,
+            ns="openmicroscopy.org/omero/annotate/labels",
+            object_type="Image",
+            object_id=image_id,
+        )
     print(f"File annotation uploaded with ID: {file_ann_id}")
 
     # Upload ROI shapes if any were created
@@ -824,7 +840,7 @@ def upload_rois_and_labels(
             conn, image_id, shapes, name=roi_name, description=roi_description
         )
         print(f"Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}")
-    else:
+    elif create_rois:
         print(f"No ROI shapes created from {annotation_file}")
 
     print(f"Uploaded annotations from {annotation_file} to image {image_id}")

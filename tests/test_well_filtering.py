@@ -230,12 +230,23 @@ class TestWellFilteringIntegration:
         pipeline = AnnotationPipeline(config, conn=mock_conn)
 
         with patch('omero_annotate_ai.core.annotation_pipeline.ezomero') as mock_ezomero:
-            mock_ezomero.get_image_ids.return_value = [1, 2, 3, 4, 5, 6]
+            mock_ezomero.get_well_ids.return_value = [101, 102]
+            mock_ezomero.get_image_ids.side_effect = (
+                lambda conn, well=None: {101: [1, 2, 3], 102: [4, 5, 6]}[well]
+            )
+            pipeline._get_well_map_annotations = lambda well_id: {"cellline": f"line{well_id}"}
+            pipeline._get_well_position = lambda well_id: {101: "A1", 102: "A2"}[well_id]
 
             image_ids = pipeline.get_image_ids_from_container()
 
             # Should include all images
             assert image_ids == [1, 2, 3, 4, 5, 6]
+            # Each image carries its well context
+            assert pipeline._well_info[5] == {
+                "well_id": 102,
+                "well": "A2",
+                "well_metadata": {"cellline": "line102"},
+            }
 
 
 @pytest.mark.unit

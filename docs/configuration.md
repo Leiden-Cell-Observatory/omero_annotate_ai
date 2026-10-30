@@ -261,16 +261,67 @@ training:
   # Fractions must sum to <= 1.0
 ```
 
+#### Split Grouping, Stratification and Seed
+
+Annotations that come from the same frame, image or well are highly correlated. If
+they end up on both sides of a split, validation and test scores are inflated
+(data leakage). `split_level` sets the unit that is always kept in one category:
+
+```yaml
+training:
+  split_level: "well"                   # "timepoint", "image" (default) or "well"
+  stratify_by: ["cellline", "treatment"] # spread these well-metadata combinations over the splits
+  random_seed: 42                       # generated and recorded when left empty
+```
+
+- **`timepoint`**: each frame is assigned on its own, so frames of the same field of view can
+  be in training and test. This is the leakiest option; use it only as a baseline.
+- **`image`**: all timepoints, z-slices and patches of an image share a category.
+- **`well`**: all images of a well share a category (plates only).
+
+In count mode, `train_n`/`validate_n`/`test_n` count units at the split level (wells for
+`split_level: "well"`). The same seed and image list give the same split. Every annotation
+records its well (`well_id`, `well`) and the well's key-value metadata (`well_metadata`), so
+`config.split_leakage_report()` can list frames, images, wells or metadata values that span
+several categories.
+
+### Normalisation of Model Input
+
+How raw intensities become model input is defined once, in the config, and travels with
+the annotation set (OMERO, YAML, MIFA export):
+
+```yaml
+normalization:
+  method: "percentile"      # "percentile" or "none"
+  percentile_low: 1.0       # per-image percentile mapped to 0
+  percentile_high: 99.8     # per-image percentile mapped to 1
+  clip: true
+  apply_at_export: true     # write float32 normalised images
+```
+
+Training data is exported at native bit depth unless `apply_at_export` is set. With
+`apply_at_export: true` the model input images are written as float32 and the exact
+bounds used for each image are recorded in `normalization.json` next to the data;
+labels are never changed. Without it, `normalization.json` records what the trainer
+must apply.
+
+`omero_annotate_ai.processing.normalization.biapy_normalization(config.normalization)`
+returns the matching BiaPy `DATA.NORMALIZATION` block. BiaPy's `div` and `scale_range`
+types guess the bit depth from the image maximum, so exporting with
+`apply_at_export: true` (BiaPy then applies the identity) is the most reliable route.
+
 ### Workflow Control
 
 ```yaml
 workflow:
   resume_from_table: false      # Resume from existing OMERO annotation table
   read_only_mode: false         # View results without uploading changes
+  upload_rois: true             # Also store masks as OMERO ROIs
 ```
 
 - **`resume_from_table`**: When `true`, loads existing annotations from an OMERO table and resumes processing from where it left off. Useful for continuing interrupted workflows.
 - **`read_only_mode`**: When `true`, prevents any uploads to OMERO. Use this to review existing results without modifications.
+- **`upload_rois`**: Each mask is always attached to its image as a label file, which is what training data export reads. With `true` (default) the objects are also stored as ROIs, so they can be viewed and edited in OMERO. Set it to `false` for large automated sets, where thousands of objects per frame would add millions of shapes to the server.
 
 ### Output Configuration
 
@@ -292,6 +343,18 @@ tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 
 # Annotation tracking (auto-populated during processing)
 annotations: []  # List of ImageAnnotation records
+```
+
+### Notes and Custom Metadata
+
+Anything the structured schema does not cover can be recorded in two open fields. Both
+are stored with the configuration; `notes` is also added to the MIFA annotation overview.
+
+```yaml
+notes: "Wells A1-B2 use the key 'celline' instead of 'cellline' in OMERO."
+custom_metadata:
+  instrument: "Incucyte SX5"
+  objective: "10x"
 ```
 
 ## Working with Configuration Files

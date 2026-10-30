@@ -586,6 +586,17 @@ class TestPrepareFromTableRecords:
             assert key in result, f"setup_training requires {key}"
         assert (result["val_input"] / "1.tif").exists()
 
+    def test_category_column_exports_test_split(self, tmp_path):
+        table = self._table()
+        table["category"] = ["training", "test"]
+        table.loc[1, "train"] = False
+
+        result = self._run(tmp_path, table)
+
+        assert (result["train_input"] / "0.tif").exists()
+        assert (tmp_path / "training" / "test_input" / "1.tif").exists()
+        assert (tmp_path / "training" / "test_label" / "1.tif").exists()
+
 
 @pytest.mark.unit
 class TestEmptyTrainingSetIsLoud:
@@ -794,16 +805,11 @@ class TestFetchPlane2D:
         )
         assert img.shape == (2, 3)  # (height, width)
 
-    def test_normalized_to_8bit_with_max_at_255(self, fake_ezomero):
-        img = tf._fetch_plane(None, _plane_row(), channel=0)
-        assert img.dtype == np.uint8
-        assert img.max() == 255
-
-    def test_all_zero_plane_does_not_divide_by_zero(self, fake_ezomero):
-        fake_ezomero.vol[:] = 0
-        img = tf._fetch_plane(None, _plane_row(), channel=0)
-        assert img.dtype == np.uint8
-        assert img.max() == 0
+    def test_native_bit_depth_and_values_are_kept(self, fake_ezomero):
+        """No lossy rescale: normalisation is defined in the config, not here."""
+        img = tf._fetch_plane(None, _plane_row(), channel=1)
+        assert img.dtype == np.uint16
+        assert img.max() == 1000 + (PLANE_X - 1) + 10 * (PLANE_Y - 1)
 
 
 @pytest.mark.unit
@@ -821,12 +827,11 @@ class TestFetchPlane3D:
         img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice=1), channel=0)
         assert img.shape == (1, PLANE_Y, PLANE_X)
 
-    def test_volumetric_normalizes_across_the_whole_stack(self, fake_ezomero):
-        """Per-slice normalization would flatten the z contrast."""
+    def test_volumetric_keeps_the_z_contrast(self, fake_ezomero):
+        """Values are not rescaled per slice (or at all)."""
         img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
-        # the global max lives on the last z; earlier slices must be dimmer
-        assert img[-1].max() == 255
-        assert img[0].max() < 255
+        assert img.dtype == np.uint16
+        assert img[0].max() < img[-1].max() == fake_ezomero.vol[..., 0, 0].max()
 
     def test_volumetric_patch_is_returned_as_z_height_width(self, fake_ezomero):
         img = tf._fetch_plane(
