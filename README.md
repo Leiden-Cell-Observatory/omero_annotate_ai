@@ -40,13 +40,16 @@ flowchart LR
 
 <table>
   <tr>
-    <td width="45%" valign="top"><img src="docs/images/widget_connect.png" alt="OMERO connection widget"></td>
-    <td width="55%" valign="top"><img src="docs/images/widget_container.png" alt="Choosing an OMERO container in the workflow widget"><br><br>
-    <img src="docs/images/widget_config.png" alt="Reviewing the generated YAML configuration"></td>
+    <td width="45%"><img src="docs/images/widget_connect.png" alt="OMERO connection widget"></td>
+    <td width="55%"><img src="docs/images/widget_container.png" alt="Choosing an OMERO container in the workflow widget"></td>
   </tr>
   <tr>
     <td><sub>Connect to any OMERO server, here the public IDR.</sub></td>
-    <td><sub>Choose a container, set the parameters, and review the YAML config the run will use.</sub></td>
+    <td><sub>Choose a project, dataset, plate or screen.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/images/widget_config.png" alt="Reviewing the generated YAML configuration" width="65%"><br>
+    <sub>Set the parameters and review the YAML config the run will use.</sub></td>
   </tr>
 </table>
 
