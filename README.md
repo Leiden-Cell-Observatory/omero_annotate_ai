@@ -40,8 +40,8 @@ flowchart LR
 
 <table>
   <tr>
-    <td width="45%"><img src="docs/images/widget_connect.png" alt="OMERO connection widget"></td>
-    <td width="55%"><img src="docs/images/widget_container.png" alt="Choosing an OMERO container in the workflow widget"><br><br>
+    <td width="45%" valign="top"><img src="docs/images/widget_connect.png" alt="OMERO connection widget"></td>
+    <td width="55%" valign="top"><img src="docs/images/widget_container.png" alt="Choosing an OMERO container in the workflow widget"><br><br>
     <img src="docs/images/widget_config.png" alt="Reviewing the generated YAML configuration"></td>
   </tr>
   <tr>
