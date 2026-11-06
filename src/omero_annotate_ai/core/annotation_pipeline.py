@@ -1221,11 +1221,22 @@ class AnnotationPipeline:
         print(f" Progress file: {table_file}")
 
     def _find_existing_table(self) -> Optional[int]:
-        """Find existing table by name for resume functionality.
-        
+        """Find the table to resume.
+
+        Uses ``config.omero.table_id`` when set (the widget sets it from the
+        selected table), because table names need not be unique. Falls back
+        to a lookup by name, e.g. for YAML configs without a table ID.
+
         Returns:
             Table ID if found, None otherwise
         """
+        table_id = self.config.omero.table_id
+        if table_id:
+            if self.conn.getObject("FileAnnotation", table_id) is not None:
+                print(f"Resuming table ID {table_id}")
+                return table_id
+            print(f"Table ID {table_id} not found; looking it up by name instead")
+
         table_title = self._get_table_title()
         print(f"Looking for existing table: {table_title}")
         
