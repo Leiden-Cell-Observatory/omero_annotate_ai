@@ -366,9 +366,83 @@ class TestOMEROConnectionWidgetCredentials:
         widget._connect(Mock())
         assert widget.connection is first
 
+        widget.password_widget.value = "s3cret"  # cleared after each attempt
         widget._connect(Mock())
         first.close.assert_called_once()
         assert widget.connection is second
+
+    @pytest.mark.parametrize("result", ["ok", "none", "raises"])
+    def test_password_field_cleared_after_connect(self, widget, conn_manager, result):
+        """The typed password never stays in the widget model after Connect."""
+        if result == "raises":
+            conn_manager.create_connection_from_config.side_effect = RuntimeError("x")
+        else:
+            conn_manager.create_connection_from_config.return_value = (
+                Mock() if result == "ok" else None
+            )
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+
+        widget._connect(Mock())
+
+        assert widget.password_widget.value == ""
+
+    def test_keychain_password_stays_out_of_the_field(self, widget, conn_manager):
+        """A keychain password is used for connecting but never put in the field."""
+        conn_manager.load_password.return_value = "from-keychain"
+        conn_manager.create_connection_from_config.return_value = Mock()
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+
+        widget._load_from_keychain(Mock())
+        assert widget.password_widget.value == ""
+
+        widget._connect(Mock())
+        sent = conn_manager.create_connection_from_config.call_args[0][0]
+        assert sent["password"] == "from-keychain"
+
+    def test_keychain_password_not_sent_to_another_server(self, widget, conn_manager):
+        conn_manager.load_password.return_value = "from-keychain"
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget._load_from_keychain(Mock())
+
+        widget.host_widget.value = "other.example.org"
+
+        assert widget._get_widget_config()["password"] == ""
+
+    def test_stale_keychain_password_hint(self, widget, conn_manager, capsys):
+        conn_manager.load_password.return_value = "old"
+        conn_manager.create_connection_from_config.return_value = None
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget._load_from_keychain(Mock())
+
+        widget._connect(Mock())
+
+        assert "may be out of date" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("host", ["wss://omero.example.org/omero-ws",
+                                      "ws://omero.example.org/omero-ws"])
+    def test_url_host_sends_no_port_and_stays_encrypted(self, widget, host):
+        widget.secure_widget.value = False
+        widget.host_widget.value = host
+
+        config = widget._get_widget_config()
+        assert config["port"] is None
+        assert config["secure"] is True
+        assert widget.port_widget.disabled and widget.secure_widget.disabled
+
+    def test_plain_host_keeps_port_and_secure_choice(self, widget):
+        widget.host_widget.value = "wss://omero.example.org/omero-ws"
+        widget.host_widget.value = "omero.example.org"
+        widget.secure_widget.value = False
+
+        config = widget._get_widget_config()
+        assert config["port"] == widget.DEFAULT_PORT
+        assert config["secure"] is False
+        assert not widget.port_widget.disabled
 
 
 @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
