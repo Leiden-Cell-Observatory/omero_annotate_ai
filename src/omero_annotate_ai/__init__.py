@@ -1,5 +1,7 @@
 """OMERO Annotate AI: Integration of AI annotation tools with OMERO for automated image segmentation."""
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from .core.annotation_config import (
     AnnotationConfig, create_default_config, load_config, load_config_from_yaml
 )
@@ -16,7 +18,10 @@ from .processing.training_utils import setup_training, run_training
 # OMERO utilities
 from .omero import omero_utils
 
-__version__ = "0.3.2"
+try:
+    __version__ = _pkg_version("omero-annotate-ai")
+except PackageNotFoundError:  # running from a source tree without installing
+    __version__ = "unknown"
 __author__ = "Maarten Paul"
 __email__ = "m.w.paul@lumc.nl"
 
