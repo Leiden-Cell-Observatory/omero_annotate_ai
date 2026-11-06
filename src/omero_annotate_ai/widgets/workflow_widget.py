@@ -1,5 +1,6 @@
 """Sequential workflow widget for OMERO annotation setup."""
 
+import html
 import tempfile
 from pathlib import Path
 
@@ -300,7 +301,11 @@ class WorkflowWidget:
 
         # Table selection
         self.table_selection = widgets.RadioButtons(
-            options=[], description="Select:", disabled=True
+            options=[],
+            description="Select:",
+            disabled=True,
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="auto", max_width="100%"),
         )
 
         # Action buttons
@@ -642,7 +647,7 @@ class WorkflowWidget:
             style={"description_width": "initial"},
         )
 
-        # Resume from table (will be auto-set based on table selection)
+        # Display only: set by Continue Existing / Name New Table in step 3
         resume_from_table = widgets.Checkbox(
             value=self.config.workflow.resume_from_table,
             description="Resume from existing table",
@@ -949,8 +954,14 @@ class WorkflowWidget:
                     self.config.name = table.get("name", "unknown")
                     break
 
-            self.config.workflow.resume_from_table = True
+            self._set_resume_from_table(True)
             self._update_progress()
+
+    def _set_resume_from_table(self, resume: bool):
+        """Resume is decided by the table choice; keep config and checkbox in step."""
+        self.config.workflow.resume_from_table = resume
+        if hasattr(self, "workflow_widgets"):
+            self.workflow_widgets["resume_from_table"].value = resume
 
     def _on_new_table(self, button):
         """Pick a name for a new table. The table itself is created at pipeline run."""
@@ -972,7 +983,8 @@ class WorkflowWidget:
                 )
             self.new_table_name.value = unique_name
             self.config.name = unique_name
-            self.config.workflow.resume_from_table = False
+            self.selected_table_id = None
+            self._set_resume_from_table(False)
 
             with self.status_output:
                 clear_output()
@@ -1048,12 +1060,12 @@ class WorkflowWidget:
                     for table in self.annotation_tables:
                         if table.get("id") == self.selected_table_id:
                             self.config.name = table.get("name", "unknown")
-                            self.config.workflow.resume_from_table = True
+                            self._set_resume_from_table(True)
                             break
                 elif self.new_table_name.value.strip():
                     # Creating new table
                     self.config.name = self.new_table_name.value.strip()
-                    self.config.workflow.resume_from_table = False
+                    self._set_resume_from_table(False)
 
                 self._render_omero_status(
                     container_type, container_id,
@@ -1223,18 +1235,14 @@ class WorkflowWidget:
             if hasattr(child, "description") and hasattr(child, "value"):
                 if "Read-only mode" in child.description:
                     workflow_widgets["read_only_mode"] = child
-                elif "Resume from existing table" in child.description:
-                    workflow_widgets["resume_from_table"] = child
 
         # Update configuration from widgets
         if "read_only_mode" in workflow_widgets:
             self.config.workflow.read_only_mode = workflow_widgets[
                 "read_only_mode"
             ].value
-        if "resume_from_table" in workflow_widgets:
-            self.config.workflow.resume_from_table = workflow_widgets[
-                "resume_from_table"
-            ].value
+        # resume_from_table is not read back: the checkbox only mirrors the
+        # table choice (Continue Existing / Name New Table) made in step 3.
 
     def _update_config_preview(self):
         """Update configuration preview."""
@@ -1279,7 +1287,21 @@ class WorkflowWidget:
                     f"Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
                 )
             lines.append(summary)
+            channels = self._format_channel_names(info)
+            if channels:
+                lines.append(f"<b>Channels:</b> {channels}")
         self.omero_status.value = "<h5>📡 OMERO Settings</h5>" + "".join(f"<p>{line}</p>" for line in lines)
+
+    @staticmethod
+    def _format_channel_names(info: dict) -> str:
+        """Channel index and name of the sample image, e.g. '0: DAPI, 1: GFP'."""
+        names = info.get("channel_names")
+        if not names:
+            return ""
+        text = ", ".join(f"{i}: {html.escape(name)}" for i, name in enumerate(names))
+        if info.get("channel_names_vary"):
+            text += " <i>(from the first image; other images name channels differently)</i>"
+        return text
 
     def _apply_container_info(self, info: dict):
         """Apply container info to UI and config-dependent widgets.
@@ -1327,6 +1349,9 @@ class WorkflowWidget:
             summary_lines.append(
                 f"<b>Sample image dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
             )
+        channels = self._format_channel_names(info)
+        if channels:
+            summary_lines.append(f"<b>Channels:</b> {channels}")
         if px:
             parts = []
             for axis in ("X", "Y", "Z"):

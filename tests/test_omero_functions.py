@@ -811,3 +811,44 @@ class TestPrepareDataframeForOmero:
 
         assert out["roi_id"].tolist() == [0]
         assert out["label_id"].tolist() == [0]
+
+
+@pytest.mark.unit
+class TestGetContainerInfoChannels:
+    """Channel names reported by get_container_info."""
+
+    @staticmethod
+    def _conn(labels_by_image):
+        conn = Mock()
+        conn.isConnected.return_value = True
+        container = Mock()
+        container.getName.return_value = "cells"
+
+        def get_object(kind, obj_id):
+            if kind != "Image":
+                return container
+            image = Mock()
+            image.getName.return_value = f"img{obj_id}"
+            image.getChannelLabels.return_value = labels_by_image[obj_id]
+            return image
+
+        conn.getObject.side_effect = get_object
+        return conn
+
+    @pytest.mark.parametrize("other, vary", [(["DAPI", "GFP"], False), (["DAPI", "RFP"], True)])
+    def test_channel_names_and_variation(self, other, vary):
+        from omero_annotate_ai.omero.omero_utils import get_container_info
+
+        labels = {1: ["DAPI", "GFP"], 2: ["DAPI", "GFP"], 3: other}
+        with patch("omero_annotate_ai.omero.omero_utils.ezomero.get_image_ids",
+                   return_value=[1, 2, 3]):
+            info = get_container_info(self._conn(labels), "dataset", 5)
+
+        assert info["channel_names"] == ["DAPI", "GFP"]
+        assert info["channel_names_vary"] is vary
+
+    def test_spread_sample_includes_last(self):
+        from omero_annotate_ai.omero.omero_utils import _spread_sample
+
+        assert _spread_sample(list(range(100)), 4) == [24, 49, 74, 99]
+        assert _spread_sample([1, 2], 4) == [1, 2]
