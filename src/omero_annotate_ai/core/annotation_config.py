@@ -701,6 +701,27 @@ class TrainingConfig(BaseModel):
         "random_split", "expert_review", "cross_validation"
     ] = "random_split"
 
+    # The level at which data are assigned to a split. Every annotation of one unit
+    # lands in the same split; counts and fractions below refer to units.
+    split_unit: Literal["image", "well"] = Field(
+        default="image",
+        description=(
+            "Unit of the train/validation/test split: 'image' (a field with all its "
+            "timepoints/z-slices) or 'well' (all fields of a plate well)"
+        ),
+    )
+    split_rationale: Optional[str] = Field(
+        default=None,
+        description="Why this split unit was chosen, e.g. 'fields within a well do not overlap'",
+    )
+    stratify_by: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Well key-value pairs (e.g. ['cell_line', 'treatment']) or 'well' to split "
+            "within: each combination is divided over the splits separately"
+        ),
+    )
+
     # Fraction-based splits (for segment_all=True)
     train_fraction: float = Field(
         default=0.7,
@@ -1061,6 +1082,81 @@ class AnnotationConfig(BaseModel):
             "pending_units": total - completed,
             "progress_percent": round(100 * completed / total, 1) if total > 0 else 0,
         }
+
+    def split_report(self) -> Dict[str, Any]:
+        """Report how images and wells are distributed over the splits.
+
+        Records rather than judges: for the declared ``training.split_unit`` and every
+        level above it, lists the units whose annotations fall in more than one split.
+        The ``wells`` section is present only when annotations carry well information.
+        """
+        report: Dict[str, Any] = {
+            "split_unit": self.training.split_unit,
+            "split_rationale": self.training.split_rationale,
+            "images": _split_level(self.annotations, lambda a: a.image_uri),
+        }
+        if any(a.well for a in self.annotations):
+            report["wells"] = _split_level(
+                [a for a in self.annotations if a.well], lambda a: a.well
+            )
+        keys = self.training.stratify_by
+        if keys:
+            unit = (lambda a: a.well) if self.training.split_unit == "well" else (
+                lambda a: a.image_uri
+            )
+            by_stratum: Dict[str, list] = {}
+            for a in self.annotations:
+                label = ", ".join(
+                    f"{k}={a.well if k == 'well' else a.well_metadata.get(k, '(missing)')}"
+                    for k in keys
+                )
+                by_stratum.setdefault(label, []).append(a)
+            wanted = {a.category for a in self.annotations}
+            report["stratify_by"] = list(keys)
+            report["strata"] = {
+                label: _split_level(anns, unit)["per_split"]
+                for label, anns in by_stratum.items()
+            }
+            report["strata_missing_splits"] = {
+                label: [c for c in SPLIT_CATEGORIES if c in wanted and not counts[c]]
+                for label, counts in report["strata"].items()
+                if any(c in wanted and not counts[c] for c in SPLIT_CATEGORIES)
+            }
+        return report
+
+    def split_summary(self) -> str:
+        """One-paragraph, human-readable version of :meth:`split_report`."""
+        report = self.split_report()
+        parts = [f"Split unit: {report['split_unit']}."]
+        for level, label in (("images", "images"), ("wells", "wells")):
+            if level not in report:
+                continue
+            section = report[level]
+            spanning = section["spanning_splits"]
+            if spanning:
+                parts.append(
+                    f"{len(spanning)} of {section['total']} {label} have annotations in "
+                    f"more than one split ({', '.join(spanning)})."
+                )
+            else:
+                parts.append(f"None of {section['total']} {label} span more than one split.")
+        if "strata" in report:
+            stratified = f"Stratified by {', '.join(report['stratify_by'])}"
+            missing = report["strata_missing_splits"]
+            if missing:
+                parts.append(
+                    f"{stratified}: {len(missing)} of {len(report['strata'])} strata are "
+                    f"not in every split ("
+                    + "; ".join(f"{s} lacks {', '.join(m)}" for s, m in missing.items())
+                    + ")."
+                )
+            else:
+                parts.append(
+                    f"{stratified}: every stratum ({len(report['strata'])}) is in every split."
+                )
+        if report["split_rationale"]:
+            parts.append(f"Rationale: {report['split_rationale'].rstrip('.')}.")
+        return " ".join(parts)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert annotations to OMERO-compatible DataFrame.
@@ -1456,6 +1552,23 @@ class AnnotationConfig(BaseModel):
         return cls.from_dict(data)
 
 
+SPLIT_CATEGORIES = ("training", "validation", "test")
+
+
+def _split_level(annotations, key) -> Dict[str, Any]:
+    """Count units (grouped by ``key``) per split and list units in several splits."""
+    categories: Dict[str, set] = {}
+    for annotation in annotations:
+        categories.setdefault(key(annotation), set()).add(annotation.category)
+    return {
+        "total": len(categories),
+        "per_split": {
+            c: sum(1 for cats in categories.values() if c in cats) for c in SPLIT_CATEGORIES
+        },
+        "spanning_splits": sorted(unit for unit, cats in categories.items() if len(cats) > 1),
+    }
+
+
 class ValidationIssue(BaseModel):
     """A single validation issue found when checking annotations against config."""
 
@@ -1555,6 +1668,18 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
                     f"May be expected if patches were clipped to image boundaries."
                 ),
             ))
+
+    # ERROR: annotations of one split unit landed in different splits
+    unit_level = "wells" if training.split_unit == "well" else "images"
+    spanning = config.split_report().get(unit_level, {}).get("spanning_splits", [])
+    if spanning:
+        errors.append(ValidationIssue(
+            field="split_unit",
+            message=(
+                f"split_unit='{training.split_unit}' but {len(spanning)} {unit_level} have "
+                f"annotations in more than one split. Example: {spanning[0]}"
+            ),
+        ))
 
     # WARNING: category distribution mismatch
     actual_train = sum(1 for a in annotations if a.category == "training")
@@ -1699,6 +1824,7 @@ training:
   validation_fraction: 0.3
   validate_n: 3
   segment_all: false
+  split_unit: "image"
 
 workflow:
   resume_from_table: false

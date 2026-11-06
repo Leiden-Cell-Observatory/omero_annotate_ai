@@ -9,9 +9,11 @@
 
 # Standard library imports
 import logging
+import math
 import random
 import shutil
 import traceback
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -92,6 +94,8 @@ class AnnotationPipeline:
         self._zarr_refs: Dict[str, ZarrImageRef] = {}
         # OMERO plate images: URI -> well, field and well key-value pairs
         self._omero_wells: Dict[str, dict] = {}
+        # OMERO plate images: URI -> plate id, so equal well names on two plates differ
+        self._omero_plates: Dict[str, int] = {}
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
@@ -293,68 +297,153 @@ class AnnotationPipeline:
             fields.update(well, well_metadata=dict(well["well_metadata"]))
         return fields
 
+    def _well_info(self, uri: str) -> Optional[Tuple[str, str, Dict[str, str]]]:
+        """(plate, well, well key-value pairs) of a plate image, else None."""
+        ref = self._zarr_refs.get(uri)
+        if ref is not None and ref.well:
+            return ref.plate, ref.well, dict(ref.well_metadata)
+        well = self._omero_wells.get(uri)
+        if well is not None:
+            plate = str(self._omero_plates.get(uri, ""))
+            return plate, well["well"], dict(well["well_metadata"])
+        return None
+
+    def _split_unit_key(self, uri: str) -> str:
+        """The split unit an image belongs to: the image itself or its plate well."""
+        if self.config.training.split_unit == "image":
+            return uri
+        info = self._well_info(uri)
+        if info is None:
+            raise ValueError(
+                f"split_unit='well' needs plate images with well information, "
+                f"but {uri} has none. Use split_unit='image' for non-plate data."
+            )
+        plate, well, _ = info
+        return f"{plate}/{well}"
+
+    def _stratum(self, uri: str) -> str:
+        """Label of the condition an image belongs to, from ``training.stratify_by``."""
+        info = self._well_info(uri)
+        _, well, kv = info if info is not None else ("", "", {})
+        return ", ".join(
+            f"{key}={well if key == 'well' else kv.get(key, '(missing)')}"
+            for key in self.config.training.stratify_by
+        )
+
+    def _check_stratify_keys(self, uris: List[str]) -> None:
+        """Error on a ``stratify_by`` key that no image has: most likely a typo."""
+        for key in self.config.training.stratify_by:
+            infos = [self._well_info(uri) for uri in uris]
+            found = any(
+                info is not None and (key == "well" or key in info[2]) for info in infos
+            )
+            if not found:
+                available = sorted({k for info in infos if info for k in info[2]})
+                raise ValueError(
+                    f"stratify_by key '{key}' is not found on any image. "
+                    f"Available well keys: {available + ['well']}"
+                )
+
+    def _plan_split(self, uris: List[str]) -> Dict[str, str]:
+        """Assign images to splits, keeping every split unit within one split.
+
+        Counts (``train_n``...) and fractions refer to split units (images or wells).
+        With ``stratify_by``, units are divided over the splits per condition; when a
+        condition has too few units to reach every split, a warning says so.
+        Returns ``{uri: category}`` for the selected images, training first.
+        """
+        training = self.config.training
+        unit_name = f"{training.split_unit}s"
+        self._check_stratify_keys(uris)
+        units: Dict[str, List[str]] = {}
+        for uri in uris:
+            units.setdefault(self._split_unit_key(uri), []).append(uri)
+        strata: Dict[str, List[str]] = {}
+        for key, unit_uris in units.items():
+            strata.setdefault(self._stratum(unit_uris[0]), []).append(key)
+        for keys in strata.values():
+            random.shuffle(keys)
+        n_total = len(units)
+
+        assignment: Dict[str, str] = {}
+        if training.segment_all:
+            fractions = {
+                "validation": training.validation_fraction,
+                "test": training.test_fraction,
+            }
+            for keys in strata.values():
+                n = len(keys)
+                n_val = min(math.floor(n * fractions["validation"] + 0.5), n)
+                n_test = min(math.floor(n * fractions["test"] + 0.5), n - n_val)
+                categories = ["validation"] * n_val + ["test"] * n_test
+                categories += ["training"] * (n - n_val - n_test)
+                assignment.update(zip(keys, categories))
+            wanted = {"training"} | {c for c, f in fractions.items() if f > 0}
+        else:
+            n_train, n_val, n_test = training.train_n, training.validate_n, training.test_n
+            n_requested = n_train + n_val + n_test
+            if n_requested > n_total:
+                raise ValueError(
+                    f"Not enough {unit_name}: requested {n_train} training + {n_val} validation"
+                    f" + {n_test} test = {n_requested}, but only {n_total} {unit_name} available."
+                    f" Reduce train_n, validate_n, or test_n in the annotation settings."
+                )
+            # Draw units in turn from each condition; smallest splits first so that
+            # validation and test reach as many conditions as possible.
+            pools = [list(keys) for keys in strata.values()]
+            random.shuffle(pools)
+            turn = 0
+            for category, n in (("test", n_test), ("validation", n_val), ("training", n_train)):
+                taken = 0
+                while taken < n:
+                    pool = pools[turn % len(pools)]
+                    turn += 1
+                    if pool:
+                        assignment[pool.pop()] = category
+                        taken += 1
+            wanted = {c for c, n in (("training", n_train), ("validation", n_val),
+                                     ("test", n_test)) if n > 0}
+            if n_total > 0:
+                # Sync fractions to reflect the actual count-mode split
+                training.train_fraction = round(n_train / n_total, 4)
+                training.validation_fraction = round(n_val / n_total, 4)
+                training.test_fraction = round(n_test / n_total, 4)
+
+        if training.stratify_by:
+            short = {
+                stratum: sorted(wanted - {assignment[k] for k in keys if k in assignment})
+                for stratum, keys in strata.items()
+            }
+            short = {stratum: missing for stratum, missing in short.items() if missing}
+            if short:
+                warnings.warn(
+                    f"{len(short)} of {len(strata)} conditions are not in every split "
+                    f"(too few {unit_name}): "
+                    + "; ".join(f"{s} lacks {', '.join(m)}" for s, m in short.items()),
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        order = {"training": 0, "validation": 1, "test": 2}
+        return {
+            uri: category
+            for key, category in sorted(assignment.items(), key=lambda kv: order[kv[1]])
+            for uri in units[key]
+        }
+
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
 
         # Clear existing annotations first
         self.config.annotations.clear()
-        n_total = len(images_list)
 
-        # Determine which images to process
-        if self.config.training.segment_all:
-            # Use all images with fraction-based split
-            selected_images = images_list
-            n_train = int(n_total * self.config.training.train_fraction)
-            n_val = int(n_total * self.config.training.validation_fraction)
-            n_test = int(n_total * self.config.training.test_fraction)
-
-            # Handle rounding remainder: assign to training (largest category typically)
-            remainder = n_total - n_train - n_val - n_test
-            n_train += remainder
-
-            # Create categories for all images
-            image_categories = (
-                ["training"] * n_train +
-                ["validation"] * n_val +
-                ["test"] * n_test
-            )
-        else:
-            # Select subset with specific counts
-            n_train = self.config.training.train_n
-            n_val = self.config.training.validate_n
-            n_test = self.config.training.test_n
-            n_requested = n_train + n_val + n_test
-            if n_requested > n_total:
-                raise ValueError(
-                    f"Not enough images: requested {n_train} training + {n_val} validation"
-                    f" + {n_test} test = {n_requested}, but only {n_total} images available."
-                    f" Reduce train_n, validate_n, or test_n in the annotation settings."
-                )
-
-            # Randomly select images
-            shuffled_indices = list(range(n_total))
-            random.shuffle(shuffled_indices)
-
-            train_indices = shuffled_indices[:n_train]
-            val_indices = shuffled_indices[n_train : n_train + n_val]
-            test_indices = shuffled_indices[n_train + n_val : n_train + n_val + n_test]
-
-            selected_images = [images_list[i] for i in train_indices + val_indices + test_indices]
-            image_categories = (
-                ["training"] * n_train +
-                ["validation"] * n_val +
-                ["test"] * n_test
-            )
-
-            # Sync fractions to reflect the actual count-mode split
-            if n_total > 0:
-                self.config.training.train_fraction = round(n_train / n_total, 4)
-                self.config.training.validation_fraction = round(n_val / n_total, 4)
-                self.config.training.test_fraction = round(n_test / n_total, 4)
+        metas = [self.image_source.metadata(image) for image in images_list]
+        plan = self._plan_split([meta.image_uri for meta in metas])
+        by_uri = {meta.image_uri: (image, meta) for image, meta in zip(images_list, metas)}
 
         # Create ImageAnnotation objects for each processing unit
-        for image, category in zip(selected_images, image_categories):
-            image_meta = self.image_source.metadata(image)
+        for uri, category in plan.items():
+            image, image_meta = by_uri[uri]
             identity = self._identity_fields(image_meta)
             image_uri = identity["image_uri"]
 
@@ -1062,6 +1151,7 @@ class AnnotationPipeline:
                     "field": str(field),
                     "well_metadata": dict(well_kv_pairs),
                 }
+                self._omero_plates[omero_uri(image_id)] = container_id
 
         if filters:
             print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(image_ids)} images selected")
@@ -1293,25 +1383,9 @@ class AnnotationPipeline:
                 )
                 raise ValueError(f"No images found in {where}")
 
-            # Determine which images to process (mimic _prepare_processing_units logic)
-            if self.config.training.segment_all:
-                selected_indices = list(range(n_total))
-            else:
-                n_train = self.config.training.train_n
-                n_val = self.config.training.validate_n
-                n_test = self.config.training.test_n
-                n_requested = n_train + n_val + n_test
-                if n_requested > n_total:
-                    raise ValueError(
-                        f"Not enough images: requested {n_train} training + {n_val} validation"
-                        f" + {n_test} test = {n_requested}, but only {n_total} images available."
-                        f" Reduce train_n, validate_n, or test_n in the annotation settings."
-                    )
-                shuffled_indices = list(range(n_total))
-                random.shuffle(shuffled_indices)
-                selected_indices = shuffled_indices[: n_requested]
-
-            selected_image_ids = [image_ids[i] for i in selected_indices]
+            # Load only the images of the selected split units; their categories are
+            # assigned again in _prepare_processing_units, unit by unit.
+            selected_image_ids = list(self._plan_split(image_ids))
             images_list = self.get_images_by_ids(selected_image_ids)
         else:
             print(f"Loaded {len(images_list)} images (provided)")
