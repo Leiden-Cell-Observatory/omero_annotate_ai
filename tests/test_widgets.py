@@ -743,6 +743,23 @@ class TestWorkflowWidgetDisplay:
             assert not fields[key].disabled, key
         assert "saved config" in widget.resume_note.value
 
+    def test_continue_existing_updates_config_without_update_click(self):
+        """Running right after Continue Existing must use the table's settings."""
+        widget = self._continue_with_saved_config()
+
+        config = widget.get_config()
+        assert config.spatial_coverage.get_label_channel() == 2
+        assert config.spatial_coverage.use_patches is True
+        assert config.spatial_coverage.patch_size == [256, 128]
+        assert config.training.train_n == 4
+        assert config.workflow.resume_from_table is True
+
+    def test_get_config_keeps_locked_values(self):
+        widget = self._continue_with_saved_config()
+        widget.config.spatial_coverage.use_patches = False
+
+        assert widget.get_config().spatial_coverage.use_patches is True
+
     def test_locked_values_win_over_widgets_on_update(self):
         widget = self._continue_with_saved_config()
         fields = widget._annotation_widget_map()

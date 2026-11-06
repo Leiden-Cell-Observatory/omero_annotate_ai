@@ -1009,6 +1009,11 @@ class WorkflowWidget:
 
         self._apply_settings_to_widgets(settings)
         self._lock_resume_fields(settings)
+        # Write the loaded settings into the config now, so a run started
+        # without clicking Update Configuration still matches the table.
+        self._update_annotation_settings()
+        self._apply_locked_settings_to_config()
+        self._update_technical_settings()
         self.resume_note.value = (
             f"<small><i>Resuming: settings loaded from {source}. Channel, 3D and patch "
             "settings are locked to match the existing rows. Raise the image counts "
@@ -1584,7 +1589,8 @@ class WorkflowWidget:
         display(self.main_widget)
 
     def get_config(self) -> AnnotationConfig:
-        """Get current configuration."""
+        """Get current configuration; locked resume settings always win."""
+        self._apply_locked_settings_to_config()
         return self.config
 
 
