@@ -150,7 +150,7 @@ class WorkflowWidget:
 
         return widgets.VBox(
             [
-                widgets.HTML("<h4>Step 1: Connect to OMERO</h4>"),
+                widgets.HTML("<h4>Connect to OMERO</h4>"),
                 connection_status,
                 connect_info,
             ]
@@ -202,7 +202,7 @@ class WorkflowWidget:
 
         return widgets.VBox(
             [
-                widgets.HTML("<h4>Step 2: Select Working Directory</h4>"),
+                widgets.HTML("<h4>Select Working Directory</h4>"),
                 directory_info,
                 self.directory_text,
                 widgets.HBox([temp_button, create_button]),
@@ -272,7 +272,7 @@ class WorkflowWidget:
 
         return widgets.VBox(
             [
-                widgets.HTML("<h4>Step 3: Choose Container</h4>"),
+                widgets.HTML("<h4>Choose Container</h4>"),
                 container_info,
                 self.container_type_dropdown,
                 widgets.HBox([self.container_dropdown, refresh_button]),
@@ -344,7 +344,7 @@ class WorkflowWidget:
 
         return widgets.VBox(
             [
-                widgets.HTML("<h4>Step 4: Check Existing Tables</h4>"),
+                widgets.HTML("<h4>Check Existing Tables</h4>"),
                 tables_info,
                 scan_button,
                 self.tables_display,
@@ -405,7 +405,7 @@ class WorkflowWidget:
 
         return widgets.VBox(
             [
-                widgets.HTML("<h4>Step 4: Configure Parameters</h4>"),
+                widgets.HTML("<h4>Configure Parameters</h4>"),
                 config_info,
                 self.omero_status,
                 config_tabs,
@@ -698,7 +698,7 @@ class WorkflowWidget:
 
         return widgets.VBox(
             [
-                widgets.HTML("<h4>Step 5: Save Configuration</h4>"),
+                widgets.HTML("<h4>Save Configuration</h4>"),
                 save_info,
                 self.config_preview,
                 save_button,
@@ -1055,13 +1055,13 @@ class WorkflowWidget:
                     self.config.name = self.new_table_name.value.strip()
                     self.config.workflow.resume_from_table = False
 
-                # Update OMERO status display
-                self.omero_status.value = f"""
-                <h5>📡 OMERO Settings</h5>
-                <p><b>Container:</b> {container_type} (ID: {container_id})</p>
-                <p><b>Training Set:</b> {self.config.name}</p>
-                <p><b>Resume from table:</b> {self.config.workflow.resume_from_table}</p>
-                """
+                self._render_omero_status(
+                    container_type, container_id,
+                    extra_lines=[
+                        f"<b>Training Set:</b> {self.config.name}",
+                        f"<b>Resume from table:</b> {self.config.workflow.resume_from_table}",
+                    ],
+                )
 
             # Update annotation settings from widgets
             self._update_annotation_settings()
@@ -1261,6 +1261,26 @@ class WorkflowWidget:
         except Exception as e:
             self.save_status.value = f"❌ Error saving configuration: {e}"
 
+    def _render_omero_status(self, container_type, container_id, extra_lines=()):
+        """Show the selected container and its image summary on the Configure tab."""
+        info = getattr(self, "_container_info", None) or {}
+        same_container = info.get("container_id") == container_id
+        label = " ".join(p for p in (container_type, info.get("container_name") if same_container else None) if p)
+        lines = [f"<b>Container:</b> {label} (ID: {container_id})"]
+        lines.extend(extra_lines)
+        if same_container:
+            summary = f"<b>Images:</b> {info.get('total_images', 0)}"
+            if container_type == "screen" and info.get("total_plates") is not None:
+                summary += f" | <b>Plates:</b> {info.get('total_plates')}"
+            dims = info.get("dimensions") or {}
+            if dims:
+                summary += (
+                    f" | <b>Sample dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, "
+                    f"Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
+                )
+            lines.append(summary)
+        self.omero_status.value = "<h5>📡 OMERO Settings</h5>" + "".join(f"<p>{line}</p>" for line in lines)
+
     def _apply_container_info(self, info: dict):
         """Apply container info to UI and config-dependent widgets.
 
@@ -1318,22 +1338,7 @@ class WorkflowWidget:
 
         self.container_summary.value = "<div>" + "<br>".join(summary_lines) + "</div>"
 
-        # Also inject into OMERO status (visible on Configure tab)
-        # Keep existing lines and append concise summary
-        current = self.omero_status.value or ""
-        extra = (
-            f"<p><b>Images:</b> {total_images}" +
-            (f" | <b>Plates:</b> {info.get('total_plates')}" if ctype == 'screen' and info.get('total_plates') is not None else "") +
-            (f" | <b>Sample dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}" if dims else "") +
-            "</p>"
-        )
-        # Replace or append a summary section
-        if "📡 OMERO Settings" in current:
-            # Append once; avoid duplicates by rudimentary check
-            if "<p><b>Images:</b>" not in current:
-                self.omero_status.value = current + extra
-        else:
-            self.omero_status.value = extra
+        self._render_omero_status(ctype, info.get("container_id", ""))
 
         # Update sliders' max to the number of available images
         if hasattr(self, "train_n_slider") and hasattr(self, "validate_n_slider") and hasattr(self, "test_n_slider"):

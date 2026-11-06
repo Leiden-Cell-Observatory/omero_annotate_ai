@@ -514,6 +514,71 @@ class TestWorkflowWidget:
         assert config.spatial_coverage.use_patches is False
 
 
+@pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
+@pytest.mark.unit
+class TestWorkflowWidgetDisplay:
+    """Text the workflow widget shows, built with real ipywidgets."""
+
+    @staticmethod
+    def _headings(widget):
+        import re
+        headings = []
+        for tab in widget.tab_widget.children:
+            for child in tab.children:
+                value = getattr(child, "value", "")
+                if isinstance(value, str) and "<h4>" in value:
+                    headings.append(re.sub(r"</?h4>", "", value))
+        return headings
+
+    @pytest.mark.parametrize("connection", [None, "connected"])
+    def test_tab_headings_match_step_names(self, connection):
+        """Each tab heading is its step name, with or without a connection tab."""
+        conn = Mock() if connection else None
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=conn)
+
+        assert self._headings(widget) == widget.steps
+
+    def test_container_info_replaces_placeholder(self):
+        """Selecting a container replaces the 'select a container' placeholder."""
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+
+        widget._apply_container_info({
+            "container_type": "project",
+            "container_id": 51,
+            "container_name": "idr0021",
+            "total_images": 414,
+            "dimensions": {"X": 256, "Y": 256, "Z": 1, "C": 3, "T": 1},
+        })
+
+        status = widget.omero_status.value
+        assert "Select container in previous steps first" not in status
+        assert "idr0021" in status
+        assert "ID: 51" in status
+        assert "414" in status
+
+    def test_update_config_keeps_image_summary(self):
+        """Updating the config keeps the image count in the OMERO settings."""
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+        widget._apply_container_info({
+            "container_type": "project", "container_id": 51,
+            "container_name": "idr0021", "total_images": 414,
+        })
+        widget.container_widgets["type"].value = "project"
+        widget.container_widgets["container"].options = [("idr0021 (ID: 51)", 51)]
+        widget.container_widgets["container"].value = 51
+        widget.new_table_name.value = "idr0021_microsam"
+
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        status = widget.omero_status.value
+        assert "idr0021_microsam" in status
+        assert "414" in status
+
+
 @pytest.mark.unit
 class TestWidgetFallbacks:
     """Test widget behavior when dependencies are missing."""
