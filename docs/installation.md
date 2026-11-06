@@ -39,8 +39,22 @@ conda activate omero-annotate-ai
 pip install omero-annotate-ai
 ```
 
-micro-SAM must come from conda-forge; it is not on PyPI. The OMERO libraries
-(`omero-py`, `zeroc-ice`) are pulled in automatically.
+The OMERO libraries (`omero-py`, `zeroc-ice`) are pulled in automatically.
+
+## Install with pip only
+
+micro-SAM is also [on PyPI](https://pypi.org/project/micro-sam/) (Python 3.11 or newer):
+
+```bash
+python -m venv omero-annotate-ai
+source omero-annotate-ai/bin/activate      # Windows: omero-annotate-ai\Scripts\activate
+pip install micro-sam omero-annotate-ai jupyterlab
+```
+
+With plain pip, `zeroc-ice` (needed by `omero-py`) may have no ready-made build for your
+platform; see [Troubleshooting](troubleshooting.md#installation). pixi and conda avoid
+this. For a CUDA GPU, install the matching PyTorch build first, following the
+[PyTorch instructions](https://pytorch.org/get-started/locally/).
 
 ## Check the installation
 

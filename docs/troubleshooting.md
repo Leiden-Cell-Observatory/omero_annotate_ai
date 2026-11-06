@@ -2,9 +2,10 @@
 
 ## Installation
 
-**`micro_sam` cannot be installed with pip.**
-micro-SAM is only on conda-forge. Install it with `pixi add micro_sam` or
-`conda install -c conda-forge micro_sam`, then `pip install omero-annotate-ai`.
+**`pip install micro-sam` fails.**
+The PyPI package needs Python 3.11 or newer; check with `python --version`. If it still
+fails, install micro-SAM from conda-forge instead (`pixi add micro_sam` or
+`conda install -c conda-forge micro_sam`), then `pip install omero-annotate-ai`.
 
 **`zeroc-ice` fails to build with pip.**
 Use pixi or conda, which provide ready-made builds. With plain pip, install a wheel for
