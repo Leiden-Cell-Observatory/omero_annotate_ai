@@ -1,5 +1,6 @@
 """Sequential workflow widget for OMERO annotation setup."""
 
+import html
 import tempfile
 from pathlib import Path
 
@@ -1286,7 +1287,21 @@ class WorkflowWidget:
                     f"Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
                 )
             lines.append(summary)
+            channels = self._format_channel_names(info)
+            if channels:
+                lines.append(f"<b>Channels:</b> {channels}")
         self.omero_status.value = "<h5>📡 OMERO Settings</h5>" + "".join(f"<p>{line}</p>" for line in lines)
+
+    @staticmethod
+    def _format_channel_names(info: dict) -> str:
+        """Channel index and name of the sample image, e.g. '0: DAPI, 1: GFP'."""
+        names = info.get("channel_names")
+        if not names:
+            return ""
+        text = ", ".join(f"{i}: {html.escape(name)}" for i, name in enumerate(names))
+        if info.get("channel_names_vary"):
+            text += " <i>(from the first image; other images name channels differently)</i>"
+        return text
 
     def _apply_container_info(self, info: dict):
         """Apply container info to UI and config-dependent widgets.
@@ -1334,6 +1349,9 @@ class WorkflowWidget:
             summary_lines.append(
                 f"<b>Sample image dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
             )
+        channels = self._format_channel_names(info)
+        if channels:
+            summary_lines.append(f"<b>Channels:</b> {channels}")
         if px:
             parts = []
             for axis in ("X", "Y", "Z"):
