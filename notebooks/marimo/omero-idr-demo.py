@@ -57,7 +57,7 @@ def _(mo):
     omero_host = mo.ui.text(value="ws://idr.openmicroscopy.org/omero-ws", label="OMERO Host")
     omero_username = mo.ui.text(value="public", label="Username")
     omero_password = mo.ui.text(value="public", label="Password", kind="password")
-    omero_secure = mo.ui.checkbox(value=False, label="Secure connection")
+    omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to IDR")
 
     mo.vstack([
