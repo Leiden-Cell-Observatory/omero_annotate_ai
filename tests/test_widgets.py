@@ -708,6 +708,98 @@ class TestWorkflowWidgetDisplay:
         assert widget.get_config().omero.table_id == 22159
         assert widget.workflow_widgets["resume_from_table"].value is True
 
+    @staticmethod
+    def _saved_config():
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        saved = create_default_config()
+        saved.name = "plate_run"
+        saved.spatial_coverage.channels = [2]
+        saved.spatial_coverage.use_patches = True
+        saved.spatial_coverage.patch_size = [256, 128]
+        saved.training.train_n = 4
+        saved.ai_model.pretrained_from = "vit_l"
+        return saved
+
+    def _continue_with_saved_config(self):
+        widget = self._widget_with_table()
+        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                   return_value=self._saved_config()):
+            widget._on_continue_table(None)
+        return widget
+
+    def test_continue_existing_loads_saved_config_and_locks_fields(self):
+        widget = self._continue_with_saved_config()
+        fields = widget._annotation_widget_map()
+
+        assert fields["channel"].value == 2
+        assert fields["use_patches"].value is True
+        assert fields["patch_size"].value == "256, 128"
+        assert fields["train_n"].value == 4
+        assert fields["model_type"].value == "vit_l"
+        for key in ("channel", "three_d", "use_patches", "patch_size"):
+            assert fields[key].disabled, key
+        for key in ("train_n", "validate_n", "test_n", "batch_size", "model_type"):
+            assert not fields[key].disabled, key
+        assert "saved config" in widget.resume_note.value
+
+    def test_locked_values_win_over_widgets_on_update(self):
+        widget = self._continue_with_saved_config()
+        fields = widget._annotation_widget_map()
+        fields["channel"].value = 5          # disabled in the UI, but set anyway
+        fields["patch_size"].value = "64, 64"
+        fields["train_n"].value = 6          # editable
+
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        config = widget.get_config()
+        assert config.spatial_coverage.get_label_channel() == 2
+        assert config.spatial_coverage.patch_size == [256, 128]
+        assert config.spatial_coverage.use_patches is True
+        assert config.training.train_n == 6
+        assert config.workflow.resume_from_table is True
+
+    def test_name_new_table_unlocks_fields(self):
+        widget = self._continue_with_saved_config()
+
+        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+                   return_value="fresh_table"):
+            widget._on_new_table(None)
+
+        fields = widget._annotation_widget_map()
+        assert not fields["channel"].disabled
+        assert not fields["use_patches"].disabled
+        assert not fields["three_d"].disabled
+        assert fields["patch_size"].disabled is (not fields["use_patches"].value)
+        assert widget.resume_note.value == ""
+        fields["channel"].value = 3
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+        assert widget.get_config().spatial_coverage.channels[0] == 3
+
+    def test_continue_infers_settings_from_rows_without_saved_config(self):
+        import pandas as pd
+
+        widget = self._widget_with_table()
+        rows = pd.DataFrame([
+            {"image_uri": "omero:image:1", "category": "training", "channel": 1,
+             "is_volumetric": False, "is_patch": False},
+            {"image_uri": "omero:image:2", "category": "training", "channel": 1,
+             "is_volumetric": False, "is_patch": False},
+        ])
+        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                   return_value=None), \
+             patch("omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
+                   return_value=rows) as read:
+            widget._on_continue_table(None)
+
+        read.assert_called_once_with(widget.connection, 22159)
+        fields = widget._annotation_widget_map()
+        assert fields["channel"].value == 1 and fields["channel"].disabled
+        assert fields["train_n"].value == 2
+        assert "table rows" in widget.resume_note.value
+
     def test_new_table_after_continue_turns_resume_off(self):
         """Switching to a new table clears the earlier Continue Existing choice."""
         widget = self._widget_with_table()

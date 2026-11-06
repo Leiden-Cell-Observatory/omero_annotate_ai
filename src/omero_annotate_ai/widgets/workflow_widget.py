@@ -10,9 +10,18 @@ from IPython.display import clear_output, display
 from ..core.annotation_config import AnnotationConfig, create_default_config
 from ..omero.omero_utils import get_container_info
 from ..omero.omero_functions import (
+    find_annotation_config_for_table,
     generate_unique_table_name,
+    infer_settings_from_table,
     list_annotation_tables,
+    read_tracking_table,
 )
+
+# Settings that must match the rows already in a tracking table: changing them
+# on resume makes validate_annotations_against_config fail (channel, 3D, patch)
+# or gives new rows a different shape than the old ones (patch size, z-range).
+RESUME_LOCKED_KEYS = ("channel", "three_d", "z_range_start", "z_range_end",
+                      "use_patches", "patch_size")
 
 
 class WorkflowWidget:
@@ -32,6 +41,7 @@ class WorkflowWidget:
         ]
         self.annotation_tables = []
         self.selected_table_id = None
+        self._locked_settings = {}
         self.working_directory = None
         self._create_widgets()
 
@@ -578,9 +588,12 @@ class WorkflowWidget:
             names="value",
         )
 
+        self.resume_note = widgets.HTML(value="")
+
         return widgets.VBox(
             [
                 widgets.HTML("<h5>🎯 Annotation Settings</h5>"),
+                self.resume_note,
                 training_help,  # New: Add help text
                 segment_all,
                 self.train_n_slider,
@@ -957,6 +970,7 @@ class WorkflowWidget:
                     break
 
             self._set_resume_from_table(True)
+            self._load_resume_settings()
             self._update_progress()
 
     def _set_resume_from_table(self, resume: bool):
@@ -967,8 +981,159 @@ class WorkflowWidget:
         """
         self.config.workflow.resume_from_table = resume
         self.config.omero.table_id = self.selected_table_id if resume else None
+        if not resume:
+            self._unlock_resume_fields()
         if hasattr(self, "workflow_widgets"):
             self.workflow_widgets["resume_from_table"].value = resume
+
+    def _load_resume_settings(self):
+        """Fill the Configure tab from the selected table and lock what must match.
+
+        Prefers the config YAML the earlier run attached to the container; falls
+        back to what the table rows show when no saved config matches.
+        """
+        container_type = self.container_widgets["type"].value
+        container_id = self.container_widgets["container"].value
+        try:
+            saved = find_annotation_config_for_table(
+                self.connection, container_type, container_id, self.config.name
+            )
+            if saved is not None:
+                settings, source = self._settings_from_config(saved), "the saved config"
+            else:
+                df = read_tracking_table(self.connection, self.selected_table_id)
+                settings, source = infer_settings_from_table(df), "the table rows"
+        except Exception as e:
+            self.resume_note.value = f"<small>⚠️ Could not load settings from the table: {e}</small>"
+            return
+
+        self._apply_settings_to_widgets(settings)
+        self._lock_resume_fields(settings)
+        self.resume_note.value = (
+            f"<small><i>Resuming: settings loaded from {source}. Channel, 3D and patch "
+            "settings are locked to match the existing rows. Raise the image counts "
+            "to add new images to this table.</i></small>"
+        )
+
+    @staticmethod
+    def _settings_from_config(config: AnnotationConfig) -> dict:
+        """Widget-level settings from a saved AnnotationConfig."""
+        sc, training = config.spatial_coverage, config.training
+        return {
+            "channel": sc.get_label_channel(),
+            "channels": list(sc.channels),
+            "label_channel": sc.label_channel,
+            "three_d": sc.three_d,
+            "z_range_start": sc.z_range_start or 0,
+            "z_range_end": sc.z_range_end or 0,
+            "use_patches": sc.use_patches,
+            "patch_size": list(sc.patch_size),
+            "patches_per_image": sc.patches_per_image,
+            "timepoint_mode": sc.timepoint_mode,
+            "timepoints": list(sc.timepoints),
+            "z_slice_mode": sc.z_slice_mode,
+            "z_slices": list(sc.z_slices),
+            "segment_all": training.segment_all,
+            "train_n": training.train_n,
+            "validate_n": training.validate_n,
+            "test_n": training.test_n,
+            "batch_size": config.workflow.batch_size,
+            "model_type": config.ai_model.pretrained_from,
+        }
+
+    def _annotation_widget_map(self) -> dict:
+        """Configure-tab widgets by setting name."""
+        names = {
+            "Annotate all images": "segment_all", "Training images": "train_n",
+            "Validation images": "validate_n", "Test images": "test_n",
+            "Channel": "channel", "Timepoint list": "timepoints", "Timepoints": "timepoint_mode",
+            "Z-slice list": "z_slices", "Z-slices": "z_slice_mode", "3D processing": "three_d",
+            "Z-range start": "z_range_start", "Z-range end": "z_range_end",
+            "Use patches": "use_patches", "Patches per image": "patches_per_image",
+            "Patch size": "patch_size",
+        }
+        found = {}
+        for child in self.annotation_widgets.children:
+            description = getattr(child, "description", "") or ""
+            for prefix, key in names.items():
+                if description.startswith(prefix):
+                    found.setdefault(key, child)
+                    break
+        for child in self.technical_widgets.children:
+            description = getattr(child, "description", "") or ""
+            if description.startswith("Batch size"):
+                found["batch_size"] = child
+            elif description.startswith("SAM Model"):
+                found["model_type"] = child
+        return found
+
+    def _apply_settings_to_widgets(self, settings: dict):
+        """Set Configure-tab widgets from a settings dict (unknown keys are skipped)."""
+        widgets_by_key = self._annotation_widget_map()
+        for key, value in settings.items():
+            widget = widgets_by_key.get(key)
+            if widget is None or value is None:
+                continue
+            if key in ("patch_size", "timepoints", "z_slices"):
+                value = ", ".join(str(v) for v in value)
+            if key == "model_type" and value not in [v for _, v in widget.options]:
+                continue
+            if hasattr(widget, "max") and isinstance(value, int) and value > widget.max:
+                widget.max = value
+            widget.value = value
+
+    def _lock_resume_fields(self, settings: dict):
+        """Disable the fields that must match the table, and remember their values."""
+        self._locked_settings = {k: settings[k] for k in RESUME_LOCKED_KEYS if k in settings}
+        for key in ("channels", "label_channel"):
+            if key in settings:
+                self._locked_settings[key] = settings[key]
+        widgets_by_key = self._annotation_widget_map()
+        for key in RESUME_LOCKED_KEYS:
+            if key in settings and key in widgets_by_key:
+                widgets_by_key[key].disabled = True
+
+    def _unlock_resume_fields(self):
+        """Re-enable locked fields, keeping the usual dependent disabled states."""
+        if not getattr(self, "_locked_settings", None):
+            return
+        self._locked_settings = {}
+        widgets_by_key = self._annotation_widget_map()
+        three_d = widgets_by_key.get("three_d")
+        use_patches = widgets_by_key.get("use_patches")
+        for key in RESUME_LOCKED_KEYS:
+            widget = widgets_by_key.get(key)
+            if widget is None:
+                continue
+            if key in ("z_range_start", "z_range_end"):
+                widget.disabled = not (three_d.value if three_d else False)
+            elif key == "patch_size":
+                widget.disabled = not (use_patches.value if use_patches else False)
+            else:
+                widget.disabled = False
+        if hasattr(self, "resume_note"):
+            self.resume_note.value = ""
+
+    def _apply_locked_settings_to_config(self):
+        """Locked values come from the table's config, never from the widgets."""
+        locked = getattr(self, "_locked_settings", None) or {}
+        sc = self.config.spatial_coverage
+        if "channels" in locked:
+            sc.channels = list(locked["channels"])
+            sc.label_channel = locked.get("label_channel")
+        elif "channel" in locked:
+            sc.channels[0] = locked["channel"]
+            sc.label_channel = None
+        if "three_d" in locked:
+            sc.three_d = locked["three_d"]
+        if "z_range_start" in locked:
+            sc.z_range_start = locked["z_range_start"]
+        if "z_range_end" in locked:
+            sc.z_range_end = locked["z_range_end"]
+        if "use_patches" in locked:
+            sc.use_patches = locked["use_patches"]
+        if "patch_size" in locked:
+            sc.patch_size = list(locked["patch_size"])
 
     def _on_new_table(self, button):
         """Pick a name for a new table. The table itself is created at pipeline run."""
@@ -1084,6 +1249,7 @@ class WorkflowWidget:
 
             # Update annotation settings from widgets
             self._update_annotation_settings()
+            self._apply_locked_settings_to_config()
 
             # Update technical settings from widgets
             self._update_technical_settings()

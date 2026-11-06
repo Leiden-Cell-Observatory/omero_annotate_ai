@@ -743,6 +743,97 @@ def download_annotation_config_from_omero(conn, object_type: str, object_id: int
         return AnnotationConfig.from_yaml(file_path)
 
 
+def find_annotation_config_for_table(
+    conn, container_type: str, container_id: int, table_name: str
+) -> Optional[AnnotationConfig]:
+    """Find the saved annotation config that belongs to a tracking table.
+
+    A pipeline run attaches its config YAML (namespace CONFIG_NS) to the
+    container, and the config's ``name`` equals the table name. A container
+    can hold configs of several runs, so this returns the newest config whose
+    name matches, not just the newest one.
+
+    Args:
+        conn: OMERO connection
+        container_type: 'dataset', 'plate', 'project' or 'screen'
+        container_id: Container ID
+        table_name: Name of the tracking table
+
+    Returns:
+        The matching AnnotationConfig, or None if no saved config matches.
+    """
+    annotations = list_annotations_by_namespace(
+        conn, str(container_type).capitalize(), container_id, CONFIG_NS
+    )
+    # Newest first; files named after the table go first as a cheap pre-filter.
+    expected_file = f"annotation_config_{table_name}.yaml"
+    annotations = sorted(annotations, key=lambda a: a["id"], reverse=True)
+    annotations.sort(key=lambda a: a.get("file_name") != expected_file)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for ann in annotations:
+            try:
+                file_path = ezomero.get_file_annotation(conn, ann["id"], tmp_dir)
+                if file_path is None:
+                    continue
+                config = AnnotationConfig.from_yaml(file_path)
+            except Exception:
+                continue
+            if config.name == table_name:
+                return config
+    return None
+
+
+def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
+    """Infer the run settings that a tracking table's rows pin down.
+
+    Used when no saved config matches the table. Returns only what the rows
+    show: the annotated channel, 3D and patch settings, and the number of
+    distinct images per category.
+    """
+    settings: Dict[str, Any] = {}
+    if df is None or df.empty:
+        return settings
+
+    def first(column):
+        if column not in df.columns:
+            return None
+        values = df[column].dropna()
+        return values.iloc[0] if len(values) else None
+
+    def as_bool(value):
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1", "yes")
+        return bool(value)
+
+    channel = first("channel")
+    if channel is not None:
+        settings["channel"] = int(channel)
+    volumetric = first("is_volumetric")
+    if volumetric is not None:
+        settings["three_d"] = as_bool(volumetric)
+    is_patch = first("is_patch")
+    if is_patch is not None:
+        settings["use_patches"] = as_bool(is_patch)
+        if settings["use_patches"]:
+            patches = df[df["is_patch"].map(as_bool)]
+            width, height = first("patch_width"), first("patch_height")
+            if width is not None and height is not None:
+                settings["patch_size"] = [int(width), int(height)]
+            image_col = "image_uri" if "image_uri" in df.columns else "image_id"
+            plane = [c for c in (image_col, "timepoint", "z_slice") if c in patches.columns]
+            if image_col in plane and len(patches):
+                settings["patches_per_image"] = int(patches.groupby(plane).size().max())
+
+    image_col = "image_uri" if "image_uri" in df.columns else "image_id"
+    if "category" in df.columns and image_col in df.columns:
+        counts = df.groupby("category")[image_col].nunique()
+        settings["train_n"] = int(counts.get("training", 0))
+        settings["validate_n"] = int(counts.get("validation", 0))
+        settings["test_n"] = int(counts.get("test", 0))
+    return settings
+
+
 def upload_rois_and_labels(
     conn,
     image_id: int,
