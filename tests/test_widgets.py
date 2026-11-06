@@ -578,6 +578,44 @@ class TestWorkflowWidgetDisplay:
         assert "idr0021_microsam" in status
         assert "414" in status
 
+    def _widget_with_table(self):
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+        widget.container_widgets["type"].value = "plate"
+        widget.container_widgets["container"].options = [("plate (ID: 803)", 803)]
+        widget.container_widgets["container"].value = 803
+        widget.annotation_tables = [{"id": 22159, "name": "plate_run"}]
+        widget.tables_widgets["selection"].options = [("plate_run", 22159)]
+        widget.tables_widgets["selection"].value = 22159
+        return widget
+
+    def test_continue_existing_survives_update_config(self):
+        """Update Configuration must not reset resume after Continue Existing."""
+        widget = self._widget_with_table()
+
+        widget._on_continue_table(None)
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        assert widget.get_config().workflow.resume_from_table is True
+        assert widget.get_config().name == "plate_run"
+        assert widget.workflow_widgets["resume_from_table"].value is True
+
+    def test_new_table_after_continue_turns_resume_off(self):
+        """Switching to a new table clears the earlier Continue Existing choice."""
+        widget = self._widget_with_table()
+        widget._on_continue_table(None)
+
+        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+                   return_value="fresh_table"):
+            widget._on_new_table(None)
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        assert widget.get_config().workflow.resume_from_table is False
+        assert widget.get_config().name == "fresh_table"
+        assert widget.workflow_widgets["resume_from_table"].value is False
+
 
 @pytest.mark.unit
 class TestWidgetFallbacks:
