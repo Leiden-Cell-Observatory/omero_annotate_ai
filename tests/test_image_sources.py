@@ -157,7 +157,7 @@ class TestUri:
 
     def test_normalize_local_path_is_absolute(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        assert normalize_zarr_uri("img.zarr/") == str(tmp_path / "img.zarr")
+        assert normalize_zarr_uri("img.zarr/") == (tmp_path / "img.zarr").as_posix()
 
     def test_normalize_windows_path_uses_forward_slashes(self, monkeypatch):
         import ntpath

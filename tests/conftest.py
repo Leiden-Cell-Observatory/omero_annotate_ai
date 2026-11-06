@@ -265,9 +265,9 @@ def ngff_stores(tmp_path_factory):
                         fmt=FormatV04(), scale_factors=(2,))
 
     return {
-        "img04": str(root / "img04.zarr"),
-        "img05": str(root / "img05.zarr"),
-        "plate": str(root / "plate.zarr"),
+        "img04": (root / "img04.zarr").as_posix(),
+        "img05": (root / "img05.zarr").as_posix(),
+        "plate": (root / "plate.zarr").as_posix(),
         "arr04": arr04,
         "arr05": arr05,
     }
