@@ -1,139 +1,103 @@
-# OMERO Annotate.AI
+---
+hide:
+  - navigation
+---
 
+# OMERO Annotate AI
 
-OMERO annotate.AI is a Python package that provides tools for reproducible AI workflows (annotation, training and inference) using OMERO (Open Microscopy Environment) data repositories. The package directly connects OMERO datasets with AI dataset annotation tools such as micro-sam annotator tool in napari.
+**Annotate your OMERO images with AI help, and get training-ready data out the other end.**
 
-## Key Features
+You pick images from an OMERO project, dataset, plate or screen. OMERO Annotate AI opens
+them one by one in [napari](https://napari.org), where
+[micro-SAM](https://github.com/computational-cell-analytics/micro-sam) suggests cell or
+nucleus outlines that you accept or correct with a few clicks. You can also hand the images
+to [Cellpose](https://www.cellpose.org) instead. The finished masks go back to OMERO, next
+to the original images, and every choice you made is written down in one small YAML file.
 
-* **OMERO connection and annotation workflow widgets** within Jupyter notebooks
-* **Pydantic model validated YAML configuration files** to track the annotation and training workflow
-* **Direct integration of micro-SAM annotation** of OMERO data
-* **Saving annotations and annotation configuration** back into OMERO (OMERO.table, YAML)
-* **Preparation of training data** for Biapy and DL4MicEverywhere
-* **3D volumetric annotation support** for z-stack processing
-* **Reproducible AI workflows** with detailed tracking and validation
+![micro-SAM segmentation of a Cell Painting field in napari](images/napari_microsam.jpg)
+<small>micro-SAM (`vit_b_lm`) segmentation of nuclei in a Cell Painting field from the
+BioImage Archive (S-BIAD855), shown in napari.</small>
 
-## Workflows Supported
+## What you get
 
-### Interactive Widget Workflows
-- **OMERO Connection Widget** - Secure connection to OMERO servers with credential management
-- **Annotation Pipeline Widget** - Visual configuration of annotation workflows
-- **Progress Tracking** - Real-time monitoring of annotation progress
+<div class="grid cards" markdown>
 
-![OMERO Connection Widget](images/omero_connect_widget.png)
-*OMERO connection widget for secure server authentication*
+-   :lucide-mouse-pointer-click: **Annotation without file juggling**
 
-![Annotation Pipeline Widget](images/omero_annotation_widget.png)  
-*Annotation pipeline widget for visual workflow configuration*
+    Images are loaded straight from OMERO. No exporting, renaming or copying TIFFs by hand.
 
-### Annotation Workflows
-- **Interactive widget-based annotation** using OMERO connection and workflow widgets
-- **YAML configuration-driven annotation** for reproducible batch processing  
-- **micro-SAM assisted annotation** with automatic segmentation
-- **Cellpose integration** for cell segmentation workflows
-- **3D volumetric annotation** for z-stack data
+-   :lucide-database: **Results stored in OMERO**
 
-### Training Workflows  
-- **BiaPy integration** for deep learning model training
-- **Training data preparation** with automatic train/validation splits
-- **micro-SAM model fine-tuning** on custom datasets
+    Masks, ROIs and a table of what was annotated are attached to your images, so
+    colleagues can see them in OMERO.web.
 
-### Quality Control
-- **Annotation validation** and quality metrics
-- **Progress tracking** with detailed status reporting
-- **Resume functionality** from previous annotation sessions
+-   :lucide-file-text: **A record of every run**
 
-## Quick Start
+    One YAML file holds the images, channels, patches and train/validation split you used.
+    Reload it to continue where you stopped, or share it so others can repeat the run.
 
-For a quick start, see our [Installation Guide](installation.md) for detailed setup instructions.
+-   :lucide-brain: **Ready for model training**
 
-### Basic 2-Widget Workflow
+    Turn the annotations into the folder layout that micro-SAM, BiaPy and
+    DL4MicEverywhere expect, or package them for the BioImage Archive.
 
-```python
-from omero_annotate_ai import create_omero_connection_widget, create_workflow_widget, create_pipeline
+</div>
 
-# Step 1: Connect to OMERO
-conn_widget = create_omero_connection_widget()
-conn_widget.display()
-conn = conn_widget.get_connection()
+## How it works
 
-# Step 2: Configure workflow
-workflow_widget = create_workflow_widget(connection=conn)
-workflow_widget.display()
-config = workflow_widget.get_config()
-
-# Step 3: Run pipeline
-pipeline = create_pipeline(config, conn)
-table_id, processed_images = pipeline.run_full_workflow()
+```mermaid
+flowchart LR
+    A[OMERO<br/>project · dataset · plate · screen] --> B[Select images<br/>train / validation split]
+    B --> C[Annotate in napari<br/>micro-SAM or Cellpose]
+    C --> D[Back to OMERO<br/>masks · ROIs · tracking table]
+    D --> E[Training data<br/>micro-SAM · BiaPy · DL4MicEverywhere]
+    D --> F[BioImage Archive<br/>MIFA export]
 ```
 
-### Configuration-Based Workflow
+[Read more about the main ideas](concepts.md) (annotation units, patches, the tracking
+table, read-only mode) before your first run.
 
-```python
-from omero_annotate_ai.core.annotation_config import load_config
-from omero_annotate_ai.core.annotation_pipeline import create_pipeline
-from omero_annotate_ai.omero.simple_connection import create_connection
+## Where to start
 
-# Load configuration from YAML
-config = load_config("annotation_config.yaml")
+<div class="grid cards" markdown>
 
-# Connect to OMERO
-conn = create_connection(host="omero.server.com", user="username")
+-   **New here?**
 
-# Run annotation pipeline  
-pipeline = create_pipeline(config, conn)
-results = pipeline.run_full_workflow()
-```
+    ---
 
-## User Guides
+    [Install the package](installation.md), then [try it on public IDR data](tutorials/public-data-idr.md).
+    No OMERO account of your own is needed.
 
-### Getting Started
-- [Installation Guide](installation) - Complete setup instructions and troubleshooting
-- [Widget Tutorial](tutorials/microsam-annotation-pipeline) - Interactive widget workflow
-- [YAML Configuration Guide](configuration) - Complete YAML configuration reference
-- [YAML Configuration Tutorial](tutorials/batch-processing) - Configuration file workflow
+-   **Ready to annotate your own data?**
 
-### Step-by-Step Tutorials
+    ---
 
-<div class="tutorial-card">
-<h3>🚀 micro-SAM Annotation Pipeline</h3>
-<span class="status-badge complete">Complete</span>
-<p>Complete workflow tutorial covering OMERO connection, configuration, and micro-SAM annotation execution.</p>
-<p><a href="tutorials/microsam-annotation-pipeline" class="md-button">Start Tutorial</a></p>
+    Follow [Annotate with micro-SAM](tutorials/microsam-annotation-pipeline.md), the main
+    tutorial. Using Cellpose? See [Annotate with Cellpose](tutorials/cellpose-integration.md).
+
+-   **Have annotations already?**
+
+    ---
+
+    [Prepare training data](tutorials/training-data-prep.md) or
+    [share them via the BioImage Archive](tutorials/bioimage-archive-export.md).
+
+-   **Writing a config by hand?**
+
+    ---
+
+    The [configuration reference](configuration.md) lists every YAML option.
+
 </div>
 
-<div class="tutorial-card">
-<h3>🔬 Cellpose Integration</h3>
-<span class="status-badge planned">Planned</span>
-<p>Learn to use Cellpose models for cell segmentation workflows within the OMERO framework.</p>
-<p><a href="tutorials/cellpose-integration" class="md-button">View Tutorial</a></p>
-</div>
+## What you need
 
-<div class="tutorial-card">
-<h3>📊 Training Data Preparation</h3>
-<span class="status-badge planned">Planned</span>
-<p>Prepare high-quality training datasets from OMERO annotations for machine learning model development.</p>
-<p><a href="tutorials/training-data-prep" class="md-button">View Tutorial</a></p>
-</div>
+- Access to an OMERO server: your institute's, or the public [IDR](https://idr.openmicroscopy.org) to try things out.
+- A computer with a screen: napari opens a desktop window. A GPU makes micro-SAM much faster but is not required.
+- Jupyter or [marimo](https://marimo.io) to run the [example notebooks](notebooks.md). The standard workflows need no programming beyond running notebook cells.
 
-<div class="tutorial-card">
-<h3>🧠 BiaPy Integration</h3>
-<span class="status-badge planned">Planned</span>
-<p>Train custom deep learning models using BiaPy with data prepared from OMERO annotations.</p>
-<p><a href="tutorials/biapy-integration" class="md-button">View Tutorial</a></p>
-</div>
+## Support
 
-### Advanced Workflows
-- [3D Volumetric Annotation](tutorials/microsam-annotation-pipeline.md#3d-volumetric-processing) - Processing z-stack data 
-- [Training with BiaPy](tutorials/biapy-integration) - Deep learning model training
-- [DL4MicEverywhere Integration](tutorials/training-data-prep) - Cloud training workflows
-
-### Configuration Reference
-- [YAML Configuration Schema](configuration) - Complete configuration options and examples
-
-## Community & Support
-
-- [GitHub Repository](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai) - Source code and development
-- [Issue Tracker](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues) - Bug reports and feature requests
-- [PyPI Package](https://pypi.org/project/omero-annotate-ai/) - Release downloads and installation
-- [NL-BioImaging](https://github.com/NL-BioImaging) - Supporting infrastructure
+- Questions and bug reports: [GitHub issues](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues)
+- Developed at the [Leiden Cell Observatory](https://github.com/Leiden-Cell-Observatory) within
+  [NL-BioImaging](https://github.com/NL-BioImaging), funded by NWO.

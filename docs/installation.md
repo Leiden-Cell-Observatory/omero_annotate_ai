@@ -1,171 +1,97 @@
-# Installation Guide
+# Installation
 
-## Prerequisites
+OMERO Annotate AI is a Python package. It needs Python 3.10 or newer and works on Linux,
+macOS and Windows. micro-SAM and napari are installed alongside it.
 
-- **Python 3.8 or higher**
-- **Pixi** (recommended, install pixi following the [official instructions](https://pixi.sh/latest/)
-) or **Conda** for dependency management
+!!! tip "Never installed Python software before?"
+    Use **pixi**. It creates a self-contained folder with Python and every dependency, and
+    does not touch the rest of your system. Install it once by following the
+    [pixi instructions](https://pixi.sh/latest/#installation).
 
-## Quick Install (Recommended)
+## Install with pixi (recommended)
 
-Using **Pixi** - automatically handles all dependencies including conda packages:
-
-```bash
-# macOS/Linux
-curl -fsSL https://pixi.sh/install.sh | bash
-
-# Windows (PowerShell)
-iwr -useb https://pixi.sh/install.ps1 | iex
-```
-
+Open a terminal and run:
 
 ```bash
-# Create a new project
-pixi init omero-annotate-ai
-cd omero-annotate-ai
-
-# Add dependencies
-pixi add python=3.12
-pixi add micro-sam                      # AI model
-pixi add --pypi omero-annotate-ai      # Main package
-
-# Activate environment
-pixi shell
+pixi init my-annotation-project
+cd my-annotation-project
+pixi add python=3.12 micro_sam jupyterlab
+pixi add --pypi omero-annotate-ai
 ```
 
-### Verify Installation
-Run `pixi run python`, then:   
-
-```python
-import omero_annotate_ai
-print(f"✅ Version: {omero_annotate_ai.__version__}")
-```
-
-## Alternative: Conda + Pip
-
-For users who prefer manual conda environment management:
+This creates the folder `my-annotation-project` with everything inside it. To start
+Jupyter in that environment:
 
 ```bash
-# Create and activate environment
-conda create -n omero-ai python=3.11
-conda activate omero-ai
+pixi run jupyter lab
+```
 
-# Install conda dependencies
-conda install -c conda-forge micro-sam napari zeroc-ice
+To use [marimo](https://marimo.io) notebooks instead, add it with `pixi add marimo` and
+start one with `pixi run marimo edit <notebook>.py`.
 
-# Install package from PyPI
+## Install with conda and pip
+
+If you already use conda (or mamba):
+
+```bash
+conda create -n omero-annotate-ai -c conda-forge python=3.12 micro_sam jupyterlab
+conda activate omero-annotate-ai
 pip install omero-annotate-ai
 ```
 
-## Quick Start
+micro-SAM must come from conda-forge; it is not on PyPI. The OMERO libraries
+(`omero-py`, `zeroc-ice`) are pulled in automatically.
 
-After installation, try connecting to OMERO:
+## Check the installation
+
+In a notebook cell or Python prompt:
 
 ```python
-from omero_annotate_ai import create_omero_connection_widget
-
-# Display connection widget in Jupyter
-conn_widget = create_omero_connection_widget()
-conn_widget.display()
-
-# Get connection
-conn = conn_widget.get_connection()
+from importlib.metadata import version
+print(version("omero-annotate-ai"))
 ```
 
-## Development Setup
+If this prints a version number, you are ready. Continue with
+[Try it on public data](tutorials/public-data-idr.md) or the
+[micro-SAM tutorial](tutorials/microsam-annotation-pipeline.md).
 
-For contributors who want to modify the code:
+## Optional extras
 
-### Clone and Install
+| You want to | Install |
+|---|---|
+| Export annotations to the BioImage Archive | `pip install "git+https://github.com/BioImage-Archive/bia-mifa-models.git@v1.1.5"` |
+| Train micro-SAM models | nothing extra; a CUDA GPU is strongly recommended |
+| Train with BiaPy or DL4MicEverywhere | install those tools separately; this package only prepares the data |
+
+## GPU or CPU?
+
+micro-SAM runs on a CPU, but computing the image embeddings that make interactive
+segmentation fast takes tens of seconds per image without a GPU. On a CPU, keep the
+default `vit_b_lm` model and use patches (smaller crops) for large images. Training a
+model really needs a GPU.
+
+Check whether a GPU is visible:
+
+```python
+import torch
+print(torch.cuda.is_available())
+```
+
+## Working on a remote machine
+
+napari opens a desktop window, so micro-SAM annotation needs a graphical session. On a
+remote server or cloud workspace, use its remote desktop (for example VNC or the desktop
+tile on SURF Research Cloud), not a plain SSH or JupyterHub tab. Preparing images for
+Cellpose and preparing training data work without a display.
+
+## For developers
 
 ```bash
 git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
 cd omero_annotate_ai
-pixi install              # Installs dev dependencies + package in editable mode
+pixi install
+pixi run -e dev pytest tests/      # tests
+pixi run -e docs docs-serve        # this documentation, live at http://localhost:8000
 ```
 
-### Run Tests
-
-```bash
-pixi run pytest           # Run all tests
-pixi run test-unit        # Run unit tests only
-pixi run test-cov         # Run with coverage report
-```
-
-### Development Environments
-
-Pixi provides multiple environments configured in `pyproject.toml`:
-
-```bash
-pixi shell                # Default environment (user)
-pixi shell -e dev         # Development tools (pytest, black, isort)
-pixi shell -e docs        # Documentation building (mkdocs)
-```
-
-### Code Quality
-
-```bash
-pixi run format           # Format code with black and isort
-pixi run lint             # Check code quality
-```
-
-## Troubleshooting
-
-### Pixi not found
-
-Install pixi following the [official instructions](https://pixi.sh/latest/):
-
-```bash
-# macOS/Linux
-curl -fsSL https://pixi.sh/install.sh | bash
-
-# Windows (PowerShell)
-iwr -useb https://pixi.sh/install.ps1 | iex
-```
-
-### Import Errors
-
-**micro-SAM not found:**
-
-```bash
-# With pixi
-pixi add micro-sam
-
-# With conda
-conda install -c conda-forge micro-sam
-```
-
-**OMERO connection issues:**
-
-```bash
-# Ensure OMERO dependencies are installed
-pixi add --pypi omero-py ezomero
-```
-
-### Widget Display Issues
-
-**Widgets not showing in Jupyter:**
-
-```bash
-# Install and enable widget extension
-pip install ipywidgets
-jupyter nbextension enable --py widgetsnbextension
-```
-
-### Platform-Specific Issues
-
-**zeroc-ice installation:**
-
-For pip-only installations (without conda), `zeroc-ice` requires platform-specific wheels:
-
-- **Linux x86_64**: [zeroc-ice-py-linux-x86_64](https://github.com/glencoesoftware/zeroc-ice-py-linux-x86_64/releases)
-- **Windows x86_64**: [zeroc-ice-py-win-x86_64](https://github.com/glencoesoftware/zeroc-ice-py-win-x86_64/releases)
-- **macOS Universal**: [zeroc-ice-py-macos-universal2](https://github.com/glencoesoftware/zeroc-ice-py-macos-universal2/releases)
-
-**Note:** Both pixi and conda handle zeroc-ice automatically - no manual wheel installation needed.
-
-## Next Steps
-
-- 📚 Try the [micro-SAM Tutorial](tutorials/microsam-annotation-pipeline.md)
-- 📖 Read the [Configuration Guide](configuration.md)
-- 💻 Explore [example notebooks](../notebooks/)
+Problems? See [Troubleshooting](troubleshooting.md).
