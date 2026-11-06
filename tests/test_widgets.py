@@ -679,6 +679,22 @@ class TestWorkflowWidgetDisplay:
         widget.tables_widgets["selection"].value = 22159
         return widget
 
+    def test_tables_with_the_same_name_get_distinct_labels(self):
+        """Two tables sharing a name must not both show as selected."""
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+        widget.container_widgets["type"].value = "plate"
+        widget.container_widgets["container"].options = [("plate (ID: 803)", 803)]
+        widget.container_widgets["container"].value = 803
+        tables = [{"id": 22162, "name": "run"}, {"id": 22159, "name": "run"}]
+
+        with patch("omero_annotate_ai.widgets.workflow_widget.list_annotation_tables",
+                   return_value=tables), patch("builtins.print"):
+            widget._on_scan_tables(None)
+
+        labels = [label for label, _ in widget.tables_widgets["selection"].options]
+        assert labels == ["run (ID: 22162)", "run (ID: 22159)"]
+
     def test_continue_existing_survives_update_config(self):
         """Update Configuration must not reset resume after Continue Existing."""
         widget = self._widget_with_table()
@@ -689,6 +705,7 @@ class TestWorkflowWidgetDisplay:
 
         assert widget.get_config().workflow.resume_from_table is True
         assert widget.get_config().name == "plate_run"
+        assert widget.get_config().omero.table_id == 22159
         assert widget.workflow_widgets["resume_from_table"].value is True
 
     def test_new_table_after_continue_turns_resume_off(self):
@@ -704,6 +721,7 @@ class TestWorkflowWidgetDisplay:
 
         assert widget.get_config().workflow.resume_from_table is False
         assert widget.get_config().name == "fresh_table"
+        assert widget.get_config().omero.table_id is None
         assert widget.workflow_widgets["resume_from_table"].value is False
 
 

@@ -1561,3 +1561,43 @@ class TestMicroSamSeparateChannelSaving:
         assert result["stats"]["n_training_images"] == 1
         assert (result["train_input"] / "img_001.tif").exists()
         assert (result["train_annotation_input"] / "img_001.tif").exists()
+
+
+@pytest.mark.unit
+class TestFindExistingTable:
+    """Which tracking table a resumed run picks up."""
+
+    def _pipeline(self, table_id=None):
+        config = create_default_config()
+        config.name = "shared_name"
+        config.omero.container_type = "plate"
+        config.omero.container_id = 803
+        config.omero.table_id = table_id
+        return AnnotationPipeline(config, conn=Mock())
+
+    def test_uses_selected_table_id(self):
+        """With a table ID in the config, the name is not looked up at all."""
+        pipeline = self._pipeline(table_id=22159)
+        with patch("omero_annotate_ai.core.annotation_pipeline.get_table_by_name") as by_name:
+            assert pipeline._find_existing_table() == 22159
+        by_name.assert_not_called()
+        pipeline.conn.getObject.assert_called_once_with("FileAnnotation", 22159)
+
+    def test_falls_back_to_name_when_id_is_gone(self):
+        """A table ID that no longer exists falls back to the lookup by name."""
+        pipeline = self._pipeline(table_id=1)
+        pipeline.conn.getObject.return_value = None
+        found = Mock()
+        found.getId.return_value = 22162
+        with patch("omero_annotate_ai.core.annotation_pipeline.get_table_by_name",
+                   return_value=found):
+            assert pipeline._find_existing_table() == 22162
+
+    def test_without_id_looks_up_by_name(self):
+        pipeline = self._pipeline()
+        found = Mock()
+        found.getId.return_value = 22162
+        with patch("omero_annotate_ai.core.annotation_pipeline.get_table_by_name",
+                   return_value=found) as by_name:
+            assert pipeline._find_existing_table() == 22162
+        by_name.assert_called_once()

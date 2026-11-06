@@ -929,7 +929,9 @@ class WorkflowWidget:
                     # Update selection options
                     options = []
                     for table in self.annotation_tables:
-                        options.append((table.get("name", "Unknown"), table.get("id")))
+                        # Labels must be unique: RadioButtons matches options by label,
+                        # so two tables with the same name would both show as selected.
+                        options.append((f"{table.get('name', 'Unknown')} (ID: {table.get('id')})", table.get("id")))
 
                     self.tables_widgets["selection"].options = options
                     self.tables_widgets["selection"].disabled = False
@@ -958,8 +960,13 @@ class WorkflowWidget:
             self._update_progress()
 
     def _set_resume_from_table(self, resume: bool):
-        """Resume is decided by the table choice; keep config and checkbox in step."""
+        """Resume is decided by the table choice; keep config and checkbox in step.
+
+        The selected table's ID goes into the config, so the pipeline resumes
+        that exact table even when several tables share its name.
+        """
         self.config.workflow.resume_from_table = resume
+        self.config.omero.table_id = self.selected_table_id if resume else None
         if hasattr(self, "workflow_widgets"):
             self.workflow_widgets["resume_from_table"].value = resume
 
