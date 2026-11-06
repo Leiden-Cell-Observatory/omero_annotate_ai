@@ -578,6 +578,22 @@ class TestWorkflowWidgetDisplay:
         assert "idr0021_microsam" in status
         assert "414" in status
 
+    @pytest.mark.parametrize("vary", [False, True])
+    def test_channel_names_shown_in_both_summaries(self, vary):
+        """Channel names appear with their index, and a note when images differ."""
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+
+        widget._apply_container_info({
+            "container_type": "dataset", "container_id": 7,
+            "container_name": "cells", "total_images": 10,
+            "channel_names": ["DAPI", "GFP<1>"], "channel_names_vary": vary,
+        })
+
+        for text in (widget.container_summary.value, widget.omero_status.value):
+            assert "0: DAPI, 1: GFP&lt;1&gt;" in text
+            assert ("name channels differently" in text) is vary
+
 
 @pytest.mark.unit
 class TestWidgetFallbacks:

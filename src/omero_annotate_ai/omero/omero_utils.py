@@ -509,6 +509,8 @@ def get_container_info(conn, container_type: str, container_id: int) -> Optional
         - sample_image_name
         - dimensions
         - pixel_sizes
+        - channel_names (from the sample image)
+        - channel_names_vary (True if a few other images name channels differently)
     """
     if not conn or not conn.isConnected():
         return None
@@ -528,6 +530,8 @@ def get_container_info(conn, container_type: str, container_id: int) -> Optional
             'sample_image_name': None,
             'dimensions': None,
             'pixel_sizes': None,
+            'channel_names': None,
+            'channel_names_vary': False,
         }
 
         if container_type == 'screen':
@@ -581,11 +585,34 @@ def get_container_info(conn, container_type: str, container_id: int) -> Optional
                     pass
 
                 info['pixel_sizes'] = pixel_sizes
+                info['channel_names'] = _channel_labels(sample_image)
+                info['channel_names_vary'] = any(
+                    _channel_labels(conn.getObject("Image", image_id)) != info['channel_names']
+                    for image_id in _spread_sample(image_ids[1:], 4)
+                )
         
         return info
 
     except Exception:
         return None
+
+
+def _channel_labels(image) -> Optional[List[str]]:
+    """Channel names of an OMERO image, or None if they cannot be read."""
+    if image is None:
+        return None
+    try:
+        return [str(label) for label in image.getChannelLabels()]
+    except Exception:
+        return None
+
+
+def _spread_sample(items: List[Any], n: int) -> List[Any]:
+    """Up to n items spread evenly across the list, always including the last."""
+    if len(items) <= n:
+        return list(items)
+    step = len(items) / n
+    return [items[min(len(items) - 1, round((i + 1) * step) - 1)] for i in range(n)]
 
 
 # =============================================================================
