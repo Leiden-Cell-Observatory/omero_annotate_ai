@@ -28,6 +28,7 @@ nav = [
     { "Configuration (YAML)" = "configuration.md" },
     { "Example notebooks" = "notebooks.md" },
     { "Troubleshooting" = "troubleshooting.md" },
+    { "Architecture" = "architecture.md" },
   ] },
   { "API" = [
     "api/index.md",

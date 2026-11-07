@@ -125,13 +125,11 @@ ignore = [
     "src/omero_annotate_ai/widgets/workflow_widget.py",
     "src/omero_annotate_ai/omero/omero_functions.py",
 ]
-# New core packages (0.5.0 core PRs) are checked strictly from their first commit.
+# New core modules (0.5.0 core PRs) are checked strictly from their first commit.
 strict = [
-    "src/omero_annotate_ai/trainingset",
-    "src/omero_annotate_ai/annotators",
-    "src/omero_annotate_ai/config",
+    "src/omero_annotate_ai/planning.py",
+    "src/omero_annotate_ai/annotators.py",
     "src/omero_annotate_ai/errors.py",
-    "src/omero_annotate_ai/events.py",
 ]
 
 [tool.pytest.ini_options]

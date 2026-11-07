@@ -174,22 +174,6 @@ def link_table_to_containers(
     return results
 
 
-def post_typed_table(
-    conn,
-    df: pd.DataFrame,
-    object_type: str,
-    object_id: int,
-    title: str,
-) -> int:
-    """Create a tracking table from a DataFrame and attach it to one container.
-
-    Returns the table's FileAnnotation ID. See :mod:`.tracking_table`.
-    """
-    return tracking_table.create_table(
-        conn, _prepare_dataframe_for_omero(df), title, object_type, [object_id]
-    )
-
-
 def read_tracking_table(conn, table_id: int) -> pd.DataFrame:
     """Read a tracking table (0.5+ only) with link columns named image_id / roi_id."""
     return tracking_table.read_table(conn, table_id)

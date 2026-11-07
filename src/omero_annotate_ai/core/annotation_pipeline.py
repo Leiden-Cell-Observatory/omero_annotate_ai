@@ -8,8 +8,7 @@
 # ========================================
 
 # Standard library imports
-import math
-import random
+import secrets
 import shutil
 import traceback
 import warnings
@@ -21,24 +20,15 @@ import ezomero
 
 # Third-party imports
 import numpy as np
-import pandas as pd
-
-# Optional imports (with error handling)
-try:
-    import napari
-    from micro_sam.sam_annotator import image_series_annotator
-
-    MICRO_SAM_AVAILABLE = True
-except ImportError:
-    MICRO_SAM_AVAILABLE = False
-    napari = None
-    image_series_annotator = None
-except Exception:
-    MICRO_SAM_AVAILABLE = False
-    napari = None
-    image_series_annotator = None
 
 # Local imports
+from ..annotators import (
+    Annotator,
+    Batch,
+    BatchItem,
+    MicroSamAnnotator,
+    collect_series_masks,
+)
 from ..omero.omero_functions import (
     create_tracking_table as create_omero_tracking_table,
 )
@@ -49,11 +39,21 @@ from ..omero.omero_functions import (
     write_config_to_table,
 )
 from ..omero.tracking_table import tag_for
+from ..planning import (
+    CoverageSpec,
+    ImageIdentity,
+    ImageInfo,
+    SplitSpec,
+    Unit,
+    plan_extension,
+    plan_split,
+    rng_for,
+    timepoints_for,
+    units_for_image,
+    z_slices_for,
+)
 from ..processing.image_functions import generate_patch_coordinates
 from ..sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
-from ..sources.uri import (
-    annotation_id as make_annotation_id,
-)
 from ..sources.uri import (
     omero_uri,
     parse_omero_uri,
@@ -77,6 +77,53 @@ def _well_name(row: int, column: int) -> str:
     return f"{letters}{column + 1}"
 
 
+class OmeroWrites:
+    """The OMERO writes the pipeline makes, as one replaceable object.
+
+    Pass a subclass to :func:`create_pipeline` to observe these writes or make them
+    fail (for example in tests). The methods look the functions up when called.
+    """
+
+    def upload_rois_and_labels(self, **kwargs: Any) -> tuple[int | None, int | None]:
+        """Upload one mask as a label file and ROIs; returns ``(label_id, roi_id)``."""
+        return upload_rois_and_labels(**kwargs)
+
+    def write_config_to_table(
+        self, conn: Any, table_id: int, config: AnnotationConfig
+    ) -> dict:
+        """Write the config's rows to the tracking table in place."""
+        return write_config_to_table(conn, table_id, config)
+
+
+def _annotation_from_unit(unit: Unit) -> ImageAnnotation:
+    """The config's record of a planned unit."""
+    x, y, width, height = unit.patch if unit.patch is not None else (0, 0, 0, 0)
+    image = unit.identity
+    return ImageAnnotation(
+        image_uri=image.image_uri,
+        image_id=image.image_id,
+        image_name=image.image_name,
+        level=image.level,
+        well=image.well,
+        field=image.field,
+        well_metadata=dict(image.well_metadata),
+        annotation_id=unit.annotation_id,
+        category=unit.category,
+        timepoint=unit.timepoint,
+        z_slice=unit.z_slice,
+        z_start=unit.z_start,
+        z_end=unit.z_end,
+        z_length=unit.z_length,
+        channel=unit.channel,
+        is_volumetric=unit.is_volumetric,
+        is_patch=unit.patch is not None,
+        patch_x=x,
+        patch_y=y,
+        patch_width=width,
+        patch_height=height,
+    )
+
+
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
 
@@ -89,6 +136,8 @@ class AnnotationPipeline:
         conn=None,
         config_file_path: str | Path | None = None,
         image_source: ImageSource | None = None,
+        annotator: Annotator | None = None,
+        omero_writes: OmeroWrites | None = None,
     ):
         """Initialize the pipeline with configuration and OMERO connection.
 
@@ -98,9 +147,16 @@ class AnnotationPipeline:
             config_file_path: Optional path to the source YAML configuration file for persistence
             image_source: Where pixels and image sizes are read from. Defaults to
                 the source the config asks for (``make_image_source``).
+            annotator: Annotation tool for the micro-SAM workflow. Defaults to
+                micro-SAM's image series annotator in napari.
+            omero_writes: The OMERO writes to use (replaceable for tests).
         """
         self.config = config
         self.conn = conn
+        self.annotator = annotator
+        self.omero_writes = omero_writes if omero_writes is not None else OmeroWrites()
+        self._batches_run = 0
+        _ = self._seed  # generate and store the seed before anything is planned
         self.image_source = (
             image_source
             if image_source is not None
@@ -125,6 +181,15 @@ class AnnotationPipeline:
                 / f"annotation_config_{config.name}.yaml"
             )
         self._validate_setup()
+
+    @property
+    def _seed(self) -> int:
+        """The training set's seed; generated and stored in the config when unset."""
+        seed = self.config.training.seed
+        if seed is None:
+            seed = secrets.randbelow(2**31)
+            self.config.training.seed = seed
+        return seed
 
     def set_table_id(self, table_id: int) -> None:
         """Update the current table ID and sync to config."""
@@ -271,145 +336,48 @@ class AnnotationPipeline:
             return plate, well["well"], dict(well["well_metadata"])
         return None
 
-    def _split_unit_key(self, uri: str) -> str:
-        """The split unit an image belongs to: the image itself or its plate well."""
-        if self.config.training.split_unit == "image":
-            return uri
+    def _image_info(self, uri: str) -> ImageInfo:
+        """What split planning needs to know about an image."""
         info = self._well_info(uri)
         if info is None:
-            raise ValueError(
-                f"split_unit='well' needs plate images with well information, "
-                f"but {uri} has none. Use split_unit='image' for non-plate data."
-            )
-        plate, well, _ = info
-        return f"{plate}/{well}"
+            return ImageInfo(uri=uri)
+        plate, well, well_metadata = info
+        return ImageInfo(uri=uri, plate=plate, well=well, well_metadata=well_metadata)
 
-    def _stratum(self, uri: str) -> str:
-        """Label of the condition an image belongs to, from ``training.stratify_by``."""
-        info = self._well_info(uri)
-        _, well, kv = info if info is not None else ("", "", {})
-        return ", ".join(
-            f"{key}={well if key == 'well' else kv.get(key, '(missing)')}"
-            for key in self.config.training.stratify_by
+    def _split_spec(self) -> SplitSpec:
+        training = self.config.training
+        return SplitSpec(
+            split_unit=training.split_unit,
+            stratify_by=tuple(training.stratify_by),
+            segment_all=training.segment_all,
+            train_n=training.train_n,
+            validate_n=training.validate_n,
+            test_n=training.test_n,
+            validation_fraction=training.validation_fraction,
+            test_fraction=training.test_fraction,
         )
-
-    def _check_stratify_keys(self, uris: list[str]) -> None:
-        """Error on a ``stratify_by`` key that no image has: most likely a typo."""
-        for key in self.config.training.stratify_by:
-            infos = [self._well_info(uri) for uri in uris]
-            found = any(
-                info is not None and (key == "well" or key in info[2]) for info in infos
-            )
-            if not found:
-                available = sorted({k for info in infos if info for k in info[2]})
-                raise ValueError(
-                    f"stratify_by key '{key}' is not found on any image. "
-                    f"Available well keys: {available + ['well']}"
-                )
 
     def _plan_split(self, uris: list[str]) -> dict[str, str]:
         """Assign images to splits, keeping every split unit within one split.
 
-        Counts (``train_n``...) and fractions refer to split units (images or wells).
-        With ``stratify_by``, units are divided over the splits per condition; when a
-        condition has too few units to reach every split, a warning says so.
+        See :func:`~omero_annotate_ai.trainingset.planning.plan_split`. In count
+        mode the fractions in the config are updated to the resulting split.
         Returns ``{uri: category}`` for the selected images, training first.
         """
         training = self.config.training
-        unit_name = f"{training.split_unit}s"
-        self._check_stratify_keys(uris)
-        units: dict[str, list[str]] = {}
-        for uri in uris:
-            units.setdefault(self._split_unit_key(uri), []).append(uri)
-        strata: dict[str, list[str]] = {}
-        for key, unit_uris in units.items():
-            strata.setdefault(self._stratum(unit_uris[0]), []).append(key)
-        for keys in strata.values():
-            random.shuffle(keys)
-        n_total = len(units)
-
-        assignment: dict[str, str] = {}
-        if training.segment_all:
-            fractions = {
-                "validation": training.validation_fraction,
-                "test": training.test_fraction,
-            }
-            for keys in strata.values():
-                n = len(keys)
-                n_val = min(math.floor(n * fractions["validation"] + 0.5), n)
-                n_test = min(math.floor(n * fractions["test"] + 0.5), n - n_val)
-                categories = ["validation"] * n_val + ["test"] * n_test
-                categories += ["training"] * (n - n_val - n_test)
-                assignment.update(zip(keys, categories))
-            wanted = {"training"} | {c for c, f in fractions.items() if f > 0}
-        else:
-            n_train, n_val, n_test = (
-                training.train_n,
-                training.validate_n,
-                training.test_n,
-            )
-            n_requested = n_train + n_val + n_test
-            if n_requested > n_total:
-                raise ValueError(
-                    f"Not enough {unit_name}: requested {n_train} training + {n_val} validation"
-                    f" + {n_test} test = {n_requested}, but only {n_total} {unit_name} available."
-                    f" Reduce train_n, validate_n, or test_n in the annotation settings."
-                )
-            # Draw units in turn from each condition; smallest splits first so that
-            # validation and test reach as many conditions as possible.
-            pools = [list(keys) for keys in strata.values()]
-            random.shuffle(pools)
-            turn = 0
-            for category, n in (
-                ("test", n_test),
-                ("validation", n_val),
-                ("training", n_train),
-            ):
-                taken = 0
-                while taken < n:
-                    pool = pools[turn % len(pools)]
-                    turn += 1
-                    if pool:
-                        assignment[pool.pop()] = category
-                        taken += 1
-            wanted = {
-                c
-                for c, n in (
-                    ("training", n_train),
-                    ("validation", n_val),
-                    ("test", n_test),
-                )
-                if n > 0
-            }
-            if n_total > 0:
-                # Sync fractions to reflect the actual count-mode split
-                training.train_fraction = round(n_train / n_total, 4)
-                training.validation_fraction = round(n_val / n_total, 4)
-                training.test_fraction = round(n_test / n_total, 4)
-
-        if training.stratify_by:
-            short = {
-                stratum: sorted(
-                    wanted - {assignment[k] for k in keys if k in assignment}
-                )
-                for stratum, keys in strata.items()
-            }
-            short = {stratum: missing for stratum, missing in short.items() if missing}
-            if short:
-                warnings.warn(
-                    f"{len(short)} of {len(strata)} conditions are not in every split "
-                    f"(too few {unit_name}): "
-                    + "; ".join(f"{s} lacks {', '.join(m)}" for s, m in short.items()),
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-        order = {"training": 0, "validation": 1, "test": 2}
-        return {
-            uri: category
-            for key, category in sorted(assignment.items(), key=lambda kv: order[kv[1]])
-            for uri in units[key]
-        }
+        plan = plan_split(
+            [self._image_info(uri) for uri in uris],
+            self._split_spec(),
+            rng_for(self._seed, "split"),
+        )
+        if not training.segment_all and plan.n_units > 0:
+            training.train_fraction = round(training.train_n / plan.n_units, 4)
+            training.validation_fraction = round(training.validate_n / plan.n_units, 4)
+            training.test_fraction = round(training.test_n / plan.n_units, 4)
+        message = plan.shortfall_message()
+        if message is not None:
+            warnings.warn(message, UserWarning, stacklevel=2)
+        return dict(plan.assignment)
 
     def _prepare_processing_units(self, images_list: list[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
@@ -429,120 +397,53 @@ class AnnotationPipeline:
             for annotation in self._units_for_image(image, category):
                 self.config.add_annotation(annotation)
 
+    def _coverage(self) -> CoverageSpec:
+        """What to annotate in each image, from ``config.spatial_coverage``."""
+        sc = self.config.spatial_coverage
+
+        def patches(
+            shape: tuple[int, int], rng
+        ) -> tuple[list[tuple[int, int]], tuple[int, int]]:
+            origins, (height, width) = generate_patch_coordinates(
+                image_shape=shape,
+                patch_size=sc.patch_size,
+                n_patches=sc.patches_per_image,
+                random_patch=sc.random_patches,
+                rng=rng,
+            )
+            return origins, (height, width)
+
+        return CoverageSpec(
+            channel=sc.get_label_channel(),
+            timepoint_mode=sc.timepoint_mode,
+            timepoints=tuple(sc.timepoints),
+            n_timepoints=sc.n_timepoints,
+            z_slice_mode=sc.z_slice_mode,
+            z_slices=tuple(sc.z_slices),
+            n_slices=sc.n_slices,
+            three_d=sc.three_d,
+            patches=patches if sc.use_patches else None,
+        )
+
+    def _identity(self, image_meta: ImageMeta) -> ImageIdentity:
+        fields = self._identity_fields(image_meta)
+        return ImageIdentity(
+            image_uri=fields["image_uri"],
+            image_name=fields["image_name"],
+            image_id=fields["image_id"],
+            level=fields["level"],
+            well=fields.get("well", ""),
+            field=fields.get("field", ""),
+            well_metadata=fields.get("well_metadata", {}),
+        )
+
     def _units_for_image(self, image: Any, category: str) -> list[ImageAnnotation]:
         """Processing units (timepoints, z-slices, patches) for one image."""
-        units: list[ImageAnnotation] = []
-        image_meta = self.image_source.metadata(image)
-        identity = self._identity_fields(image_meta)
-        image_uri = identity["image_uri"]
-
-        # Handle timepoints
-        timepoints = self._get_timepoints_for_image(image)
-
-        # Handle z-slices based on processing mode
-        z_slices = self._get_z_slices_for_image(image)
-
-        # Check if we're doing volumetric 3D processing
-        is_volumetric = self.config.spatial_coverage.three_d
-
-        # Create annotations based on processing mode
-        for t in timepoints:
-            if is_volumetric:
-                # 3D volumetric mode: one annotation per timepoint (includes all z-slices)
-                z_start = min(z_slices) if z_slices else 0
-                z_end = max(z_slices) if z_slices else 0
-                z_length = len(z_slices) if z_slices else 1
-
-                if self.config.spatial_coverage.use_patches:
-                    # Create multiple annotations for 3D patches
-                    patch_coords, actual_patch_size = self._generate_patch_coordinates(
-                        image
-                    )
-                    patch_h, patch_w = actual_patch_size
-                    for i, (x, y) in enumerate(patch_coords):
-                        annotation = ImageAnnotation(
-                            **identity,
-                            annotation_id=make_annotation_id(
-                                image_uri, t, z_start, volumetric=True, patch=i
-                            ),
-                            timepoint=t,
-                            z_slice=z_start,  # Start slice for compatibility
-                            z_start=z_start,
-                            z_end=z_end,
-                            z_length=z_length,
-                            is_patch=True,
-                            patch_x=x,
-                            patch_y=y,
-                            patch_width=patch_w,
-                            patch_height=patch_h,
-                            category=category,
-                            channel=self.config.spatial_coverage.get_label_channel(),
-                            is_volumetric=True,
-                        )
-                        units.append(annotation)
-                else:
-                    # Single annotation for full 3D volume
-                    annotation = ImageAnnotation(
-                        **identity,
-                        annotation_id=make_annotation_id(
-                            image_uri, t, z_start, volumetric=True
-                        ),
-                        timepoint=t,
-                        z_slice=z_start,  # Start slice for compatibility
-                        z_start=z_start,
-                        z_end=z_end,
-                        z_length=z_length,
-                        category=category,
-                        channel=self.config.spatial_coverage.get_label_channel(),
-                        is_volumetric=True,
-                    )
-                    units.append(annotation)
-            else:
-                # 2D mode: create annotations per z-slice (existing behavior)
-                for z in z_slices:
-                    if self.config.spatial_coverage.use_patches:
-                        # Create multiple annotations for 2D patches
-                        patch_coords, actual_patch_size = (
-                            self._generate_patch_coordinates(image)
-                        )
-                        patch_h, patch_w = actual_patch_size
-                        for i, (x, y) in enumerate(patch_coords):
-                            annotation = ImageAnnotation(
-                                **identity,
-                                annotation_id=make_annotation_id(
-                                    image_uri, t, z, patch=i
-                                ),
-                                timepoint=t,
-                                z_slice=z,
-                                z_start=z,
-                                z_end=z,
-                                z_length=1,
-                                patch_x=x,
-                                patch_y=y,
-                                is_patch=True,
-                                patch_width=patch_w,
-                                patch_height=patch_h,
-                                category=category,
-                                channel=self.config.spatial_coverage.get_label_channel(),
-                                is_volumetric=False,
-                            )
-                            units.append(annotation)
-                    else:
-                        # Single annotation for 2D slice
-                        annotation = ImageAnnotation(
-                            **identity,
-                            annotation_id=make_annotation_id(image_uri, t, z),
-                            timepoint=t,
-                            z_slice=z,
-                            z_start=z,
-                            z_end=z,
-                            z_length=1,
-                            category=category,
-                            channel=self.config.spatial_coverage.get_label_channel(),
-                            is_volumetric=False,
-                        )
-                        units.append(annotation)
-        return units
+        meta = self.image_source.metadata(image)
+        units = units_for_image(
+            meta, self._identity(meta), self._coverage(), category, self._seed
+        )
+        return [_annotation_from_unit(unit) for unit in units]
 
     def _upload_annotation_config_to_omero(self) -> int | None:
         """Replace the training set's one config YAML on OMERO with the local one."""
@@ -558,123 +459,64 @@ class AnnotationPipeline:
 
     def _get_timepoints_for_image(self, image) -> list[int]:
         """Get timepoints to process for an image based on configuration."""
-        max_t = self.image_source.metadata(image).size_t
-
-        if self.config.spatial_coverage.timepoint_mode == "all":
-            return list(range(max_t))
-        elif self.config.spatial_coverage.timepoint_mode == "random":
-            # Use n_timepoints if specified, otherwise fall back to list length
-            if self.config.spatial_coverage.n_timepoints is not None:
-                n_points = min(self.config.spatial_coverage.n_timepoints, max_t)
-            else:
-                n_points = min(len(self.config.spatial_coverage.timepoints), max_t)
-            return random.sample(range(max_t), n_points)
-        else:  # specific
-            return [t for t in self.config.spatial_coverage.timepoints if t < max_t]
+        meta = self.image_source.metadata(image)
+        return timepoints_for(meta, self._coverage(), self._seed)
 
     def _get_z_slices_for_image(self, image) -> list[int]:
         """Get z-slices to process for an image based on configuration."""
-        max_z = self.image_source.metadata(image).size_z
-
-        if self.config.spatial_coverage.z_slice_mode == "all":
-            return list(range(max_z))
-        elif self.config.spatial_coverage.z_slice_mode == "random":
-            # Use n_slices if specified, otherwise fall back to list length
-            if self.config.spatial_coverage.n_slices is not None:
-                n_slices = min(self.config.spatial_coverage.n_slices, max_z)
-            else:
-                n_slices = min(len(self.config.spatial_coverage.z_slices), max_z)
-            return random.sample(range(max_z), n_slices)
-        else:  # specific
-            return [z for z in self.config.spatial_coverage.z_slices if z < max_z]
+        meta = self.image_source.metadata(image)
+        return z_slices_for(meta, self._coverage(), self._seed)
 
     def _generate_patch_coordinates(
         self, image
-    ) -> tuple[list[tuple[int, int]], list[int]]:
-        """Generate patch coordinates for an image and return actual patch size."""
-        patch_size = self.config.spatial_coverage.patch_size
-        patches_per_image = self.config.spatial_coverage.patches_per_image
-        random_patches = self.config.spatial_coverage.random_patches
-
+    ) -> tuple[list[tuple[int, int]], tuple[int, int]]:
+        """Patch origins for an image and the patch size actually used."""
         meta = self.image_source.metadata(image)
-        image_shape = (meta.size_y, meta.size_x)
-
-        coordinates, actual_patch_size = generate_patch_coordinates(
-            image_shape=image_shape,
-            patch_size=patch_size,
-            n_patches=patches_per_image,
-            random_patch=random_patches,
+        sc = self.config.spatial_coverage
+        return generate_patch_coordinates(
+            image_shape=(meta.size_y, meta.size_x),
+            patch_size=sc.patch_size,
+            n_patches=sc.patches_per_image,
+            random_patch=sc.random_patches,
+            rng=rng_for(self._seed, "patches", meta.image_uri),
         )
 
-        return coordinates, actual_patch_size
-
     def _run_micro_sam_annotation(self, batch_data: list[tuple]) -> dict:
-        """Run micro-SAM annotation on a batch of data."""
-        # Single comprehensive dependency check for micro-SAM annotation
-        if not MICRO_SAM_AVAILABLE or napari is None or image_series_annotator is None:
-            raise ImportError(
-                "micro-sam and napari are required. Install micro-sam via conda: conda install -c conda-forge micro_sam"
-            )
-
-        # Configure napari settings to ensure proper blocking behavior
-        napari_settings = napari.settings.get_settings()
-
-        # Store original setting to restore later
-        original_ipy_interactive = napari_settings.application.ipy_interactive
-
-        # Force blocking behavior - this is crucial for proper event loop handling
-        napari_settings.application.ipy_interactive = False
-        napari_settings.application.save_window_geometry = False
-
-        try:
-            # Prepare image data for annotation
-            images = []
-            metadata = []
-
-            for image_obj, annotation_id, meta, row_idx in batch_data:
-                # Load image data from OMERO
-                image_data = self._load_image_data(image_obj, meta)
-                images.append(image_data)
-                metadata.append((annotation_id, meta.copy(), row_idx))
-
-            # Build context images parallel list (empty dicts when no context channels)
-            context_images = self._build_context_images(batch_data)
-
-            # Set up output paths
-            output_path = Path(self.config.output.output_directory)
-            embedding_path = output_path / "sam_embeddings"
-            annotations_path = output_path / "annotations"
-            annotations_path.mkdir(exist_ok=True)
-            # print("DEBUG: Ready to run micro_sam annotations")
-            # Run micro-SAM annotation
-            model_type = self.config.ai_model.pretrained_from
-
-            # Run image series annotator with explicit napari.run() call
-            viewer = image_series_annotator(
-                images=images,
-                output_folder=str(annotations_path),
-                model_type=model_type,
-                viewer=None,  # Let it create its own viewer
-                return_viewer=True,  # Important: get the viewer back
-                embedding_path=str(embedding_path),
-                is_volumetric=self.config.spatial_coverage.three_d,
-                skip_segmented=True,
-            )
-
-            # Install context channel sidecar layers (no-op if none configured)
-            self._install_context_channel_hook(viewer, images, context_images)
-
-            # Explicitly start the event loop - this will block until viewer is closed
-            napari.run()
-
-        finally:
-            # Always restore the original setting
-            napari_settings.application.ipy_interactive = original_ipy_interactive
-
+        """Let the annotator annotate a batch; returns its metadata and mask files."""
+        images = [
+            self._load_image_data(image_obj, meta)
+            for image_obj, _annotation_id, meta, _row_idx in batch_data
+        ]
+        contexts = self._build_context_images(batch_data)
+        output_path = Path(self.config.output.output_directory)
+        mask_dir = output_path / "annotations"
+        mask_dir.mkdir(exist_ok=True)
+        specs = self.config.spatial_coverage.get_context_channel_specs()
+        self._batches_run += 1
+        batch = Batch(
+            index=self._batches_run,
+            items=tuple(
+                BatchItem(annotation_id=annotation_id, pixels=pixels, context=context)
+                for (_obj, annotation_id, _meta, _row), pixels, context in zip(
+                    batch_data, images, contexts, strict=True
+                )
+            ),
+            mask_dir=mask_dir,
+            embedding_dir=output_path / "sam_embeddings",
+            model_type=self.config.ai_model.pretrained_from,
+            is_volumetric=self.config.spatial_coverage.three_d,
+            context_colormaps={name: cmap for _ch, name, cmap in specs},
+        )
+        annotator = (
+            self.annotator if self.annotator is not None else MicroSamAnnotator()
+        )
+        masks = annotator.annotate(batch)
         return {
-            "metadata": metadata,
-            "embedding_path": embedding_path,
-            "annotations_path": annotations_path,
+            "metadata": [
+                (annotation_id, meta.copy(), row_idx)
+                for _obj, annotation_id, meta, row_idx in batch_data
+            ],
+            "masks": masks,
         }
 
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
@@ -746,83 +588,6 @@ class AnnotationPipeline:
             context_images.append(per_item)
         return context_images
 
-    def _install_context_channel_hook(
-        self,
-        viewer,
-        images: list,
-        context_images: list[dict],
-    ) -> None:
-        """Install a napari events.data hook that keeps context layers in sync.
-
-        When image_series_annotator advances to the next image, updates each
-        context channel sidecar layer to match the new image index.
-        Does nothing when context_images contains only empty dicts.
-        """
-        specs = self.config.spatial_coverage.get_context_channel_specs()
-        if not specs:
-            return
-
-        # Build identity lookup: id(array) -> list index
-        id_to_index = {id(arr): i for i, arr in enumerate(images)}
-
-        def update_context_layers(idx: int) -> None:
-            per_item = context_images[idx]
-            for _ch_idx, ch_name, cmap in specs:
-                arr = per_item.get(ch_name)
-                if arr is None:
-                    continue
-                if ch_name in viewer.layers:
-                    try:
-                        viewer.layers[ch_name].data = arr
-                    except Exception:
-                        del viewer.layers[ch_name]
-                        viewer.add_image(
-                            arr,
-                            name=ch_name,
-                            colormap=cmap,
-                            blending="additive",
-                            visible=True,
-                        )
-                        viewer.layers.move(len(viewer.layers) - 1, 0)
-                else:
-                    viewer.add_image(
-                        arr,
-                        name=ch_name,
-                        colormap=cmap,
-                        blending="additive",
-                        visible=True,
-                    )
-                    viewer.layers.move(len(viewer.layers) - 1, 0)
-
-        def on_image_data_changed(event) -> None:
-            try:
-                new_data = viewer.layers["image"].data
-                idx = id_to_index.get(id(new_data))
-                if idx is None:
-                    # Fallback: scan with array identity then equality
-                    for i, arr in enumerate(images):
-                        if arr is new_data or (
-                            arr.shape == new_data.shape
-                            and arr.dtype == new_data.dtype
-                            and np.array_equal(arr, new_data)
-                        ):
-                            idx = i
-                            break
-                if idx is None:
-                    return
-                update_context_layers(idx)
-            except Exception:
-                pass  # Stale viewer reference during shutdown — ignore
-
-        # Handle the initial image (already loaded before napari.run())
-        initial_data = viewer.layers["image"].data
-        initial_idx = id_to_index.get(id(initial_data))
-        if initial_idx is not None:
-            update_context_layers(initial_idx)
-
-        # Subscribe for subsequent image transitions
-        viewer.layers["image"].events.data.connect(on_image_data_changed)
-
     def _process_annotation_results(self, annotation_results: dict) -> None:
         """Process annotation results, upload ROIs to OMERO, and update config annotations."""
 
@@ -832,29 +597,26 @@ class AnnotationPipeline:
             self._debug_print("No annotation results received")
             return
 
-        # Extract metadata and paths from results
+        # Results carry the annotator's mask files ("masks"), or - from custom
+        # annotation functions - the folder they were written to ("annotations_path").
         try:
             metadata = annotation_results["metadata"]
-            annotations_path = Path(annotation_results["annotations_path"])
+            masks = annotation_results.get("masks")
+            if masks is None:
+                masks = collect_series_masks(
+                    Path(annotation_results["annotations_path"]),
+                    [annotation_id for annotation_id, _meta, _row in metadata],
+                )
         except KeyError as e:
             self._debug_print(f"Missing required key: {e}")
             return
-
-        # Get all TIFF files in the annotations directory.
-        # micro-sam writes seg_00000.tif, seg_00001.tif, ... in the same order
-        # as `images`/`metadata` were passed in. glob() returns arbitrary
-        # filesystem order, so sort by name to realign tiff_files[i] with
-        # metadata[i] (zero-padded names sort numerically).
-        tiff_files = sorted(
-            list(annotations_path.glob("*.tiff")) + list(annotations_path.glob("*.tif"))
-        )
         self._debug_print(
-            f"Found {len(tiff_files)} annotation files for {len(metadata)} metadata entries"
+            f"Found {len(masks)} annotation files for {len(metadata)} metadata entries"
         )
 
         # Process each annotation metadata entry
         updated_count = 0
-        for i, (annotation_id, meta, row_idx) in enumerate(metadata):
+        for i, (annotation_id, meta, _row_idx) in enumerate(metadata):
             # Find matching annotation in config by annotation_id or sequence_val
             matching_annotation = None
             for annotation in self.config.annotations:
@@ -872,9 +634,8 @@ class AnnotationPipeline:
                 )
                 continue
 
-            # Find corresponding TIFF file
-            tiff_file = tiff_files[i] if i < len(tiff_files) else None
-            if not tiff_file:
+            tiff_file = masks.get(annotation_id)
+            if tiff_file is None:
                 self._debug_print(f"No annotation file for metadata entry {i + 1}")
                 continue
 
@@ -907,7 +668,7 @@ class AnnotationPipeline:
                         patch_offset = (meta.get("patch_x", 0), meta.get("patch_y", 0))
 
                     # Upload ROIs and labels using the existing function
-                    label_id, roi_id = upload_rois_and_labels(
+                    label_id, roi_id = self.omero_writes.upload_rois_and_labels(
                         conn=self.conn,
                         image_id=image_id,
                         annotation_file=str(tiff_file),
@@ -1267,45 +1028,6 @@ class AnnotationPipeline:
         image_ids = self.get_image_ids_from_container()
         return self.get_images_by_ids(image_ids)
 
-    def _save_local_progress(
-        self, completed_row_indices: list[int], metadata: list[tuple]
-    ) -> None:
-        """Save progress locally in read-only mode by creating/updating a CSV table."""
-        output_path = Path(self.config.output.output_directory)
-        table_file = output_path / "tracking_table.csv"
-        if table_file.exists():
-            df = pd.read_csv(table_file)
-        else:
-            rows = []
-            for annotation_id, meta, row_idx in metadata:
-                image_id = meta.get("image_id", -1)
-                rows.append(
-                    {
-                        "row_index": row_idx,
-                        "image_id": image_id,
-                        "image_uri": meta.get("image_uri", ""),
-                        "annotation_id": annotation_id,
-                        "timepoint": meta.get("timepoint", -1),
-                        "z_slice": meta.get("z_slice", -1),
-                        "channel": meta.get("channel", -1),
-                        "pretrained_from": self.config.ai_model.pretrained_from
-                        or "vit_b_lm",
-                        "processed": False,
-                        "completed_timestamp": "",
-                    }
-                )
-            df = pd.DataFrame(rows)
-        timestamp = datetime.now().isoformat()
-        for row_idx in completed_row_indices:
-            mask = df["row_index"] == row_idx
-            df.loc[mask, "processed"] = True
-            df.loc[mask, "completed_timestamp"] = timestamp
-        df.to_csv(table_file, index=False)
-        completed_count = df["processed"].sum()
-        total_count = len(df)
-        print(f"Local progress saved: {completed_count}/{total_count} units completed")
-        print(f" Progress file: {table_file}")
-
     def _save_local_progress_from_annotations(self, completed_annotations) -> None:
         """Save progress locally in read-only mode using completed annotations."""
         output_path = Path(self.config.output.output_directory)
@@ -1367,7 +1089,9 @@ class AnnotationPipeline:
         if self.table_id in (None, -1):
             return self.create_tracking_table()
         print("Updating OMERO table...")
-        result = write_config_to_table(self.conn, self.table_id, self.config)
+        result = self.omero_writes.write_config_to_table(
+            self.conn, self.table_id, self.config
+        )
         print(
             f"OMERO table updated (ID: {self.table_id}; "
             f"{result['updated']} rows updated, {result['added']} added)"
@@ -1467,10 +1191,8 @@ class AnnotationPipeline:
     def _extend_annotations(self) -> int:
         """Add images when a resumed run asks for more than the table holds.
 
-        Compares train_n / validate_n / test_n with the number of distinct
-        images per category already in config.annotations, and adds units for
-        images not yet in the table. Existing rows are never removed, so a
-        lower count leaves the table as it is.
+        See :func:`~omero_annotate_ai.trainingset.planning.plan_extension`. Existing
+        rows are never removed, so a lower count leaves the table as it is.
 
         Returns:
             Number of images added.
@@ -1479,39 +1201,25 @@ class AnnotationPipeline:
         if training.segment_all:
             return 0
 
-        categories = ("training", "validation", "test")
-        wanted = {
-            "training": training.train_n,
-            "validation": training.validate_n,
-            "test": training.test_n,
-        }
         existing = self.config.annotations
-        have = {
-            c: len({a.image_uri for a in existing if a.category == c})
-            for c in categories
-        }
-        missing = {c: max(0, wanted[c] - have[c]) for c in categories}
-        if not any(missing.values()):
-            return 0
-
-        used = {a.image_uri for a in existing}
-        unused = [uri for uri in self.get_image_uris() if uri not in used]
-        random.shuffle(unused)
+        plan = plan_extension(
+            [(a.image_uri, a.category) for a in existing],
+            {
+                "training": training.train_n,
+                "validation": training.validate_n,
+                "test": training.test_n,
+            },
+            self.get_image_uris,
+            rng_for(self._seed, "extend", len(existing)),
+        )
+        for category, (got, asked) in plan.shortfalls.items():
+            print(
+                f"Only {got} unused images left for {category} (asked for {asked} more)"
+            )
 
         added = 0
-        cursor = 0
-        for category in categories:
-            n = missing[category]
-            if n == 0:
-                continue
-            picked = unused[cursor : cursor + n]
-            cursor += len(picked)
-            if len(picked) < n:
-                print(
-                    f"Only {len(picked)} unused images left for {category} "
-                    f"(asked for {n} more)"
-                )
-            for image in self.get_images_by_ids(picked):
+        for category, uris in plan.picks.items():
+            for image in self.get_images_by_ids(list(uris)):
                 for annotation in self._units_for_image(image, category):
                     self.config.add_annotation(annotation)
                 added += 1
@@ -2204,6 +1912,9 @@ def create_pipeline(
     config: AnnotationConfig,
     conn=None,
     config_file_path: str | Path | None = None,
+    *,
+    annotator: Annotator | None = None,
+    omero_writes: OmeroWrites | None = None,
 ) -> AnnotationPipeline:
     """Create a micro-SAM annotation pipeline with the given configuration.
 
@@ -2212,6 +1923,10 @@ def create_pipeline(
         conn: OMERO connection object
         config_file_path: Optional path to the source YAML configuration file for persistence.
                          If None, uses config.config_file_path if available.
+        annotator: Annotation tool; defaults to micro-SAM in napari. Pass e.g. a
+            :class:`~omero_annotate_ai.annotators.ScriptedAnnotator` to run without
+            a display.
+        omero_writes: The OMERO writes to use (replaceable for tests).
 
     Returns:
         AnnotationPipeline instance
@@ -2219,4 +1934,10 @@ def create_pipeline(
     # Use provided path, or fall back to config's stored path
     actual_config_path = config_file_path or config.config_file_path
 
-    return AnnotationPipeline(config, conn, actual_config_path)
+    return AnnotationPipeline(
+        config,
+        conn,
+        actual_config_path,
+        annotator=annotator,
+        omero_writes=omero_writes,
+    )

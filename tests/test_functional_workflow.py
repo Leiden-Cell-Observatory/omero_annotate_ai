@@ -3,10 +3,11 @@
 Everything runs through the public API — ``create_pipeline`` and its workflows,
 ``collect_annotations_from_disk``, ``prepare_training_data_from_table``,
 ``setup_training``/``run_training`` and ``delete_training_set`` — on the seeded test
-server (tests/omero_seed.py). Only the interactive step is replaced: micro-SAM's
-``image_series_annotator`` becomes :class:`ScriptedAnnotator`, which writes masks the
-way micro-SAM does (``seg_{i:05}.tif`` in the output folder, honouring
-``skip_segmented``) and can "close napari" early.
+server (tests/omero_seed.py). Only the interactive step is replaced: the pipeline gets
+a :class:`~omero_annotate_ai.annotators.ScriptedAnnotator` instead of micro-SAM in
+napari. It writes masks the way micro-SAM does (``seg_{i:05}.tif`` in the output
+folder, honouring ``skip_segmented``) and can "close napari" early. Failures are
+injected through the pipeline's ``omero_writes`` object.
 
 The masks encode which image they were drawn on: seeded image ``k`` has every plane's
 minimum at ``1000 * k + ...``, so its mask label is ``k + 1``. A label file or ROI on
@@ -24,11 +25,13 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import tifffile
+
+from omero_annotate_ai.annotators import ScriptedAnnotator
+from omero_annotate_ai.core.annotation_pipeline import OmeroWrites
 
 pytestmark = [pytest.mark.docker, pytest.mark.integration]
 
@@ -55,84 +58,59 @@ def mask_for(image: np.ndarray, value: int | None = None) -> np.ndarray:
     return mask
 
 
-class ScriptedAnnotator:
-    """Stands in for ``micro_sam.sam_annotator.image_series_annotator``.
+class Annotators:
+    """Hands out scripted annotators; :func:`run_microsam` uses the latest one."""
 
-    Writes ``seg_{i:05}.tif`` for each image like micro-SAM, skipping positions whose
-    file already exists when ``skip_segmented`` is set. ``limit`` simulates the user
-    closing napari after that many images in a session.
-    """
-
-    def __init__(self, limit: int | None = None, value: int | None = None):
-        self.limit = limit
-        self.value = value
-        self.calls: list[dict] = []
+    def __init__(self) -> None:
+        self.current = ScriptedAnnotator(mask_for)
 
     def __call__(
-        self,
-        images,
-        output_folder,
-        model_type=None,
-        viewer=None,
-        return_viewer=False,
-        embedding_path=None,
-        is_volumetric=False,
-        skip_segmented=True,
-        **kwargs,
-    ):
-        out = Path(output_folder)
-        out.mkdir(parents=True, exist_ok=True)
-        written, skipped = [], []
-        for i, image in enumerate(images):
-            path = out / f"seg_{i:05}.tif"
-            if skip_segmented and path.exists():
-                skipped.append(i)
-                continue
-            if self.limit is not None and len(written) >= self.limit:
-                break
-            tifffile.imwrite(path, mask_for(image, self.value))
-            written.append(i)
-        self.calls.append(
-            {
-                "n_images": len(images),
-                "written": written,
-                "skipped": skipped,
-                "shapes": [np.asarray(im).shape for im in images],
-            }
-        )
-        return SimpleNamespace(layers={})
+        self, limit: int | None = None, value: int | None = None
+    ) -> ScriptedAnnotator:
+        """A fresh annotator; ``limit`` closes "napari" early, ``value`` fixes the label."""
 
+        def mask_fn(image: np.ndarray) -> np.ndarray:
+            return mask_for(image, value)
 
-class _FakeNapari:
-    """Enough of napari for the pipeline: settings and a non-blocking run()."""
-
-    def __init__(self):
-        app = SimpleNamespace(ipy_interactive=True, save_window_geometry=True)
-        settings = SimpleNamespace(application=app)
-        self.settings = SimpleNamespace(get_settings=lambda: settings)
-
-    @staticmethod
-    def run():
-        return None
+        self.current = ScriptedAnnotator(mask_fn, limit=limit)
+        return self.current
 
 
 @pytest.fixture
-def annotator(monkeypatch):
-    """Install a scripted annotator; returns a setter for a fresh one per run."""
-    from omero_annotate_ai.core import annotation_pipeline as ap
+def annotator() -> Annotators:
+    return Annotators()
 
-    monkeypatch.setattr(ap, "napari", _FakeNapari())
-    monkeypatch.setattr(ap, "MICRO_SAM_AVAILABLE", True)
 
-    def install(
-        limit: int | None = None, value: int | None = None
-    ) -> ScriptedAnnotator:
-        scripted = ScriptedAnnotator(limit=limit, value=value)
-        monkeypatch.setattr(ap, "image_series_annotator", scripted)
-        return scripted
+class SpyWrites(OmeroWrites):
+    """Records the table each table write goes to."""
 
-    install()
-    return install
+    def __init__(self) -> None:
+        self.table_ids: list[int] = []
+
+    def write_config_to_table(self, conn, table_id, config):
+        self.table_ids.append(table_id)
+        return super().write_config_to_table(conn, table_id, config)
+
+
+class FlakyWrites(OmeroWrites):
+    """Fails the n-th upload and/or the first table write."""
+
+    def __init__(self, fail_upload: int | None = None, fail_table_once: bool = False):
+        self.fail_upload = fail_upload
+        self.fail_table_once = fail_table_once
+        self.uploads = 0
+
+    def upload_rois_and_labels(self, **kwargs):
+        self.uploads += 1
+        if self.uploads == self.fail_upload:
+            raise ConnectionError("simulated upload failure")
+        return super().upload_rois_and_labels(**kwargs)
+
+    def write_config_to_table(self, conn, table_id, config):
+        if self.fail_table_once:
+            self.fail_table_once = False
+            raise ConnectionError("simulated table update failure")
+        return super().write_config_to_table(conn, table_id, config)
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +149,14 @@ def make_config(
     return config
 
 
-def run_microsam(config, conn):
+def run_microsam(
+    config, conn, annotators: Annotators, writes: OmeroWrites | None = None
+):
     from omero_annotate_ai.core.annotation_pipeline import create_pipeline
 
-    pipeline = create_pipeline(config, conn)
+    pipeline = create_pipeline(
+        config, conn, annotator=annotators.current, omero_writes=writes
+    )
     table_id, config = pipeline.run_full_micro_sam_workflow()
     return pipeline, table_id, config
 
@@ -252,7 +234,7 @@ def assert_labels_on_right_images(conn, seed, rows):
 class TestNewTrainingSet:
     def test_single_batch_dataset_2d(self, omero_conn, omero_seed, annotator, tmp_path):
         config = make_config(omero_seed, tmp_path, "new2d")
-        pipeline, table_id, config = run_microsam(config, omero_conn)
+        pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
 
         rows = table_rows(omero_conn, table_id)
         assert len(rows) == 4
@@ -281,22 +263,13 @@ class TestNewTrainingSet:
         )
 
     def test_table_id_stable_across_batches(
-        self, omero_conn, omero_seed, annotator, tmp_path, monkeypatch
+        self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        from omero_annotate_ai.core import annotation_pipeline as ap
-
-        ids_seen = []
-        real_write = ap.write_config_to_table
-
-        def spy(conn, table_id, config):
-            ids_seen.append(table_id)
-            return real_write(conn, table_id, config)
-
-        monkeypatch.setattr(ap, "write_config_to_table", spy)
+        spy = SpyWrites()
         config = make_config(omero_seed, tmp_path, "batches", batch_size=2)
-        _, table_id, config = run_microsam(config, omero_conn)
+        _, table_id, config = run_microsam(config, omero_conn, annotator, spy)
 
-        assert ids_seen == [table_id, table_id]
+        assert spy.table_ids == [table_id, table_id]
         assert omero_conn.getObject("FileAnnotation", table_id) is not None
         rows = table_rows(omero_conn, table_id)
         assert rows["processed"].all() and len(rows) == 4
@@ -309,7 +282,7 @@ class TestNewTrainingSet:
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
         config = make_config(omero_seed, tmp_path, "batchmasks", batch_size=2)
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(config, omero_conn, annotator)
         assert_labels_on_right_images(
             omero_conn, omero_seed, table_rows(omero_conn, table_id)
         )
@@ -334,7 +307,7 @@ class TestSources:
             validate_n=1,
             test_n=0,
         )
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(config, omero_conn, annotator)
 
         rows = table_rows(omero_conn, table_id)
         assert len(rows) == 3 and rows["processed"].all()
@@ -358,11 +331,11 @@ class TestSources:
             random_patches=False,
         )
         scripted = annotator()
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(config, omero_conn, annotator)
 
         rows = table_rows(omero_conn, table_id)
         assert len(rows) == 6 and rows["is_patch"].all()
-        assert all(shape == (32, 32) for shape in scripted.calls[0]["shapes"])
+        assert all(shape == (32, 32) for shape in scripted.calls[0].shapes)
         assert_labels_on_right_images(omero_conn, omero_seed, rows)
 
     def test_volumetric(self, omero_conn, omero_seed, annotator, tmp_path):
@@ -379,11 +352,11 @@ class TestSources:
             z_slice_mode="all",
         )
         scripted = annotator()
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(config, omero_conn, annotator)
 
         rows = table_rows(omero_conn, table_id)
         assert len(rows) == 2 and rows["is_volumetric"].all()
-        assert all(len(shape) == 3 for shape in scripted.calls[0]["shapes"])
+        assert all(len(shape) == 3 for shape in scripted.calls[0].shapes)
         assert_labels_on_right_images(omero_conn, omero_seed, rows)
         assert download_label(omero_conn, rows["label_id"][0]).ndim == 3
 
@@ -397,12 +370,12 @@ class TestResume:
     def _early_close_then_resume(self, conn, seed, annotator, tmp_path, name):
         annotator(limit=1)  # user closes napari after one image
         config = make_config(seed, tmp_path, name)
-        _, table_id, config = run_microsam(config, conn)
+        _, table_id, config = run_microsam(config, conn, annotator)
         first = table_rows(conn, table_id)
         done_first = first[first["processed"]]
 
         annotator()
-        _, table_id2, _ = run_microsam(resume_config(config, table_id), conn)
+        _, table_id2, _ = run_microsam(resume_config(config, table_id), conn, annotator)
         return table_id, table_id2, done_first, table_rows(conn, table_id)
 
     def test_resume_after_early_close_completes(
@@ -443,11 +416,11 @@ class TestResume:
         config = make_config(
             omero_seed, tmp_path, "extend", train_n=2, validate_n=1, test_n=0
         )
-        _, table_id, config = run_microsam(config, omero_conn)
+        _, table_id, config = run_microsam(config, omero_conn, annotator)
         assert len(table_rows(omero_conn, table_id)) == 3
 
         _, table_id2, _ = run_microsam(
-            resume_config(config, table_id, train_n=3), omero_conn
+            resume_config(config, table_id, train_n=3), omero_conn, annotator
         )
 
         rows = table_rows(omero_conn, table_id)
@@ -469,29 +442,16 @@ class TestResume:
 
 
 class TestCrashes:
-    def _fail_nth_upload(self, monkeypatch, n: int):
-        from omero_annotate_ai.core import annotation_pipeline as ap
-
-        real = ap.upload_rois_and_labels
-        calls = {"n": 0}
-
-        def flaky(*args, **kwargs):
-            calls["n"] += 1
-            if calls["n"] == n:
-                raise ConnectionError("simulated upload failure")
-            return real(*args, **kwargs)
-
-        monkeypatch.setattr(ap, "upload_rois_and_labels", flaky)
-
     @pytest.mark.xfail(
         strict=True, reason="PR 3: a failed upload must leave the row unprocessed"
     )
     def test_failed_upload_leaves_row_unprocessed(
-        self, omero_conn, omero_seed, annotator, tmp_path, monkeypatch
+        self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        self._fail_nth_upload(monkeypatch, 2)
         config = make_config(omero_seed, tmp_path, "uploadfail")
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(
+            config, omero_conn, annotator, FlakyWrites(fail_upload=2)
+        )
 
         rows = table_rows(omero_conn, table_id)
         broken = rows[rows["roi_id"].isna() | (rows["roi_id"] <= 0)]
@@ -499,41 +459,29 @@ class TestCrashes:
         assert not broken["processed"].any()
 
     def test_failed_upload_current_behaviour(
-        self, omero_conn, omero_seed, annotator, tmp_path, monkeypatch
+        self, omero_conn, omero_seed, annotator, tmp_path
     ):
         """Documents today's behaviour: the row is marked done without IDs."""
-        self._fail_nth_upload(monkeypatch, 2)
         config = make_config(omero_seed, tmp_path, "uploadfailnow")
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(
+            config, omero_conn, annotator, FlakyWrites(fail_upload=2)
+        )
 
         rows = table_rows(omero_conn, table_id)
         assert rows["processed"].all()
         no_ids = rows[rows["roi_id"].isna() | (rows["roi_id"] <= 0)]
         assert len(no_ids) == 1
 
-    def _table_write_fails_once(self, monkeypatch):
-        from omero_annotate_ai.core import annotation_pipeline as ap
-
-        real = ap.write_config_to_table
-        state = {"failed": False}
-
-        def flaky(conn, table_id, config):
-            if not state["failed"]:
-                state["failed"] = True
-                raise ConnectionError("simulated table update failure")
-            return real(conn, table_id, config)
-
-        monkeypatch.setattr(ap, "write_config_to_table", flaky)
-
     def test_failed_table_update_stops_run_and_uploads_stay_traceable(
-        self, omero_conn, omero_seed, annotator, tmp_path, monkeypatch
+        self, omero_conn, omero_seed, annotator, tmp_path
     ):
         from omero_annotate_ai.omero.omero_functions import delete_training_set
 
-        self._table_write_fails_once(monkeypatch)
         config = make_config(omero_seed, tmp_path, "tablefail")
         with pytest.raises(ConnectionError):
-            run_microsam(config, omero_conn)
+            run_microsam(
+                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+            )
 
         table_id = config.omero.table_id
         rows = table_rows(omero_conn, table_id)
@@ -548,15 +496,16 @@ class TestCrashes:
         reason="PR 3: reconcile must not upload again after a failed table update",
     )
     def test_resume_after_failed_table_update_has_no_duplicates(
-        self, omero_conn, omero_seed, annotator, tmp_path, monkeypatch
+        self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        self._table_write_fails_once(monkeypatch)
         config = make_config(omero_seed, tmp_path, "tablefailresume")
         with pytest.raises(ConnectionError):
-            run_microsam(config, omero_conn)
+            run_microsam(
+                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+            )
         table_id = config.omero.table_id
 
-        run_microsam(resume_config(config, table_id), omero_conn)
+        run_microsam(resume_config(config, table_id), omero_conn, annotator)
         rows = table_rows(omero_conn, table_id)
         rois = tagged_rois(omero_conn, table_id, rows["image_id"])
         assert rows["processed"].all()
@@ -572,7 +521,7 @@ class TestCrashes:
 def finished_set(omero_conn, omero_seed, annotator, tmp_path):
     """A completed 2/1/1 training set and its config."""
     config = make_config(omero_seed, tmp_path / "annotate", "export")
-    _, table_id, config = run_microsam(config, omero_conn)
+    _, table_id, config = run_microsam(config, omero_conn, annotator)
     return table_id, config
 
 
@@ -735,7 +684,7 @@ class TestOtherPaths:
         }
         config = make_config(omero_seed, tmp_path, "readonly", test_n=0)
         config.workflow.read_only_mode = True
-        _, table_id, config = run_microsam(config, omero_conn)
+        _, table_id, config = run_microsam(config, omero_conn, annotator)
 
         assert table_id == -1
         masks = sorted((tmp_path / "annotation_output").glob("*_mask.tif"))
@@ -775,11 +724,13 @@ class TestZarr:
             0,
         )
         scripted = annotator(value=3)
-        table_id, config = create_pipeline(config).run_full_micro_sam_workflow()
+        table_id, config = create_pipeline(
+            config, annotator=scripted
+        ).run_full_micro_sam_workflow()
 
         assert table_id == -1
         assert all(a.processed for a in config.annotations)
-        assert len(scripted.calls) == 1 and scripted.calls[0]["n_images"] == 2
+        assert len(scripted.calls) == 1 and scripted.calls[0].n_images == 2
         masks = sorted((tmp_path / "annotation_output").glob("*_mask.tif"))
         assert len(masks) == 2
         assert (tmp_path / "tracking_table.csv").exists()
@@ -799,7 +750,7 @@ class TestDelete:
         config = make_config(
             omero_seed, tmp_path, "delete", train_n=1, validate_n=1, test_n=0
         )
-        _, table_id, _ = run_microsam(config, omero_conn)
+        _, table_id, _ = run_microsam(config, omero_conn, annotator)
         rows = table_rows(omero_conn, table_id)
         roi_ids = [int(i) for i in rows["roi_id"]]
         label_ids = [int(i) for i in rows["label_id"]]

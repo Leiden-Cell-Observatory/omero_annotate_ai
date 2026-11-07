@@ -16,6 +16,7 @@ def generate_patch_coordinates(
     patch_size: list[int],
     n_patches: int,
     random_patch: bool = True,
+    rng: rnd.Random | None = None,
 ) -> tuple[list[tuple[int, int]], tuple[int, int]]:
     """Generate non-overlapping patch coordinates for an image.
 
@@ -26,6 +27,7 @@ def generate_patch_coordinates(
         patch_size: (height, width) of patches
         n_patches: Number of patches to generate
         random_patch: Whether to generate random patches or grid-based patches
+        rng: Random stream for random patches; the ``random`` module when omitted.
 
     Returns:
         Tuple containing:
@@ -52,6 +54,7 @@ def generate_patch_coordinates(
     coordinates = []
 
     if random_patch:
+        draw = rng if rng is not None else rnd.Random()
         # Generate random non-overlapping coordinates
         used_areas = []  # Track used rectangular areas
         max_attempts = n_patches * 20  # Limit attempts to avoid infinite loops
@@ -59,8 +62,8 @@ def generate_patch_coordinates(
 
         while len(coordinates) < n_patches and attempts < max_attempts:
             attempts += 1
-            x = rnd.randint(0, max_x)
-            y = rnd.randint(0, max_y)
+            x = draw.randint(0, max_x)
+            y = draw.randint(0, max_y)
 
             # Check if this patch overlaps with any existing patch
             new_rect = (x, y, x + patch_w, y + patch_h)
