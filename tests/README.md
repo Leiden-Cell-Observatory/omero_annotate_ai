@@ -8,31 +8,42 @@ All test commands should be run from the root of the project using the `dev` env
 
 ## Running Tests
 
-### Running All Tests
-
-To run all tests, including unit and integration tests, use the following command. This requires Docker to be running for the integration tests.
+### Unit tests (fast, no server)
 
 ```bash
-pixi run -e dev pytest
+pixi run -e dev pytest tests/ -q -m "not (omero or docker)"
 ```
 
-### Running Unit Tests
+### Integration tests against a local OMERO (Docker)
 
-To run only the unit tests, which are fast and do not require any external dependencies, use the `-m "unit"` marker:
+`tests/docker-compose.yml` runs a throwaway OMERO (server, web, PostgreSQL) on
+ports 6063/6064 (server) and 5080 (web), login `root` / `omero`.
 
 ```bash
-pixi run -e dev pytest -m "unit"
+pixi run start-omero          # start and wait until healthy (first start: a few minutes)
+pixi run -e dev test-omero    # pytest -m docker
+pixi run stop-omero           # stop and wipe all data
 ```
 
-### Running Integration Tests
+`pytest -m docker` also works without `start-omero`: the fixtures reuse a server
+that already answers on the port, and otherwise start the stack themselves and
+stop it at the end of the session. Without Docker the tests are skipped.
 
-To run the integration tests, which require a running OMERO server via Docker, use the `-m "integration"` marker:
+Each session seeds a uniquely named project/dataset with 6 synthetic images
+(2 channels, 3 z, 2 t, 64x80, known pixel values) and a 2x2 plate imported from a
+Bio-Formats `.fake` file inside the server container (`tests/omero_seed.py`), and
+deletes them afterwards.
 
-```bash
-pixi run -e dev pytest -m "integration"
-```
+Environment variables:
 
-**Note:** The integration tests use `docker-compose` to automatically start and stop an OMERO server. Ensure Docker is installed and running before executing these tests.
+| Variable | Default | Meaning |
+|---|---|---|
+| `OAI_OMERO_HOST` / `OAI_OMERO_PORT` | `localhost` / `6064` | Server to test against |
+| `OAI_OMERO_USER` / `OAI_OMERO_PASSWORD` | `root` / `omero` | Login |
+| `OAI_KEEP_OMERO` | unset | `1` keeps the stack and the seeded data after the session |
+
+After the pinned image versions change, recreate the stack (`stop-omero`, then
+`start-omero`): the database volume of an older PostgreSQL cannot be reused.
 
 ## Test Markers
 
@@ -41,7 +52,7 @@ The test suite uses `pytest` markers to categorize tests:
 -   `@pytest.mark.unit`: For fast, self-contained unit tests.
 -   `@pytest.mark.integration`: For tests that require external services, like a running OMERO server.
 -   `@pytest.mark.omero`: A specific marker for tests that interact with an OMERO server.
--   `@pytest.mark.docker`: For tests that require Docker.
+-   `@pytest.mark.docker`: For tests that need the Docker OMERO test server (see above).
 
 ## Test Suite Status (As of last update)
 

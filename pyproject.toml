@@ -192,8 +192,9 @@ docs-serve = {cmd = "mkdocs serve"}
 docs-build = {cmd = "mkdocs build"}
 
 # Development
-start-omero = {cmd = "cd tests && docker-compose up -d"}
-stop-omero = {cmd = "cd tests && docker-compose down -v"}
+start-omero = {cmd = "docker compose -p oai-test -f tests/docker-compose.yml up -d --wait"}
+stop-omero = {cmd = "docker compose -p oai-test -f tests/docker-compose.yml down -v"}
+test-omero = {cmd = "pytest tests/ -m docker -v --no-cov"}
 build = { cmd = "python -m build" }
 clean = {cmd = "rm -rf build/ dist/ *.egg-info/ && find . -type d -name __pycache__ -exec rm -rf {} + && find . -type f -name \"*.pyc\" -delete"}
 

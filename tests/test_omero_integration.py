@@ -1,174 +1,180 @@
-"""Integration tests for OMERO functionality using docker-compose."""
+"""Integration tests against a real OMERO server (the Docker stack in tests/).
 
-import pytest
-import sys
+Run with ``pixi run test-omero`` (or ``pytest -m docker``). The fixtures in
+conftest.py reuse a running test server or start tests/docker-compose.yml, and
+seed a uniquely named project, dataset and plate (tests/omero_seed.py).
+"""
+
 import os
-from unittest.mock import patch, MagicMock
 from pathlib import Path
+from unittest.mock import patch
 
-# Add src to path for testing
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+import numpy as np
+import pytest
 
-try:
-    from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
-    from omero_annotate_ai.omero.omero_utils import (
-        get_table_by_name,
-        list_user_tables,
-    )
-    OMERO_AVAILABLE = True
-except ImportError:
-    OMERO_AVAILABLE = False
-
-# Always import the widget for test discovery, even if OMERO is unavailable
-try:
-    from omero_annotate_ai.widgets.omero_connection_widget import create_omero_connection_widget
-except ImportError:
-    create_omero_connection_widget = None
+from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+from tests.omero_seed import CHANNEL_NAMES, IMAGE_SHAPE, synthetic_plane
 
 
-@pytest.mark.omero
+
+@pytest.mark.docker
 @pytest.mark.integration
-class TestOMEROIntegration:
-    """Integration tests for OMERO functionality."""
-    
-    def test_simple_connection_manager(self, omero_connection):
-        """
-        Tests the `SimpleOMEROConnection` class against a real OMERO server.
-        This test ensures that the `SimpleOMEROConnection` class can correctly
-        connect to an OMERO server and that the connection object is valid.
-        """
-        conn_manager = SimpleOMEROConnection()
+class TestServer:
+    """The test server is reachable and the seed data is in place."""
 
-        # Test connection
+    def test_login(self, omero_conn):
+        assert omero_conn.isConnected()
+        assert omero_conn.getUser().getName() == "root"
 
-        params = {
-            "host": "localhost",
-            "username": "root",
-            "password": "omero",
-            "secure": True,
-            "port": 6064
+    def test_seeded_dataset_info(self, omero_conn, omero_seed):
+        from omero_annotate_ai.omero.omero_utils import get_container_info
+
+        info = get_container_info(omero_conn, "dataset", omero_seed.dataset_id)
+
+        assert info["total_images"] == len(omero_seed.image_ids)
+        assert info["channel_names"] == CHANNEL_NAMES
+        assert info["channel_names_vary"] is False
+        assert info["dimensions"] == {
+            "T": IMAGE_SHAPE["size_t"], "C": IMAGE_SHAPE["size_c"],
+            "Z": IMAGE_SHAPE["size_z"], "Y": IMAGE_SHAPE["size_y"],
+            "X": IMAGE_SHAPE["size_x"],
         }
 
-        print(f"[DEBUG] Attempting OMERO connection with params: {params}")
-        conn = conn_manager.connect(**params)
-        if conn is None:
-            print("[ERROR] OMERO connection failed. Check if the server is running and accessible at the specified host/port.")
-        assert conn is not None
-        assert conn.isConnected()
+    def test_seeded_plate_info(self, omero_conn, omero_seed):
+        from omero_annotate_ai.omero.omero_utils import get_container_info
 
-        # Test connection retrieval
-        last_conn = conn_manager.get_last_connection()
-        assert last_conn is not None
-        assert last_conn.isConnected()
-
-        conn.close()
-    
-    def test_omero_utils_functions(self, omero_connection):
-        """
-        Tests the OMERO utility functions against a real OMERO server.
-        This test ensures that the utility functions in `omero_utils.py` can
-        correctly interact with a real OMERO server.
-        """
-        # Test table listing
-        tables = list_user_tables(omero_connection)
-        assert isinstance(tables, list)
-    
-    @pytest.mark.skipif(not OMERO_AVAILABLE, reason="OMERO dependencies not available")
-    def test_connection_widget_creation(self):
-        """
-        Tests that the OMERO connection widget can be created.
-        This test ensures that the `create_omero_connection_widget` function can
-        be called without errors and that it returns a valid widget object.
-        """
-        # Mock the problematic print statements that cause Unicode encoding issues
-        with patch('builtins.print'):
-            widget = create_omero_connection_widget()
-            assert widget is not None
-            
-            # Test widget configuration
-            config = widget.get_config()
-            assert isinstance(config, dict)
-            assert "host" in config
-            assert "username" in config
-    
-    def test_connection_from_widget_config(self, docker_omero_server):
-        """
-        Tests creating a connection from the widget's configuration.
-        This test ensures that the `SimpleOMEROConnection` class can correctly
-        create a connection from the configuration dictionary returned by the
-        connection widget.
-        """
-        conn_manager = SimpleOMEROConnection()
-        
-        widget_config = {
-            "host": docker_omero_server["host"],
-            "username": docker_omero_server["user"], 
-            "password": docker_omero_server["password"],
-            "secure": docker_omero_server["secure"],
-            "port": docker_omero_server.get("port", 6064)
-        }
-        
-        conn = conn_manager.create_connection_from_config(widget_config)
-        assert conn is not None
-        assert conn.isConnected()
-        
-        conn.close()
+        if omero_seed.plate_id is None:
+            pytest.skip("Plate could not be imported on this server")
+        info = get_container_info(omero_conn, "plate", omero_seed.plate_id)
+        assert info["total_images"] == 4
 
 
-@pytest.mark.omero
-@pytest.mark.integration  
-class TestOMEROConnectionManager:
-    """Test the OMERO connection management features."""
-    
-    def test_connection_history(self, omero_connection):
-        """
-        Tests the connection history functionality.
-        This test ensures that the `SimpleOMEROConnection` class can correctly
-        save and load connection details to and from the connection history.
-        """
-        conn_manager = SimpleOMEROConnection()
-        
-        # Test saving connection details
-        conn_manager.save_connection_details(
-            host="localhost",
-            username="root", 
-            group=""
-        )
-        
-        # Test loading connection history
-        history = conn_manager.load_connection_history()
-        assert isinstance(history, list)
-        
-        # Should have at least one entry now
-        if history:
-            entry = history[0]
-            assert "host" in entry
-            assert "username" in entry
-            assert "created_at" in entry or "last_used" in entry  # Check for actual timestamp fields
-    
-    def test_keychain_integration(self):
-        """
-        Tests the keychain integration for password storage.
-        This test ensures that the `SimpleOMEROConnection` class can correctly
-        save and load passwords from the system keychain, if it is available.
-        """
-        conn_manager = SimpleOMEROConnection()
-        
-        # Test password storage/retrieval
-        test_host = "test_omero_server"
-        test_username = "test_user"
-        test_password = "test_password"
-        
-        # Save password
-        success = conn_manager.save_password(test_host, test_username, test_password)
-        
-        if success:  # Only test if keychain is available
-            # Retrieve password
-            retrieved = conn_manager.load_password(test_host, test_username)
-            assert retrieved == test_password
-            
-            # Clean up (using private method since there's no public delete method)
-            conn_manager._delete_password(test_host, test_username)
+@pytest.mark.docker
+@pytest.mark.integration
+class TestOmeroImageSource:
+    """The package's OMERO image source reads back the seeded pixels."""
+
+    def _source_and_image(self, conn, seed, index=1):
+        from omero_annotate_ai.sources.omero import OmeroImageSource
+
+        source = OmeroImageSource(conn)
+        return source, source.get_image(f"omero:image:{seed.image_ids[index]}")
+
+    def test_metadata(self, omero_conn, omero_seed):
+        source, image = self._source_and_image(omero_conn, omero_seed)
+        meta = source.metadata(image)
+        assert meta.image_uri == f"omero:image:{omero_seed.image_ids[1]}"
+        assert (meta.size_t, meta.size_c, meta.size_z, meta.size_y, meta.size_x) == (
+            IMAGE_SHAPE["size_t"], IMAGE_SHAPE["size_c"], IMAGE_SHAPE["size_z"],
+            IMAGE_SHAPE["size_y"], IMAGE_SHAPE["size_x"])
+        assert meta.dtype == "uint16"
+
+    def test_plane_region_and_volume(self, omero_conn, omero_seed):
+        source, image = self._source_and_image(omero_conn, omero_seed)
+
+        plane = source.read_plane(image, t=1, c=1, z=2)
+        np.testing.assert_array_equal(plane, synthetic_plane(2, 1, 1, 1))
+
+        tile = source.read_plane(image, t=0, c=0, z=0, region=(10, 5, 20, 8))
+        np.testing.assert_array_equal(tile, synthetic_plane(0, 0, 0, 1)[5:13, 10:30])
+
+        volume = source.read_volume(image, t=0, c=1, z_start=0, z_end=2)
+        assert volume.shape == (3, IMAGE_SHAPE["size_y"], IMAGE_SHAPE["size_x"])
+        np.testing.assert_array_equal(volume[2], synthetic_plane(2, 1, 0, 1))
+
+    def test_missing_image_raises(self, omero_conn):
+        from omero_annotate_ai.sources.omero import OmeroImageSource
+
+        with pytest.raises(LookupError):
+            OmeroImageSource(omero_conn).get_image("omero:image:999999999")
+
+
+@pytest.fixture
+def scratch_table(omero_conn):
+    """An empty OMERO.tables table (image_uri, processed, roi_id), deleted afterwards."""
+    import omero
+    import omero.grid
+
+    resources = omero_conn.c.sf.sharedResources()
+    repo_id = resources.repositories().descriptions[0].getId().getValue()
+    table = resources.newTable(repo_id, "oai_test_inplace.h5")
+    columns = [
+        omero.grid.StringColumn("image_uri", "", 64, []),
+        omero.grid.BoolColumn("processed", "", []),
+        omero.grid.LongColumn("roi_id", "", []),
+    ]
+    table.initialize(columns)
+    file_id = table.getOriginalFile().getId().getValue()
+    table.close()
+    yield resources, file_id
+    omero_conn.deleteObjects("OriginalFile", [file_id], wait=True)
+
+
+def _open(resources, file_id):
+    import omero
+
+    return resources.openTable(omero.model.OriginalFileI(file_id, False))
+
+
+def _rows(table):
+    data = table.read(list(range(len(table.getHeaders()))), 0, table.getNumberOfRows())
+    return {column.name: list(column.values) for column in data.columns}
+
+
+@pytest.mark.docker
+@pytest.mark.integration
+class TestTablesInPlace:
+    """OMERO.tables can be changed without replacing the table (same file ID)."""
+
+    def _append(self, table, uris, processed, roi_ids):
+        columns = table.getHeaders()
+        columns[0].values, columns[1].values, columns[2].values = uris, processed, roi_ids
+        table.addData(columns)
+
+    def test_update_and_append_keep_file_id(self, scratch_table):
+        resources, file_id = scratch_table
+
+        table = _open(resources, file_id)
+        try:
+            self._append(table, ["omero:image:1", "omero:image:2"], [False, False], [-1, -1])
+        finally:
+            table.close()
+
+        table = _open(resources, file_id)
+        try:
+            data = table.readCoordinates([1])
+            for column in data.columns:
+                if column.name == "processed":
+                    column.values = [True]
+                elif column.name == "roi_id":
+                    column.values = [42]
+            table.update(data)
+            self._append(table, ["omero:image:3"], [False], [-1])
+        finally:
+            table.close()
+
+        table = _open(resources, file_id)
+        try:
+            assert table.getOriginalFile().getId().getValue() == file_id
+            assert _rows(table) == {
+                "image_uri": ["omero:image:1", "omero:image:2", "omero:image:3"],
+                "processed": [False, True, False],
+                "roi_id": [-1, 42, -1],
+            }
+        finally:
+            table.close()
+
+    def test_string_longer_than_column_is_rejected(self, scratch_table):
+        import omero
+
+        resources, file_id = scratch_table
+        table = _open(resources, file_id)
+        try:
+            with pytest.raises(omero.ValidationException):
+                self._append(table, ["x" * 100], [False], [-1])
+            assert table.getNumberOfRows() == 0
+        finally:
+            table.close()
 
 
 @pytest.mark.unit
