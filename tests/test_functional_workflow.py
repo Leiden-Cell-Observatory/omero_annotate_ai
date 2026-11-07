@@ -35,7 +35,7 @@ from omero_annotate_ai.core.annotation_pipeline import OmeroWrites
 
 pytestmark = [pytest.mark.docker, pytest.mark.integration]
 
-PR3_WRITE_ORDER = "PR 3: masks paired by position / write order and reconcile"
+PR3_WRITE_ORDER = "PR 3c: write order and reconcile"
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,6 @@ class FlakyWrites(OmeroWrites):
 
 def make_config(
     seed,
-    out_dir: Path,
     name: str,
     *,
     container="dataset",
@@ -134,7 +133,6 @@ def make_config(
 
     config = create_default_config()
     config.name = f"{seed.tag}_{name}"
-    config.output.output_directory = str(out_dir)
     config.omero.container_type = container
     config.omero.container_id = (
         seed.dataset_id if container == "dataset" else seed.plate_id
@@ -233,7 +231,7 @@ def assert_labels_on_right_images(conn, seed, rows):
 
 class TestNewTrainingSet:
     def test_single_batch_dataset_2d(self, omero_conn, omero_seed, annotator, tmp_path):
-        config = make_config(omero_seed, tmp_path, "new2d")
+        config = make_config(omero_seed, "new2d")
         pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
 
         rows = table_rows(omero_conn, table_id)
@@ -266,7 +264,7 @@ class TestNewTrainingSet:
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
         spy = SpyWrites()
-        config = make_config(omero_seed, tmp_path, "batches", batch_size=2)
+        config = make_config(omero_seed, "batches", batch_size=2)
         _, table_id, config = run_microsam(config, omero_conn, annotator, spy)
 
         assert spy.table_ids == [table_id, table_id]
@@ -275,13 +273,10 @@ class TestNewTrainingSet:
         assert rows["processed"].all() and len(rows) == 4
         assert len(config_annotations(omero_conn, table_id)) == 1
 
-    @pytest.mark.xfail(
-        strict=True, reason=PR3_WRITE_ORDER + " (batch 2 reuses batch 1's seg_*.tif)"
-    )
     def test_multi_batch_masks_on_right_images(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(omero_seed, tmp_path, "batchmasks", batch_size=2)
+        config = make_config(omero_seed, "batchmasks", batch_size=2)
         _, table_id, _ = run_microsam(config, omero_conn, annotator)
         assert_labels_on_right_images(
             omero_conn, omero_seed, table_rows(omero_conn, table_id)
@@ -300,7 +295,6 @@ class TestSources:
         annotator(value=7)  # fake plate pixels carry no image index
         config = make_config(
             omero_seed,
-            tmp_path,
             "plate",
             container="plate",
             train_n=2,
@@ -320,7 +314,6 @@ class TestSources:
     def test_patches(self, omero_conn, omero_seed, annotator, tmp_path):
         config = make_config(
             omero_seed,
-            tmp_path,
             "patches",
             train_n=2,
             validate_n=1,
@@ -341,7 +334,6 @@ class TestSources:
     def test_volumetric(self, omero_conn, omero_seed, annotator, tmp_path):
         config = make_config(
             omero_seed,
-            tmp_path,
             "vol3d",
             train_n=1,
             validate_n=1,
@@ -369,7 +361,7 @@ class TestSources:
 class TestResume:
     def _early_close_then_resume(self, conn, seed, annotator, tmp_path, name):
         annotator(limit=1)  # user closes napari after one image
-        config = make_config(seed, tmp_path, name)
+        config = make_config(seed, name)
         _, table_id, config = run_microsam(config, conn, annotator)
         first = table_rows(conn, table_id)
         done_first = first[first["processed"]]
@@ -399,9 +391,6 @@ class TestResume:
         rois = tagged_rois(omero_conn, table_id, rows["image_id"])
         assert all(len(v) == 1 for v in rois.values()) and len(rois) == 4
 
-    @pytest.mark.xfail(
-        strict=True, reason=PR3_WRITE_ORDER + " (stale seg_00000.tif from session 1)"
-    )
     def test_resume_after_early_close_masks_on_right_images(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
@@ -413,9 +402,7 @@ class TestResume:
     def test_resume_with_raised_counts_extends_same_table(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(
-            omero_seed, tmp_path, "extend", train_n=2, validate_n=1, test_n=0
-        )
+        config = make_config(omero_seed, "extend", train_n=2, validate_n=1, test_n=0)
         _, table_id, config = run_microsam(config, omero_conn, annotator)
         assert len(table_rows(omero_conn, table_id)) == 3
 
@@ -448,7 +435,7 @@ class TestCrashes:
     def test_failed_upload_leaves_row_unprocessed(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(omero_seed, tmp_path, "uploadfail")
+        config = make_config(omero_seed, "uploadfail")
         _, table_id, _ = run_microsam(
             config, omero_conn, annotator, FlakyWrites(fail_upload=2)
         )
@@ -462,7 +449,7 @@ class TestCrashes:
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
         """Documents today's behaviour: the row is marked done without IDs."""
-        config = make_config(omero_seed, tmp_path, "uploadfailnow")
+        config = make_config(omero_seed, "uploadfailnow")
         _, table_id, _ = run_microsam(
             config, omero_conn, annotator, FlakyWrites(fail_upload=2)
         )
@@ -477,7 +464,7 @@ class TestCrashes:
     ):
         from omero_annotate_ai.omero.omero_functions import delete_training_set
 
-        config = make_config(omero_seed, tmp_path, "tablefail")
+        config = make_config(omero_seed, "tablefail")
         with pytest.raises(ConnectionError):
             run_microsam(
                 config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
@@ -498,7 +485,7 @@ class TestCrashes:
     def test_resume_after_failed_table_update_has_no_duplicates(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(omero_seed, tmp_path, "tablefailresume")
+        config = make_config(omero_seed, "tablefailresume")
         with pytest.raises(ConnectionError):
             run_microsam(
                 config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
@@ -520,7 +507,7 @@ class TestCrashes:
 @pytest.fixture
 def finished_set(omero_conn, omero_seed, annotator, tmp_path):
     """A completed 2/1/1 training set and its config."""
-    config = make_config(omero_seed, tmp_path / "annotate", "export")
+    config = make_config(omero_seed, "export")
     _, table_id, config = run_microsam(config, omero_conn, annotator)
     return table_id, config
 
@@ -653,20 +640,19 @@ class TestOtherPaths:
     def test_cellpose_prepare_then_collect(self, omero_conn, omero_seed, tmp_path):
         from omero_annotate_ai.core.annotation_pipeline import create_pipeline
 
-        config = make_config(
-            omero_seed, tmp_path, "cellpose", train_n=2, validate_n=1, test_n=0
-        )
+        config = make_config(omero_seed, "cellpose", train_n=2, validate_n=1, test_n=0)
         config.ai_model.framework = "cellpose"
         pipeline = create_pipeline(config, omero_conn)
         table_id, config = pipeline.run_cp_workflow()
 
         # The user segments the exported images with Cellpose: masks from the images.
-        inputs = sorted((tmp_path / "annotation_input").glob("*.tif"))
+        bundle = pipeline.bundle_dir
+        inputs = sorted((bundle / "annotation_input").glob("*.tif"))
         assert len(inputs) == 3
-        (tmp_path / "annotation_output").mkdir(exist_ok=True)
+        (bundle / "annotation_output").mkdir(exist_ok=True)
         for path in inputs:
             tifffile.imwrite(
-                tmp_path / "annotation_output" / f"{path.stem}_mask.tif",
+                bundle / "annotation_output" / f"{path.stem}_mask.tif",
                 mask_for(tifffile.imread(path)),
             )
         n, _ = pipeline.collect_annotations_from_disk()
@@ -682,17 +668,19 @@ class TestOtherPaths:
             i: len(omero_conn.getRoiService().findByImage(i, None).rois)
             for i in omero_seed.image_ids
         }
-        config = make_config(omero_seed, tmp_path, "readonly", test_n=0)
+        config = make_config(omero_seed, "readonly", test_n=0)
         config.workflow.read_only_mode = True
-        _, table_id, config = run_microsam(config, omero_conn, annotator)
+        pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
 
         assert table_id == -1
-        masks = sorted((tmp_path / "annotation_output").glob("*_mask.tif"))
-        inputs = sorted((tmp_path / "annotation_input").glob("*.tif"))
+        bundle = pipeline.bundle_dir
+        assert bundle.parent.name == "local"
+        masks = sorted((bundle / "annotation_output").glob("*_mask.tif"))
+        inputs = sorted((bundle / "annotation_input").glob("*.tif"))
         assert len(masks) == 3 and len(inputs) == 3
         for mask_path in masks:
             image = tifffile.imread(
-                tmp_path / "annotation_input" / mask_path.name.replace("_mask", "")
+                bundle / "annotation_input" / mask_path.name.replace("_mask", "")
             )
             assert set(np.unique(tifffile.imread(mask_path))) - {0} == {
                 mask_value_for(image)
@@ -717,23 +705,27 @@ class TestZarr:
             source="zarr",
             zarr={"uris": [ngff_stores["img04"], ngff_stores["img05"]]},
         )
-        config.output.output_directory = str(tmp_path)
         config.training.train_n, config.training.validate_n, config.training.test_n = (
             1,
             1,
             0,
         )
         scripted = annotator(value=3)
-        table_id, config = create_pipeline(
-            config, annotator=scripted
-        ).run_full_micro_sam_workflow()
+        pipeline = create_pipeline(config, annotator=scripted, home=tmp_path)
+        table_id, config = pipeline.run_full_micro_sam_workflow()
 
         assert table_id == -1
         assert all(a.processed for a in config.annotations)
         assert len(scripted.calls) == 1 and scripted.calls[0].n_images == 2
-        masks = sorted((tmp_path / "annotation_output").glob("*_mask.tif"))
+        bundle = pipeline.bundle_dir
+        assert bundle.parent == tmp_path / "local"
+        masks = sorted((bundle / "annotation_output").glob("*_mask.tif"))
         assert len(masks) == 2
-        assert (tmp_path / "tracking_table.csv").exists()
+        assert (bundle / "tracking_table.csv").exists()
+        assert (bundle / "config.yaml").exists()
+        assert not (bundle / ".scratch").exists() or not any(
+            (bundle / ".scratch").iterdir()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -747,9 +739,7 @@ class TestDelete:
     ):
         from omero_annotate_ai.omero.omero_functions import delete_training_set
 
-        config = make_config(
-            omero_seed, tmp_path, "delete", train_n=1, validate_n=1, test_n=0
-        )
+        config = make_config(omero_seed, "delete", train_n=1, validate_n=1, test_n=0)
         _, table_id, _ = run_microsam(config, omero_conn, annotator)
         rows = table_rows(omero_conn, table_id)
         roi_ids = [int(i) for i in rows["roi_id"]]
