@@ -68,7 +68,7 @@ def atomic_write(path: Path, write: Callable[[Path], object]) -> None:
     temp = path.with_name(f".{path.name}.tmp")
     try:
         write(temp)
-        with temp.open("rb") as handle:
+        with temp.open("r+b") as handle:  # Windows needs write access to fsync
             os.fsync(handle.fileno())
         temp.replace(path)
     finally:
