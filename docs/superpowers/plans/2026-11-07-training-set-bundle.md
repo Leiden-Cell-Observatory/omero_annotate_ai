@@ -138,8 +138,15 @@ annotation, `_initialize_tracking_table`, `cleanup_project_annotations`.
 
 ## Delivery (PRs, all into the 0.5.0 line)
 
-1. **Test infrastructure**: working Docker OMERO fixture + seed data.
-2. **Table layer**: schema v2, in-place updates, tagging, one config per set.
+1. **Test infrastructure**: working Docker OMERO fixture + seed data. (done, #69)
+2. **Table layer**: schema v2, in-place updates, tagging, one config per set; zlib-compressed
+   label uploads named after the training set.
+2b. **Functional workflow tests** against the Docker OMERO, through the public API with the
+   napari step replaced by a scripted annotator: new set (dataset and plate, 2D, patches, 3D)
+   → upload → resume → extend → crash at each write step → reconcile →
+   `prepare_training_data_from_table` (layout, dtype, normalisation sidecar) → a few micro-SAM
+   training iterations on CPU (marked slow) → delete. Cellpose path and read-only/zarr too.
+   These become the acceptance suite PR 3 must keep green.
 3. **Pipeline**: bundle folder, write order + reconcile, batch scratch/embeddings, sessions and
    notes, seed, Cellpose/upload-mode fixes.
 4. **Widget**: New / Open training set, copy semantics, resets.
