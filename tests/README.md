@@ -43,6 +43,12 @@ Known-wrong behaviour is marked `xfail(strict=True)` with the reason and the cha
 that fixes it; when such a test starts passing, the run fails until the marker is
 removed.
 
+## Where tests live
+
+Unit tests mirror the source modules, e.g. `planning.py` → `tests/test_planning.py`,
+`annotators.py` → `tests/test_annotators.py`, `core/annotation_pipeline.py` →
+`tests/test_pipeline.py`. Add tests to the file of the module you change.
+
 ## Markers
 
 | Marker | Meaning |
