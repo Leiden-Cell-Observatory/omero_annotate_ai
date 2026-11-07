@@ -104,6 +104,11 @@ pipeline = create_pipeline(config, conn)
 table_id, config = pipeline.run_full_micro_sam_workflow()
 ```
 
+Each training set keeps its files in one folder: images, masks, the config and a
+local copy of the tracking table. By default that is
+`~/omero_annotate_ai/<server>/<table id>_<name>/`; set `OMERO_ANNOTATE_AI_HOME` (or pass
+`home=` to `create_pipeline`) to keep the sets elsewhere.
+
 The [configuration guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/configuration/) lists every option.
 
 ## Example notebooks

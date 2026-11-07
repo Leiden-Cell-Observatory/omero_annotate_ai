@@ -1,8 +1,9 @@
 """Annotation tools the pipeline can drive: micro-SAM in napari, or a script.
 
 The pipeline loads a batch of units and passes it to an :class:`Annotator`, which
-writes one mask file per annotated unit into ``batch.mask_dir`` and returns their
-paths. Units missing from the result were not annotated (e.g. napari closed early).
+writes ``seg_{i:05}.tif`` for item ``i`` into the batch's own, empty ``mask_dir`` and
+returns the files by annotation ID. Units missing from the result were not annotated
+(e.g. napari closed early).
 """
 
 from __future__ import annotations
@@ -17,23 +18,31 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 import tifffile
 
+from .bundle import collect_masks
 from .errors import AnnotatorUnavailable
+from .planning import Unit
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class BatchItem:
-    """One unit to annotate: its pixels ``(y, x)`` or ``(z, y, x)`` and context channels."""
+    """One unit to annotate: its pixels ``(y, x)`` or ``(z, y, x)``, context channels,
+    and the unit itself (image, plane, patch, category)."""
 
     annotation_id: str
     pixels: np.ndarray
     context: Mapping[str, np.ndarray] = field(default_factory=dict[str, np.ndarray])
+    unit: Unit | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Batch:
-    """Units handed to an annotator in one go, plus where and how to annotate them."""
+    """Units handed to an annotator in one go, plus where and how to annotate them.
+
+    ``mask_dir`` and ``embedding_dir`` belong to this batch only; embeddings are
+    named ``embedding_{i:05}.zarr`` by position, as micro-SAM writes them.
+    """
 
     index: int
     items: Sequence[BatchItem]
@@ -52,18 +61,6 @@ class Annotator(Protocol):
     def name(self) -> str: ...
 
     def annotate(self, batch: Batch) -> Mapping[str, Path]: ...
-
-
-def collect_series_masks(
-    mask_dir: Path, annotation_ids: Sequence[str]
-) -> dict[str, Path]:
-    """Mask files in ``mask_dir``, sorted by name and paired with ``annotation_ids`` in order.
-
-    This is how micro-SAM's series output has always been read; it is only right
-    when the folder holds this batch's files and no others.
-    """
-    files = sorted([*mask_dir.glob("*.tiff"), *mask_dir.glob("*.tif")])
-    return dict(zip(annotation_ids, files, strict=False))
 
 
 def _ids(batch: Batch) -> list[str]:
@@ -117,7 +114,7 @@ class MicroSamAnnotator:
             napari.run()
         finally:
             settings.application.ipy_interactive = ipy_interactive
-        return collect_series_masks(batch.mask_dir, _ids(batch))
+        return collect_masks(batch.mask_dir, _ids(batch))
 
 
 def install_context_channel_hook(
@@ -229,4 +226,4 @@ class ScriptedAnnotator:
         self.calls.append(
             ScriptedCall(len(batch.items), tuple(written), tuple(skipped), shapes)
         )
-        return collect_series_masks(batch.mask_dir, _ids(batch))
+        return collect_masks(batch.mask_dir, _ids(batch))

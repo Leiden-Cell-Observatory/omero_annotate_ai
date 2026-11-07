@@ -43,10 +43,6 @@ It waits until you close the last napari window of the batch. That is normal.
 Each image needs an embedding before you can click. Without a GPU this takes tens of
 seconds per image. Use `vit_b_lm`, switch on patches, and keep batches small.
 
-**Masks ended up on the wrong images after a restart.**
-In upload mode, empty the `annotations/` subfolder of your working directory before
-resuming. See [Resume or repeat a run](tutorials/resume-and-repeat.md).
-
 **"Not enough images" when starting.**
 `train_n + validate_n + test_n` is larger than the number of images in the container
 (after well filtering). Lower the counts or use `segment_all: true`.

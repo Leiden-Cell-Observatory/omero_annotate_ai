@@ -341,18 +341,39 @@ class TestAnnotationPipeline:
         assert images[0] == mock_image
         mock_conn.getObject.assert_called_once_with("Image", 456)
 
-    def test_setup_directories(self):
-        """Test directory setup."""
+    def test_bundle_dir_uses_explicit_output_directory(self, tmp_path):
         config = create_default_config()
-        config.output.output_directory = Path(tempfile.mkdtemp())
+        config.output.output_directory = tmp_path / "my_set"
 
         pipeline = AnnotationPipeline(config, conn=Mock())
-        output_path = pipeline._setup_directories()
 
-        assert output_path.exists()
-        assert (output_path / "annotation_input").exists()
-        assert (output_path / "annotation_output").exists()
-        assert (output_path / "sam_embeddings").exists()
+        assert pipeline.bundle_dir == tmp_path / "my_set"
+
+    def test_bundle_dir_of_omero_set_is_named_after_server_and_table(self, tmp_path):
+        config = create_default_config()
+        config.name = "nuclei"
+        pipeline = AnnotationPipeline(
+            config, conn=Mock(host="omero.example.org", port=4064), home=tmp_path
+        )
+        with pytest.raises(RuntimeError, match="does not exist yet"):
+            _ = pipeline.bundle_dir
+
+        pipeline.set_table_id(42)
+
+        expected = tmp_path / "omero.example.org-4064" / "42_nuclei"
+        assert pipeline.bundle_dir == expected
+        assert config.output.output_directory == expected  # stored for resume
+
+    def test_bundle_dir_of_read_only_set_is_local(self, tmp_path):
+        config = create_default_config()
+        config.name = "nuclei"
+        config.workflow.read_only_mode = True
+
+        pipeline = AnnotationPipeline(config, conn=Mock(), home=tmp_path)
+
+        assert pipeline.bundle_dir.parent == tmp_path / "local"
+        assert pipeline.bundle_dir.name.endswith("_nuclei")
+        assert pipeline.bundle_dir == pipeline.bundle_dir  # chosen once
 
     def test_get_table_title(self):
         """Test table title generation - should use config name directly."""
@@ -688,8 +709,10 @@ class TestAnnotationPipeline:
         config = create_default_config()
         config.workflow.read_only_mode = False
         config.spatial_coverage.use_patches = False
+        config.output.output_directory = tmp_path / "set"
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline.set_table_id(7)  # uploads need the table to exist first
+        pipeline._save_original_image_for_annotation = Mock()
 
         # Three annotations + parallel seg files + metadata, all in order 0,1,2
         annotations_path = tmp_path / "annotations"
@@ -701,13 +724,13 @@ class TestAnnotationPipeline:
                     image_id=100 + i, image_name=f"img{i}", annotation_id=f"ann{i}"
                 )
             )
-            (annotations_path / f"seg_{i:05d}.tif").write_bytes(b"")
+            (annotations_path / f"seg_{i:05d}.tif").write_bytes(f"mask{i}".encode())
             metadata.append((f"ann{i}", {"image_id": 100 + i}, i))
 
         captured = []
 
         def fake_upload(conn, image_id, annotation_file, **kwargs):
-            captured.append((image_id, Path(annotation_file).name))
+            captured.append((image_id, Path(annotation_file).read_bytes()))
             return (image_id * 10, image_id * 100)
 
         # Force glob to return descending name order, a valid (worst-case)
@@ -729,11 +752,10 @@ class TestAnnotationPipeline:
             )
 
         # Each seg_0000i.tif must have been uploaded to image 100+i
-        assert captured == [
-            (100, "seg_00000.tif"),
-            (101, "seg_00001.tif"),
-            (102, "seg_00002.tif"),
-        ]
+        assert captured == [(100, b"mask0"), (101, b"mask1"), (102, b"mask2")]
+        for i in range(3):
+            kept = tmp_path / "set" / "annotation_output" / f"ann{i}_mask.tif"
+            assert kept.read_bytes() == f"mask{i}".encode()
 
     def test_three_way_split_with_counts(self):
         """Test train/validation/test split with specific counts."""
@@ -1079,10 +1101,6 @@ class TestPipelineIntegration:
             patch.object(
                 pipeline, "get_images_from_container", return_value=mock_images
             ),
-            patch.object(
-                pipeline, "_setup_directories", return_value=Path(tempfile.mkdtemp())
-            ),
-            patch.object(pipeline, "_cleanup_embeddings"),
             patch.object(pipeline, "_auto_save_config"),
             patch.object(
                 pipeline, "_upload_annotation_config_to_omero", return_value=789
@@ -1118,9 +1136,12 @@ class TestPipelineIntegration:
             ([], 0),
         ],
     )
-    def test_resume_logic_edge_cases(self, processed_flags, expected_unprocessed):
+    def test_resume_logic_edge_cases(
+        self, processed_flags, expected_unprocessed, tmp_path
+    ):
         """Test resume logic for all/none/some processed and empty schema."""
         config = create_default_config()
+        config.output.output_directory = tmp_path
         config.omero.container_id = 123
         config.training.train_n = len(processed_flags)
         config.training.validate_n = 0
@@ -1583,27 +1604,17 @@ class TestAnnotationFolderNames:
     def test_single_channel_folders(self, tmp_path):
         pipeline = self._pipeline(tmp_path, separate_channels=False)
 
-        assert pipeline._get_input_folders(tmp_path) == {
+        assert pipeline._get_input_folders() == {
             "annotation_input": tmp_path / "annotation_input"
         }
 
     def test_separate_channel_folders(self, tmp_path):
         pipeline = self._pipeline(tmp_path, separate_channels=True)
 
-        assert pipeline._get_input_folders(tmp_path) == {
+        assert pipeline._get_input_folders() == {
             "annotation_input": tmp_path / "annotation_input",
             "model_input": tmp_path / "model_input",
         }
-
-    def test_setup_creates_annotation_output(self, tmp_path):
-        pipeline = self._pipeline(tmp_path, separate_channels=False)
-
-        output_path = pipeline._setup_directories()
-
-        assert (output_path / "annotation_output").exists()
-        assert (output_path / "annotation_input").exists()
-        assert not (output_path / "output").exists()
-        assert not (output_path / "input").exists()
 
 
 @pytest.mark.unit
@@ -1638,7 +1649,6 @@ class TestMicroSamSeparateChannelSaving:
 
     def test_training_channel_goes_to_model_input(self, tmp_path):
         pipeline = self._pipeline(tmp_path)
-        pipeline._setup_directories()
 
         pipeline._save_original_image_for_annotation(
             {"image_id": 1, "timepoint": 0, "z_slice": 0}, "img_001"
@@ -1662,13 +1672,13 @@ class TestMicroSamSeparateChannelSaving:
         )
 
         pipeline = self._pipeline(tmp_path)
-        pipeline._setup_directories()
         pipeline._save_original_image_for_annotation(
             {"image_id": 1, "timepoint": 0, "z_slice": 0}, "img_001"
         )
         # The annotation the user would have drawn.
         import tifffile
 
+        (tmp_path / "annotation_output").mkdir()
         tifffile.imwrite(
             str(tmp_path / "annotation_output" / "img_001_mask.tif"),
             np.ones((8, 8), dtype=np.uint8),

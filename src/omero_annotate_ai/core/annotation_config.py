@@ -950,8 +950,11 @@ class ZarrConfig(BaseModel):
 class OutputConfig(BaseModel):
     """Output configuration"""
 
-    output_directory: Path = Field(
-        default=Path("./annotations"), description="Output directory"
+    output_directory: Path | None = Field(
+        default=None,
+        description="This training set's folder. Leave unset to keep it under the "
+        "home folder ($OMERO_ANNOTATE_AI_HOME or ~/omero_annotate_ai); the pipeline "
+        "fills it in.",
     )
 
     model_config = ConfigDict(json_encoders={Path: str})
@@ -1855,7 +1858,7 @@ def load_config_from_yaml(yaml_path: str) -> AnnotationConfig:
     Returns:
         AnnotationConfig object
     """
-    path = Path(yaml_path)
+    path = Path(yaml_path).expanduser()  # "~/omero_annotate_ai/..." as in the docs
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {yaml_path}")
     return AnnotationConfig.from_yaml(path)
@@ -1949,7 +1952,7 @@ ai_model:
   pretrained_from: "vit_b_lm"
 
 output:
-  output_directory: "./annotations"
+  output_directory: null  # this set's folder; unset = under $OMERO_ANNOTATE_AI_HOME
 
 tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """

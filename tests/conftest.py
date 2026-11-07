@@ -36,12 +36,13 @@ except ImportError:
 def isolated_cwd(tmp_path, monkeypatch):
     """Run every test in a throwaway working directory.
 
-    Several config paths are relative - OutputConfig.output_directory defaults
-    to ./annotations, and SimpleOMEROConnection reads ./.env - so a test that
-    triggers an auto-save would otherwise write into the checked-out repo and
-    dirty the working tree. Isolating the cwd makes that structurally impossible.
+    SimpleOMEROConnection reads ./.env and training sets default to folders under
+    $OMERO_ANNOTATE_AI_HOME (else ~/omero_annotate_ai), so a test that triggers an
+    auto-save would otherwise write into the repo or the user's home. Isolating
+    both makes that structurally impossible.
     """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OMERO_ANNOTATE_AI_HOME", str(tmp_path / "home"))
 
 
 @pytest.fixture

@@ -35,9 +35,6 @@ ai_model:
 workflow:
   batch_size: 4            # images per napari session
   read_only_mode: false    # true = write nothing to OMERO
-
-output:
-  output_directory: ./annotations/hela_nuclei_v1
 ```
 
 Load and run it:
@@ -47,7 +44,7 @@ from omero_annotate_ai import load_config_from_yaml, create_pipeline
 
 config = load_config_from_yaml("hela_nuclei_v1.yaml")
 config.config_file_path = (
-    None  # keep this file unchanged; progress is saved in output_directory
+    None  # keep this file unchanged; progress goes to the training set's folder
 )
 pipeline = create_pipeline(config, conn)
 table_id, config = pipeline.run_full_micro_sam_workflow()
@@ -255,7 +252,7 @@ types guess the bit depth from the image maximum, so exporting with
 
 | Key | Default | Meaning |
 |---|---|---|
-| `output_directory` | `./annotations` | Working directory for this run. Progress is saved here as `annotation_config_<name>.yaml`. |
+| `output_directory` | not set | This training set's folder. Leave it unset: the pipeline picks `<home>/<server>/<table id>_<name>/` (or `<home>/local/<id>_<name>/` for read-only and OME-Zarr sets) and fills it in. `<home>` is `$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`. Progress is saved there as `config.yaml`. |
 
 ## Metadata for sharing
 

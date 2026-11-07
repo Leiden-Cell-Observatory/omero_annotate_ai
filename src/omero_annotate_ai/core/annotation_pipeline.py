@@ -27,7 +27,16 @@ from ..annotators import (
     Batch,
     BatchItem,
     MicroSamAnnotator,
-    collect_series_masks,
+)
+from ..bundle import (
+    atomic_write,
+    collect_masks,
+    fresh_scratch,
+    home_dir,
+    local_bundle,
+    mask_path,
+    omero_bundle,
+    server_slug,
 )
 from ..omero.omero_functions import (
     create_tracking_table as create_omero_tracking_table,
@@ -124,6 +133,40 @@ def _annotation_from_unit(unit: Unit) -> ImageAnnotation:
     )
 
 
+def _unit_from_annotation(annotation: ImageAnnotation) -> Unit:
+    """The planned unit a config record describes."""
+    patch = (
+        (
+            annotation.patch_x,
+            annotation.patch_y,
+            annotation.patch_width,
+            annotation.patch_height,
+        )
+        if annotation.is_patch
+        else None
+    )
+    return Unit(
+        annotation_id=annotation.annotation_id,
+        identity=ImageIdentity(
+            image_uri=annotation.image_uri,
+            image_name=annotation.image_name,
+            image_id=annotation.image_id,
+            level=annotation.level,
+            well=annotation.well,
+            field=annotation.field,
+            well_metadata=dict(annotation.well_metadata),
+        ),
+        category=annotation.category,
+        timepoint=annotation.timepoint,
+        z_start=annotation.z_start,
+        z_end=annotation.z_end,
+        z_length=annotation.z_length,
+        channel=annotation.channel,
+        is_volumetric=annotation.is_volumetric,
+        patch=patch,
+    )
+
+
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
 
@@ -138,6 +181,7 @@ class AnnotationPipeline:
         image_source: ImageSource | None = None,
         annotator: Annotator | None = None,
         omero_writes: OmeroWrites | None = None,
+        home: str | Path | None = None,
     ):
         """Initialize the pipeline with configuration and OMERO connection.
 
@@ -150,8 +194,13 @@ class AnnotationPipeline:
             annotator: Annotation tool for the micro-SAM workflow. Defaults to
                 micro-SAM's image series annotator in napari.
             omero_writes: The OMERO writes to use (replaceable for tests).
+            home: Folder holding the training sets' folders (see
+                :func:`~omero_annotate_ai.bundle.home_dir`). Ignored when
+                ``config.output.output_directory`` names this set's folder.
         """
         self.config = config
+        self.home = home_dir(home)
+        self._session = 1
         self.conn = conn
         self.annotator = annotator
         self.omero_writes = omero_writes if omero_writes is not None else OmeroWrites()
@@ -170,16 +219,6 @@ class AnnotationPipeline:
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
-        # If no explicit path, derive from config name and output directory
-        if (
-            self.config_file_path is None
-            and config.name
-            and config.output.output_directory
-        ):
-            self.config_file_path = (
-                Path(config.output.output_directory)
-                / f"annotation_config_{config.name}.yaml"
-            )
         self._validate_setup()
 
     @property
@@ -190,6 +229,42 @@ class AnnotationPipeline:
             seed = secrets.randbelow(2**31)
             self.config.training.seed = seed
         return seed
+
+    @property
+    def bundle_dir(self) -> Path:
+        """This training set's folder; chosen (and stored in the config) on first use.
+
+        ``config.output.output_directory`` wins when set. Otherwise the folder goes
+        under :attr:`home`, named after the OMERO table - which must exist by then -
+        or, for read-only and OME-Zarr sets, after a new local ID.
+        """
+        if self.config.output.output_directory is None:
+            name = self.config.name or "training_set"
+            if self.config.workflow.read_only_mode:
+                folder = local_bundle(self.home, name)
+            elif self.table_id in (None, -1):
+                raise RuntimeError(
+                    "The training set's folder is named after its OMERO table, "
+                    "which does not exist yet"
+                )
+            else:
+                host = getattr(self.conn, "host", None) or "omero"
+                folder = omero_bundle(
+                    self.home,
+                    server_slug(str(host), getattr(self.conn, "port", None)),
+                    self.table_id,
+                    name,
+                )
+            self.config.output.output_directory = folder
+        return Path(self.config.output.output_directory)
+
+    def _has_bundle(self) -> bool:
+        """Whether :attr:`bundle_dir` can be chosen yet (OMERO sets need their table)."""
+        return (
+            self.config.output.output_directory is not None
+            or self.config.workflow.read_only_mode
+            or self.table_id not in (None, -1)
+        )
 
     def set_table_id(self, table_id: int) -> None:
         """Update the current table ID and sync to config."""
@@ -206,21 +281,19 @@ class AnnotationPipeline:
         Args:
             file_path: Optional path to save to. If None, uses stored config_file_path
         """
-        save_path = file_path or self.config_file_path
+        save_path = Path(file_path or self._config_path())
+        yaml_text = self.config.to_yaml()
+        atomic_write(save_path, lambda tmp: tmp.write_text(yaml_text, encoding="utf-8"))
+        self.config.config_file_path = save_path
+        print(f"Config state saved to: {save_path}")
 
-        if save_path is None:
-            print("Warning: No YAML file path provided for saving config state")
-            return
-
-        try:
-            self.config.save_yaml(save_path)
-            print(f"Config state saved to: {save_path}")
-        except Exception as e:
-            print(f"Error saving config to YAML: {e}")
+    def _config_path(self) -> Path:
+        """The config file: the one given to the pipeline, else the bundle's."""
+        return self.config_file_path or self.bundle_dir / "config.yaml"
 
     def _auto_save_config(self) -> None:
-        """Automatically save config to YAML if path is available."""
-        if self.config_file_path is not None:
+        """Save the config into the bundle (or the given file), once there is one."""
+        if self.config_file_path is not None or self._has_bundle():
             self.save_config_to_yaml()
 
     def _debug_print(self, message: str) -> None:
@@ -242,7 +315,7 @@ class AnnotationPipeline:
         ):
             raise ValueError("OMERO connection is required to read images")
 
-    def _get_input_folders(self, output_path: Path) -> dict:
+    def _get_input_folders(self) -> dict:
         """Return input folder paths for the current workflow configuration.
 
         Separate channels (label_channel != training_channels):
@@ -251,39 +324,10 @@ class AnnotationPipeline:
         Single channel:
           - 'annotation_input': serves both roles
         """
-        folders = {"annotation_input": output_path / "annotation_input"}
+        folders = {"annotation_input": self.bundle_dir / "annotation_input"}
         if self.config.spatial_coverage.uses_separate_channels():
-            folders["model_input"] = output_path / "model_input"
+            folders["model_input"] = self.bundle_dir / "model_input"
         return folders
-
-    def _setup_directories(self):
-        """Create output directories for annotation workflow.
-
-        Separate channels:  annotation_input/  model_input/  annotation_output/
-        Single channel:     annotation_input/  annotation_output/
-        micro-SAM adds:     sam_embeddings/
-        """
-        output_path = Path(self.config.output.output_directory)
-
-        dirs = [output_path, output_path / "annotation_output"]
-        dirs.extend(self._get_input_folders(output_path).values())
-        if self.config.ai_model.framework == "micro_sam":
-            dirs.append(output_path / "sam_embeddings")
-
-        for dir_path in dirs:
-            dir_path.mkdir(parents=True, exist_ok=True)
-
-        return output_path
-
-    def _cleanup_embeddings(self, output_path: Path):
-        """Clean up any existing embeddings from interrupted runs."""
-        embed_path = output_path / "sam_embeddings"
-        if embed_path.exists():
-            for file in embed_path.glob("*"):
-                if file.is_file():
-                    file.unlink()
-                elif file.is_dir():
-                    shutil.rmtree(file)
 
     def _get_table_title(self) -> str:
         """Generate table title based on configuration."""
@@ -447,12 +491,12 @@ class AnnotationPipeline:
 
     def _upload_annotation_config_to_omero(self) -> int | None:
         """Replace the training set's one config YAML on OMERO with the local one."""
-        if self.table_id in (None, -1) or self.config_file_path is None:
+        if self.table_id in (None, -1):
             return None
         return replace_table_config(
             self.conn,
             table_id=self.table_id,
-            file_path=str(self.config_file_path),
+            file_path=str(self._config_path()),
             container_type=self.config.omero.container_type,
             container_id=self.config.omero.get_primary_container_id(),
         )
@@ -488,21 +532,25 @@ class AnnotationPipeline:
             for image_obj, _annotation_id, meta, _row_idx in batch_data
         ]
         contexts = self._build_context_images(batch_data)
-        output_path = Path(self.config.output.output_directory)
-        mask_dir = output_path / "annotations"
-        mask_dir.mkdir(exist_ok=True)
         specs = self.config.spatial_coverage.get_context_channel_specs()
         self._batches_run += 1
+        scratch = fresh_scratch(self.bundle_dir, self._session, self._batches_run)
+        by_id = {a.annotation_id: a for a in self.config.annotations}
         batch = Batch(
             index=self._batches_run,
             items=tuple(
-                BatchItem(annotation_id=annotation_id, pixels=pixels, context=context)
+                BatchItem(
+                    annotation_id=annotation_id,
+                    pixels=pixels,
+                    context=context,
+                    unit=_unit_from_annotation(by_id[annotation_id]),
+                )
                 for (_obj, annotation_id, _meta, _row), pixels, context in zip(
                     batch_data, images, contexts, strict=True
                 )
             ),
-            mask_dir=mask_dir,
-            embedding_dir=output_path / "sam_embeddings",
+            mask_dir=scratch,
+            embedding_dir=scratch / "embeddings",
             model_type=self.config.ai_model.pretrained_from,
             is_volumetric=self.config.spatial_coverage.three_d,
             context_colormaps={name: cmap for _ch, name, cmap in specs},
@@ -517,6 +565,7 @@ class AnnotationPipeline:
                 for _obj, annotation_id, meta, row_idx in batch_data
             ],
             "masks": masks,
+            "scratch": scratch,
         }
 
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
@@ -598,12 +647,12 @@ class AnnotationPipeline:
             return
 
         # Results carry the annotator's mask files ("masks"), or - from custom
-        # annotation functions - the folder they were written to ("annotations_path").
+        # annotation functions - the folder they wrote seg_{i:05}.tif into.
         try:
             metadata = annotation_results["metadata"]
             masks = annotation_results.get("masks")
             if masks is None:
-                masks = collect_series_masks(
+                masks = collect_masks(
                     Path(annotation_results["annotations_path"]),
                     [annotation_id for annotation_id, _meta, _row in metadata],
                 )
@@ -614,92 +663,59 @@ class AnnotationPipeline:
             f"Found {len(masks)} annotation files for {len(metadata)} metadata entries"
         )
 
-        # Process each annotation metadata entry
+        by_id = {a.annotation_id: a for a in self.config.annotations}
         updated_count = 0
-        for i, (annotation_id, meta, _row_idx) in enumerate(metadata):
-            # Find matching annotation in config by annotation_id or sequence_val
-            matching_annotation = None
-            for annotation in self.config.annotations:
-                # Try both annotation_id and sequence_val for backward compatibility
-                if annotation.annotation_id == annotation_id or (
-                    hasattr(annotation, "sequence_val")
-                    and annotation.sequence_val == annotation_id
-                ):
-                    matching_annotation = annotation
-                    break
+        for annotation_id, meta, _row_idx in metadata:
+            annotation = by_id.get(annotation_id)
+            source = masks.get(annotation_id)
+            if annotation is None or source is None:
+                continue  # not annotated (e.g. napari closed early)
 
-            if not matching_annotation:
-                self._debug_print(
-                    f"No matching annotation for annotation_id: '{annotation_id}'"
-                )
-                continue
+            # Every mode keeps the mask and the annotated image in the bundle.
+            local_mask = mask_path(self.bundle_dir, annotation_id)
+            local_mask.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(source, local_mask)
+            self._save_original_image_for_annotation(meta, annotation_id)
+            updated_count += 1
 
-            tiff_file = masks.get(annotation_id)
-            if tiff_file is None:
-                self._debug_print(f"No annotation file for metadata entry {i + 1}")
-                continue
-
-            # Process based on mode
             if self.config.workflow.read_only_mode:
-                # Read-only mode: save locally (category tracked in config, not folders)
-                matching_annotation.mark_processed()
-
-                # Save mask to output folder
-                output_dir = (
-                    Path(self.config.output.output_directory) / "annotation_output"
+                annotation.mark_processed()
+                continue
+            try:
+                patch_offset = (
+                    (meta.get("patch_x", 0), meta.get("patch_y", 0))
+                    if self.config.spatial_coverage.use_patches
+                    else None
                 )
-                output_dir.mkdir(parents=True, exist_ok=True)
-                local_file = output_dir / f"{annotation_id}_mask.tif"
+                label_id, roi_id = self.omero_writes.upload_rois_and_labels(
+                    conn=self.conn,
+                    image_id=meta.get("image_id"),
+                    annotation_file=str(local_mask),
+                    patch_offset=patch_offset,
+                    trainingset_name=self.config.name,
+                    trainingset_description=f"Training set: {self.config.name}",
+                    z_slice=meta.get("z_slice"),
+                    channel=meta.get("channel"),
+                    timepoint=meta.get("timepoint"),
+                    is_volumetric=meta.get("is_volumetric"),
+                    z_start=meta.get("z_start"),
+                    tag=self._upload_tag(annotation_id),
+                )
+                annotation.mark_processed(
+                    annotation_type=self.config.annotation_methodology.annotation_type,
+                    roi_id=roi_id,
+                    label_id=label_id,
+                )
+                self._debug_print(
+                    f"Uploaded ROI for annotation_id '{annotation_id}' (label_id: {label_id}, roi_id: {roi_id})"
+                )
+            except Exception as e:
+                self._debug_print(f"Error uploading ROI for '{annotation_id}': {e}")
+                # Still mark as processed but without OMERO IDs (fixed in a later PR)
+                annotation.mark_processed()
 
-                shutil.move(tiff_file, local_file)
-
-                # Also save the original image to input folder
-                self._save_original_image_for_annotation(meta, annotation_id)
-
-                updated_count += 1
-
-            else:
-                # Upload mode: Upload ROIs to OMERO
-                try:
-                    image_id = meta.get("image_id")
-                    patch_offset = None
-
-                    if self.config.spatial_coverage.use_patches:
-                        patch_offset = (meta.get("patch_x", 0), meta.get("patch_y", 0))
-
-                    # Upload ROIs and labels using the existing function
-                    label_id, roi_id = self.omero_writes.upload_rois_and_labels(
-                        conn=self.conn,
-                        image_id=image_id,
-                        annotation_file=str(tiff_file),
-                        patch_offset=patch_offset,
-                        trainingset_name=self.config.name,
-                        trainingset_description=f"Training set: {self.config.name}",
-                        z_slice=meta.get("z_slice"),
-                        channel=meta.get("channel"),
-                        timepoint=meta.get("timepoint"),
-                        is_volumetric=meta.get("is_volumetric"),
-                        z_start=meta.get("z_start"),
-                        tag=self._upload_tag(matching_annotation.annotation_id),
-                    )
-
-                    # Update config annotation with OMERO IDs
-                    matching_annotation.mark_processed(
-                        annotation_type=self.config.annotation_methodology.annotation_type,
-                        roi_id=roi_id,
-                        label_id=label_id,
-                    )
-
-                    updated_count += 1
-                    self._debug_print(
-                        f"Uploaded ROI for annotation_id '{annotation_id}' (label_id: {label_id}, roi_id: {roi_id})"
-                    )
-
-                except Exception as e:
-                    self._debug_print(f"Error uploading ROI for '{annotation_id}': {e}")
-                    # Still mark as processed but without OMERO IDs
-                    matching_annotation.mark_processed()
-                    updated_count += 1
+        if (scratch := annotation_results.get("scratch")) is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
         # Show final results
         processed_count = sum(1 for ann in self.config.annotations if ann.processed)
@@ -730,8 +746,7 @@ class AnnotationPipeline:
             return
 
         image_obj = self.image_source.get_image(image_key)
-        output_path = Path(self.config.output.output_directory)
-        folders = self._get_input_folders(output_path)
+        folders = self._get_input_folders()
 
         # The channel being annotated (always)
         saved_path = self._save_training_image(
@@ -756,42 +771,19 @@ class AnnotationPipeline:
     def _save_image_to_disk(
         self, image_data: np.ndarray, file_path: Path, axes: str | None = None
     ) -> bool:
-        """Save image data to disk using tifffile (preferred) or imageio fallback.
+        """Write ``image_data`` as a TIFF, atomically; ``axes`` e.g. ``'YXC'``."""
+        import tifffile
 
-        Args:
-            image_data: NumPy array of image data to save
-            file_path: Path where the image should be saved
-            axes: Optional axes string for tifffile metadata (e.g. 'YXC', 'ZYXC')
-
-        Returns:
-            True if saved successfully, False otherwise
-        """
+        kwargs = {"metadata": {"axes": axes}} if axes else {}
         try:
-            import tifffile
-
-            kwargs = {"metadata": {"axes": axes}} if axes else {}
-            tifffile.imwrite(file_path, image_data, **kwargs)
-            self._debug_print(
-                f"Saved (tifffile): {file_path} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]"
+            atomic_write(
+                file_path, lambda tmp: tifffile.imwrite(tmp, image_data, **kwargs)
             )
-            return True
-        except ImportError:
-            try:
-                from imageio import imwrite
-
-                imwrite(file_path, image_data)
-                self._debug_print(
-                    f"Saved (imageio): {file_path} - shape: {image_data.shape}, range: [{np.min(image_data)}-{np.max(image_data)}]"
-                )
-                return True
-            except ImportError:
-                self._debug_print(
-                    "Could not save image - tifffile and imageio not available"
-                )
-                return False
-        except Exception as e:
+        except OSError as e:
             self._debug_print(f"Error saving image to {file_path}: {e}")
             return False
+        self._debug_print(f"Saved {file_path} - shape: {image_data.shape}")
+        return True
 
     def _save_training_image(
         self, image_obj, meta: dict, annotation_id: str, output_folder: Path
@@ -963,9 +955,7 @@ class AnnotationPipeline:
     def get_image_uris(self) -> list[str]:
         """URIs of the images the config selects (OMERO container or OME-Zarr URIs)."""
         if self.config.source == "zarr":
-            refs = discover_zarr_images(
-                self.config.zarr, output_dir=Path(self.config.output.output_directory)
-            )
+            refs = discover_zarr_images(self.config.zarr, output_dir=self.bundle_dir)
             self._zarr_refs = {ref.uri: ref for ref in refs}
             print(f"Found {len(refs)} OME-Zarr images")
             return list(self._zarr_refs)
@@ -1029,9 +1019,8 @@ class AnnotationPipeline:
         return self.get_images_by_ids(image_ids)
 
     def _save_local_progress_from_annotations(self, completed_annotations) -> None:
-        """Save progress locally in read-only mode using completed annotations."""
-        output_path = Path(self.config.output.output_directory)
-        table_file = output_path / "tracking_table.csv"
+        """Write the bundle's ``tracking_table.csv`` (every mode)."""
+        table_file = self.bundle_dir / "tracking_table.csv"
 
         # Convert current config state to DataFrame for local storage
         df = self.config.to_dataframe()
@@ -1042,7 +1031,7 @@ class AnnotationPipeline:
             df.loc[mask, "processed"] = True
             df.loc[mask, "completed_timestamp"] = annotation.annotation_created_at
 
-        df.to_csv(table_file, index=False)
+        atomic_write(table_file, lambda tmp: df.to_csv(tmp, index=False))
         completed_count = df["processed"].sum()
         total_count = len(df)
         print(f"Local progress saved: {completed_count}/{total_count} units completed")
@@ -1101,17 +1090,13 @@ class AnnotationPipeline:
     def initialize_workflow(
         self, images_list: list[Any] | None = None
     ) -> tuple[int, list[Any]]:
-        """Initialize the workflow: setup directories, load only required images, handle resume logic.
+        """Initialize the workflow: load only the required images, handle resume logic.
 
         Args:
             images_list: Optional list of OMERO image objects. If None, loads only required images from container.
         Returns:
             Tuple of (table_id, images_list)
         """
-        # Setup directories
-        output_path = self._setup_directories()
-        self._cleanup_embeddings(output_path)
-
         # If images_list is not provided, select only required images
         if images_list is None:
             image_ids = self.get_image_uris()
@@ -1345,14 +1330,11 @@ class AnnotationPipeline:
                 )
 
                 # Update OMERO table and save config
+                self._save_local_progress_from_annotations(self.config.get_processed())
                 if not self.config.workflow.read_only_mode:
                     self._debug_print("   Updating OMERO table...")
                     self._write_omero_table()
                     self._debug_print(f"   OMERO table updated (ID: {self.table_id})")
-                else:
-                    self._save_local_progress_from_annotations(
-                        self.config.get_processed()
-                    )
 
                 self._debug_print("   Auto-saving config...")
                 self._auto_save_config()
@@ -1458,10 +1440,9 @@ class AnnotationPipeline:
             annotation.mark_processed()
 
         # Update tracking
+        self._save_local_progress_from_annotations(self.config.get_processed())
         if not self.config.workflow.read_only_mode:
             self._write_omero_table()
-        else:
-            self._save_local_progress_from_annotations(self.config.get_processed())
 
         self._auto_save_config()
         print(
@@ -1479,8 +1460,7 @@ class AnnotationPipeline:
                           and the model channel to model_input/{annotation_id}.tif
         Category metadata is tracked in config.yaml, not in folder structure.
         """
-        output_path = Path(self.config.output.output_directory)
-        folders = self._get_input_folders(output_path)
+        folders = self._get_input_folders()
 
         for img_id, annotation_id, meta, row_idx in processing_units:
             print(f"Processing image {annotation_id} (ID: {img_id})")
@@ -1537,71 +1517,50 @@ class AnnotationPipeline:
             True if successfully processed, False otherwise
         """
         try:
+            # Every mode keeps the mask in the bundle.
+            local_file = mask_path(self.bundle_dir, annotation_id)
+            local_file.parent.mkdir(parents=True, exist_ok=True)
+            if annotation_file.resolve() != local_file.resolve():
+                shutil.copy(annotation_file, local_file)
+
+            now = datetime.now().isoformat()
+            matching_annotation.processed = True
+            matching_annotation.annotation_updated_at = now
+            if matching_annotation.annotation_created_at is None:
+                matching_annotation.annotation_created_at = now
+
             if self.config.workflow.read_only_mode:
-                # Read-only mode: save locally (category tracked in config, not folders)
-                output_dir = (
-                    Path(self.config.output.output_directory) / "annotation_output"
-                )
-                output_dir.mkdir(parents=True, exist_ok=True)
-                local_file = output_dir / f"{annotation_id}_mask.tif"
-
-                # Copy file to output location if not already there
-                if annotation_file != local_file:
-                    shutil.copy(annotation_file, local_file)
-
-                # Mark as processed
-                matching_annotation.processed = True
-                now = datetime.now().isoformat()
-                matching_annotation.annotation_updated_at = now
-                if matching_annotation.annotation_created_at is None:
-                    matching_annotation.annotation_created_at = now
-
                 print(f"Processed locally: {annotation_id}")
                 return True
 
-            else:
-                # Upload mode: Upload ROIs to OMERO
-                image_id = matching_annotation.image_id
-                patch_offset = None
-
-                if matching_annotation.is_patch:
-                    patch_offset = (
-                        matching_annotation.patch_x,
-                        matching_annotation.patch_y,
-                    )
-
-                # Upload ROIs and labels using the existing function
-                label_id, roi_id = upload_rois_and_labels(
-                    conn=self.conn,
-                    image_id=image_id,
-                    annotation_file=str(annotation_file),
-                    patch_offset=patch_offset,
-                    trainingset_name=self.config.name,
-                    trainingset_description=f"Training set: {self.config.name}",
-                    z_slice=matching_annotation.z_slice,
-                    channel=matching_annotation.channel,
-                    timepoint=matching_annotation.timepoint,
-                    is_volumetric=matching_annotation.is_volumetric,
-                    z_start=matching_annotation.z_start,
-                    tag=self._upload_tag(annotation_id),
-                )
-
-                # Update config annotation with OMERO IDs
-                matching_annotation.processed = True
-                matching_annotation.label_id = label_id
-                matching_annotation.roi_id = roi_id
-                now = datetime.now().isoformat()
-                matching_annotation.annotation_updated_at = now
-                if matching_annotation.annotation_created_at is None:
-                    matching_annotation.annotation_created_at = now
-                matching_annotation.annotation_type = (
-                    self.config.annotation_methodology.annotation_type
-                )
-
-                print(
-                    f"Uploaded to OMERO: {annotation_id} (label_id: {label_id}, roi_id: {roi_id})"
-                )
-                return True
+            patch_offset = (
+                (matching_annotation.patch_x, matching_annotation.patch_y)
+                if matching_annotation.is_patch
+                else None
+            )
+            label_id, roi_id = upload_rois_and_labels(
+                conn=self.conn,
+                image_id=matching_annotation.image_id,
+                annotation_file=str(local_file),
+                patch_offset=patch_offset,
+                trainingset_name=self.config.name,
+                trainingset_description=f"Training set: {self.config.name}",
+                z_slice=matching_annotation.z_slice,
+                channel=matching_annotation.channel,
+                timepoint=matching_annotation.timepoint,
+                is_volumetric=matching_annotation.is_volumetric,
+                z_start=matching_annotation.z_start,
+                tag=self._upload_tag(annotation_id),
+            )
+            matching_annotation.label_id = label_id
+            matching_annotation.roi_id = roi_id
+            matching_annotation.annotation_type = (
+                self.config.annotation_methodology.annotation_type
+            )
+            print(
+                f"Uploaded to OMERO: {annotation_id} (label_id: {label_id}, roi_id: {roi_id})"
+            )
+            return True
 
         except Exception as e:
             print(f"Error processing {annotation_id}: {e}")
@@ -1629,7 +1588,7 @@ class AnnotationPipeline:
         if not self.config.annotations:
             raise ValueError("No annotation schema defined")
 
-        output_path = Path(self.config.output.output_directory)
+        output_path = self.bundle_dir
 
         # Find all annotation mask files matching the pattern
         annotation_files = []
@@ -1689,6 +1648,7 @@ class AnnotationPipeline:
 
         # Update tracking and save config
         if processed_count > 0:
+            self._save_local_progress_from_annotations(self.config.get_processed())
             if not self.config.workflow.read_only_mode:
                 print("Updating OMERO tracking table...")
                 self._write_omero_table()
@@ -1713,8 +1673,7 @@ class AnnotationPipeline:
         Returns:
             Dictionary with status information about available annotations
         """
-        output_path = Path(self.config.output.output_directory)
-        output_folder = output_path / folder_name
+        output_folder = self.bundle_dir / folder_name
 
         status = {
             "total_annotations": len(self.config.annotations),
@@ -1845,7 +1804,7 @@ class AnnotationPipeline:
         from ..processing.training_functions import reorganize_local_data_for_training
 
         # Use config's output directory as the annotation source
-        annotation_dir = Path(self.config.output.output_directory)
+        annotation_dir = self.bundle_dir
 
         # output_dir stays None here on purpose: reorganize_local_data_for_training
         # defaults it to the sibling <annotation_dir>_training/. It must not default to
@@ -1915,6 +1874,7 @@ def create_pipeline(
     *,
     annotator: Annotator | None = None,
     omero_writes: OmeroWrites | None = None,
+    home: str | Path | None = None,
 ) -> AnnotationPipeline:
     """Create a micro-SAM annotation pipeline with the given configuration.
 
@@ -1927,6 +1887,8 @@ def create_pipeline(
             :class:`~omero_annotate_ai.annotators.ScriptedAnnotator` to run without
             a display.
         omero_writes: The OMERO writes to use (replaceable for tests).
+        home: Folder holding the training sets' folders; defaults to
+            ``$OMERO_ANNOTATE_AI_HOME`` or ``~/omero_annotate_ai``.
 
     Returns:
         AnnotationPipeline instance
@@ -1940,4 +1902,5 @@ def create_pipeline(
         actual_config_path,
         annotator=annotator,
         omero_writes=omero_writes,
+        home=home,
     )

@@ -55,7 +55,9 @@ summary = config.save_bia_package("bia_bundle", move_data=True)
 ## From a local read-only run
 
 ```python
-config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
+config = load_config_from_yaml(
+    "~/omero_annotate_ai/local/<id>_hela_nuclei_v1/config.yaml"
+)
 config.annotations = config.get_processed()  # leave out unfinished units
 config.save_bia_package("bia_bundle")
 ```
