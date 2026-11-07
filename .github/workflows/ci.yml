@@ -3,14 +3,23 @@ name: CI/CD
 on:
   push:
     branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+  pull_request:  # every PR, including PRs into feature branches
   release:
     types: [ published ]
+
+# Least privilege by default; jobs that need more (publish) ask for it.
+permissions:
+  contents: read
+
+# A new push to the same PR/branch cancels the run that is still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   notebooks:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
     - uses: actions/checkout@v7
     - name: Notebooks have no outputs
@@ -18,6 +27,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v7
 
@@ -38,10 +48,12 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
+      fail-fast: false  # report every platform, not just the first failure
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        
+
     steps:
     - uses: actions/checkout@v7
     
@@ -70,9 +82,10 @@ jobs:
       run: pixi run stop-omero
 
   build:
-    needs: test
+    needs: [test, lint, notebooks]
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
     - uses: actions/checkout@v7
     
@@ -87,7 +100,14 @@ jobs:
         
     - name: Build package
       run: pixi run -e dev build
-        
+
+    - name: Check package metadata and contents
+      run: |
+        pixi run -e dev check-package
+        python3 -m zipfile -l dist/*.whl | tee wheel-contents.txt
+        grep -q "omero_annotate_ai/py.typed" wheel-contents.txt
+        grep -q "omero_annotate_ai/planning.py" wheel-contents.txt
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7
       with:
@@ -99,9 +119,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment: release
+    timeout-minutes: 15
     permissions:
-      id-token: write  # For trusted publishing
-      
+      contents: read
+      id-token: write  # trusted publishing (and PyPI attestations)
+
     steps:
     - uses: actions/checkout@v7
     

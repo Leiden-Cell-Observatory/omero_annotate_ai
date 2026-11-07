@@ -164,7 +164,7 @@ def _row_str(row, key: str, default: str = "") -> str:
         if pd.isna(value):
             return default
     except (TypeError, ValueError):
-        pass
+        pass  # non-scalar values (lists, arrays) are never NaN; keep them
     return str(value)
 
 
