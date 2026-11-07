@@ -513,23 +513,61 @@ class TestTrainingData:
         assert "test_input" in result
         assert len(list(Path(result["test_input"]).glob("*.tif"))) == 1
 
+    def _training_config(self, conn, table_id, config, out):
+        from omero_annotate_ai.processing.training_utils import setup_training
+
+        result = self._export(conn, table_id, config, out)
+        # run_training ignores n_iterations (it passes n_epochs only), so one epoch
+        # is the shortest run possible.
+        return setup_training(result, model_name="functional_test", model_type="vit_b_lm",
+                              epochs=1, batch_size=1, patch_shape=(64, 64),
+                              n_objects_per_batch=1)
+
     @pytest.mark.slow
+    def test_training_loaders_feed_microsam_ready_batches(self, omero_conn, finished_set,
+                                                          tmp_path, monkeypatch):
+        """The real run_training up to micro-SAM's train_sam, which is replaced by a check.
+
+        Covers export -> normalization.json -> raw transform -> torch_em loaders: the
+        batches micro-SAM would train on must be in [0, 255] and carry labels.
+        """
+        pytest.importorskip("micro_sam")
+        import micro_sam.training as sam_training
+        from omero_annotate_ai.processing.training_utils import run_training
+
+        table_id, config = finished_set
+        training = self._training_config(omero_conn, table_id, config, tmp_path / "train")
+        assert training["normalization"]["applied_at_export"] is False
+
+        seen = {}
+
+        def check_train_sam(train_loader, val_loader, **kwargs):
+            for name, loader in (("train", train_loader), ("val", val_loader)):
+                x, y = next(iter(loader))
+                seen[name] = (float(x.min()), float(x.max()), int(y.max()))
+            raise RuntimeError("stop after checking the loaders")
+
+        monkeypatch.setattr(sam_training, "train_sam", check_train_sam)
+        with pytest.raises(RuntimeError, match="stop after checking"):
+            run_training(training)
+
+        for name in ("train", "val"):
+            low, high, label_max = seen[name]
+            assert 0.0 <= low and high <= 255.0 and high > 1.0, (name, low, high)
+            assert label_max > 0, name
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(os.environ.get("OAI_FULL_TRAINING") != "1",
+                        reason="Full micro-SAM training on CPU takes >30 min; set OAI_FULL_TRAINING=1")
     def test_microsam_training_runs(self, omero_conn, finished_set, tmp_path):
         cache = Path(os.environ.get("MICROSAM_CACHEDIR", Path.home() / ".cache" / "micro_sam"))
         if not (cache / "models" / "vit_b_lm").exists():
             pytest.skip("micro-SAM vit_b_lm weights not cached (training would download them)")
-        from omero_annotate_ai.processing.training_utils import run_training, setup_training
+        from omero_annotate_ai.processing.training_utils import run_training
 
         table_id, config = finished_set
-        result = self._export(omero_conn, table_id, config, tmp_path / "train")
-        training = setup_training(result, model_name="functional_test", model_type="vit_b_lm",
-                                  # n_iterations is ignored by run_training (it passes
-                                  # n_epochs only); one epoch over 2 images is enough.
-                                  epochs=1, batch_size=1,
-                                  patch_shape=(64, 64), n_objects_per_batch=1,
-                                  save_every=1, validate_every=1)
-        assert training["normalization"]["applied_at_export"] is False
-        outcome = run_training(training)
+        outcome = run_training(self._training_config(omero_conn, table_id, config,
+                                                     tmp_path / "train"))
         assert Path(outcome["final_model_path"]).exists() or outcome.get("checkpoint_folder")
 
 
