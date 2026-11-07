@@ -20,8 +20,15 @@ from ..omero.omero_functions import (
 # Settings that must match the rows already in a tracking table: changing them
 # on resume makes validate_annotations_against_config fail (channel, 3D, patch)
 # or gives new rows a different shape than the old ones (patch size, z-range).
+# Timepoints, z-slices and patches per image decide which planes new rows use;
+# "Annotate all images" changes how the table grows.
 RESUME_LOCKED_KEYS = ("channel", "three_d", "z_range_start", "z_range_end",
-                      "use_patches", "patch_size")
+                      "use_patches", "patch_size", "patches_per_image",
+                      "timepoint_mode", "timepoints", "z_slice_mode", "z_slices",
+                      "segment_all")
+# Planes the rows show are only a fallback: a saved config's own timepoint and
+# z-slice settings (e.g. "random") describe the run better than the samples.
+ROW_FALLBACK_KEYS = ("timepoint_mode", "timepoints", "z_slice_mode", "z_slices")
 
 
 class WorkflowWidget:
@@ -1031,9 +1038,10 @@ class WorkflowWidget:
         self._apply_locked_settings_to_config()
         self._update_technical_settings()
         self.resume_note.value = (
-            f"<small><i>Resuming: settings loaded from {source}. Channel, 3D and patch "
-            "settings are locked to match the existing rows. Raise the image counts "
-            "to add new images to this table.</i></small>"
+            f"<small><i>Resuming: settings loaded from {source}. Channel, timepoint, "
+            "z-slice, 3D and patch settings are locked to match the existing rows, and "
+            "read-only mode is off so the table on OMERO stays up to date. Raise the "
+            "image counts to add new images to this table.</i></small>"
         )
 
     @staticmethod
@@ -1047,6 +1055,8 @@ class WorkflowWidget:
         merged = dict(saved)
         overridden = []
         for key, value in rows.items():
+            if key in ROW_FALLBACK_KEYS and key in saved:
+                continue
             if key in saved and saved[key] != value and key in RESUME_LOCKED_KEYS:
                 overridden.append(key)
             merged[key] = value
@@ -1133,6 +1143,13 @@ class WorkflowWidget:
         for key in RESUME_LOCKED_KEYS:
             if key in settings and key in widgets_by_key:
                 widgets_by_key[key].disabled = True
+        # A resumed table lives on OMERO; read-only runs would not update it,
+        # so the next resume would miss their rows.
+        self._locked_settings["read_only_mode"] = False
+        read_only = getattr(self, "workflow_widgets", {}).get("read_only_mode")
+        if read_only is not None:
+            read_only.value = False
+            read_only.disabled = True
 
     def _unlock_resume_fields(self):
         """Re-enable locked fields, keeping the usual dependent disabled states."""
@@ -1142,16 +1159,23 @@ class WorkflowWidget:
         widgets_by_key = self._annotation_widget_map()
         three_d = widgets_by_key.get("three_d")
         use_patches = widgets_by_key.get("use_patches")
+        modes = {"timepoints": widgets_by_key.get("timepoint_mode"),
+                 "z_slices": widgets_by_key.get("z_slice_mode")}
         for key in RESUME_LOCKED_KEYS:
             widget = widgets_by_key.get(key)
             if widget is None:
                 continue
             if key in ("z_range_start", "z_range_end"):
                 widget.disabled = not (three_d.value if three_d else False)
-            elif key == "patch_size":
+            elif key in ("patch_size", "patches_per_image"):
                 widget.disabled = not (use_patches.value if use_patches else False)
+            elif key in modes:
+                widget.disabled = not (modes[key] and modes[key].value == "specific")
             else:
                 widget.disabled = False
+        read_only = getattr(self, "workflow_widgets", {}).get("read_only_mode")
+        if read_only is not None:
+            read_only.disabled = False
         if hasattr(self, "resume_note"):
             self.resume_note.value = ""
 
@@ -1175,6 +1199,18 @@ class WorkflowWidget:
             sc.use_patches = locked["use_patches"]
         if "patch_size" in locked:
             sc.patch_size = list(locked["patch_size"])
+        if "patches_per_image" in locked:
+            sc.patches_per_image = locked["patches_per_image"]
+        for key in ("timepoint_mode", "z_slice_mode"):
+            if key in locked:
+                setattr(sc, key, locked[key])
+        for key in ("timepoints", "z_slices"):
+            if key in locked:
+                setattr(sc, key, list(locked[key]))
+        if "segment_all" in locked:
+            self.config.training.segment_all = locked["segment_all"]
+        if "read_only_mode" in locked:
+            self.config.workflow.read_only_mode = locked["read_only_mode"]
 
     def _on_new_table(self, button):
         """Pick a name for a new table. The table itself is created at pipeline run."""

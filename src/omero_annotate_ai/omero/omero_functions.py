@@ -835,6 +835,14 @@ def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
             if image_col in plane and len(patches):
                 settings["patches_per_image"] = int(patches.groupby(plane).size().max())
 
+    for column, mode_key, list_key in (("timepoint", "timepoint_mode", "timepoints"),
+                                       ("z_slice", "z_slice_mode", "z_slices")):
+        if column in df.columns:
+            values = sorted({int(v) for v in df[column].dropna()})
+            if values:
+                settings[mode_key] = "specific"
+                settings[list_key] = values
+
     image_col = "image_uri" if "image_uri" in df.columns else "image_id"
     if "category" in df.columns and image_col in df.columns:
         counts = df.groupby("category")[image_col].nunique()

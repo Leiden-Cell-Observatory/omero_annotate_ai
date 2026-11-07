@@ -945,6 +945,8 @@ class TestInferSettingsFromTable:
         assert settings == {
             "channel": 1, "three_d": False, "use_patches": True,
             "patch_size": [256, 128], "patches_per_image": 2,
+            "timepoint_mode": "specific", "timepoints": [0],
+            "z_slice_mode": "specific", "z_slices": [0],
             "train_n": 2, "validate_n": 1, "test_n": 0,
         }
 
