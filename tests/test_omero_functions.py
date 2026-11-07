@@ -925,3 +925,47 @@ class TestDeleteTrainingSet:
         conn.getAnnotationLinks.side_effect = links
         assert _table_containers(conn, self.TABLE_ID) == [("plate", 803), ("plate", 804)]
 
+
+@pytest.mark.unit
+class TestLabelUpload:
+    """Label files are uploaded zlib-compressed, losslessly, named after the set."""
+
+    def test_label_file_name(self):
+        from omero_annotate_ai.omero.omero_functions import _label_file_name
+        assert _label_file_name("/x/seg_00000.tif", "plate run", "omero-annotate-ai:7:42_0_3") \
+            == "plate_run_42_0_3_mask.tif"
+        assert _label_file_name("/x/seg_00000.tif", None, None) == "seg_00000.tif"
+        assert _label_file_name("/x/seg_00000.tif", "run", None) == "run_seg_00000.tif"
+
+    def test_upload_is_compressed_lossless_and_tagged(self, tmp_path):
+        import tifffile
+        from omero_annotate_ai.omero.omero_functions import upload_rois_and_labels
+
+        mask = np.zeros((40, 50), np.uint16)
+        mask[5:15, 5:20] = 1
+        mask[20:30, 25:45] = 300
+        local = tmp_path / "seg_00000.tif"
+        tifffile.imwrite(local, mask)
+        uploaded = {}
+
+        def post(conn, file_path, description, ns, object_type, object_id):
+            with tifffile.TiffFile(file_path) as tif:
+                uploaded.update(
+                    name=Path(file_path).name, description=description,
+                    compression=tif.pages[0].compression.name, data=tif.asarray())
+            return 55
+
+        mod = "omero_annotate_ai.omero.omero_functions"
+        with patch(f"{mod}.ezomero.post_file_annotation", side_effect=post), \
+             patch(f"{mod}.ezomero.post_roi", return_value=66), \
+             patch("builtins.print"):
+            label_id, roi_id = upload_rois_and_labels(
+                Mock(), 1, str(local), trainingset_name="run", z_slice=2, channel=1,
+                timepoint=0, tag="omero-annotate-ai:7:1_0_2")
+
+        assert (label_id, roi_id) == (55, 66)
+        assert uploaded["name"] == "run_1_0_2_mask.tif"
+        assert uploaded["compression"] in ("ADOBE_DEFLATE", "DEFLATE")
+        assert np.array_equal(uploaded["data"], mask)
+        assert uploaded["description"].startswith("omero-annotate-ai:7:1_0_2 | ")
+        assert "t=0" in uploaded["description"] and "z=2" in uploaded["description"]

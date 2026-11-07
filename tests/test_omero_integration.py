@@ -276,12 +276,22 @@ class TestTrackingTableOnOmero:
         with patch("builtins.print"):
             # Uploaded, but (as after a crash) never written to the table.
             label_id, roi_id = upload_rois_and_labels(
-                omero_conn, image_id, str(mask_file), 
+                omero_conn, image_id, str(mask_file), trainingset_name=config.name,
                 z_slice=0, channel=0, timepoint=0, tag=tag)
 
         roi = omero_conn.getObject("Roi", roi_id)
         assert roi.getDescription().startswith(tag)
-        assert omero_conn.getObject("FileAnnotation", label_id).getDescription().startswith(tag)
+        label = omero_conn.getObject("FileAnnotation", label_id)
+        assert label.getDescription().startswith(tag)
+        assert label.getFile().getName() == f"oai_table_layer_{image_id}_0_0_mask.tif"
+
+        # The label file round-trips losslessly (zlib-compressed TIFF).
+        import ezomero
+        import tifffile
+        download_dir = tmp_path / "download"
+        download_dir.mkdir()
+        downloaded = ezomero.get_file_annotation(omero_conn, label_id, str(download_dir))
+        assert np.array_equal(tifffile.imread(downloaded), mask)
 
         with patch("builtins.print"):
             report = delete_training_set(omero_conn, table_id)

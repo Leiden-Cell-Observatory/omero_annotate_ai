@@ -25,6 +25,7 @@ from .omero_utils import (
 import ezomero
 
 import imageio.v3 as imageio
+import tifffile
 
 from ..processing.image_functions import label_to_rois
 from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
@@ -794,6 +795,23 @@ def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
     return settings
 
 
+def _label_file_name(annotation_file: str, trainingset_name: Optional[str],
+                     tag: Optional[str]) -> str:
+    """``<trainingset>_<annotation_id>_mask.tif``, falling back to the local name.
+
+    The annotation ID comes from the tag (``omero-annotate-ai:<table>:<id>``).
+    Characters that are unsafe in file names are replaced by ``_``.
+    """
+    def safe(text: str) -> str:
+        return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in text)
+
+    annotation_id = tag.split(":", 2)[2] if tag and tag.count(":") >= 2 else None
+    stem = f"{annotation_id}_mask" if annotation_id else os.path.splitext(
+        os.path.basename(annotation_file))[0]
+    prefix = f"{trainingset_name}_" if trainingset_name else ""
+    return safe(prefix + stem) + ".tif"
+
+
 def upload_rois_and_labels(
     conn,
     image_id: int,
@@ -852,22 +870,32 @@ def upload_rois_and_labels(
     # Upload label file as attachment
     print("Step 3: Uploading label file as attachment")
 
-    # Build description: the set's tag first, so the upload can be traced to its table
-    label_desc = trainingset_description or ""
+    # Description: the set's tag first (so the upload can be traced to its
+    # table), then the training set and the plane the labels belong to.
+    desc_parts = [tag] if tag else []
+    if trainingset_description:
+        desc_parts.append(trainingset_description)
+    for key, value in (("t", timepoint), ("z", z_start if is_volumetric else z_slice), ("c", channel)):
+        if value is not None:
+            desc_parts.append(f"{key}={value}")
     if patch_offset:
-        separator = " | " if label_desc else ""
-        label_desc += f"{separator}Patch offset: ({patch_offset[0]}, {patch_offset[1]})"
-    if tag:
-        label_desc = f"{tag} | {label_desc}" if label_desc else tag
+        desc_parts.append(f"Patch offset: ({patch_offset[0]}, {patch_offset[1]})")
+    label_desc = " | ".join(desc_parts)
 
-    file_ann_id = ezomero.post_file_annotation(
-        conn,
-        file_path=annotation_file,
-        description=label_desc,
-        ns=LABELS_NS,
-        object_type="Image",
-        object_id=image_id,
-    )
+    # The uploaded file is written losslessly compressed (label images compress
+    # well) and named after the training set and annotation, so label files of
+    # different sets on the same image can be told apart in OMERO.
+    with tempfile.TemporaryDirectory() as tmp:
+        upload_path = os.path.join(tmp, _label_file_name(annotation_file, trainingset_name, tag))
+        tifffile.imwrite(upload_path, label_img, compression="zlib")
+        file_ann_id = ezomero.post_file_annotation(
+            conn,
+            file_path=upload_path,
+            description=label_desc,
+            ns=LABELS_NS,
+            object_type="Image",
+            object_id=image_id,
+        )
     print(f"File annotation uploaded with ID: {file_ann_id}")
 
     # Upload ROI shapes if any were created
