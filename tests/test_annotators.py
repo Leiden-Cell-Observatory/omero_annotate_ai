@@ -1,0 +1,170 @@
+"""Annotation tools behind the Annotator protocol (annotators.py)."""
+
+from pathlib import Path
+from unittest.mock import MagicMock, Mock
+
+import numpy as np
+import pytest
+import tifffile
+
+from omero_annotate_ai.annotators import (
+    Annotator,
+    Batch,
+    BatchItem,
+    MicroSamAnnotator,
+    ScriptedAnnotator,
+    collect_series_masks,
+    install_context_channel_hook,
+)
+
+
+def _batch(tmp_path: Path, n: int = 3) -> Batch:
+    items = tuple(
+        BatchItem(annotation_id=f"a{i}", pixels=np.full((8, 10), i, dtype=np.uint16))
+        for i in range(n)
+    )
+    return Batch(index=1, items=items, mask_dir=tmp_path / "masks")
+
+
+def _label(image: np.ndarray) -> np.ndarray:
+    return (image + 1).astype(np.uint16)
+
+
+@pytest.mark.unit
+class TestAnnotatorProtocol:
+    def test_annotators_satisfy_the_protocol(self):
+        assert isinstance(ScriptedAnnotator(_label), Annotator)
+        assert isinstance(MicroSamAnnotator(), Annotator)
+
+
+@pytest.mark.unit
+class TestCollectSeriesMasks:
+    def test_pairs_sorted_files_with_ids_by_position(self, tmp_path):
+        for i in (2, 0, 1):
+            (tmp_path / f"seg_{i:05}.tif").write_bytes(b"")
+        masks = collect_series_masks(tmp_path, ["a", "b", "c"])
+        assert {k: p.name for k, p in masks.items()} == {
+            "a": "seg_00000.tif",
+            "b": "seg_00001.tif",
+            "c": "seg_00002.tif",
+        }
+
+    def test_fewer_files_than_units(self, tmp_path):
+        (tmp_path / "seg_00000.tif").write_bytes(b"")
+        assert list(collect_series_masks(tmp_path, ["a", "b"])) == ["a"]
+
+
+@pytest.mark.unit
+class TestScriptedAnnotator:
+    def test_writes_one_mask_per_item(self, tmp_path):
+        annotator = ScriptedAnnotator(_label)
+        masks = annotator.annotate(_batch(tmp_path))
+
+        assert sorted(masks) == ["a0", "a1", "a2"]
+        for i in range(3):
+            mask = tifffile.imread(masks[f"a{i}"])
+            assert mask.shape == (8, 10) and (mask == i + 1).all()
+        call = annotator.calls[0]
+        assert (call.n_images, call.written, call.skipped) == (3, (0, 1, 2), ())
+
+    def test_limit_stops_early(self, tmp_path):
+        annotator = ScriptedAnnotator(_label, limit=1)
+        masks = annotator.annotate(_batch(tmp_path))
+        assert list(masks) == ["a0"]
+        assert annotator.calls[0].written == (0,)
+
+    def test_skips_existing_files_like_micro_sam(self, tmp_path):
+        batch = _batch(tmp_path)
+        batch.mask_dir.mkdir()
+        tifffile.imwrite(batch.mask_dir / "seg_00000.tif", np.zeros((8, 10)))
+        annotator = ScriptedAnnotator(_label)
+        annotator.annotate(batch)
+        assert annotator.calls[0].skipped == (0,)
+        assert annotator.calls[0].written == (1, 2)
+
+
+def _viewer(image_layer):
+    layers = MagicMock()
+    viewer = Mock()
+    viewer.layers = layers
+    return viewer, layers, image_layer
+
+
+@pytest.mark.unit
+class TestContextChannelHook:
+    def test_no_op_without_context_channels(self):
+        viewer = Mock()
+        install_context_channel_hook(viewer, [np.zeros((64, 64))], [{}], {})
+        viewer.add_image.assert_not_called()
+
+    def test_adds_layer_for_initial_image(self):
+        label = np.zeros((64, 64), dtype=np.uint16)
+        dapi = np.ones((64, 64), dtype=np.uint16) * 50
+        image_layer = Mock()
+        image_layer.data = label
+        viewer, layers, _ = _viewer(image_layer)
+        layers.__getitem__ = Mock(return_value=image_layer)
+        layers.__contains__ = Mock(return_value=False)
+
+        install_context_channel_hook(
+            viewer, [label], [{"DAPI": dapi}], {"DAPI": "blue"}
+        )
+
+        viewer.add_image.assert_called_once_with(
+            dapi, name="DAPI", colormap="blue", blending="additive", visible=True
+        )
+
+    def test_follows_the_annotator_to_the_next_image(self):
+        labels = [
+            np.zeros((64, 64), dtype=np.uint16),
+            np.ones((64, 64), dtype=np.uint16),
+        ]
+        dapi = [np.full((64, 64), 10, np.uint16), np.full((64, 64), 20, np.uint16)]
+        dapi_layer = Mock()
+        image_layer = Mock()
+        image_layer.data = labels[0]
+        callbacks = []
+
+        class Events:
+            def connect(self, callback):
+                callbacks.append(callback)
+
+        image_layer.events = Mock()
+        image_layer.events.data = Events()
+
+        def getitem(name):
+            return {"image": image_layer, "DAPI": dapi_layer}[name]
+
+        viewer, layers, _ = _viewer(image_layer)
+        layers.__getitem__ = Mock(side_effect=getitem)
+        layers.__contains__ = Mock(side_effect=lambda name: name == "DAPI")
+
+        install_context_channel_hook(
+            viewer, labels, [{"DAPI": d} for d in dapi], {"DAPI": "blue"}
+        )
+        image_layer.data = labels[1]
+        assert len(callbacks) == 1
+        callbacks[0](Mock())
+
+        assert dapi_layer.data is dapi[1]
+
+
+@pytest.mark.unit
+class TestMicroSamAnnotator:
+    def test_missing_micro_sam_raises_annotator_unavailable(
+        self, tmp_path, monkeypatch
+    ):
+        import importlib
+
+        from omero_annotate_ai.errors import AnnotatorUnavailable
+
+        real_import_module = importlib.import_module
+
+        def import_module(name, *args, **kwargs):
+            if name == "napari" or name.startswith("micro_sam"):
+                raise ImportError(name)
+            return real_import_module(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib, "import_module", import_module)
+        with pytest.raises(AnnotatorUnavailable, match="micro-SAM"):
+            MicroSamAnnotator().annotate(_batch(tmp_path))

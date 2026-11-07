@@ -2,7 +2,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
@@ -1367,7 +1367,7 @@ class TestAnnotationTimestamps:
 
 @pytest.mark.unit
 class TestContextChannelHook:
-    """Tests for context channel hook in _run_micro_sam_annotation."""
+    """Context channel images loaded for each batch item."""
 
     def test_build_context_images_empty_when_no_context_channels(self):
         """With no context_channels, context_images should be list of empty dicts."""
@@ -1417,125 +1417,6 @@ class TestContextChannelHook:
         assert len(context_images) == 1
         assert "DAPI" in context_images[0]
         np.testing.assert_array_equal(context_images[0]["DAPI"], ctx_arr)
-
-    def test_install_context_channel_hook_no_op_when_empty(self):
-        """Hook install is a no-op when context_images contains empty dicts."""
-        import numpy as np
-
-        from omero_annotate_ai.core.annotation_config import create_default_config
-        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-
-        config = create_default_config()
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_viewer = Mock()
-        images = [np.zeros((64, 64))]
-        context_images = [{}]
-
-        # Should not raise; viewer.layers should not be touched
-        pipeline._install_context_channel_hook(mock_viewer, images, context_images)
-        mock_viewer.add_image.assert_not_called()
-
-    def test_install_context_channel_hook_adds_initial_layer(self):
-        """Hook install should add a context layer for the initial image."""
-        import numpy as np
-
-        from omero_annotate_ai.core.annotation_config import create_default_config
-        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1]
-        config.spatial_coverage.context_channels = [1]
-        config.spatial_coverage.context_channel_names = ["DAPI"]
-        config.spatial_coverage.context_channel_colormaps = ["blue"]
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        label_arr = np.zeros((64, 64), dtype=np.uint16)
-        dapi_arr = np.ones((64, 64), dtype=np.uint16) * 50
-
-        # Mock viewer: layers["image"].data returns label_arr
-        mock_image_layer = Mock()
-        mock_image_layer.data = label_arr
-
-        mock_layers = MagicMock()
-        mock_layers.__getitem__ = Mock(return_value=mock_image_layer)
-        mock_layers.__contains__ = Mock(return_value=False)  # "DAPI" not in layers
-
-        mock_viewer = Mock()
-        mock_viewer.layers = mock_layers
-
-        images = [label_arr]
-        context_images = [{"DAPI": dapi_arr}]
-
-        pipeline._install_context_channel_hook(mock_viewer, images, context_images)
-
-        # Verify add_image was called with DAPI array and correct kwargs
-        mock_viewer.add_image.assert_called_once_with(
-            dapi_arr, name="DAPI", colormap="blue", blending="additive", visible=True
-        )
-
-    def test_context_hook_callback_updates_layer_on_next_image(self):
-        """Simulating next-image event: callback should update DAPI layer data."""
-        import numpy as np
-
-        from omero_annotate_ai.core.annotation_config import create_default_config
-        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1]
-        config.spatial_coverage.context_channels = [1]
-        config.spatial_coverage.context_channel_names = ["DAPI"]
-        config.spatial_coverage.context_channel_colormaps = ["blue"]
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        label_arr0 = np.zeros((64, 64), dtype=np.uint16)
-        label_arr1 = np.ones((64, 64), dtype=np.uint16)
-        dapi_arr0 = np.zeros((64, 64), dtype=np.uint16) + 10
-        dapi_arr1 = np.zeros((64, 64), dtype=np.uint16) + 20
-
-        images = [label_arr0, label_arr1]
-        context_images = [{"DAPI": dapi_arr0}, {"DAPI": dapi_arr1}]
-
-        # Simulate viewer: image layer starts at label_arr0, transitions to label_arr1
-        mock_dapi_layer = Mock()
-        mock_image_layer = Mock()
-        mock_image_layer.data = label_arr0  # initial state
-
-        event_callbacks = []
-
-        class MockEvents:
-            def connect(self, cb):
-                event_callbacks.append(cb)
-
-        mock_image_layer.events = Mock()
-        mock_image_layer.events.data = MockEvents()
-
-        def layers_getitem(name):
-            if name == "image":
-                return mock_image_layer
-            if name == "DAPI":
-                return mock_dapi_layer
-            raise KeyError(name)
-
-        def layers_contains(name):
-            return name == "DAPI"  # After first call, DAPI layer exists
-
-        mock_layers = MagicMock()
-        mock_layers.__getitem__ = Mock(side_effect=layers_getitem)
-        mock_layers.__contains__ = Mock(side_effect=layers_contains)
-
-        mock_viewer = Mock()
-        mock_viewer.layers = mock_layers
-
-        pipeline._install_context_channel_hook(mock_viewer, images, context_images)
-
-        # Simulate napari firing events.data when image advances to label_arr1
-        mock_image_layer.data = label_arr1
-        assert len(event_callbacks) == 1
-        event_callbacks[0](Mock())  # fire the callback
-
-        # DAPI layer data should have been updated to dapi_arr1
-        assert mock_dapi_layer.data is dapi_arr1
 
 
 @pytest.mark.unit
