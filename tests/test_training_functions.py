@@ -829,6 +829,11 @@ class TestFetchPlane3D:
         assert img[0].max() < 255
 
     def test_volumetric_patch_is_returned_as_z_height_width(self, fake_ezomero):
+        """The 3D-patch branch used to skip np.swapaxes, so it alone returned (Z, X, Y).
+
+        A 3-wide by 2-high patch came back as (Z, 3, 2) instead of (Z, 2, 3),
+        transposing every volumetric patch against its label.
+        """
         img = tf._fetch_plane(
             None,
             _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
@@ -836,6 +841,32 @@ class TestFetchPlane3D:
             channel=0,
         )
         assert img.shape == (PLANE_Z, 2, 3)  # (Z, height, width)
+
+    def test_volumetric_patch_content_is_not_transposed(self, fake_ezomero):
+        """Shape alone would still pass on a square patch; pin the content too."""
+        img = tf._fetch_plane(
+            None,
+            _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
+                patch_x=2, patch_y=1, patch_width=3, patch_height=3),
+            channel=0,
+        )
+        # Voxel value is x + 10y + 100z, so a step along +y outweighs a step along +x.
+        # In (Z, Y, X) the far-y corner is therefore brighter than the far-x corner;
+        # a transpose swaps exactly these two probes.
+        assert img[0, -1, 0] > img[0, 0, -1]
+
+    def test_all_branches_agree_on_orientation(self, fake_ezomero):
+        """A 2D patch and the same patch fetched volumetrically must not disagree."""
+        patch_kwargs = dict(is_patch=True, patch_x=2, patch_y=1,
+                            patch_width=3, patch_height=2)
+
+        flat = tf._fetch_plane(None, _plane_row(**patch_kwargs), channel=0)
+        volumetric = tf._fetch_plane(
+            None, _plane_row(is_volumetric=True, z_slice=0, **patch_kwargs), channel=0
+        )
+
+        assert flat.shape == volumetric[0].shape
+        np.testing.assert_array_equal(flat, volumetric[0])
 
 
 @pytest.mark.unit

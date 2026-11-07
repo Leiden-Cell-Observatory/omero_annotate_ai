@@ -427,11 +427,13 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                         f"  Returned array shape (before extraction): {img_slice.shape}"
                     )
 
-                # The result will be 5D, extract just the 2D slice
-                img_slice = img_slice[
-                    :, :, 0, 0, 0
-                ]  # Extract the single z-slice
-                img_slice = np.swapaxes(img_slice, 0, 1)
+                # The result will be 5D, extract just the 2D slice.
+                # ezomero hands back XYZCT, so x is axis 0; swap to (Y, X) like every
+                # other branch does. Omitting this swap here transposed volumetric
+                # patches against their labels.
+                if len(img_slice.shape) == 5:
+                    img_slice = img_slice[:, :, 0, 0, 0]
+                    img_slice = np.swapaxes(img_slice, 0, 1)
                 if logger:
                     logger.debug(f"Extracted slice shape: {img_slice.shape}")
                 else:
