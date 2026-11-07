@@ -3,6 +3,7 @@
 from .omero_functions import (
     analyze_table_completion_status,
     cleanup_project_annotations,
+    delete_training_set,
     create_or_replace_tracking_table,
     create_roi_namespace_for_table,
     download_annotation_config_from_omero,
@@ -22,6 +23,7 @@ from .omero_functions import (
 __all__ = [
     "analyze_table_completion_status",
     "cleanup_project_annotations",
+    "delete_training_set",
     "create_or_replace_tracking_table",
     "create_roi_namespace_for_table",
     "download_annotation_config_from_omero",

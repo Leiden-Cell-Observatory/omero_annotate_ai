@@ -959,3 +959,154 @@ class TestInferSettingsFromTable:
         assert settings["three_d"] is True and settings["use_patches"] is False
         assert "patch_size" not in settings and settings["test_n"] == 1
         assert infer_settings_from_table(pd.DataFrame()) == {}
+
+
+@pytest.mark.unit
+class TestDeleteTrainingSet:
+    """delete_training_set removes a table and everything tied to it by ID."""
+
+    TABLE_ID = 100
+
+    def _conn(self, missing=()):
+        conn = Mock()
+
+        def get_object(omero_type, object_id):
+            if (omero_type, object_id) in missing:
+                return None
+            obj = Mock()
+            if omero_type == "FileAnnotation" and object_id == self.TABLE_ID:
+                obj.getFile.return_value.getName.return_value = "run"
+            return obj
+
+        conn.getObject.side_effect = get_object
+        return conn
+
+    @staticmethod
+    def _rows(input_column="annotation_input_id"):
+        return pd.DataFrame({
+            "annotation_id": ["a", "b", "c"],
+            "roi_id": [11, 12, np.nan],
+            "label_id": [21, 22, -1],
+            input_column: [31, 0, None],
+        })
+
+    def _run(self, tmp_path, conn, rows, configs=(), maps=None, tables=None,
+             dry_run=True):
+        """configs: (ann_id, name, table_id); maps: {ns: {map_id: kv}}."""
+        from omero_annotate_ai.omero.omero_functions import (
+            CONFIG_NS, delete_training_set,
+        )
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        paths, listing = {}, []
+        for ann_id, name, saved_table_id in configs:
+            config = create_default_config()
+            config.name = name
+            config.omero.table_id = saved_table_id
+            path = tmp_path / f"{ann_id}.yaml"
+            config.save_yaml(path)
+            paths[ann_id] = str(path)
+            listing.append({"id": ann_id, "file_name": path.name})
+        maps = maps or {}
+        tables = tables if tables is not None else [{"id": self.TABLE_ID, "name": "run"}]
+
+        def list_ns(conn_, obj_type, obj_id, ns):
+            return listing if ns == CONFIG_NS else []
+
+        mod = "omero_annotate_ai.omero.omero_functions"
+        with patch(f"{mod}.read_tracking_table", return_value=rows), \
+             patch(f"{mod}.list_annotations_by_namespace", side_effect=list_ns), \
+             patch(f"{mod}.list_annotation_tables", return_value=tables), \
+             patch(f"{mod}.ezomero.get_file_annotation",
+                   side_effect=lambda c, ann_id, folder: paths[ann_id]), \
+             patch(f"{mod}.ezomero.get_map_annotation_ids",
+                   side_effect=lambda c, t, i, ns=None: list(maps.get(ns, {}))), \
+             patch(f"{mod}.ezomero.get_map_annotation",
+                   side_effect=lambda c, map_id: {k: v for d in maps.values()
+                                                   for mid, v in d.items()
+                                                   if mid == map_id for k, v in v.items()}), \
+             patch("builtins.print"):
+            return delete_training_set(conn, self.TABLE_ID, "plate", 803, dry_run=dry_run)
+
+    def test_dry_run_deletes_nothing(self, tmp_path):
+        conn = self._conn()
+        report = self._run(tmp_path, conn, self._rows())
+
+        conn.deleteObjects.assert_not_called()
+        assert report["deleted"] is False
+        assert report["rois"] == [11, 12]
+        assert report["labels"] == [21, 22]
+        assert report["annotation_inputs"] == [31]
+        assert report["table"] == [self.TABLE_ID]
+
+    def test_real_run_deletes_children_then_table(self, tmp_path):
+        from omero_annotate_ai.omero.omero_functions import WORKFLOW_STATUS_NS
+
+        conn = self._conn()
+        report = self._run(
+            tmp_path, conn, self._rows(),
+            configs=[(41, "run", self.TABLE_ID)],
+            maps={WORKFLOW_STATUS_NS: {51: {"table_id": str(self.TABLE_ID)},
+                                       52: {"table_id": "999"}}},
+            dry_run=False,
+        )
+
+        calls = conn.deleteObjects.call_args_list
+        assert calls[0].args == ("Roi", [11, 12])
+        assert calls[1].args == ("Annotation", [21, 22, 31, 41, 51])
+        assert calls[-1].args == ("Annotation", [self.TABLE_ID])
+        assert report["deleted"] is True
+        assert report["map_annotations"] == [51]
+
+    def test_other_tables_configs_untouched(self, tmp_path):
+        conn = self._conn()
+        report = self._run(
+            tmp_path, conn, self._rows(),
+            configs=[(41, "run", self.TABLE_ID), (42, "run", 200), (43, "other", None)],
+        )
+        assert report["configs"] == [41]
+
+    def test_unlinked_config_only_when_name_is_unique(self, tmp_path):
+        conn = self._conn()
+        unique = self._run(tmp_path, conn, self._rows(), configs=[(44, "run", None)])
+        assert unique["configs"] == [44]
+
+        shared = self._run(
+            tmp_path, conn, self._rows(), configs=[(44, "run", None)],
+            tables=[{"id": self.TABLE_ID, "name": "run"}, {"id": 200, "name": "run"}],
+        )
+        assert shared["configs"] == []
+
+    def test_missing_objects_are_reported_not_deleted(self, tmp_path):
+        conn = self._conn(missing={("Roi", 12), ("FileAnnotation", 22)})
+        report = self._run(tmp_path, conn, self._rows(), dry_run=False)
+
+        assert report["rois"] == [11]
+        assert report["missing"]["rois"] == [12]
+        assert report["missing"]["labels"] == [22]
+        assert conn.deleteObjects.call_args_list[0].args == ("Roi", [11])
+
+    def test_legacy_label_input_id_column(self, tmp_path):
+        conn = self._conn()
+        report = self._run(tmp_path, conn, self._rows("label_input_id"))
+        assert report["annotation_inputs"] == [31]
+
+    def test_missing_table_deletes_nothing(self, tmp_path):
+        conn = self._conn(missing={("FileAnnotation", self.TABLE_ID)})
+        report = self._run(tmp_path, conn, self._rows(), dry_run=False)
+        conn.deleteObjects.assert_not_called()
+        assert report["missing"]["table"] == [self.TABLE_ID]
+
+    def test_finds_containers_from_table_links(self):
+        from omero_annotate_ai.omero.omero_functions import _table_containers
+
+        conn = Mock()
+
+        def links(container_type, ann_ids):
+            if container_type == "Plate":
+                return [Mock(**{"getParent.return_value.getId.return_value": pid})
+                        for pid in (803, 804)]
+            return []
+
+        conn.getAnnotationLinks.side_effect = links
+        assert _table_containers(conn, self.TABLE_ID) == [("plate", 803), ("plate", 804)]
