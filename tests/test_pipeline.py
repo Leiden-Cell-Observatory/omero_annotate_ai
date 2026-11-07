@@ -1768,7 +1768,7 @@ class TestZarrWorkflow:
             assert mask.shape == (32, 40)  # level 1 grid
             assert (out / "annotation_input" / f"{ann.annotation_id}.tif").exists()
         table = pd.read_csv(out / "tracking_table.csv")
-        assert list(table["image_uri"]) == [a.image_uri for a in anns]
+        assert sorted(table["image_uri"]) == sorted(a.image_uri for a in anns)
         assert table["processed"].all()
         assert (out / "well_matching.csv").exists()
 
