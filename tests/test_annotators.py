@@ -13,7 +13,6 @@ from omero_annotate_ai.annotators import (
     BatchItem,
     MicroSamAnnotator,
     ScriptedAnnotator,
-    collect_series_masks,
     install_context_channel_hook,
 )
 
@@ -35,23 +34,6 @@ class TestAnnotatorProtocol:
     def test_annotators_satisfy_the_protocol(self):
         assert isinstance(ScriptedAnnotator(_label), Annotator)
         assert isinstance(MicroSamAnnotator(), Annotator)
-
-
-@pytest.mark.unit
-class TestCollectSeriesMasks:
-    def test_pairs_sorted_files_with_ids_by_position(self, tmp_path):
-        for i in (2, 0, 1):
-            (tmp_path / f"seg_{i:05}.tif").write_bytes(b"")
-        masks = collect_series_masks(tmp_path, ["a", "b", "c"])
-        assert {k: p.name for k, p in masks.items()} == {
-            "a": "seg_00000.tif",
-            "b": "seg_00001.tif",
-            "c": "seg_00002.tif",
-        }
-
-    def test_fewer_files_than_units(self, tmp_path):
-        (tmp_path / "seg_00000.tif").write_bytes(b"")
-        assert list(collect_series_masks(tmp_path, ["a", "b"])) == ["a"]
 
 
 @pytest.mark.unit

@@ -575,6 +575,11 @@ def save_bia_package(
         transfers[source_image] = bundle_image
         transfers[source_mask] = bundle_mask
 
+    if config.output.output_directory is None:
+        raise ValueError(
+            "config.output.output_directory is not set: export from the config of a "
+            "finished run (its config.yaml), or set it to the folder holding the files"
+        )
     source_root = Path(config.output.output_directory)
     transfer = shutil.move if move_data else shutil.copy2
     copied = 0

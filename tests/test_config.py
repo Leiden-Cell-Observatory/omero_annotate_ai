@@ -1429,15 +1429,19 @@ class TestMIFAExport:
 def _write_pipeline_layout(config):
     """Write dummy files for ``config.annotations`` where AnnotationPipeline puts them.
 
-    The folders come from the pipeline's own ``_setup_directories`` so the BIA export is
-    tested against the layout the pipeline actually writes, not a copy of its names.
+    The folders come from the pipeline's own ``_get_input_folders`` and ``mask_path`` so
+    the BIA export is tested against the layout the pipeline actually writes, not a copy
+    of its names.
     """
+    from omero_annotate_ai.bundle import mask_path
     from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
     pipeline = AnnotationPipeline.__new__(AnnotationPipeline)
     pipeline.config = config
-    root = pipeline._setup_directories()
-    folders = pipeline._get_input_folders(root)
+    root = pipeline.bundle_dir
+    folders = pipeline._get_input_folders()
+    for folder in [*folders.values(), mask_path(root, "x").parent]:
+        folder.mkdir(parents=True, exist_ok=True)
     for ann in config.annotations:
         (folders["annotation_input"] / f"{ann.annotation_id}.tif").write_bytes(b"img")
         if "model_input" in folders:
