@@ -1,6 +1,7 @@
 """Training data preparation functions for micro-SAM workflows."""
 
 import ast
+import logging
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +31,8 @@ from .utils import validate_table_schema
 
 if TYPE_CHECKING:
     from ..core.annotation_config import AnnotationConfig
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _build_standard_result(
@@ -361,6 +364,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
     Raises:
         ValueError: If the image is not found in OMERO
     """
+    log = logger or _LOGGER
     # Extract metadata
     image_id = int(row["image_id"])
 
@@ -391,11 +395,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
     patch_width = int(row["patch_width"])
     patch_height = int(row["patch_height"])
 
-    if logger:
-        logger.debug(
-            f"Image {image_id}: patch={is_patch} {patch_width}x{patch_height} "
-            f"at ({patch_x},{patch_y}), volumetric={is_volumetric}, channel={channel}"
-        )
+    log.debug(
+        f"Image {image_id}: patch={is_patch} {patch_width}x{patch_height} "
+        f"at ({patch_x},{patch_y}), volumetric={is_volumetric}, channel={channel}"
+    )
 
     # Process based on whether it's 3D volumetric or 2D
     if is_volumetric:
@@ -425,15 +428,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
             z_val = int(z)
             if is_patch and patch_width > 0 and patch_height > 0:
                 # Debug start_coords and axis_lengths
-                if logger:
-                    logger.debug(
-                        f"3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                    )
-                else:
-                    print(
-                        f"  3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                    )
-
+                log.debug(
+                    f"3D patch request: start ({patch_x}, {patch_y}, {z_val}, {channel}, "
+                    f"{timepoint}), size {patch_width}x{patch_height}"
+                )
                 # Use ezomero.get_image to extract the patch for this z-slice
                 _, img_slice = ezomero.get_image(
                     conn,
@@ -444,15 +442,9 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                 )
 
                 # Check shape of returned array
-                if logger:
-                    logger.debug(
-                        f"Returned array shape (before extraction): {img_slice.shape}"
-                    )
-                else:
-                    print(
-                        f"  Returned array shape (before extraction): {img_slice.shape}"
-                    )
-
+                log.debug(
+                    f"Returned array shape (before extraction): {img_slice.shape}"
+                )
                 # The result will be 5D, extract just the 2D slice.
                 # ezomero hands back XYZCT, so x is axis 0; swap to (Y, X) like every
                 # other branch does. Omitting this swap here transposed volumetric
@@ -460,10 +452,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                 if len(img_slice.shape) == 5:
                     img_slice = img_slice[:, :, 0, 0, 0]
                     img_slice = np.swapaxes(img_slice, 0, 1)
-                if logger:
-                    logger.debug(f"Extracted slice shape: {img_slice.shape}")
-                else:
-                    print(f"  Extracted slice shape: {img_slice.shape}")
+                log.debug(f"Extracted slice shape: {img_slice.shape}")
             else:
                 # Get full plane for this z-slice
                 # Get image dimensions if not already obtained
@@ -480,31 +469,17 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                     xyzct=True,  # Use XYZCT ordering
                 )
                 # Check shape of returned array
-                if logger:
-                    logger.debug(
-                        f"Full plane shape (before extraction): {img_slice.shape}"
-                    )
-                else:
-                    print(f"  Full plane shape (before extraction): {img_slice.shape}")
-
+                log.debug(f"Full plane shape (before extraction): {img_slice.shape}")
                 # The result will be 5D, extract just the 2D slice
                 if len(img_slice.shape) == 5:
                     img_slice = img_slice[:, :, 0, 0, 0]
                     img_slice = np.swapaxes(img_slice, 0, 1)
-                if logger:
-                    logger.debug(f"Extracted full plane shape: {img_slice.shape}")
-                else:
-                    print(f"  Extracted full plane shape: {img_slice.shape}")
-
+                log.debug(f"Extracted full plane shape: {img_slice.shape}")
             img_3d.append(img_slice)
 
         # Convert to numpy array
         img_3d = np.array(img_3d)
-        if logger:
-            logger.debug(f"Final 3D array shape: {img_3d.shape}")
-        else:
-            print(f"  Final 3D array shape: {img_3d.shape}")
-
+        log.debug(f"Final 3D array shape: {img_3d.shape}")
         return img_3d
 
     # Handle 2D data with patch support using ezomero.get_image
@@ -513,15 +488,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
 
         # Debug start_coords and axis_lengths
-        if logger:
-            logger.debug(
-                f"2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-            )
-        else:
-            print(
-                f"  2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-            )
-
+        log.debug(
+            f"2D patch request: start ({patch_x}, {patch_y}, {z_val}, {channel}, "
+            f"{timepoint}), size {patch_width}x{patch_height}"
+        )
         _, img_data = ezomero.get_image(
             conn,
             image_id,
@@ -531,11 +501,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         )
 
         # Check shape of returned array
-        if logger:
-            logger.debug(f"Returned array shape: {img_data.shape}")
-        else:
-            print(f"  Returned array shape: {img_data.shape}")
-
+        log.debug(f"Returned array shape: {img_data.shape}")
         # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
         # We just need to remove the trailing dimensions
         if len(img_data.shape) == 5:
@@ -544,10 +510,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
             # swap x and y dimensions in the numpy array
             img_data = np.swapaxes(img_data, 0, 1)
 
-        if logger:
-            logger.debug(f"Extracted 2D shape: {img_data.shape}")
-        else:
-            print(f"  Extracted 2D shape: {img_data.shape}")
+        log.debug(f"Extracted 2D shape: {img_data.shape}")
     else:
         # Get full plane
         z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
@@ -558,15 +521,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         size_y = omero_image.getSizeY()
 
         # Debug start_coords
-        if logger:
-            logger.debug(
-                f"2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
-            )
-        else:
-            print(
-                f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
-            )
-
+        log.debug(
+            f"2D full image request: start (0, 0, {z_val}, {channel}, {timepoint}), "
+            f"size {size_x}x{size_y}"
+        )
         _, img_data = ezomero.get_image(
             conn,
             image_id,
@@ -576,21 +534,13 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         )
 
         # Check shape of returned array
-        if logger:
-            logger.debug(f"Returned array shape: {img_data.shape}")
-        else:
-            print(f"  Returned array shape: {img_data.shape}")
-
+        log.debug(f"Returned array shape: {img_data.shape}")
         # Remove trailing dimensions
         if len(img_data.shape) == 5:
             img_data = img_data[:, :, 0, 0, 0]
             img_data = np.swapaxes(img_data, 0, 1)
 
-        if logger:
-            logger.debug(f"Extracted 2D shape: {img_data.shape}")
-        else:
-            print(f"  Extracted 2D shape: {img_data.shape}")
-
+        log.debug(f"Extracted 2D shape: {img_data.shape}")
     return img_data
 
 

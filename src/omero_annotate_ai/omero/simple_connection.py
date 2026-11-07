@@ -3,11 +3,15 @@
 import configparser
 import contextlib
 import json
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from dotenv import dotenv_values
+from omero.gateway import BlitzGateway
 
 try:
     import keyring
@@ -16,9 +20,7 @@ try:
 except ImportError:
     KEYRING_AVAILABLE = False
 
-
-from dotenv import dotenv_values
-from omero.gateway import BlitzGateway
+logger = logging.getLogger(__name__)
 
 _URL_HOST = re.compile(r"^wss?://", re.IGNORECASE)
 
@@ -109,13 +111,13 @@ class SimpleOMEROConnection:
         """
         usable, backend_name, warning = self.keyring_backend()
         if not usable:
-            print(
+            logger.warning(
                 f"Password not saved: no usable keyring backend ({backend_name}). "
                 "Enter the password each time, or configure a system keyring."
             )
             return False
         if warning:
-            print(f"Warning: {warning} ({backend_name})")
+            logger.warning(f"{warning} ({backend_name})")
 
         try:
             key = f"{host}:{username}"
@@ -131,23 +133,25 @@ class SimpleOMEROConnection:
             payload = json.dumps(password_data)
             keyring.set_password(self.SERVICE_NAME, key, payload)
             if keyring.get_password(self.SERVICE_NAME, key) != payload:
-                print(
+                logger.warning(
                     f"Password not saved: the keyring backend ({backend_name}) "
                     "did not keep it"
                 )
                 return False
 
             if expire_hours is not None:
-                print(
+                logger.info(
                     f"Password saved to keychain via {backend_name} "
                     f"(expires in {expire_hours} hours)"
                 )
             else:
-                print(f"Password saved to keychain via {backend_name} (never expires)")
+                logger.info(
+                    f"Password saved to keychain via {backend_name} (never expires)"
+                )
             return True
 
         except Exception as e:  # noqa: BLE001 - keyring backends raise backend-specific errors
-            print(f"Failed to save password to keychain: {e}")
+            logger.error(f"Failed to save password to keychain: {e}")
             return False
 
     def load_password(self, host: str, username: str) -> str | None:
@@ -181,16 +185,16 @@ class SimpleOMEROConnection:
                 if datetime.now(timezone.utc) > expiry_time:
                     # Password expired, remove it
                     self._delete_password(host, username)
-                    print("Stored password has expired and was removed")
+                    logger.info("Stored password has expired and was removed")
                     return None
-                print("Password loaded from keychain")
+                logger.info("Password loaded from keychain")
             else:
-                print("Password loaded from keychain (no expiration)")
+                logger.info("Password loaded from keychain (no expiration)")
 
             return password
 
         except Exception as e:  # noqa: BLE001 - keyring backends raise backend-specific errors
-            print(f"Error loading password from keychain: {e}")
+            logger.error(f"Error loading password from keychain: {e}")
             return None
 
     def _delete_password(self, host: str, username: str) -> bool:
@@ -275,11 +279,11 @@ class SimpleOMEROConnection:
             if port is not None:
                 config["port"] = port
 
-            print("Loaded configuration from .env file")
+            logger.info("Loaded configuration from .env file")
             return config
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting
-            print(f"Could not load .env file: {e}")
+            logger.warning(f"Could not load .env file: {e}")
             return {}
 
     def _load_history_config(self) -> dict[str, Any]:
@@ -296,7 +300,7 @@ class SimpleOMEROConnection:
             recent = connections[0]
             # Only the source is printed: notebook outputs get committed, and
             # user@host would end up in the repository.
-            print("Loaded configuration from connection history")
+            logger.info("Loaded configuration from connection history")
             config: dict[str, Any] = {
                 "host": recent["host"],
                 "username": recent["username"],
@@ -313,7 +317,7 @@ class SimpleOMEROConnection:
             return config
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting
-            print(f"Could not load connection history: {e}")
+            logger.warning(f"Could not load connection history: {e}")
             return {}
 
     def _load_ezomero_config(self) -> dict[str, Any]:
@@ -352,11 +356,11 @@ class SimpleOMEROConnection:
                 config["port"] = port
 
             config["source"] = ".ezomero file"
-            print("Loaded configuration from .ezomero file")
+            logger.info("Loaded configuration from .ezomero file")
             return config
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting
-            print(f"Could not load .ezomero file: {e}")
+            logger.warning(f"Could not load .ezomero file: {e}")
             return {}
 
     def connect(
@@ -393,7 +397,7 @@ class SimpleOMEROConnection:
         try:
             if verbose:
                 host_display = f"{host}:{port}" if port else host
-                print(f"Connecting to OMERO server: {host_display}")
+                logger.info(f"Connecting to OMERO server: {host_display}")
 
             # Create BlitzGateway connection
             bg_kwargs: dict[str, Any] = {
@@ -412,9 +416,9 @@ class SimpleOMEROConnection:
             if conn.connect():
                 if verbose:
                     user, user_group = conn.getUser(), conn.getGroupFromContext()
-                    print("Connected to OMERO Server")
-                    print(f"User: {user.getName() if user else '?'}")
-                    print(f"Group: {user_group.getName() if user_group else '?'}")
+                    logger.info("Connected to OMERO Server")
+                    logger.info(f"User: {user.getName() if user else '?'}")
+                    logger.info(f"Group: {user_group.getName() if user_group else '?'}")
 
                 # Keep the session alive while the user annotates.
                 if conn.c is not None:
@@ -422,12 +426,12 @@ class SimpleOMEROConnection:
 
                 self.last_connection = conn
                 return conn
-            print("Connection to OMERO Server Failed")
+            logger.error("Connection to OMERO Server Failed")
             self._close_quietly(conn)
             return None
 
         except Exception as e:  # noqa: BLE001 - report any gateway/Ice failure as a failed connection
-            print(f"Error connecting to OMERO: {e}")
+            logger.error(f"Error connecting to OMERO: {e}")
             self._close_quietly(conn)
             return None
 
@@ -498,7 +502,7 @@ class SimpleOMEROConnection:
 
         # Validate required fields
         if not host or not username or not password:
-            print("Host, username, and password are required")
+            logger.warning("Host, username, and password are required")
             return None
 
         # Create connection first to validate it works
@@ -611,11 +615,11 @@ class SimpleOMEROConnection:
                 json.dump(connections, f, indent=2)
 
             if verbose:
-                print("Connection details saved to history")
+                logger.info("Connection details saved to history")
             return True
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting
-            print(f"Error saving connection details: {e}")
+            logger.error(f"Error saving connection details: {e}")
             return False
 
     def load_connection_history(self) -> list[dict[str, Any]]:
@@ -639,7 +643,7 @@ class SimpleOMEROConnection:
             return connections
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting
-            print(f"Error loading connection history: {e}")
+            logger.error(f"Error loading connection history: {e}")
             return []
 
     def delete_connection(self, host: str, username: str) -> bool:
@@ -661,7 +665,7 @@ class SimpleOMEROConnection:
 
             if not connections_file.exists():
                 if password_deleted:
-                    print("Password deleted from keychain")
+                    logger.info("Password deleted from keychain")
                 return password_deleted
 
             # Load existing connections
@@ -682,16 +686,16 @@ class SimpleOMEROConnection:
                 with connections_file.open("w") as f:
                     json.dump(connections, f, indent=2)
 
-                print("Connection deleted from history and keychain")
+                logger.info("Connection deleted from history and keychain")
                 return True
             if password_deleted:
-                print("Connection not in history; password deleted from keychain")
+                logger.info("Connection not in history; password deleted from keychain")
                 return True
-            print("Connection not found in history or keychain")
+            logger.warning("Connection not found in history or keychain")
             return False
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting
-            print(f"Error deleting connection: {e}")
+            logger.error(f"Error deleting connection: {e}")
             return False
 
     def get_connection_list(self) -> list[dict[str, Any]]:

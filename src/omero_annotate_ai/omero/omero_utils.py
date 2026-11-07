@@ -5,6 +5,7 @@ This module provides reusable utilities for common OMERO operations that are
 useful across different workflows and not specific to micro-SAM annotation.
 """
 
+import logging
 from typing import Any
 
 import dask.array as da
@@ -12,6 +13,8 @@ import numpy as np
 from dask.delayed import delayed
 
 from ._untyped import ezomero
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Table Management Utilities
@@ -36,7 +39,7 @@ def list_user_tables(
         List of dictionaries with table information
     """
     if conn is None:
-        print("Cannot list tables: OMERO connection is None")
+        logger.error("Cannot list tables: OMERO connection is None")
         return []
 
     tables = []
@@ -87,12 +90,12 @@ def list_user_tables(
                 except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
                     continue
         else:
-            print(
+            logger.info(
                 "Tip: Specify container_type and container_id for more efficient search"
             )
 
     except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        print(f"Error listing tables: {e}")
+        logger.error(f"Error listing tables: {e}")
 
     return tables
 
@@ -108,28 +111,28 @@ def delete_table(conn, table_id: int) -> bool:
         True if successful, False otherwise
     """
     if conn is None:
-        print("Cannot delete table: OMERO connection is None")
+        logger.error("Cannot delete table: OMERO connection is None")
         return False
 
     try:
         # Get table info first
         file_ann = conn.getObject("FileAnnotation", table_id)
         if not file_ann:
-            print(f"Table {table_id} not found")
+            logger.warning(f"Table {table_id} not found")
             return False
 
         table_name = (
             file_ann.getFile().getName() if file_ann.getFile() else f"ID:{table_id}"
         )
-        print(f"Deleting table: {table_name}")
+        logger.info(f"Deleting table: {table_name}")
 
         # Delete the file annotation
         conn.deleteObjects("FileAnnotation", [table_id], wait=True)
-        print(f"Successfully deleted table {table_id}")
+        logger.info(f"Successfully deleted table {table_id}")
         return True
 
     except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        print(f"Error deleting table {table_id}: {e}")
+        logger.error(f"Error deleting table {table_id}: {e}")
         return False
 
 
@@ -159,17 +162,17 @@ def validate_table_schema(
         is_valid = len(missing_columns) == 0
 
         if is_valid:
-            print(f"Table {table_id} schema is valid")
+            logger.info(f"Table {table_id} schema is valid")
             if extra_columns:
-                print(f"   Extra columns: {extra_columns}")
+                logger.info(f"   Extra columns: {extra_columns}")
         else:
-            print(f"Table {table_id} schema is invalid")
-            print(f"   Missing columns: {missing_columns}")
+            logger.warning(f"Table {table_id} schema is invalid")
+            logger.warning(f"   Missing columns: {missing_columns}")
 
         return is_valid, missing_columns
 
     except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        print(f"Error validating table {table_id}: {e}")
+        logger.error(f"Error validating table {table_id}: {e}")
         return False, expected_columns
 
 
@@ -220,10 +223,12 @@ def list_annotations_by_namespace(
             except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
                 continue
 
-        print(f"Found {len(annotations)} annotations with namespace '{namespace}'")
+        logger.info(
+            f"Found {len(annotations)} annotations with namespace '{namespace}'"
+        )
 
     except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        print(f"Error listing annotations: {e}")
+        logger.error(f"Error listing annotations: {e}")
 
     return annotations
 
@@ -248,18 +253,18 @@ def delete_annotations_by_namespace(
         )
 
         if not annotations:
-            print(f"No annotations found with namespace '{namespace}'")
+            logger.info(f"No annotations found with namespace '{namespace}'")
             return 0
 
         # Delete annotations
         ann_ids = [ann["id"] for ann in annotations]
         conn.deleteObjects("FileAnnotation", ann_ids, wait=True)
 
-        print(f"Deleted {len(ann_ids)} annotations with namespace '{namespace}'")
+        logger.info(f"Deleted {len(ann_ids)} annotations with namespace '{namespace}'")
         return len(ann_ids)
 
     except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        print(f"Error deleting annotations: {e}")
+        logger.error(f"Error deleting annotations: {e}")
         return 0
 
 
@@ -441,7 +446,7 @@ def _create_dask_array_for_image(
             return pix.getPlane(z_idx, c_idx, t_idx)
 
         except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-            print(
+            logger.error(
                 f"Error loading plane {z_idx},{c_idx},{t_idx} for image {image_id}: {e}"
             )
             return np.zeros((height, width), dtype=np.uint16)

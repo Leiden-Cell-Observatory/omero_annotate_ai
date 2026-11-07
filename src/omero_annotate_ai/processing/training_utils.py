@@ -1,8 +1,11 @@
 """Training convenience functions for clean notebook experiences."""
 
 import datetime
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def setup_training(
@@ -177,16 +180,16 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
     checkpoint_folder = config["checkpoint_folder"]
     checkpoint_folder.mkdir(exist_ok=True, parents=True)
 
-    print("Starting micro-SAM training...")
-    print(f"Model name: {config['model_name']}")
-    print(f"Model type: {config['model_type']}")
-    print("Training configuration:")
-    print(f"  Patch shape: {config['patch_shape']}")
-    print(f"  Batch size: {config['batch_size']}")
-    print(f"  Learning rate: {config['learning_rate']}")
-    print(f"  Epochs: {config['epochs']}")
-    print(f"  Objects per batch: {config['n_objects_per_batch']}")
-    print(f"  Checkpoint folder: {checkpoint_folder}")
+    logger.info("Starting micro-SAM training...")
+    logger.info(f"Model name: {config['model_name']}")
+    logger.info(f"Model type: {config['model_type']}")
+    logger.info("Training configuration:")
+    logger.info(f"  Patch shape: {config['patch_shape']}")
+    logger.info(f"  Batch size: {config['batch_size']}")
+    logger.info(f"  Learning rate: {config['learning_rate']}")
+    logger.info(f"  Epochs: {config['epochs']}")
+    logger.info(f"  Objects per batch: {config['n_objects_per_batch']}")
+    logger.info(f"  Checkpoint folder: {checkpoint_folder}")
 
     # Convert patch_shape to 3D format (C, H, W) if needed
     # micro-SAM expects 3D patch shape: (channels, height, width)
@@ -195,7 +198,7 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
     else:
         patch_shape_3d = config["patch_shape"]
 
-    print(f"  Using patch shape: {patch_shape_3d}")
+    logger.info(f"  Using patch shape: {patch_shape_3d}")
 
     # Create sampler with minimum size filter
     sampler = MinInstanceSampler(min_size=25)
@@ -204,7 +207,7 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
     train_instance_segmentation = config.get("train_instance_segmentation", True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"Training device: {device}")
+    logger.info(f"Training device: {device}")
 
     # micro-SAM requires inputs in [0, 255]; exports keep native bit depth.
     from omero_annotate_ai.processing.normalization import microsam_raw_transform
@@ -238,7 +241,7 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
         sampler=sampler,
     )
 
-    print("Data loaders created successfully!")
+    logger.info("Data loaders created successfully!")
 
     # Run training with correct function name and parameters
     try:
@@ -255,10 +258,10 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
             with_segmentation_decoder=train_instance_segmentation,
             device=device,
         )
-        print("Training completed successfully!")
+        logger.info("Training completed successfully!")
 
     except Exception as e:
-        print(f"Training failed with error: {e}")
+        logger.error(f"Training failed with error: {e}")
         raise
 
     # Find checkpoints in the correct location
@@ -287,7 +290,7 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
         import shutil
 
         shutil.copy2(latest_checkpoint, final_model_path)
-        print(f"Final model exported to: {final_model_path}")
+        logger.info(f"Final model exported to: {final_model_path}")
 
     # Prepare results dictionary
     results = {
@@ -312,13 +315,13 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-    print("\nTraining summary:")
-    print(f"  Model name: {config['model_name']}")
-    print(f"  Output directory: {config['output_dir']}")
-    print(f"  Checkpoints saved: {len(checkpoints)}")
+    logger.info("Training summary:")
+    logger.info(f"  Model name: {config['model_name']}")
+    logger.info(f"  Output directory: {config['output_dir']}")
+    logger.info(f"  Checkpoints saved: {len(checkpoints)}")
     if results["best_checkpoint"]:
-        print(f"  Best checkpoint: {results['best_checkpoint']}")
+        logger.info(f"  Best checkpoint: {results['best_checkpoint']}")
     if results["final_model_path"]:
-        print(f"  Final model: {final_model_path}")
+        logger.info(f"  Final model: {final_model_path}")
 
     return results

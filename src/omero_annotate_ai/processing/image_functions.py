@@ -1,11 +1,14 @@
 """Image processing functions for annotation workflows."""
 
+import logging
 import random as rnd
 
 # Optional dependencies for ROI functionality
 import cv2
 import ezomero.rois
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def generate_patch_coordinates(
@@ -35,7 +38,7 @@ def generate_patch_coordinates(
     # Check if image is smaller than patch
     if width < patch_w or height < patch_h:
         # Image smaller than patch, return image size as patch size
-        print("Image smaller than patch size, using full image")
+        logger.info("Image smaller than patch size, using full image")
         actual_patch_size = (height, width)
         return [(0, 0)], actual_patch_size
 
@@ -73,8 +76,9 @@ def generate_patch_coordinates(
                 used_areas.append(new_rect)
 
         if len(coordinates) < n_patches:
-            print(
-                f"Could only place {len(coordinates)} non-overlapping patches out of {n_patches} requested"
+            logger.warning(
+                f"Could only place {len(coordinates)} non-overlapping patches "
+                f"out of {n_patches} requested"
             )
 
     else:
@@ -85,8 +89,9 @@ def generate_patch_coordinates(
         max_grid_patches = patches_x * patches_y
 
         if n_patches > max_grid_patches:
-            print(
-                f"Requested {n_patches} patches, but only {max_grid_patches} non-overlapping patches fit"
+            logger.warning(
+                f"Requested {n_patches} patches, but only {max_grid_patches} "
+                "non-overlapping patches fit"
             )
             n_patches = max_grid_patches
 
@@ -239,7 +244,7 @@ def label_to_rois(
             else:
                 actual_z = z_slice + z_index  # Assume z_slice is the starting index
 
-            print(f"Processing volumetric ROIs for z-slice {actual_z}")
+            logger.debug(f"Processing volumetric ROIs for z-slice {actual_z}")
             shapes.extend(
                 process_label_plane(
                     z_plane,

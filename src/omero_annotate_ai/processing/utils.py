@@ -1,6 +1,10 @@
 """Utility functions for micro-SAM workflows."""
 
+import logging
+
 import pandas as pd
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
@@ -54,7 +58,4 @@ def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
     available_optional = optional_columns.intersection(set(df.columns))
     if available_optional:
         message = f"Optional columns found: {sorted(available_optional)}"
-        if logger:
-            logger.debug(message)
-        else:
-            print(message)
+        (logger or _LOGGER).debug(message)

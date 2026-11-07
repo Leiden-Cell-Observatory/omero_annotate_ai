@@ -5,6 +5,7 @@ where a secret could escape - the keychain, ``.env`` and ``~/.ezomero``.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -16,6 +17,8 @@ try:
     CONNECTION_AVAILABLE = True
 except ImportError:
     CONNECTION_AVAILABLE = False
+
+LOGGER = "omero_annotate_ai.omero.simple_connection"
 
 
 pytestmark = [
@@ -282,33 +285,41 @@ class TestKeyringBackendChecks:
         ],
     )
     def test_unusable_backend_refuses_to_save(
-        self, manager, fake_keyring, backend, capsys
+        self, manager, fake_keyring, backend, caplog
     ):
         fake_keyring.backend = backend
 
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is False
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert (
+                manager.save_password("omero.example.org", "alice", "s3cret") is False
+            )
         assert fake_keyring.store == {}
-        assert "no usable keyring backend" in capsys.readouterr().out
+        assert "no usable keyring backend" in caplog.text
 
-    def test_plaintext_backend_saves_with_warning(self, manager, fake_keyring, capsys):
+    def test_plaintext_backend_saves_with_warning(self, manager, fake_keyring, caplog):
         fake_keyring.backend = _backend("keyrings.alt.file", "PlaintextKeyring")
 
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is True
-        out = capsys.readouterr().out
-        assert "unencrypted" in out
-        assert "keyrings.alt.file.PlaintextKeyring" in out
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert manager.save_password("omero.example.org", "alice", "s3cret") is True
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("unencrypted" in r.getMessage() for r in warnings)
+        assert "keyrings.alt.file.PlaintextKeyring" in caplog.text
 
     def test_read_back_mismatch_is_not_reported_as_saved(
-        self, manager, fake_keyring, monkeypatch, capsys
+        self, manager, fake_keyring, monkeypatch, caplog
     ):
         monkeypatch.setattr(fake_keyring, "set_password", lambda *a: None)
 
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is False
-        assert "did not keep it" in capsys.readouterr().out
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert (
+                manager.save_password("omero.example.org", "alice", "s3cret") is False
+            )
+        assert "did not keep it" in caplog.text
 
-    def test_success_names_the_backend(self, manager, fake_keyring, capsys):
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is True
-        assert "_GoodBackend" in capsys.readouterr().out
+    def test_success_names_the_backend(self, manager, fake_keyring, caplog):
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert manager.save_password("omero.example.org", "alice", "s3cret") is True
+        assert "_GoodBackend" in caplog.text
 
 
 class TestForgetPassword:
@@ -322,14 +333,14 @@ class TestForgetPassword:
 
 
 class TestHistoryMessage:
-    def test_history_message_does_not_name_user_or_host(self, manager, capsys):
+    def test_history_message_does_not_name_user_or_host(self, manager, caplog):
         manager.save_connection_details("omero.example.org", "alice", verbose=False)
 
-        manager.load_config_files()
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            manager.load_config_files()
 
-        out = capsys.readouterr().out
-        assert "connection history" in out
-        assert "alice" not in out and "omero.example.org" not in out
+        assert "connection history" in caplog.text
+        assert "alice" not in caplog.text and "omero.example.org" not in caplog.text
 
 
 class TestConnectGatewayArgs:
