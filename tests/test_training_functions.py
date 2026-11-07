@@ -595,6 +595,30 @@ class TestPrepareFromTableRecords:
             assert key in result, f"setup_training requires {key}"
         assert (result["val_input"] / "1.tif").exists()
 
+    def test_label_that_no_longer_matches_its_digest_stops_the_export(self, tmp_path):
+        from omero_annotate_ai.bundle import pixel_digest
+        from omero_annotate_ai.errors import IntegrityError
+
+        table = self._table()
+        table["mask_digest"] = pixel_digest(np.ones((4, 4), dtype=np.uint8))
+        table.loc[1, "mask_digest"] = pixel_digest(np.zeros((4, 4), dtype=np.uint8))
+
+        with pytest.raises(IntegrityError, match="1"):
+            self._run(tmp_path, table)
+
+    def test_matching_digests_export_normally(self, tmp_path):
+        from omero_annotate_ai.bundle import pixel_digest
+
+        table = self._table()
+        table["mask_digest"] = pixel_digest(np.ones((4, 4), dtype=np.uint8))
+
+        result = self._run(tmp_path, table)
+
+        assert sorted(p.name for p in result["train_label"].glob("*.tif")) == [
+            "0.tif",
+            "1.tif",
+        ]
+
 
 @pytest.mark.unit
 class TestEmptyTrainingSetIsLoud:

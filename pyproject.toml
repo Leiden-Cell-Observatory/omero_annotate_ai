@@ -131,6 +131,9 @@ strict = [
     "src/omero_annotate_ai/annotators.py",
     "src/omero_annotate_ai/bundle.py",
     "src/omero_annotate_ai/errors.py",
+    "src/omero_annotate_ai/events.py",
+    "src/omero_annotate_ai/session.py",
+    "src/omero_annotate_ai/reconcile.py",
 ]
 
 [tool.pytest.ini_options]

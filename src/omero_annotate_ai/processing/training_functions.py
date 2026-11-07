@@ -16,7 +16,9 @@ import numpy as np
 import pandas as pd
 from tifffile import imread
 
+from ..bundle import file_digest
 from ..core.annotation_config import NormalizationConfig
+from ..errors import IntegrityError
 from ..omero._untyped import ezomero
 from ..utils.logging import create_training_logger
 from .normalization import NormalizationRecorder, write_native_sidecar
@@ -629,11 +631,16 @@ def _records_from_table(
     fetched lazily (ArraySource), so dropping the record costs nothing - and nothing
     is written for it.
 
+    Raises:
+        IntegrityError: A label file's pixels no longer match the ``mask_digest``
+            recorded when it was annotated.
+
     Returns:
         (records, n_missing)
     """
     records = []
     n_missing = 0
+    changed: list[str] = []
 
     for _, row in df.iterrows():
         annotation_id = str(row["annotation_id"])
@@ -645,6 +652,9 @@ def _records_from_table(
             if logger:
                 logger.warning(f"Skipping annotation {annotation_id}: no label")
             continue
+        recorded = str(row.get("mask_digest") or "")
+        if recorded and recorded != "nan" and file_digest(label_path) != recorded:
+            changed.append(annotation_id)
 
         category = "training" if bool(row["train"]) else "validation"
 
@@ -675,6 +685,12 @@ def _records_from_table(
             )
         )
 
+    if changed:
+        raise IntegrityError(
+            f"{len(changed)} label file(s) on OMERO no longer match the masks recorded "
+            f"when they were annotated: {', '.join(changed[:5])}"
+            + (" ..." if len(changed) > 5 else "")
+        )
     return records, n_missing
 
 

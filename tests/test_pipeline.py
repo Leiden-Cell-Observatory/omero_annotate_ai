@@ -1,6 +1,5 @@
 """Tests for the annotation pipeline."""
 
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,14 +14,14 @@ from omero_annotate_ai.core.annotation_config import (
     create_default_config,
 )
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
+from omero_annotate_ai.sources import OmeroImageSource
 from omero_annotate_ai.sources.uri import (
     annotation_id as make_annotation_id,
 )
 from omero_annotate_ai.sources.uri import (
     omero_uri,
-    parse_omero_uri,
 )
+from tests.fakes import FakeImageSource, FakeOmero
 
 
 def _read_only_config():
@@ -30,59 +29,6 @@ def _read_only_config():
     config = create_default_config()
     config.workflow.read_only_mode = True
     return config
-
-
-class FakeImage:
-    """Handle with no OMERO methods: proves the pipeline only talks to the source."""
-
-    def __init__(self, image_id, name):
-        self.image_id = image_id
-        self.name = name
-
-
-class FakeImageSource:
-    """In-memory ImageSource over (t, c, z, y, x) arrays; records read calls."""
-
-    def __init__(self, arrays):
-        self.arrays = arrays  # {image_id: ndarray (t, c, z, y, x)}
-        self.reads = []
-
-    def get_image(self, image_id):
-        if isinstance(image_id, str):
-            image_id = parse_omero_uri(image_id)
-        if image_id not in self.arrays:
-            raise LookupError(image_id)
-        return FakeImage(image_id, f"img{image_id}")
-
-    def metadata(self, image):
-        t, c, z, y, x = self.arrays[image.image_id].shape
-        return ImageMeta(
-            omero_uri(image.image_id),
-            image.name,
-            t,
-            c,
-            z,
-            y,
-            x,
-            str(self.arrays[image.image_id].dtype),
-        )
-
-    def read_plane(self, image, *, t, c, z, region=None):
-        self.reads.append(("plane", image.image_id, t, c, z, region))
-        plane = self.arrays[image.image_id][t, c, z]
-        if region is not None:
-            x, y, w, h = clamp_region(region, *plane.shape)
-            plane = plane[y : y + h, x : x + w]
-        return plane
-
-    def read_volume(self, image, *, t, c, z_start, z_end, region=None):
-        self.reads.append(("volume", image.image_id, t, c, (z_start, z_end), region))
-        return np.stack(
-            [
-                self.read_plane(image, t=t, c=c, z=z, region=region)
-                for z in range(z_start, z_end + 1)
-            ]
-        )
 
 
 @pytest.mark.unit
@@ -463,8 +409,7 @@ class TestAnnotationPipeline:
 
             # Verify the table was created with the exact name from config
             mock_create_table.assert_called_once()
-            call_args = mock_create_table.call_args
-            table_title_arg = call_args.kwargs.get("table_title")
+            table_title_arg = mock_create_table.call_args.args[2]
 
             assert table_title_arg == unique_name
             assert table_title_arg == config.name
@@ -693,69 +638,30 @@ class TestAnnotationPipeline:
         assert unprocessed[0].image_id == 1
         assert processed[0].image_id == 2
 
-    def test_process_annotation_results_pairs_tiff_by_name_not_glob_order(
-        self, tmp_path
-    ):
-        """seg_0000i.tif must upload to metadata[i]'s image, regardless of glob order.
+    def test_custom_annotation_masks_pair_by_name_not_glob_order(self, tmp_path):
+        """seg_0000i.tif must upload to item i's image, whatever order glob() returns."""
+        config, source, omero = omero_set(tmp_path, n_images=3)
 
-        Regression: _process_annotation_results paired metadata[i] with the raw
-        glob() result tiff_files[i]. glob() returns arbitrary filesystem order, so
-        when the filesystem yielded files in reverse, image N received image
-        (count-1-N)'s mask. Here glob is forced to return reverse order to
-        reproduce that failure deterministically.
-        """
-        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+        def annotate(units):
+            folder = tmp_path / "custom"
+            folder.mkdir(exist_ok=True)
+            for position, (image, _id, _meta, _row) in enumerate(units):
+                mask = np.full((16, 16), image.image_id, dtype=np.uint16)
+                tifffile.imwrite(folder / f"seg_{position:05d}.tif", mask)
+            return {"annotations_path": folder}
 
-        config = create_default_config()
-        config.workflow.read_only_mode = False
-        config.spatial_coverage.use_patches = False
-        config.output.output_directory = tmp_path / "set"
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        pipeline.set_table_id(7)  # uploads need the table to exist first
-        pipeline._save_original_image_for_annotation = Mock()
-
-        # Three annotations + parallel seg files + metadata, all in order 0,1,2
-        annotations_path = tmp_path / "annotations"
-        annotations_path.mkdir()
-        metadata = []
-        for i in range(3):
-            config.add_annotation(
-                ImageAnnotation(
-                    image_id=100 + i, image_name=f"img{i}", annotation_id=f"ann{i}"
-                )
-            )
-            (annotations_path / f"seg_{i:05d}.tif").write_bytes(f"mask{i}".encode())
-            metadata.append((f"ann{i}", {"image_id": 100 + i}, i))
-
-        captured = []
-
-        def fake_upload(conn, image_id, annotation_file, **kwargs):
-            captured.append((image_id, Path(annotation_file).read_bytes()))
-            return (image_id * 10, image_id * 100)
-
-        # Force glob to return descending name order, a valid (worst-case)
-        # filesystem ordering that the buggy positional pairing mishandles.
         real_glob = Path.glob
 
         def reversed_glob(self, pattern):
             return sorted(real_glob(self, pattern), reverse=True)
 
-        with (
-            patch(
-                "omero_annotate_ai.core.annotation_pipeline.upload_rois_and_labels",
-                side_effect=fake_upload,
-            ),
-            patch.object(Path, "glob", reversed_glob),
-        ):
-            pipeline._process_annotation_results(
-                {"metadata": metadata, "annotations_path": annotations_path}
-            )
+        pipeline = omero_pipeline(config, source, omero)
+        with patch.object(Path, "glob", reversed_glob):
+            pipeline.run_custom_annotation(annotate, list(source_images(source)))
 
-        # Each seg_0000i.tif must have been uploaded to image 100+i
-        assert captured == [(100, b"mask0"), (101, b"mask1"), (102, b"mask2")]
-        for i in range(3):
-            kept = tmp_path / "set" / "annotation_output" / f"ann{i}_mask.tif"
-            assert kept.read_bytes() == f"mask{i}".encode()
+        for upload in omero.labels.values():
+            assert set(np.unique(upload.pixels)) == {upload.image_id}
+        assert len(omero.labels) == 3
 
     def test_three_way_split_with_counts(self):
         """Test train/validation/test split with specific counts."""
@@ -1028,169 +934,45 @@ class TestFractionSync:
 
 @pytest.mark.unit
 class TestPipelineIntegration:
-    """Test pipeline integration scenarios."""
+    """The whole workflow against an in-memory OMERO (tests/fakes.py)."""
 
-    @patch("omero_annotate_ai.core.annotation_pipeline.ezomero")
-    def test_run_full_microsam_workflow_basic(self, mock_ezomero):
-        """Test running the full micro-SAM workflow with mocked dependencies."""
-        mock_ezomero.get_image_ids.return_value = [1, 2]
-        config = create_default_config()
-        config.omero.container_type = "dataset"
-        config.omero.container_id = 123
-        config.workflow.batch_size = 2
-        config.training.train_n = 1
-        config.training.validate_n = 1
-        mock_images = []
-        for i in range(2):
-            mock_img = Mock()
-            mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i + 1}"
-            mock_img.getSizeT.return_value = 1
-            mock_img.getSizeZ.return_value = 1
-            mock_images.append(mock_img)
-        mock_conn = Mock()
-        mock_conn.getObject = Mock(side_effect=mock_images)
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
-        with (
-            patch.object(pipeline, "_run_micro_sam_annotation") as mock_annotate,
-            patch(
-                "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table",
-                return_value=456,
-            ),
-            patch.object(pipeline, "_process_annotation_results"),
-            patch.object(pipeline, "_write_omero_table"),
-            patch.object(pipeline, "_auto_save_config"),
-            patch.object(pipeline, "_upload_annotation_config_to_omero"),
-        ):
-            mock_annotate.return_value = {
-                "metadata": [
-                    ("ann1", {"image_id": 1}, 0),
-                    ("ann2", {"image_id": 2}, 1),
-                ],
-                "annotations_path": Path(tempfile.mkdtemp()),
-            }
-            table_id, result_config = pipeline.run_full_micro_sam_workflow(mock_images)
-            assert table_id == 456
-            assert result_config == config
-            mock_annotate.assert_called()
+    def test_full_workflow_uploads_every_unit(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        pipeline = omero_pipeline(config, source, omero)
 
-    def test_run_full_workflow_resume_mode(self):
-        """Test running workflow in resume mode."""
-        config = create_default_config()
-        config.workflow.resume_from_table = True
-        config.omero.container_id = 123
-        config.training.train_n = 1
-        config.training.validate_n = 1
-        # Create mock images for the workflow
-        mock_images = []
-        for i in range(2):
-            mock_img = Mock()
-            mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i + 1}"
-            mock_img.getSizeT.return_value = 1
-            mock_img.getSizeZ.return_value = 1
-            mock_img.getSizeY.return_value = 1000
-            mock_img.getSizeX.return_value = 1000
-            mock_images.append(mock_img)
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        with (
-            patch.object(pipeline, "_find_existing_table", return_value=789),
-            patch(
-                "omero_annotate_ai.core.annotation_pipeline.sync_omero_table_to_config"
-            ),
-            patch.object(
-                pipeline, "get_images_from_container", return_value=mock_images
-            ),
-            patch.object(pipeline, "_auto_save_config"),
-            patch.object(
-                pipeline, "_upload_annotation_config_to_omero", return_value=789
-            ),
-            patch(
-                "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table",
-                return_value=789,
-            ),
-        ):
-            # Patch _prepare_processing_units only for the first call
-            with patch.object(pipeline, "_prepare_processing_units"):
-                config.annotations = []  # Start with empty annotations for resume mode
-                pipeline.initialize_workflow(mock_images)
-                # No schema to define, so run_micro_sam_annotation should raise ValueError
-                with pytest.raises(ValueError):
-                    pipeline.run_micro_sam_annotation()
-            # Now define schema and mark all as processed (do not patch _prepare_processing_units)
-            pipeline.define_annotation_schema(mock_images)
-            for ann in config.annotations:
-                ann.processed = True
-            # Should print 'All annotations already processed!' and return table_id, config
-            table_id, result_config = pipeline.run_micro_sam_annotation()
-            assert table_id == 789
-            assert pipeline.table_id == 789
-            assert result_config == config
+        table_id, result = pipeline.run_full_micro_sam_workflow(
+            list(source_images(source))
+        )
 
-    @pytest.mark.parametrize(
-        "processed_flags,expected_unprocessed",
-        [
-            ([False, False, False], 3),
-            ([True, True, True], 0),
-            ([True, False, True], 1),
-            ([], 0),
-        ],
-    )
-    def test_resume_logic_edge_cases(
-        self, processed_flags, expected_unprocessed, tmp_path
+        rows = omero.tables[table_id]
+        assert result is config
+        assert rows["processed"].all() and (rows["label_id"] > 0).all()
+        assert len(rows["mask_digest"].unique()) == 2 and all(rows["input_digest"])
+        assert all(n == (1, 1) for n in omero.uploads_per_tag().values())
+        assert omero.calls["table"] == 1  # one table write for the one batch
+
+    @pytest.mark.parametrize("annotated_first", [0, 1, 3])
+    def test_resume_finishes_what_the_first_session_left(
+        self, tmp_path, annotated_first
     ):
-        """Test resume logic for all/none/some processed and empty schema."""
-        config = create_default_config()
-        config.output.output_directory = tmp_path
-        config.omero.container_id = 123
-        config.training.train_n = len(processed_flags)
-        config.training.validate_n = 0
-        # Mock images
-        mock_images = []
-        for i in range(len(processed_flags)):
-            mock_img = Mock()
-            mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i + 1}"
-            mock_img.getSizeT.return_value = 1
-            mock_img.getSizeZ.return_value = 1
-            mock_images.append(mock_img)
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        pipeline.initialize_workflow(mock_images)
-        pipeline.define_annotation_schema(mock_images)
-        # Set processed flags
-        for ann, flag in zip(config.annotations, processed_flags, strict=True):
-            ann.processed = flag
-        # Patch annotation runner and OMERO table creation to avoid real OMERO logic
-        with (
-            patch.object(pipeline, "_run_micro_sam_annotation") as mock_annotate,
-            patch(
-                "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table",
-                return_value=12345,
-            ),
-            patch(
-                "omero_annotate_ai.core.annotation_pipeline.replace_table_config",
-                return_value=12345,
-            ),
-        ):
-            mock_annotate.return_value = {
-                "metadata": [],
-                "annotations_path": Path(tempfile.mkdtemp()),
-            }
-            if len(processed_flags) == 0:
-                # No schema defined, should raise ValueError
-                with pytest.raises(ValueError):
-                    pipeline.run_micro_sam_annotation()
-            elif expected_unprocessed == 0:
-                # Should print 'All annotations already processed!' and return
-                table_id, result_config = pipeline.run_micro_sam_annotation()
-                assert table_id == pipeline.table_id
-                assert result_config == config
-                mock_annotate.assert_not_called()
-            else:
-                table_id, result_config = pipeline.run_micro_sam_annotation()
-                assert table_id == pipeline.table_id
-                assert result_config == config
-                mock_annotate.assert_called()
+        config, source, omero = omero_set(tmp_path, n_images=3)
+        first = omero_pipeline(config, source, omero, limit=annotated_first)
+        table_id, _ = first.run_full_micro_sam_workflow(list(source_images(source)))
+
+        resumed = resume_of(config, table_id)
+        omero_pipeline(resumed, source, omero).run_full_micro_sam_workflow(
+            list(source_images(source))
+        )
+
+        rows = omero.tables[table_id]
+        assert len(rows) == 3 and rows["processed"].all()
+        assert all(n == (1, 1) for n in omero.uploads_per_tag().values())
+        assert len(omero.uploads_per_tag()) == 3
+
+    def test_run_without_schema_raises(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=1)
+        with pytest.raises(ValueError, match="schema"):
+            omero_pipeline(config, source, omero).run_micro_sam_annotation()
 
 
 @pytest.mark.unit
@@ -1406,10 +1188,8 @@ class TestContextChannelHook:
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
-        batch_data = [(source.get_image(1), "ann1", meta, 0)]
 
-        context_images = pipeline._build_context_images(batch_data)
-        assert context_images == [{}]
+        assert pipeline._context_for(source.get_image(1), meta) == {}
 
     def test_build_context_images_loads_correct_channel(self):
         """With context_channels=[1], loads channel 1 for each batch item."""
@@ -1432,12 +1212,10 @@ class TestContextChannelHook:
         pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
-        batch_data = [(source.get_image(1), "ann1", meta, 0)]
 
-        context_images = pipeline._build_context_images(batch_data)
-        assert len(context_images) == 1
-        assert "DAPI" in context_images[0]
-        np.testing.assert_array_equal(context_images[0]["DAPI"], ctx_arr)
+        context = pipeline._context_for(source.get_image(1), meta)
+        assert list(context) == ["DAPI"]
+        np.testing.assert_array_equal(context["DAPI"], ctx_arr)
 
 
 @pytest.mark.unit
@@ -1650,8 +1428,11 @@ class TestMicroSamSeparateChannelSaving:
     def test_training_channel_goes_to_model_input(self, tmp_path):
         pipeline = self._pipeline(tmp_path)
 
-        pipeline._save_original_image_for_annotation(
-            {"image_id": 1, "timepoint": 0, "z_slice": 0}, "img_001"
+        pipeline._save_inputs(
+            Mock(),
+            {"image_id": 1, "timepoint": 0, "z_slice": 0},
+            "img_001",
+            np.full((8, 8), 3, dtype=np.uint16),
         )
 
         assert (tmp_path / "annotation_input" / "img_001.tif").exists()
@@ -1672,8 +1453,11 @@ class TestMicroSamSeparateChannelSaving:
         )
 
         pipeline = self._pipeline(tmp_path)
-        pipeline._save_original_image_for_annotation(
-            {"image_id": 1, "timepoint": 0, "z_slice": 0}, "img_001"
+        pipeline._save_inputs(
+            Mock(),
+            {"image_id": 1, "timepoint": 0, "z_slice": 0},
+            "img_001",
+            np.full((8, 8), 3, dtype=np.uint16),
         )
         # The annotation the user would have drawn.
         import tifffile
@@ -1914,7 +1698,7 @@ class TestExtendOnResume:
     def test_schema_updates_the_table_only_when_images_were_added(self):
         pipeline = self._pipeline()
         pipeline.table_id = 22159
-        with patch.object(pipeline, "_write_omero_table") as replace:
+        with patch.object(pipeline, "write_table") as replace:
             pipeline.define_annotation_schema([])
             replace.assert_not_called()
 
@@ -1922,3 +1706,58 @@ class TestExtendOnResume:
             pipeline.define_annotation_schema([])
             replace.assert_called_once()
         assert len(self._images(pipeline.config, "training")) == 3
+
+
+# ---------------------------------------------------------------------------
+# Helpers: an OMERO training set on fakes
+# ---------------------------------------------------------------------------
+
+
+def omero_set(tmp_path, n_images=3):
+    """A dataset of ``n_images`` 16x16 images (pixel value = image ID), all training."""
+    source = FakeImageSource(
+        {
+            i: np.full((1, 1, 1, 16, 16), i, dtype=np.uint16)
+            for i in range(1, n_images + 1)
+        }
+    )
+    config = create_default_config()
+    config.name = "fake_set"
+    config.omero.container_type = "dataset"
+    config.omero.container_id = 1
+    config.training.train_n = n_images
+    config.training.validate_n = 0
+    config.training.test_n = 0
+    config.output.output_directory = tmp_path / "set"
+    return config, source, FakeOmero()
+
+
+def source_images(source):
+    return (source.get_image(i) for i in sorted(source.arrays))
+
+
+def image_mask(pixels):
+    """The scripted user's mask: the whole plane, labelled with the image's ID."""
+    return np.full(np.asarray(pixels).shape, int(np.asarray(pixels).max()), np.uint16)
+
+
+def omero_pipeline(config, source, omero, limit=None, **kwargs):
+    from omero_annotate_ai.annotators import ScriptedAnnotator
+
+    return AnnotationPipeline(
+        config,
+        conn=omero.conn(),
+        image_source=source,
+        annotator=ScriptedAnnotator(image_mask, limit=limit),
+        omero_writes=omero,
+        **kwargs,
+    )
+
+
+def resume_of(config, table_id):
+    """The same training set, resumed: rows come from the table again."""
+    resumed = config.model_copy(deep=True)
+    resumed.annotations = []
+    resumed.workflow.resume_from_table = True
+    resumed.omero.table_id = table_id
+    return resumed
