@@ -49,7 +49,7 @@ def clamp_region(region: Region, size_y: int, size_x: int) -> Region:
 class ImageSource(Protocol):
     """Where the pipeline gets images from."""
 
-    def get_image(self, image_id: Any) -> Any:
+    def get_image(self, image_id: Any, /) -> Any:
         """Return the handle for ``image_id``; raise ``LookupError`` if it does not exist."""
         ...
 

@@ -17,6 +17,7 @@ annotation set and travels with the exported dataset.
 
 import json
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -190,25 +191,29 @@ def microsam_raw_transform(spec: Any) -> Callable[[np.ndarray], np.ndarray]:
         spec = NormalizationConfig()
 
     if spec.apply_at_export:
+        return _unit_range_to_8bit
+    if spec.method == "percentile":
+        return partial(
+            _percentile_to_8bit, low=spec.percentile_low, high=spec.percentile_high
+        )
+    return _require_8bit_range
 
-        def transform(x):
-            return np.clip(np.asarray(x, dtype=np.float32), 0.0, 1.0) * 255.0
-    elif spec.method == "percentile":
 
-        def transform(x):
-            normalised, _ = percentile_normalize(
-                x, spec.percentile_low, spec.percentile_high, clip=True
-            )
-            return normalised * 255.0
-    else:
+def _unit_range_to_8bit(x: np.ndarray) -> np.ndarray:
+    """Images normalised at export are in [0, 1]."""
+    return np.clip(np.asarray(x, dtype=np.float32), 0.0, 1.0) * 255.0
 
-        def transform(x):
-            x = np.asarray(x, dtype=np.float32)
-            if x.min() < 0 or x.max() > 255:
-                raise ValueError(
-                    "micro-SAM needs input in the 0-255 range, but these images go up to "
-                    f"{x.max():g}. Use normalization.method 'percentile' (the default)."
-                )
-            return x
 
-    return transform
+def _percentile_to_8bit(x: np.ndarray, *, low: float, high: float) -> np.ndarray:
+    normalised, _ = percentile_normalize(x, low, high, clip=True)
+    return normalised * 255.0
+
+
+def _require_8bit_range(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    if x.min() < 0 or x.max() > 255:
+        raise ValueError(
+            "micro-SAM needs input in the 0-255 range, but these images go up to "
+            f"{x.max():g}. Use normalization.method 'percentile' (the default)."
+        )
+    return x

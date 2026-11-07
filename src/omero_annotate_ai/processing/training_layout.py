@@ -201,7 +201,7 @@ class ArraySource:
         return "write"
 
 
-Source = object  # FileSource | ArraySource
+Source = FileSource | ArraySource
 
 
 @dataclass

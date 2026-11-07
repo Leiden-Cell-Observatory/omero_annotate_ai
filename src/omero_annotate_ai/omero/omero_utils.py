@@ -8,9 +8,10 @@ useful across different workflows and not specific to micro-SAM annotation.
 from typing import Any
 
 import dask.array as da
-import ezomero
 import numpy as np
 from dask.delayed import delayed
+
+from ._untyped import ezomero
 
 # =============================================================================
 # Table Management Utilities
@@ -18,7 +19,10 @@ from dask.delayed import delayed
 
 
 def list_user_tables(
-    conn, container_type: str = None, container_id: int = None, namespace: str = None
+    conn,
+    container_type: str | None = None,
+    container_id: int | None = None,
+    namespace: str | None = None,
 ) -> list[dict]:
     """List all OMERO.tables accessible to the user.
 

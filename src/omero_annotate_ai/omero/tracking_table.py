@@ -19,18 +19,9 @@ from collections.abc import Iterable
 
 import pandas as pd
 
-try:
-    import ezomero
-    import omero.grid as omero_grid
-    import omero.model as omero_model
-    from omero.constants.namespaces import NSBULKANNOTATIONS
-    from omero.rtypes import rstring
-except ImportError:  # pragma: no cover - exercised only without OMERO installed
-    ezomero = None
-    omero_grid = None
-    omero_model = None
-    NSBULKANNOTATIONS = None
-    rstring = None
+from ._untyped import NSBULKANNOTATIONS, omero_grid, omero_model, omero_rtypes
+
+rstring = omero_rtypes.rstring
 
 
 TABLE_MARKER = "omero-annotate-ai table v2"
@@ -338,15 +329,17 @@ def write_rows(conn, table_id: int, df: pd.DataFrame) -> dict[str, int]:
             existing = {str(k): i for i, k in enumerate(keys)}
 
         keys = df[KEY_COLUMN].astype(str)
-        to_update = df[keys.isin(existing)]
-        to_add = df[~keys.isin(existing)]
+        to_update = df.loc[keys.isin(existing)]
+        to_add = df.loc[~keys.isin(existing)]
 
         if len(to_update):
             row_numbers = [existing[str(k)] for k in to_update[KEY_COLUMN]]
             data = table.readCoordinates(row_numbers)
             # readCoordinates returns the rows in the order asked for.
             for column in data.columns:
-                column.values = _values_for(column, to_update[_df_name(column.name)])
+                column.values = _values_for(
+                    column, to_update.loc[:, _df_name(column.name)]
+                )
             table.update(data)
         if len(to_add):
             table.addData(_fill_columns(table.getHeaders(), to_add))

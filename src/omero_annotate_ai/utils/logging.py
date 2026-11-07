@@ -12,7 +12,7 @@ def setup_logger(
     log_file: str | Path | None = None,
     verbose: bool = False,
     console_level: int | None = None,
-    jupyter_mode: bool = None,
+    jupyter_mode: bool | None = None,
 ) -> logging.Logger:
     """
     Set up a logger for the omero_annotate_ai package.

@@ -25,9 +25,10 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import ezomero
 import numpy as np
 from tifffile import imwrite
+
+from ..omero._untyped import ezomero
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.annotation_config import AnnotationConfig, ImageAnnotation
@@ -70,7 +71,11 @@ def _fetch_plane(
     z/c/t axes are dropped and x/y swapped to give the row-major (y, x) layout
     ``tifffile`` expects.
     """
-    image_id = int(annotation.image_id)
+    if annotation.image_id is None:
+        raise ValueError(
+            f"Annotation {annotation.annotation_id!r} has no OMERO image id"
+        )
+    image_id = annotation.image_id
     if (
         annotation.is_patch
         and annotation.patch_width > 0

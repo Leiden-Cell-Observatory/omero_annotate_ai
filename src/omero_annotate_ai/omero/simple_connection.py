@@ -411,12 +411,14 @@ class SimpleOMEROConnection:
             # Test connection
             if conn.connect():
                 if verbose:
+                    user, user_group = conn.getUser(), conn.getGroupFromContext()
                     print("Connected to OMERO Server")
-                    print(f"User: {conn.getUser().getName()}")
-                    print(f"Group: {conn.getGroupFromContext().getName()}")
+                    print(f"User: {user.getName() if user else '?'}")
+                    print(f"Group: {user_group.getName() if user_group else '?'}")
 
-                # Enable keep-alive
-                conn.c.enableKeepAlive(60)
+                # Keep the session alive while the user annotates.
+                if conn.c is not None:
+                    conn.c.enableKeepAlive(60)
 
                 self.last_connection = conn
                 return conn

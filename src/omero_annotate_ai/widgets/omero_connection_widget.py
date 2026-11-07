@@ -295,7 +295,7 @@ class OMEROConnectionWidget:
             for conn in connections
         }
 
-        options = [("Manual entry", None)]
+        options: list[tuple[str, str | None]] = [("Manual entry", None)]
         for key, conn in self._connections_by_key.items():
             display_text = (
                 f"{conn['display_name']} (last used: {conn['last_used_display']})"
@@ -471,6 +471,8 @@ class OMEROConnectionWidget:
 
     def _print_connection_details(self):
         """Show who we connected as, without failing an otherwise good connection."""
+        if self.connection is None:
+            return
         try:
             print(f"👤 User: {self.connection.getUser().getName()}")
             print(f"🏢 Group: {self.connection.getGroupFromContext().getName()}")

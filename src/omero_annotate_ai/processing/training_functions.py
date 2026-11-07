@@ -11,12 +11,12 @@ from typing import (
     Union,
 )
 
-import ezomero
 import numpy as np
 import pandas as pd
 from tifffile import imread
 
 from ..core.annotation_config import NormalizationConfig
+from ..omero._untyped import ezomero
 from ..utils.logging import create_training_logger
 from .normalization import NormalizationRecorder, write_native_sidecar
 from .training_layout import (
@@ -684,7 +684,7 @@ def _records_from_table(
     n_missing = 0
 
     for _, row in df.iterrows():
-        annotation_id = row["annotation_id"]
+        annotation_id = str(row["annotation_id"])
 
         label_id = _optional_int(row.get("label_id"))
         label_path = _download_label(conn, label_id, tmp_dir, logger)

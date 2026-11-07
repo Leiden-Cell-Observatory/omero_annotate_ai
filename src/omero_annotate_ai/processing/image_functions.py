@@ -190,7 +190,8 @@ def process_label_plane(
             )
             poly = ezomero.rois.Polygon(
                 points=contour,  # explicitly name the points parameter
-                z=z_slice,
+                # Volumetric shapes pass a z range; ezomero types z as int.
+                z=z_slice,  # pyright: ignore[reportArgumentType]
                 c=channel,
                 t=timepoint,
                 label=f"micro_sam.{segmentation_type}_instance_segmentation",

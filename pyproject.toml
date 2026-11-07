@@ -86,6 +86,9 @@ Changelog = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releas
 where = ["src"]
 include = ["omero_annotate_ai*"]
 
+[tool.setuptools.package-data]
+omero_annotate_ai = ["py.typed"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"
@@ -114,6 +117,13 @@ pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingImports = "warning"
 reportMissingModuleSource = "none"
+# legacy, rewritten in 0.5.0 core PRs: analysed for imports, diagnostics not reported.
+ignore = [
+    "src/omero_annotate_ai/core/annotation_pipeline.py",
+    "src/omero_annotate_ai/core/annotation_config.py",
+    "src/omero_annotate_ai/widgets/workflow_widget.py",
+    "src/omero_annotate_ai/omero/omero_functions.py",
+]
 # New core packages (0.5.0 core PRs) are checked strictly from their first commit.
 strict = [
     "src/omero_annotate_ai/trainingset",
