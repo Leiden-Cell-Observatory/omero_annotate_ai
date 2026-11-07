@@ -791,6 +791,31 @@ class TestWorkflowWidgetDisplay:
         assert config.training.validate_n == 3
         assert "did not match the table" in widget.resume_note.value
 
+    def test_resume_locks_planes_patches_and_read_only(self):
+        widget = self._continue_with_saved_config()
+        fields = widget._annotation_widget_map()
+        for key in ("timepoint_mode", "timepoints", "z_slice_mode", "z_slices",
+                    "patches_per_image", "segment_all"):
+            assert fields[key].disabled, key
+        read_only = widget.workflow_widgets["read_only_mode"]
+        assert read_only.disabled and read_only.value is False
+
+        read_only.value = True               # disabled in the UI, but set anyway
+        fields["patches_per_image"].value = 7
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+        config = widget.get_config()
+        assert config.workflow.read_only_mode is False
+        assert config.spatial_coverage.patches_per_image == self._saved_config().spatial_coverage.patches_per_image
+
+    def test_name_new_table_unlocks_read_only(self):
+        widget = self._continue_with_saved_config()
+        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+                   return_value="fresh_table"):
+            widget._on_new_table(None)
+        assert not widget.workflow_widgets["read_only_mode"].disabled
+        assert not widget._annotation_widget_map()["segment_all"].disabled
+
     def test_locked_values_win_over_widgets_on_update(self):
         widget = self._continue_with_saved_config()
         fields = widget._annotation_widget_map()
