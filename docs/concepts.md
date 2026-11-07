@@ -80,18 +80,25 @@ Small batches (5 to 20) mean less work is lost if something crashes.
 
 ## Local folders
 
-Everything local goes into the output folder (`output.output_directory`):
+Each training set has one folder on your disk, with the same layout in every mode:
 
 ```text
-annotations/                      ← output folder
-├── annotation_config_<name>.yaml   progress, used to resume
-├── annotation_input/               images as annotated (read-only mode, Cellpose)
-├── annotation_output/              masks: <unit id>_mask.tif (read-only mode, Cellpose)
-├── model_input/                    training channel(s), if different from the annotated one
-├── tracking_table.csv              local copy of the progress table (read-only mode)
-├── annotations/                    micro-SAM's own working files
-└── sam_embeddings/                 micro-SAM cache, cleared at every start
+~/omero_annotate_ai/                  ← home folder
+├── <server>/<table id>_<name>/       a set tracked in an OMERO table
+└── local/<id>_<name>/                a read-only or OME-Zarr set
+    ├── config.yaml                   the config and progress, used to resume
+    ├── tracking_table.csv            local copy of the progress table
+    ├── annotation_input/             images as annotated: <unit id>.tif
+    ├── annotation_output/            masks: <unit id>_mask.tif
+    ├── model_input/                  training channel(s), if different from the annotated one
+    └── .scratch/                     micro-SAM's files for the current batch only
 ```
+
+Choose another home folder with the `OMERO_ANNOTATE_AI_HOME` environment variable or
+`create_pipeline(..., home=...)`. To put one set somewhere specific, set
+`output.output_directory` to its folder. Files are written atomically (a crash never
+leaves half a file), and micro-SAM works in a fresh folder for every batch, so masks
+always land on the image they were drawn on.
 
 Training data is written to a separate folder; see
 [Prepare training data](tutorials/training-data-prep.md).

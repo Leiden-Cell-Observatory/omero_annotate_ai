@@ -65,10 +65,12 @@ When the images and masks are on your disk (`annotation_input/` and
 ```python
 from omero_annotate_ai import load_config_from_yaml, reorganize_local_data_for_training
 
-config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
+config = load_config_from_yaml(
+    "~/omero_annotate_ai/<server>/<table id>_hela_nuclei_v1/config.yaml"
+)
 result = reorganize_local_data_for_training(
     config,
-    annotation_dir="annotations",  # your working directory
+    annotation_dir=config.output.output_directory,  # the training set's folder
     include_test=True,
 )
 ```

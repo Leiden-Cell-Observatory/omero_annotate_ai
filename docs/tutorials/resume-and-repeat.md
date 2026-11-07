@@ -19,15 +19,12 @@ opened, with the same images and patches as before:
 ```python
 from omero_annotate_ai import load_config_from_yaml, create_pipeline
 
-config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
+config = load_config_from_yaml(
+    "~/omero_annotate_ai/<server>/<table id>_hela_nuclei_v1/config.yaml"
+)
 pipeline = create_pipeline(config, conn)
 table_id, config = pipeline.run_full_micro_sam_workflow()  # or run_cp_workflow()
 ```
-
-!!! warning "Upload mode: clear micro-SAM's working folder first"
-    Before resuming in upload mode, empty the `annotations/` subfolder inside your
-    working directory. micro-SAM skips images whose `seg_*.tif` file already exists, so
-    leftovers from an earlier session can end up attached to the wrong images.
 
 !!! note "Use the saved file, not the 'resume from table' switch"
     The *Resume from existing table* option in the widget and `resume_from_table: true`

@@ -10,6 +10,7 @@ flowchart LR
     P --> PL[planning]
     P --> S[sources]
     P --> A[annotators]
+    P --> B[bundle]
     P --> O[omero]
     A --> N[(micro-SAM / napari)]
     S --> OM[(OMERO / OME-Zarr)]
@@ -25,11 +26,12 @@ flowchart LR
 | `sources/` | Reading pixels and image sizes from OMERO or OME-Zarr behind one `ImageSource` protocol. |
 | `omero/` | OMERO access: the tracking table (updated in place, so its ID identifies the training set), uploads of ROIs and labels, connections. |
 | `processing/` | Training data export and training helpers. |
+| `bundle.py` | Where a training set's files live: one folder per set under the home folder (`$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`), atomic writes, a fresh scratch folder per batch, and masks matched to units by exact file name. |
 | `errors.py` | The package's exceptions; all derive from `OmeroAnnotateAIError`. |
 
 **Rules of thumb**
 
-- `planning.py`, `annotators.py` and `errors.py` are type-checked strictly (pyright) and
+- `planning.py`, `annotators.py`, `bundle.py` and `errors.py` are type-checked strictly (pyright) and
   must not print; the pipeline and widgets are older code being replaced step by step.
 - A protocol needs two real implementations before it is introduced.
 - Tests: unit tests mirror the modules (`tests/test_planning.py`,
