@@ -22,19 +22,21 @@ from omero_annotate_ai.core.annotation_config import (
     TrainingConfig,
     WorkflowConfig,
 )
-from omero_annotate_ai.omero.omero_functions import (
-    CONFIG_NS,
-    create_tracking_table,
+from omero_annotate_ai.omero.biomero import (
     generate_set_id,
-    generate_unique_table_name,
     geojson_namespace,
-    link_table_to_containers,
-    list_annotation_tables,
     list_manifests_from_omero,
     load_geojson_from_omero,
     load_manifest_from_omero,
     manifest_namespace,
     merge_geojson_patches,
+)
+from omero_annotate_ai.omero.omero_functions import (
+    CONFIG_NS,
+    create_tracking_table,
+    generate_unique_table_name,
+    link_table_to_containers,
+    list_annotation_tables,
     replace_table_config,
     sync_omero_table_to_config,
     upload_rois_and_labels,

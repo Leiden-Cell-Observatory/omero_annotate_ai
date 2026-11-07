@@ -10,10 +10,10 @@ readme = "README.md"
 license = "GPL-2.0-or-later"
 license-files = ["LICENSE"]
 authors = [
-    {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
+    {name = "Maarten Paul", email = "m.w.paul@lacdr.leidenuniv.nl"},
 ]
 maintainers = [
-    {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
+    {name = "Maarten Paul", email = "m.w.paul@lacdr.leidenuniv.nl"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -104,7 +104,7 @@ max-line-length = 100
 [tool.ruff.lint.per-file-ignores]
 # Tests and notebooks may print and use broad patterns.
 "tests/**" = ["T20", "BLE", "PTH"]
-"notebooks/**" = ["T20", "BLE", "PTH", "E501", "B018"]
+"notebooks/**" = ["T20", "BLE", "PTH", "E501", "B018", "RET504"]
 # Widgets show status by printing into ipywidgets Output areas; CLI scripts print.
 "src/omero_annotate_ai/widgets/**" = ["T201"]
 ".github/scripts/**" = ["T201"]
@@ -250,6 +250,3 @@ upload-test = { cmd = "python -m twine upload --repository testpypi dist/*" }
 upload-prod = { cmd = "python -m twine upload dist/*" }
 verify-build = { cmd = "python -m zipfile -l dist/*.whl && tar -tzf dist/*.tar.gz" }
 
-[dependency-groups]
-docs = ["mkdocs-glightbox>=0.5.1,<0.6"]
-dev = ["ty>=0.0.12,<0.0.13", "aiohttp>=3.14.3,<4", "requests"]

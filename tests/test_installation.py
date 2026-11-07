@@ -48,7 +48,6 @@ def test_omero_functions_import():
     # Test that key functions exist
     assert hasattr(omero_functions, "upload_rois_and_labels")
     assert hasattr(omero_utils, "list_user_tables")
-    assert hasattr(omero_utils, "delete_table")
 
 
 def test_processing_functions_import():

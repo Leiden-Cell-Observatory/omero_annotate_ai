@@ -100,42 +100,6 @@ def list_user_tables(
     return tables
 
 
-def delete_table(conn, table_id: int) -> bool:
-    """Safely delete OMERO table.
-
-    Args:
-        conn: OMERO connection
-        table_id: ID of table to delete
-
-    Returns:
-        True if successful, False otherwise
-    """
-    if conn is None:
-        logger.error("Cannot delete table: OMERO connection is None")
-        return False
-
-    try:
-        # Get table info first
-        file_ann = conn.getObject("FileAnnotation", table_id)
-        if not file_ann:
-            logger.warning(f"Table {table_id} not found")
-            return False
-
-        table_name = (
-            file_ann.getFile().getName() if file_ann.getFile() else f"ID:{table_id}"
-        )
-        logger.info(f"Deleting table: {table_name}")
-
-        # Delete the file annotation
-        conn.deleteObjects("FileAnnotation", [table_id], wait=True)
-        logger.info(f"Successfully deleted table {table_id}")
-        return True
-
-    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        logger.error(f"Error deleting table {table_id}: {e}")
-        return False
-
-
 def validate_table_schema(
     conn, table_id: int, expected_columns: list[str]
 ) -> tuple[bool, list[str]]:
@@ -231,41 +195,6 @@ def list_annotations_by_namespace(
         logger.error(f"Error listing annotations: {e}")
 
     return annotations
-
-
-def delete_annotations_by_namespace(
-    conn, object_type: str, object_id: int, namespace: str
-) -> int:
-    """Clean up annotations by namespace.
-
-    Args:
-        conn: OMERO connection
-        object_type: Type of object ('Image', 'Dataset', etc.)
-        object_id: ID of object
-        namespace: Namespace to delete
-
-    Returns:
-        Number of annotations deleted
-    """
-    try:
-        annotations = list_annotations_by_namespace(
-            conn, object_type, object_id, namespace
-        )
-
-        if not annotations:
-            logger.info(f"No annotations found with namespace '{namespace}'")
-            return 0
-
-        # Delete annotations
-        ann_ids = [ann["id"] for ann in annotations]
-        conn.deleteObjects("FileAnnotation", ann_ids, wait=True)
-
-        logger.info(f"Deleted {len(ann_ids)} annotations with namespace '{namespace}'")
-        return len(ann_ids)
-
-    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
-        logger.error(f"Error deleting annotations: {e}")
-        return 0
 
 
 # =============================================================================

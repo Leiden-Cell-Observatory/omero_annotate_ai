@@ -30,7 +30,7 @@ try:
 except PackageNotFoundError:  # running from a source tree without installing
     __version__ = "unknown"
 __author__ = "Maarten Paul"
-__email__ = "m.w.paul@lumc.nl"
+__email__ = "m.w.paul@lacdr.leidenuniv.nl"
 
 __all__ = [
     "AnnotationConfig",
