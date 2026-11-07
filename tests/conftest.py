@@ -110,96 +110,117 @@ def assert_config_has_required_fields(config):
 
 
 # =============================================================================
-# OMERO Integration Test Fixtures (for real OMERO server)
+# Docker OMERO fixtures (pytest -m docker)
 # =============================================================================
+#
+# A server already answering on the configured port is reused and left running.
+# Otherwise tests/docker-compose.yml is started and stopped again at the end of
+# the session, unless OAI_KEEP_OMERO=1. Without Docker the tests skip.
+
+OMERO_READY_TIMEOUT = 600  # seconds; a cold start takes a few minutes
+
 
 @pytest.fixture(scope="session")
 def omero_params() -> Dict[str, Any]:
-    """OMERO connection parameters for testing."""
+    """Connection parameters of the test server (overridable by environment)."""
     return {
-        "host": "localhost",
-        "port": 6064,  # Standard secure port for OMERO Docker
-        "user": "root", 
-        "password": "omero",
-        "group": "",
-        "secure": True  # Use SSL as standard for OMERO Docker
+        "host": os.environ.get("OAI_OMERO_HOST", "localhost"),
+        "port": int(os.environ.get("OAI_OMERO_PORT", "6064")),
+        "user": os.environ.get("OAI_OMERO_USER", "root"),
+        "password": os.environ.get("OAI_OMERO_PASSWORD", "omero"),
+        "secure": True,
     }
 
 
-@pytest.fixture(scope="session") 
+def _connect(params):
+    conn = BlitzGateway(params["user"], params["password"],
+                        host=params["host"], port=params["port"],
+                        secure=params["secure"])
+    try:
+        if conn.connect():
+            return conn
+    except Exception:
+        pass
+    conn.close()
+    return None
+
+
+def _server_ready(params) -> bool:
+    conn = _connect(params)
+    if conn is None:
+        return False
+    conn.close()
+    return True
+
+
+def _docker_available() -> bool:
+    try:
+        subprocess.run(["docker", "compose", "version"], check=True,
+                       capture_output=True, timeout=30)
+        return True
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
+
+@pytest.fixture(scope="session")
 def docker_omero_server(omero_params):
-    """Start OMERO server via docker-compose for testing."""
-    # Check if docker-compose is available
-    try:
-        subprocess.run(["docker-compose", "--version"], 
-                      check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip("docker-compose not available")
-    
-    # Start the OMERO server
-    compose_file = os.path.join(os.path.dirname(__file__), "docker-compose.yml")
-    
-    try:
-        # Start services
-        subprocess.run([
-            "docker-compose", "-f", compose_file, "up", "-d"
-        ], check=True, cwd=os.path.dirname(__file__))
-        
-        # Wait for OMERO to be ready
-        max_wait = 300  # 5 minutes
-        wait_interval = 10
-        waited = 0
-        
-        while waited < max_wait:
-            try:
-                if OMERO_AVAILABLE:
-                    print(f"Attempting OMERO connection... ({waited}s elapsed)")
-                    conn = ezomero.connect(**omero_params)
-                    if conn and conn.isConnected():
-                        print("OMERO connection successful!")
-                        conn.close()
-                        break
-                    if conn:
-                        conn.close()
-                        print("Connection created but not connected")
-                else:
-                    print("OMERO not available, skipping connection test")
-                    break
-            except Exception as e:
-                print(f"Connection attempt failed: {e}")
-            
-            time.sleep(wait_interval)
-            waited += wait_interval
-            print(f"Waiting for OMERO server... ({waited}s)")
-        
-        if waited >= max_wait and OMERO_AVAILABLE:
-            pytest.fail("OMERO server did not start within timeout")
-        
+    """A reachable OMERO server; starts the Docker stack when none is running."""
+    if not OMERO_AVAILABLE:
+        pytest.skip("omero-py not installed")
+    if _server_ready(omero_params):
         yield omero_params
-        
+        return
+    if not _docker_available():
+        pytest.skip("No OMERO server running and docker compose not available")
+
+    from tests.omero_seed import compose_cmd
+
+    subprocess.run(compose_cmd("up", "-d"), check=True)
+    try:
+        deadline = time.monotonic() + OMERO_READY_TIMEOUT
+        while not _server_ready(omero_params):
+            if time.monotonic() > deadline:
+                pytest.fail(f"OMERO did not accept logins within {OMERO_READY_TIMEOUT}s")
+            time.sleep(10)
+        yield omero_params
     finally:
-        # Cleanup
-        try:
-            subprocess.run([
-                "docker-compose", "-f", compose_file, "down", "-v"
-            ], check=True, cwd=os.path.dirname(__file__))
-        except subprocess.CalledProcessError:
-            pass
+        if os.environ.get("OAI_KEEP_OMERO") != "1":
+            subprocess.run(compose_cmd("down", "-v"), check=False)
 
 
 @pytest.fixture
-def omero_connection(docker_omero_server):
-    """Create an OMERO connection for testing."""
-    if not OMERO_AVAILABLE:
-        pytest.skip("OMERO not available")
-    
-    conn = ezomero.connect(**docker_omero_server)
-    if not conn or not conn.isConnected():
-        pytest.fail("Could not connect to OMERO server")
-    
+def omero_conn(docker_omero_server):
+    """A fresh BlitzGateway connection per test."""
+    conn = _connect(docker_omero_server)
+    if conn is None:
+        pytest.fail("Could not log in to the test OMERO server")
     yield conn
-    
-    if conn:
+    conn.close()
+
+
+@pytest.fixture(scope="session")
+def omero_seed(docker_omero_server):
+    """Project/dataset with synthetic images and a small plate, removed afterwards.
+
+    See tests/omero_seed.py. ``plate_id`` is None when the plate could not be
+    imported (e.g. a reused server that is not the compose stack).
+    """
+    from tests import omero_seed as seed_module
+
+    conn = _connect(docker_omero_server)
+    if conn is None:
+        pytest.fail("Could not log in to the test OMERO server")
+    try:
+        data = seed_module.seed(conn, docker_omero_server["user"],
+                                docker_omero_server["password"])
+    except Exception:
+        conn.close()
+        raise
+    try:
+        yield data
+    finally:
+        if os.environ.get("OAI_KEEP_OMERO") != "1":
+            seed_module.cleanup(conn, data)
         conn.close()
 
 
@@ -220,6 +241,9 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "slow: mark test as slow (takes >5 seconds)"
+    )
+    config.addinivalue_line(
+        "markers", "docker: mark test as needing the Docker OMERO test server"
     )
 
 

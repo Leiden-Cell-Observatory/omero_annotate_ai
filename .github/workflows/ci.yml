@@ -33,9 +33,17 @@ jobs:
     # - name: Check code quality
     #   run: pixi run -e dev lint
       
-    - name: Test OMERO functionality (Linux only)
+    - name: Start test OMERO (Linux only)
       if: matrix.os == 'ubuntu-latest'
-      run: pixi run -e dev test
+      run: pixi run start-omero
+
+    - name: Integration tests against OMERO (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: pixi run -e dev test-omero
+
+    - name: Stop test OMERO
+      if: always() && matrix.os == 'ubuntu-latest'
+      run: pixi run stop-omero
 
   build:
     needs: test
