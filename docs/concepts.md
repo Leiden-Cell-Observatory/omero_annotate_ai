@@ -74,9 +74,11 @@ the pipeline keeps track of the current one for you.
 
 ## Batches
 
-`workflow.batch_size` sets how many units napari shows in one session. After each batch,
-progress is saved to OMERO and to the local YAML. With `0` everything is opened in one go.
-Small batches (5 to 20) mean less work is lost if something crashes.
+`workflow.batch_size` sets how many units napari shows at once. Each mask is saved to
+the set's folder and uploaded as soon as the batch is closed; the OMERO table is updated
+once per batch. With `0` everything is opened in one go. If something crashes, resuming
+the set repairs what was half done (see
+[Resume or repeat a run](tutorials/resume-and-repeat.md#what-resuming-repairs)).
 
 ## Local folders
 
