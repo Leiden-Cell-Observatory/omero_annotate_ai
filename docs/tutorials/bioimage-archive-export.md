@@ -40,9 +40,9 @@ annotation_methodology:
 
 ```python
 from omero_annotate_ai import prepare_bia_data_from_table
-from omero_annotate_ai.omero.omero_functions import download_annotation_config_from_omero
+from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
 
-config = download_annotation_config_from_omero(conn, "Dataset", 123)   # the run's config
+config = find_annotation_config_for_table(conn, table_id)   # the run's config
 stats = prepare_bia_data_from_table(conn, table_id, "bia_staging", config=config)
 
 config.output.output_directory = "bia_staging"

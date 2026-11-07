@@ -14,4 +14,4 @@
 
 ::: omero_annotate_ai.omero.omero_functions.sync_omero_table_to_config
 
-::: omero_annotate_ai.omero.omero_functions.download_annotation_config_from_omero
+::: omero_annotate_ai.omero.omero_functions.find_annotation_config_for_table

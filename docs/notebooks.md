@@ -13,13 +13,13 @@ on GitHub. Download the one you need, or clone the repository.
 | Annotate with micro-SAM | [widget workflow][gh-ann] | [annotation][mo-ann] | [guide](tutorials/microsam-annotation-pipeline.md) |
 | Annotate with Cellpose | [cellpose][gh-cp] | [cellpose][mo-cp] | [guide](tutorials/cellpose-integration.md) |
 | Run from a YAML file | [from YAML][gh-yaml] | [from YAML][mo-yaml] | [guide](tutorials/resume-and-repeat.md) |
-| Try on public IDR data | | [IDR demo][mo-idr] | [guide](tutorials/public-data-idr.md) |
+| Try on public IDR data | | [IDR demo][mo-idr], [OME-Zarr][mo-zarr] | [guide](tutorials/public-data-idr.md) |
 | Train micro-SAM | [micro-SAM][gh-tr] | [micro-SAM][mo-tr] | [guide](tutorials/training-data-prep.md) |
 | Prepare data for BiaPy | [BiaPy][gh-biapy] | | [guide](tutorials/training-data-prep.md#biapy) |
 | Prepare data for DL4MicEverywhere | [DL4Mic][gh-dl4mic] | | [guide](tutorials/training-data-prep.md#dl4miceverywhere) |
 | Apply a trained micro-SAM model | [inference][gh-inf] | | |
 | Export to the BioImage Archive | [BIA export][gh-bia] | | [guide](tutorials/bioimage-archive-export.md) |
-| List and delete annotation tables | [cleanup][gh-clean] | | |
+| Delete a training set from OMERO | [cleanup][gh-clean] | | |
 
 [gh-ann]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb
 [gh-cp]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-cellpose.ipynb
@@ -35,3 +35,4 @@ on GitHub. Download the one you need, or clone the repository.
 [mo-yaml]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-from-yaml.py
 [mo-idr]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-idr-demo.py
 [mo-tr]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py
+[mo-zarr]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/zarr-annotate-ai-from-yaml.py

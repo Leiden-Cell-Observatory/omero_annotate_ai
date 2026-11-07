@@ -100,7 +100,18 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=omero_annotate_ai --cov-report=html --cov-report=term-missing"
+markers = [
+    "unit: fast unit tests with mocked dependencies",
+    "omero: needs an OMERO server",
+    "integration: integration tests",
+    "docker: needs the Docker test OMERO (tests/docker-compose.yml)",
+    "slow: takes longer than a few seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::FutureWarning",
+]
 
 # Pixi configuration
 [tool.pixi.workspace]
@@ -133,6 +144,7 @@ pytest-mock = ">=3.14.1,<4"
 flake8 = ">=7.3.0,<8"
 black = ">=25.1.0,<26"
 isort = ">=6.0.1,<7"
+pre-commit = ">=4.7.0,<5"
 
 # Documentation feature
 [tool.pixi.feature.docs.dependencies]
@@ -172,6 +184,9 @@ omero-annotate-ai = { path = ".", editable = true }
 test = {cmd = "pytest tests/ -v"}
 test-unit = {cmd = "pytest tests/ -v -m \"not (omero or integration or docker)\""}
 test-cov = { cmd = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml" }
+
+# Git hooks: strip notebook outputs on commit (run once per clone)
+install-hooks = { cmd = "pre-commit install" }
 
 # Code quality
 lint = { cmd = "flake8 src/omero_annotate_ai && black --check src/omero_annotate_ai && isort --check-only src/omero_annotate_ai" }

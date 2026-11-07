@@ -128,7 +128,7 @@ def _(load_button, load_config_from_yaml, mo, yaml_path):
             | Workflow Name | {config.name} |
             | Container | {config.omero.container_type} (ID: {config.omero.container_id}) |
             | Output Directory | {config.output.output_directory} |
-            | Model | {config.ai_model.model_type} |
+            | Model | {config.ai_model.pretrained_from} |
             | Channel | {config.spatial_coverage.channels} |
             | Read-only Mode | {config.workflow.read_only_mode} |
             | Resume from Table | {config.workflow.resume_from_table} |

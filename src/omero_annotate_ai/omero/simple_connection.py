@@ -718,10 +718,3 @@ class SimpleOMEROConnection:
         return connections
 
 
-def create_simple_omero_connection() -> SimpleOMEROConnection:
-    """Create a simple OMERO connection manager.
-
-    Returns:
-        SimpleOMEROConnection instance
-    """
-    return SimpleOMEROConnection()

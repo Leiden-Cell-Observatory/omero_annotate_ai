@@ -737,8 +737,6 @@ class AIModelConfig(BaseModel):
     )
 
 
-
-
 class TrainingConfig(BaseModel):
     """Quality metrics and validation (MIFA requirement)"""
 
@@ -1798,22 +1796,6 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
         warnings=warnings,
         annotation_count=len(annotations),
     )
-
-
-def parse_sequence(value: Union[str, List[int]]) -> List[int]:
-    """Parse a sequence specification into a list of integers."""
-    if isinstance(value, list):
-        return value
-    elif isinstance(value, str):
-        # Handle range notation like "0:100"
-        if ":" in value:
-            start, end = value.split(":")
-            return list(range(int(start), int(end)))
-        else:
-            # Handle comma-separated values
-            return [int(x.strip()) for x in value.split(",")]
-    else:
-        return [value]
 
 
 def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationConfig:

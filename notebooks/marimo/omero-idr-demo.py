@@ -28,6 +28,10 @@ def _(mo):
     Since IDR is a public server, you cannot upload annotations or tables. The pipeline runs in
     **read-only mode**, saving all progress locally to CSV files instead of OMERO tables.
 
+    **If the connection fails:** the IDR's OMERO API is not always available. The same IDR
+    and BioImage Archive images can be annotated as OME-Zarr without OMERO, using
+    `zarr-annotate-ai-from-yaml.py` (`source: zarr`).
+
     **Workflow Steps:**
     1. Connect to IDR (pre-configured)
     2. Select a dataset or screen
@@ -319,11 +323,11 @@ def _(
     | Workflow Name | {config.name} |
     | Container | {config.omero.container_type} (ID: {config.omero.container_id}) |
     | Output Directory | {config.output.output_directory} |
-    | Model | {config.ai_model.model_type} |
+    | Model | {config.ai_model.pretrained_from} |
     | Channel | {config.spatial_coverage.channels} |
     | Segment All | {config.training.segment_all} |
     | Train/Val/Test | {config.training.train_n}/{config.training.validate_n}/{config.training.test_n} |
-    | Use Patches | {config.processing.use_patches} |
+    | Use Patches | {config.spatial_coverage.use_patches} |
     | **Read-only Mode** | **True** (IDR is public) |
     """)
     return (config,)
@@ -401,13 +405,11 @@ def _(mo):
 
 @app.cell
 def _(
-    Path,
     config,
-    conn,
     datetime,
     mo,
     parse_patch_size,
-    prepare_training_data_from_table,
+    reorganize_local_data_for_training,
     run_training,
     setup_training,
     train_batch_size,
@@ -417,51 +419,43 @@ def _(
 ):
     mo.stop(not train_button.value, mo.md("Click 'Prepare Data & Train' after completing annotation"))
 
-    if not conn or not conn.isConnected():
-        mo.output.replace(mo.md("**Error:** Please connect to IDR first"))
+    if not config.get_processed():
+        mo.output.replace(mo.md("**Error:** No annotations yet. Run the annotation step first."))
     else:
         try:
             _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            _output_dir = Path(config.output.output_directory) / f"micro_sam_training_{_timestamp}"
-            _output_dir.mkdir(parents=True, exist_ok=True)
+            mo.output.replace(mo.md("**Preparing training data...**"))
 
-            _table_id = config.omero.table_id
-            if _table_id is None or _table_id <= 0:
-                mo.output.replace(mo.md("**Error:** No annotation table found. Run annotation first."))
-            else:
-                mo.output.replace(mo.md("**Preparing training data...**"))
+            # Read-only mode keeps everything local (there is no OMERO table), so
+            # reorganise the local annotation folders into the training layout.
+            # It is written next to the annotation folder, never inside it.
+            _training_result = reorganize_local_data_for_training(
+                config, annotation_dir=config.output.output_directory
+            )
 
-                _training_result = prepare_training_data_from_table(
-                    conn=conn,
-                    table_id=_table_id,
-                    training_name=f"idr_training_{_timestamp}",
-                    output_dir=_output_dir,
-                    clean_existing=True,
-                )
+            _patch = parse_patch_size(train_patch_shape.value)
+            _training_config = setup_training(
+                _training_result,
+                model_name=f"idr_microsam_{_timestamp}",
+                epochs=train_epochs.value,
+                batch_size=train_batch_size.value,
+                learning_rate=1e-5,
+                patch_shape=tuple(_patch),
+                model_type="vit_b_lm",
+                n_objects_per_batch=25,
+            )
 
-                _patch = parse_patch_size(train_patch_shape.value)
-                _training_config = setup_training(
-                    _training_result,
-                    model_name=f"idr_microsam_{_timestamp}",
-                    epochs=train_epochs.value,
-                    batch_size=train_batch_size.value,
-                    learning_rate=1e-5,
-                    patch_shape=tuple(_patch),
-                    model_type="vit_b_lm",
-                    n_objects_per_batch=25,
-                )
+            mo.output.replace(mo.md(f"**Training started...** {train_epochs.value} epochs, {_training_config['n_iterations']} iterations"))
 
-                mo.output.replace(mo.md(f"**Training started...** {train_epochs.value} epochs, {_training_config['n_iterations']} iterations"))
+            _results = run_training(_training_config, framework="microsam")
 
-                _results = run_training(_training_config, framework="microsam")
+            mo.output.replace(mo.md(f"""
+            **Training completed!**
 
-                mo.output.replace(mo.md(f"""
-                **Training completed!**
-
-                - Model: `{_results['model_name']}`
-                - Final model: `{_results.get('final_model_path', 'N/A')}`
-                - Output: `{_results['output_dir']}`
-                """))
+            - Model: `{_results['model_name']}`
+            - Final model: `{_results.get('final_model_path', 'N/A')}`
+            - Output: `{_results['output_dir']}`
+            """))
         except Exception as e:
             mo.output.replace(mo.md(f"**Error:** {str(e)}"))
     return
@@ -522,7 +516,7 @@ def _():
     from omero_annotate_ai import (
         create_default_config,
         create_pipeline,
-        prepare_training_data_from_table,
+        reorganize_local_data_for_training,
         setup_training,
         run_training,
     )
@@ -537,7 +531,7 @@ def _():
         SimpleOMEROConnection,
         create_default_config,
         create_pipeline,
-        prepare_training_data_from_table,
+        reorganize_local_data_for_training,
         setup_training,
         run_training,
     )

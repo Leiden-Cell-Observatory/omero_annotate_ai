@@ -15,6 +15,7 @@ Example notebooks demonstrating the omero-annotate-ai package workflows.
 | `omero-annotate-ai-from-yaml.py` | Load an existing YAML configuration and run the pipeline without configuration widgets |
 | `omero-training-microsam.py` | Micro-SAM training — select an annotation table, download training data, fine-tune a micro-SAM model |
 | `omero-idr-demo.py` | Full demo using public IDR data — no local OMERO server needed. Annotation + training in read-only mode |
+| `zarr-annotate-ai-from-yaml.py` | Annotate OME-Zarr images (local or remote, e.g. IDR / BioImage Archive) from a YAML config — no OMERO needed (`source: zarr`) |
 
 ## Jupyter Notebooks (`jupyter/`)
 
@@ -44,23 +45,22 @@ Classic Jupyter notebooks using ipywidgets for the UI.
 |----------|-------------|
 | `omero-test_model-microsam.ipynb` | Run a fine-tuned micro-SAM model on OMERO images for inference |
 
+### BioImage Archive export (`jupyter/export_annotations/`)
+
+| Notebook | Description |
+|----------|-------------|
+| `omero-table-to-bioimage-archive.ipynb` | Build a BioImage Archive submission bundle from an OMERO tracking table |
+| `prepare_bioimage_archive.ipynb` | Offline demo of the submission bundle with dummy data |
+
 ### Utilities (`jupyter/other/`)
 
 | Notebook | Description |
 |----------|-------------|
-| `cleanup_annotation.ipynb` | List, delete, and bulk-clean annotation tables from OMERO containers |
-
-## Developer Notebooks (`dev/`)
-
-Notebooks for package development and debugging. Not intended for end users.
-
-| Notebook | Description |
-|----------|-------------|
-| `omero-annotate-ai-annotation_dev.ipynb` | Development version with autoreload and widget reload helpers |
+| `cleanup_annotations.ipynb` | Delete one training set (table, ROIs, labels, config) from OMERO, with a dry run first |
 
 ## Prerequisites
 
-- A running OMERO server (or use IDR for the demo notebook)
+- A running OMERO server (or OME-Zarr images for the zarr notebook)
 - The `omero-annotate-ai` package installed: `pip install omero-annotate-ai`
 - For micro-SAM workflows: a GPU is recommended
 - For Jupyter notebooks: `jupyter notebook` or `jupyter lab`
