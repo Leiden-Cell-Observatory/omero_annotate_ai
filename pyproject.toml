@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: Implementation :: CPython",
+    "Framework :: napari",
     "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -56,6 +57,12 @@ notebooks = [
 microsam = [
     "micro-sam>=1.8",  # brings napari; pixi takes micro_sam from conda-forge instead
 ]
+# Experimental napari plugin; pinned to the micro-SAM minor version whose annotator
+# internals it drives (see napari_plugin/_controller.py).
+napari = [
+    "micro-sam>=1.8,<1.9",
+    "qtpy>=2.4",
+]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
@@ -73,6 +80,9 @@ all = [
     "omero-annotate-ai[notebooks,microsam,zarr]",
 ]
 
+[project.entry-points."napari.manifest"]
+omero-annotate-ai = "omero_annotate_ai.napari_plugin:napari.yaml"
+
 [project.urls]
 Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
 Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
@@ -85,7 +95,7 @@ where = ["src"]
 include = ["omero_annotate_ai*"]
 
 [tool.setuptools.package-data]
-omero_annotate_ai = ["py.typed"]
+omero_annotate_ai = ["py.typed", "napari_plugin/napari.yaml"]
 
 [tool.ruff]
 line-length = 88
@@ -130,6 +140,8 @@ strict = [
     "src/omero_annotate_ai/planning.py",
     "src/omero_annotate_ai/annotators.py",
     "src/omero_annotate_ai/errors.py",
+    # The rest of the napari plugin is basic: Qt (qtpy) and micro-SAM ship no types.
+    "src/omero_annotate_ai/napari_plugin/_core.py",
 ]
 
 [tool.pytest.ini_options]
@@ -143,6 +155,7 @@ markers = [
     "integration: integration tests",
     "docker: needs the Docker test OMERO (tests/docker-compose.yml)",
     "slow: takes longer than a few seconds",
+    "napari: needs napari and a Qt binding (runs headless)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
@@ -181,6 +194,7 @@ pytest-mock = ">=3.14.1,<4"
 pre-commit = ">=4.7.0,<5"
 ruff = ">=0.17.4,<0.18"
 pyright = ">=1.1.414,<2"
+pytest-qt = ">=4.4,<5"
 
 # Documentation feature
 [tool.pixi.feature.docs.dependencies]
