@@ -133,3 +133,10 @@ Issues and pull requests are welcome on [GitHub](https://github.com/Leiden-Cell-
 
 Developed at the [Leiden Cell Observatory](https://github.com/Leiden-Cell-Observatory) within the
 [NL-BioImaging](https://github.com/NL-BioImaging) infrastructure, funded by NWO.
+
+## License
+
+GNU General Public License v2.0 or later (GPL-2.0-or-later); see [LICENSE](LICENSE).
+The package builds on [omero-py](https://github.com/ome/omero-py) (GPL-2.0-or-later) and
+[ezomero](https://github.com/TheJacksonLaboratory/ezomero) (GPL-2.0), so it uses a compatible
+license. Releases up to and including 0.4.x were published under Apache-2.0.
