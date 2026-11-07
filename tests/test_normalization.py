@@ -136,3 +136,46 @@ class TestExportNormalization:
         assert sidecar["bounds_per_image"]["img1"] == [[1.0, 63 * 50.0 + 1]]
         # labels are never normalised
         assert imread(result["train_label"] / "img0.tif").dtype == np.uint16
+
+
+@pytest.mark.unit
+class TestMicroSamRawTransform:
+    """micro-SAM training needs inputs in [0, 255]; exports keep native bit depth."""
+
+    def test_percentile_scales_16bit_to_8bit_range(self):
+        from omero_annotate_ai.processing.normalization import microsam_raw_transform
+
+        image = np.linspace(0, 60000, 1000, dtype=np.float32).astype(np.uint16).reshape(20, 50)
+        out = microsam_raw_transform(NormalizationConfig())(image)
+        assert out.min() >= 0 and out.max() <= 255
+        assert out.max() > 250
+
+    def test_applied_at_export_scales_unit_range(self):
+        from omero_annotate_ai.processing.normalization import microsam_raw_transform
+
+        spec = NormalizationConfig(apply_at_export=True)
+        out = microsam_raw_transform(spec)(np.array([[0.0, 0.5, 1.0]], dtype=np.float32))
+        assert np.allclose(out, [[0, 127.5, 255]])
+
+    def test_none_rejects_values_above_255(self):
+        from omero_annotate_ai.processing.normalization import microsam_raw_transform
+
+        transform = microsam_raw_transform(NormalizationConfig(method="none"))
+        assert transform(np.array([[0, 200]], dtype=np.uint8)).max() == 200
+        with pytest.raises(ValueError, match="0-255"):
+            transform(np.array([[0, 4000]], dtype=np.uint16))
+
+    def test_setup_training_reads_sidecar(self, tmp_path):
+        from omero_annotate_ai.processing.normalization import write_native_sidecar
+        from omero_annotate_ai.processing.training_utils import setup_training
+
+        for name in ("train_input", "train_label", "val_input", "val_label"):
+            (tmp_path / name).mkdir()
+        write_native_sidecar(NormalizationConfig(percentile_high=99.0), tmp_path)
+        result = {name: tmp_path / name for name in
+                  ("train_input", "train_label", "val_input", "val_label")}
+        result["output_dir"] = tmp_path
+
+        config = setup_training(result)
+        assert config["normalization"]["percentile_high"] == 99.0
+        assert config["normalization"]["applied_at_export"] is False

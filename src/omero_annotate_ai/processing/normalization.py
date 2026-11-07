@@ -16,7 +16,7 @@ annotation set and travels with the exported dataset.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Callable, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -157,3 +157,50 @@ def biapy_normalization(spec: Any) -> Dict[str, Any]:
             "UPPER_PERC": spec.percentile_high,
         },
     }
+
+
+def microsam_raw_transform(spec: Any) -> Callable[[np.ndarray], np.ndarray]:
+    """Raw transform for micro-SAM training, which requires inputs in [0, 255].
+
+    Exported images keep their native bit depth (often 16-bit), so the
+    normalisation is applied when micro-SAM loads them:
+
+    - applied at export: the images are already in [0, 1]; scale to [0, 255];
+    - ``percentile``: per-image percentile normalisation, then scale to [0, 255];
+    - ``none``: pass through, but refuse data outside [0, 255] with a clear error.
+
+    Args:
+        spec: A :class:`NormalizationConfig`, an equivalent dict, or the content of
+            ``normalization.json`` (``applied_at_export`` is accepted as an alias).
+    """
+    from omero_annotate_ai.core.annotation_config import NormalizationConfig
+
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        if "applied_at_export" in spec:
+            spec["apply_at_export"] = spec.pop("applied_at_export")
+        spec = NormalizationConfig.model_validate(
+            {k: v for k, v in spec.items() if k in NormalizationConfig.model_fields}
+        )
+    elif spec is None:
+        spec = NormalizationConfig()
+
+    if spec.apply_at_export:
+        def transform(x):
+            return np.clip(np.asarray(x, dtype=np.float32), 0.0, 1.0) * 255.0
+    elif spec.method == "percentile":
+        def transform(x):
+            normalised, _ = percentile_normalize(
+                x, spec.percentile_low, spec.percentile_high, clip=True
+            )
+            return normalised * 255.0
+    else:
+        def transform(x):
+            x = np.asarray(x, dtype=np.float32)
+            if x.min() < 0 or x.max() > 255:
+                raise ValueError(
+                    "micro-SAM needs input in the 0-255 range, but these images go up to "
+                    f"{x.max():g}. Use normalization.method 'percentile' (the default)."
+                )
+            return x
+    return transform
