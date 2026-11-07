@@ -1756,7 +1756,8 @@ class TestZarrWorkflow:
 
         pipeline.run_custom_annotation(fake_annotate)
 
-        anns = pipeline.config.annotations
+        # Split planning shuffles unit order, so compare in a fixed order.
+        anns = sorted(pipeline.config.annotations, key=lambda a: a.well)
         assert [(a.well, a.field, a.level, a.image_id) for a in anns] == [
             ("A1", "0", 1, None), ("B3", "0", 1, None)]
         assert anns[0].image_name == "testplate_A1_0"
@@ -1810,3 +1811,93 @@ class TestFindExistingTable:
                    return_value=found) as by_name:
             assert pipeline._find_existing_table() == 22162
         by_name.assert_called_once()
+
+
+@pytest.mark.unit
+class TestExtendOnResume:
+    """A resumed run with higher image counts adds unused images to the table."""
+
+    N_IMAGES = 10
+
+    def _pipeline(self, n_images=N_IMAGES, train_n=2, validate_n=1, test_n=0):
+        source = FakeImageSource(
+            {i: np.zeros((1, 1, 1, 8, 8), np.uint16) for i in range(1, n_images + 1)}
+        )
+        config = create_default_config()
+        config.workflow.resume_from_table = True
+        config.training.train_n = train_n
+        config.training.validate_n = validate_n
+        config.training.test_n = test_n
+        # Existing table: images 1-2 training (1 done), image 3 validation
+        config.annotations.extend([
+            ImageAnnotation(image_id=1, image_name="img1", annotation_id="a1", channel=0,
+                            category="training", processed=True, roi_id=5, label_id=6),
+            ImageAnnotation(image_id=2, image_name="img2", annotation_id="a2", channel=0,
+                            category="training"),
+            ImageAnnotation(image_id=3, image_name="img3", annotation_id="a3", channel=0,
+                            category="validation"),
+        ])
+        pipeline = AnnotationPipeline(config, conn=Mock(), image_source=source)
+        pipeline.get_image_uris = lambda: [omero_uri(i) for i in range(1, n_images + 1)]
+        return pipeline
+
+    @staticmethod
+    def _images(config, category):
+        return {a.image_uri for a in config.annotations if a.category == category}
+
+    def test_adds_only_unused_images_per_category(self):
+        pipeline = self._pipeline()
+        pipeline.config.training.train_n = 4
+        pipeline.config.training.validate_n = 2
+        pipeline.config.training.test_n = 1
+
+        assert pipeline._extend_annotations() == 4
+
+        config = pipeline.config
+        assert len(self._images(config, "training")) == 4
+        assert len(self._images(config, "validation")) == 2
+        assert len(self._images(config, "test")) == 1
+        new = {a.image_uri for a in config.annotations[3:]}
+        assert not new & {omero_uri(1), omero_uri(2), omero_uri(3)}
+        assert len(new) == 4
+
+    def test_keeps_existing_rows_and_ids(self):
+        pipeline = self._pipeline()
+        pipeline.config.training.train_n = 5
+        before = [a.model_dump() for a in pipeline.config.annotations]
+
+        pipeline._extend_annotations()
+
+        assert [a.model_dump() for a in pipeline.config.annotations[:3]] == before
+        done = pipeline.config.annotations[0]
+        assert (done.processed, done.roi_id, done.label_id) == (True, 5, 6)
+        assert not any(a.processed for a in pipeline.config.annotations[3:])
+
+    def test_adds_what_is_left_when_too_few_images(self, capsys):
+        pipeline = self._pipeline(n_images=4)
+        pipeline.config.training.train_n = 5
+
+        assert pipeline._extend_annotations() == 1
+        assert self._images(pipeline.config, "training") == {
+            omero_uri(1), omero_uri(2), omero_uri(4)}
+        assert "Only 1 unused images left for training" in capsys.readouterr().out
+
+    def test_lower_counts_never_drop_rows(self):
+        pipeline = self._pipeline()
+        pipeline.config.training.train_n = 1
+        pipeline.config.training.validate_n = 0
+
+        assert pipeline._extend_annotations() == 0
+        assert [a.annotation_id for a in pipeline.config.annotations] == ["a1", "a2", "a3"]
+
+    def test_schema_updates_the_table_only_when_images_were_added(self):
+        pipeline = self._pipeline()
+        pipeline.table_id = 22159
+        with patch.object(pipeline, "_replace_omero_table_from_config") as replace:
+            pipeline.define_annotation_schema([])
+            replace.assert_not_called()
+
+            pipeline.config.training.train_n = 3
+            pipeline.define_annotation_schema([])
+            replace.assert_called_once()
+        assert len(self._images(pipeline.config, "training")) == 3

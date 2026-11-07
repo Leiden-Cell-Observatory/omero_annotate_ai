@@ -177,6 +177,8 @@ def compose_method(config) -> str:
         parts.append(f"Model URL: {ai.model_url}.")
     if ai.model_doi:
         parts.append(f"Model DOI: {ai.model_doi}.")
+    if config.annotations:
+        parts.append(config.split_summary())
     return " ".join(parts)
 
 

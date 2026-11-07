@@ -743,6 +743,295 @@ def download_annotation_config_from_omero(conn, object_type: str, object_id: int
         return AnnotationConfig.from_yaml(file_path)
 
 
+def find_annotation_config_for_table(
+    conn, container_type: str, container_id: int, table_name: str,
+    table_id: Optional[int] = None,
+) -> Optional[AnnotationConfig]:
+    """Find the saved annotation config that belongs to a tracking table.
+
+    A pipeline run attaches its config YAML (namespace CONFIG_NS) to the
+    container, and the config's ``name`` equals the table name. A container
+    can hold configs of several runs, so this returns the newest config whose
+    name matches, not just the newest one.
+
+    Args:
+        conn: OMERO connection
+        container_type: 'dataset', 'plate', 'project' or 'screen'
+        container_id: Container ID
+        table_name: Name of the tracking table
+        table_id: ID of the tracking table. Several tables can share a name;
+            a config that records this ID wins, and one that records another
+            table's ID is skipped.
+
+    Returns:
+        The matching AnnotationConfig, or None if no saved config matches.
+    """
+    annotations = list_annotations_by_namespace(
+        conn, str(container_type).capitalize(), container_id, CONFIG_NS
+    )
+    # Newest first; files named after the table go first as a cheap pre-filter.
+    expected_file = f"annotation_config_{table_name}.yaml"
+    annotations = sorted(annotations, key=lambda a: a["id"], reverse=True)
+    annotations.sort(key=lambda a: a.get("file_name") != expected_file)
+
+    fallback = None
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for ann in annotations:
+            try:
+                file_path = ezomero.get_file_annotation(conn, ann["id"], tmp_dir)
+                if file_path is None:
+                    continue
+                config = AnnotationConfig.from_yaml(file_path)
+            except Exception:
+                continue
+            if config.name != table_name:
+                continue
+            saved_id = config.omero.table_id
+            if table_id is None or saved_id == table_id:
+                return config
+            if saved_id is None and fallback is None:
+                fallback = config
+    return fallback
+
+
+# Map annotations a run attaches to its container(s).
+WORKFLOW_STATUS_NS = "openmicroscopy.org/omero/annotate/workflow_status"
+CONFIG_MAP_NS = "openmicroscopy.org/omero/annotation"
+
+_CONTAINER_TYPES = ("Dataset", "Plate", "Project", "Screen")
+
+
+def _valid_omero_ids(values) -> List[int]:
+    """Positive integer IDs from a column, skipping NaN/None/0/-1, deduplicated."""
+    ids = []
+    for value in values:
+        try:
+            if value is None or pd.isna(value):
+                continue
+            number = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in ids:
+            ids.append(number)
+    return ids
+
+
+def _table_containers(conn, table_id: int) -> List[Tuple[str, int]]:
+    """Every container the table FileAnnotation is linked to."""
+    containers = []
+    for container_type in _CONTAINER_TYPES:
+        try:
+            links = conn.getAnnotationLinks(container_type, ann_ids=[table_id])
+        except Exception:
+            continue
+        for link in links or []:
+            try:
+                key = (container_type.lower(), int(link.getParent().getId()))
+            except Exception:
+                continue
+            if key not in containers:
+                containers.append(key)
+    return containers
+
+
+def delete_training_set(
+    conn,
+    table_id: int,
+    container_type: Optional[str] = None,
+    container_id: Optional[int] = None,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Delete a tracking table and everything a run created for it.
+
+    Everything is found by ID, never by name alone, so another training set's
+    objects are never touched:
+
+    - ``rois``: the ``roi_id`` of each table row.
+    - ``labels``: the label FileAnnotations (``label_id``) on the images.
+    - ``annotation_inputs``: the annotation-channel FileAnnotations
+      (``annotation_input_id``, or ``label_input_id`` in older tables).
+    - ``configs``: config YAMLs (CONFIG_NS) on the table's container(s) that
+      record this ``table_id``. A config without a table ID is included only
+      when it carries the table's name and no other table on that container
+      has the same name.
+    - ``map_annotations``: workflow-status and flattened-config map
+      annotations on the container(s), matched the same way.
+    - ``table``: the tracking table FileAnnotation, deleted last.
+
+    Args:
+        conn: OMERO connection
+        table_id: Tracking table (FileAnnotation) ID
+        container_type: Container to search for configs; defaults to every
+            container the table is linked to
+        container_id: Container ID that goes with ``container_type``
+        dry_run: When True (default) nothing is deleted; the report says what
+            would be.
+
+    Returns:
+        Report dict with the IDs per kind, ``missing`` (IDs in the table that
+        no longer exist on the server), ``containers`` searched, and
+        ``deleted`` (False on a dry run).
+    """
+    kinds = ("rois", "labels", "annotation_inputs", "configs", "map_annotations", "table")
+    report: Dict[str, Any] = {kind: [] for kind in kinds}
+    report["missing"] = {kind: [] for kind in kinds}
+    report["containers"] = []
+    report["deleted"] = False
+
+    table = conn.getObject("FileAnnotation", table_id)
+    if table is None:
+        report["missing"]["table"].append(table_id)
+        print(f"Table {table_id} not found; nothing to delete")
+        return report
+    report["table"].append(table_id)
+    table_name = table.getFile().getName() if table.getFile() else None
+
+    # Per-row objects
+    df = read_tracking_table(conn, table_id)
+    row_kinds = [
+        ("rois", "Roi", ["roi_id"]),
+        ("labels", "FileAnnotation", ["label_id"]),
+        ("annotation_inputs", "FileAnnotation", ["annotation_input_id", "label_input_id"]),
+    ]
+    for kind, omero_type, columns in row_kinds:
+        ids = []
+        for column in columns:
+            if df is not None and column in df.columns:
+                ids.extend(i for i in _valid_omero_ids(df[column]) if i not in ids)
+        for object_id in ids:
+            if conn.getObject(omero_type, object_id) is None:
+                report["missing"][kind].append(object_id)
+            else:
+                report[kind].append(object_id)
+
+    # Container-level objects
+    if container_type and container_id:
+        containers = [(str(container_type).lower(), int(container_id))]
+    else:
+        containers = _table_containers(conn, table_id)
+    report["containers"] = containers
+
+    for ctype, cid in containers:
+        other_same_name = any(
+            t.get("name") == table_name and t.get("id") != table_id
+            for t in list_annotation_tables(conn, ctype, cid)
+        )
+
+        def belongs(saved_table_id, saved_name):
+            if saved_table_id not in (None, "", "None"):
+                try:
+                    return int(float(saved_table_id)) == int(table_id)
+                except (TypeError, ValueError):
+                    return False
+            return bool(table_name) and saved_name == table_name and not other_same_name
+
+        for ann in list_annotations_by_namespace(conn, ctype.capitalize(), cid, CONFIG_NS):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                try:
+                    path = ezomero.get_file_annotation(conn, ann["id"], tmp_dir)
+                    saved = AnnotationConfig.from_yaml(path) if path else None
+                except Exception:
+                    saved = None
+            if saved is not None and belongs(saved.omero.table_id, saved.name):
+                if ann["id"] not in report["configs"]:
+                    report["configs"].append(ann["id"])
+
+        for ns, id_key, name_key in (
+            (WORKFLOW_STATUS_NS, "table_id", None),
+            (CONFIG_MAP_NS, "omero.table_id", "name"),
+        ):
+            try:
+                map_ids = ezomero.get_map_annotation_ids(conn, ctype.capitalize(), cid, ns=ns)
+            except Exception:
+                map_ids = []
+            for map_id in map_ids:
+                try:
+                    kv = ezomero.get_map_annotation(conn, map_id) or {}
+                except Exception:
+                    continue
+                if belongs(kv.get(id_key), kv.get(name_key) if name_key else None):
+                    if map_id not in report["map_annotations"]:
+                        report["map_annotations"].append(map_id)
+
+    summary = ", ".join(f"{len(report[k])} {k}" for k in kinds)
+    missing = sum(len(v) for v in report["missing"].values())
+    if dry_run:
+        print(f"Dry run, nothing deleted. Would delete: {summary}"
+              + (f" ({missing} IDs in the table no longer exist)" if missing else "")
+              + ". Pass dry_run=False to delete.")
+        return report
+
+    # Children first, the table last.
+    if report["rois"]:
+        conn.deleteObjects("Roi", report["rois"], wait=True)
+    annotations = (report["labels"] + report["annotation_inputs"]
+                   + report["configs"] + report["map_annotations"])
+    if annotations:
+        conn.deleteObjects("Annotation", annotations, wait=True)
+    conn.deleteObjects("Annotation", [table_id], wait=True)
+    report["deleted"] = True
+    print(f"Deleted: {summary}")
+    return report
+
+
+def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
+    """Infer the run settings that a tracking table's rows pin down.
+
+    Used when no saved config matches the table. Returns only what the rows
+    show: the annotated channel, 3D and patch settings, and the number of
+    distinct images per category.
+    """
+    settings: Dict[str, Any] = {}
+    if df is None or df.empty:
+        return settings
+
+    def first(column):
+        if column not in df.columns:
+            return None
+        values = df[column].dropna()
+        return values.iloc[0] if len(values) else None
+
+    def as_bool(value):
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1", "yes")
+        return bool(value)
+
+    channel = first("channel")
+    if channel is not None:
+        settings["channel"] = int(channel)
+    volumetric = first("is_volumetric")
+    if volumetric is not None:
+        settings["three_d"] = as_bool(volumetric)
+    is_patch = first("is_patch")
+    if is_patch is not None:
+        settings["use_patches"] = as_bool(is_patch)
+        if settings["use_patches"]:
+            patches = df[df["is_patch"].map(as_bool)]
+            width, height = first("patch_width"), first("patch_height")
+            if width is not None and height is not None:
+                settings["patch_size"] = [int(width), int(height)]
+            image_col = "image_uri" if "image_uri" in df.columns else "image_id"
+            plane = [c for c in (image_col, "timepoint", "z_slice") if c in patches.columns]
+            if image_col in plane and len(patches):
+                settings["patches_per_image"] = int(patches.groupby(plane).size().max())
+
+    for column, mode_key, list_key in (("timepoint", "timepoint_mode", "timepoints"),
+                                       ("z_slice", "z_slice_mode", "z_slices")):
+        if column in df.columns:
+            values = sorted({int(v) for v in df[column].dropna()})
+            if values:
+                settings[mode_key] = "specific"
+                settings[list_key] = values
+
+    image_col = "image_uri" if "image_uri" in df.columns else "image_id"
+    if "category" in df.columns and image_col in df.columns:
+        counts = df.groupby("category")[image_col].nunique()
+        settings["train_n"] = int(counts.get("training", 0))
+        settings["validate_n"] = int(counts.get("validation", 0))
+        settings["test_n"] = int(counts.get("test", 0))
+    return settings
+
+
 def upload_rois_and_labels(
     conn,
     image_id: int,

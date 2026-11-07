@@ -224,11 +224,14 @@ processing:
 training:
   validation_strategy: "random_split"    # "random_split", "expert_review", "cross_validation"
   segment_all: false                     # Processing mode (see below)
+  split_unit: "image"                    # "image" or "well" (see Split Unit below)
+  split_rationale: null                  # Why this unit was chosen (free text, optional)
+  stratify_by: []                        # Well keys to split within, e.g. [cell_line, treatment]
 
   # Count-based splits (when segment_all: false)
-  train_n: 10                           # Number of training images
-  validate_n: 5                         # Number of validation images
-  test_n: 0                             # Number of test images
+  train_n: 10                           # Number of training images (or wells)
+  validate_n: 5                         # Number of validation images (or wells)
+  test_n: 0                             # Number of test images (or wells)
 
   # Fraction-based splits (when segment_all: true)
   train_fraction: 0.7                   # Training data fraction
@@ -237,6 +240,61 @@ training:
 
   quality_threshold: 0.8                # Minimum quality score (optional)
 ```
+
+#### Split Unit
+
+`split_unit` sets the level at which data are assigned to a split. All annotations
+of one unit end up in the same split, and `train_n`/`validate_n`/`test_n` and the
+fractions count units:
+
+- `image` (default): an image (a plate field) with all its timepoints and z-slices.
+  Fields from one well may end up in different splits.
+- `well`: all fields of a plate well. Needs plate data with well information
+  (OMERO plates or OME-Zarr HCS plates).
+
+Whether fields of one well are independent enough to be split apart depends on the
+task, so the choice is recorded rather than imposed. Use `split_rationale` to say
+why, for example:
+
+```yaml
+training:
+  split_unit: image
+  split_rationale: >
+    Fields within a well do not overlap; for nucleus segmentation they are
+    treated as independent.
+```
+
+`config.split_report()` lists which images and wells have annotations in more than
+one split, and `config.split_summary()` puts this in a sentence that is added to the
+MIFA annotation method. Validation reports an error when annotations of one declared
+unit are found in different splits.
+
+#### Stratified Splits
+
+`stratify_by` divides the units over the splits per condition, so that validation
+and test cover every condition instead of whatever a random draw gives. Keys are
+well key-value pairs (from OMERO map annotations or OME-Zarr well attributes), or
+`well` itself:
+
+```yaml
+training:
+  segment_all: true
+  stratify_by: [cell_line, treatment]
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+```
+
+- Fraction mode: within each condition, validation and test get their rounded share
+  and training the rest (4 fields at 0.6/0.2/0.2 become 2/1/1).
+- Count mode: each split draws units in turn from all conditions, test and
+  validation first.
+
+When a condition has too few units to reach every split (for example one well per
+condition with `split_unit: well`), the split still runs with a warning, and
+`split_report()` lists the conditions that miss a split. A key that no image has is
+an error, as it is most likely a typo. Images lacking a key that others have form
+their own `(missing)` group.
 
 #### Training Split Modes
 
