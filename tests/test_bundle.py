@@ -12,6 +12,7 @@ from omero_annotate_ai.bundle import (
     home_dir,
     local_bundle,
     mask_path,
+    new_local_id,
     omero_bundle,
     server_slug,
 )
@@ -50,7 +51,8 @@ class TestFolderNames:
         assert folder == tmp_path / "localhost-6064" / "42_nuclei-set-1"
 
     def test_local_bundles_get_distinct_ids(self, tmp_path):
-        first, second = local_bundle(tmp_path, "run"), local_bundle(tmp_path, "run")
+        first = local_bundle(tmp_path, new_local_id(), "run")
+        second = local_bundle(tmp_path, new_local_id(), "run")
         assert first.parent == tmp_path / "local"
         assert first.name.endswith("_run") and first != second
 

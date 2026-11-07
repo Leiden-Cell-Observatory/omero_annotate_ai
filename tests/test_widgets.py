@@ -9,6 +9,8 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import pytest
 
+from omero_annotate_ai.errors import ConnectionFailed
+
 # Test imports with fallbacks for missing dependencies
 try:
     from omero_annotate_ai.widgets.omero_connection_widget import OMEROConnectionWidget
@@ -432,7 +434,9 @@ class TestOMEROConnectionWidgetCredentials:
 
     def test_stale_keychain_password_hint(self, widget, conn_manager, capsys):
         conn_manager.load_password.return_value = "old"
-        conn_manager.create_connection_from_config.return_value = None
+        conn_manager.create_connection_from_config.side_effect = ConnectionFailed(
+            "login failed"
+        )
         widget.host_widget.value = "omero.example.org"
         widget.username_widget.value = "alice"
         widget._load_from_keychain(Mock())
@@ -635,7 +639,7 @@ class TestWorkflowWidget:
         config = widget.get_config()
 
         assert config is not None
-        assert config.output.output_directory == Path("/tmp/test")
+        assert widget.home == Path("/tmp/test")
         assert config.omero.container_type == "dataset"
         assert config.omero.container_id == 123
         assert config.ai_model.pretrained_from == "vit_b_lm"
@@ -775,9 +779,9 @@ class TestWorkflowWidgetDisplay:
         with patch("builtins.print"):
             widget._on_update_config(None)
 
-        assert widget.get_config().workflow.resume_from_table is True
+        assert widget.get_config().identity.table_id is not None
         assert widget.get_config().name == "plate_run"
-        assert widget.get_config().omero.table_id == 22159
+        assert widget.get_config().identity.table_id == 22159
         assert widget.workflow_widgets["resume_from_table"].value is True
 
     @staticmethod
@@ -826,7 +830,7 @@ class TestWorkflowWidgetDisplay:
         assert config.spatial_coverage.use_patches is True
         assert config.spatial_coverage.patch_size == [256, 128]
         assert config.training.train_n == 4
-        assert config.workflow.resume_from_table is True
+        assert config.identity.table_id is not None
 
     def test_get_config_keeps_locked_values(self):
         widget = self._continue_with_saved_config()
@@ -898,7 +902,7 @@ class TestWorkflowWidgetDisplay:
         with patch("builtins.print"):
             widget._on_update_config(None)
         config = widget.get_config()
-        assert config.workflow.read_only_mode is False
+        assert config.storage == "omero"
         assert (
             config.spatial_coverage.patches_per_image
             == self._saved_config().spatial_coverage.patches_per_image
@@ -929,7 +933,7 @@ class TestWorkflowWidgetDisplay:
         assert config.spatial_coverage.patch_size == [256, 128]
         assert config.spatial_coverage.use_patches is True
         assert config.training.train_n == 6
-        assert config.workflow.resume_from_table is True
+        assert config.identity.table_id is not None
 
     def test_name_new_table_unlocks_fields(self):
         widget = self._continue_with_saved_config()
@@ -1003,9 +1007,9 @@ class TestWorkflowWidgetDisplay:
         with patch("builtins.print"):
             widget._on_update_config(None)
 
-        assert widget.get_config().workflow.resume_from_table is False
+        assert widget.get_config().identity.table_id is None
         assert widget.get_config().name == "fresh_table"
-        assert widget.get_config().omero.table_id is None
+        assert widget.get_config().identity.table_id is None
         assert widget.workflow_widgets["resume_from_table"].value is False
 
 

@@ -86,9 +86,9 @@ class SpyWrites(OmeroWrites):
     def __init__(self) -> None:
         self.table_ids: list[int] = []
 
-    def write_config_to_table(self, conn, table_id, config):
+    def write_rows(self, conn, table_id, rows):
         self.table_ids.append(table_id)
-        return super().write_config_to_table(conn, table_id, config)
+        return super().write_rows(conn, table_id, rows)
 
 
 class FlakyWrites(OmeroWrites):
@@ -105,11 +105,11 @@ class FlakyWrites(OmeroWrites):
             raise ConnectionError("simulated upload failure")
         return super().upload_label(conn, image_id, label_img, **fields)
 
-    def write_config_to_table(self, conn, table_id, config):
+    def write_rows(self, conn, table_id, rows):
         if self.fail_table_once:
             self.fail_table_once = False
             raise ConnectionError("simulated table update failure")
-        return super().write_config_to_table(conn, table_id, config)
+        return super().write_rows(conn, table_id, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +146,24 @@ def make_config(
     return config
 
 
+def make_pipeline(
+    config,
+    conn,
+    annotators: Annotators,
+    writes: OmeroWrites | None = None,
+    events: list | None = None,
+):
+    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+    return AnnotationPipeline(
+        config,
+        conn,
+        annotator=annotators.current,
+        omero_writes=writes,
+        events=None if events is None else events.append,
+    )
+
+
 def run_microsam(
     config,
     conn,
@@ -153,25 +171,15 @@ def run_microsam(
     writes: OmeroWrites | None = None,
     events: list | None = None,
 ):
-    from omero_annotate_ai.core.annotation_pipeline import create_pipeline
-
-    pipeline = create_pipeline(
-        config,
-        conn,
-        annotator=annotators.current,
-        omero_writes=writes,
-        events=None if events is None else events.append,
-    )
+    pipeline = make_pipeline(config, conn, annotators, writes, events)
     table_id, config = pipeline.run_full_micro_sam_workflow()
     return pipeline, table_id, config
 
 
 def resume_config(config, table_id: int, **training):
-    """The same set again, as a resumed run (fresh annotations, loaded from the table)."""
+    """The same set again, opened by its table ID (rows come from the table)."""
     resumed = config.model_copy(deep=True)
-    resumed.annotations = []
-    resumed.workflow.resume_from_table = True
-    resumed.omero.table_id = table_id
+    resumed.identity.table_id = table_id
     for key, value in training.items():
         setattr(resumed.training, key, value)
     return resumed
@@ -461,13 +469,14 @@ class TestCrashes:
         from omero_annotate_ai.omero.omero_functions import delete_training_set
 
         config = make_config(omero_seed, "tablefail")
+        pipeline = make_pipeline(
+            config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+        )
         with pytest.raises(TableWriteError) as raised:
-            run_microsam(
-                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
-            )
+            pipeline.run_full_micro_sam_workflow()
         assert isinstance(raised.value.__cause__, ConnectionError)
 
-        table_id = config.omero.table_id
+        table_id = pipeline.table_id
         rows = table_rows(omero_conn, table_id)
         assert not rows["processed"].any()  # the update never reached the table
         rois = tagged_rois(omero_conn, table_id, omero_seed.image_ids)
@@ -481,11 +490,12 @@ class TestCrashes:
         from omero_annotate_ai.errors import TableWriteError
 
         config = make_config(omero_seed, "tablefailresume")
+        pipeline = make_pipeline(
+            config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+        )
         with pytest.raises(TableWriteError):
-            run_microsam(
-                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
-            )
-        table_id = config.omero.table_id
+            pipeline.run_full_micro_sam_workflow()
+        table_id = pipeline.table_id
 
         run_microsam(resume_config(config, table_id), omero_conn, annotator)
         rows = table_rows(omero_conn, table_id)
@@ -500,12 +510,13 @@ class TestCrashes:
         from omero_annotate_ai.errors import TableWriteError
 
         config = make_config(omero_seed, "orphans")
+        pipeline = make_pipeline(
+            config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+        )
         with pytest.raises(TableWriteError):
-            run_microsam(
-                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
-            )
-        table_id = config.omero.table_id
-        (config.output.output_directory / "tracking_table.csv").unlink()
+            pipeline.run_full_micro_sam_workflow()
+        table_id = pipeline.table_id
+        (pipeline.bundle_dir / "tracking_table.csv").unlink()
         before = tagged_rois(omero_conn, table_id, omero_seed.image_ids)
 
         events: list = []
@@ -719,7 +730,7 @@ class TestOtherPaths:
             for i in omero_seed.image_ids
         }
         config = make_config(omero_seed, "readonly", test_n=0)
-        config.workflow.read_only_mode = True
+        config.storage = "local"
         pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
 
         assert table_id == -1
@@ -753,6 +764,7 @@ class TestZarr:
         config = AnnotationConfig(
             name="zarr_functional",
             source="zarr",
+            storage="local",
             zarr={"uris": [ngff_stores["img04"], ngff_stores["img05"]]},
         )
         config.training.train_n, config.training.validate_n, config.training.test_n = (
@@ -765,7 +777,7 @@ class TestZarr:
         table_id, config = pipeline.run_full_micro_sam_workflow()
 
         assert table_id == -1
-        assert all(a.processed for a in config.annotations)
+        assert all(a.processed for a in pipeline.training_set.units())
         assert len(scripted.calls) == 1 and scripted.calls[0].n_images == 2
         bundle = pipeline.bundle_dir
         assert bundle.parent == tmp_path / "local"

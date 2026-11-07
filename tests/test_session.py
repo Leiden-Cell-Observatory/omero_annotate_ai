@@ -15,23 +15,13 @@ from omero_annotate_ai.events import (
     UnitCommitted,
     UploadFailed,
 )
-from tests.test_pipeline import omero_pipeline, omero_set, source_images
+from tests.fakes import annotate, create_set, omero_set
 
 
 def ready_pipeline(tmp_path, n_images=3, events=None, **kwargs):
     """An OMERO set with its schema and table, ready for a session."""
     config, source, omero = omero_set(tmp_path, n_images=n_images)
-    pipeline = omero_pipeline(
-        config,
-        source,
-        omero,
-        events=None if events is None else events.append,
-        **kwargs,
-    )
-    images = list(source_images(source))
-    pipeline.initialize_workflow(images)
-    pipeline.define_annotation_schema(images)
-    pipeline.create_tracking_table()
+    pipeline = create_set(config, source, omero, tmp_path / "home", events, **kwargs)
     return pipeline, omero
 
 
@@ -78,13 +68,12 @@ class TestAnnotationSession:
         released = [e for e in events if isinstance(e, BatchReleased)]
         assert len(released[0].annotation_ids) == 2
         assert session.next_batch() is None  # not handed out twice in one session
-        assert sum(not a.processed for a in pipeline.config.annotations) == 2
+        assert sum(not a.processed for a in pipeline.rows) == 2
         assert pipeline.start_session().next_batch() is not None
 
     def test_batch_size_splits_the_pending_units(self, tmp_path):
         pipeline, _ = ready_pipeline(tmp_path)
-        pipeline.config.workflow.batch_size = 2
-        session = pipeline.start_session()
+        session = pipeline.start_session(batch_size=2)
 
         sizes = []
         while (batch := session.next_batch()) is not None:
@@ -118,9 +107,7 @@ class TestAnnotationSession:
         report = session.commit(batch, masks_for(batch))
 
         assert len(report.committed) == 2 and len(report.failed) == 1
-        failed = next(
-            a for a in pipeline.config.annotations if a.annotation_id in report.failed
-        )
+        failed = next(a for a in pipeline.rows if a.annotation_id in report.failed)
         assert not failed.processed and "simulated label failure" in failed.error
         assert [type(e) for e in events].count(UploadFailed) == 1
         local = pd.read_csv(pipeline.bundle_dir / "tracking_table.csv")
@@ -146,16 +133,18 @@ class TestAnnotationSession:
 
     def test_config_published_per_commit_or_at_finish(self, tmp_path):
         pipeline, omero = ready_pipeline(tmp_path)
-        pipeline.config.workflow.batch_size = 1
-        session = pipeline.start_session()
+        published = len(omero.configs)  # once when the set was created
+        session = pipeline.start_session(batch_size=1)
         for _ in range(2):
             batch = session.next_batch()
             session.commit(batch, masks_for(batch), publish_config=False)
-        assert omero.configs == []
+        assert len(omero.configs) == published
 
         session.finish("done for today")
 
-        assert omero.configs == [pipeline.table_id]
+        assert omero.configs[published:] == [pipeline.table_id]
+        assert pipeline.config.sessions[-1].note == "done for today"
+        assert pipeline.config.sessions[-1].status == "finished"
 
     def test_events_frame_the_session(self, tmp_path):
         events = []
@@ -171,12 +160,12 @@ class TestAnnotationSession:
 
     def test_read_only_set_keeps_masks_locally(self, tmp_path):
         config, source, omero = omero_set(tmp_path, n_images=2)
-        config.workflow.read_only_mode = True
-        pipeline = omero_pipeline(config, source, omero)
+        config.storage = "local"
+        pipeline = create_set(config, source, omero, tmp_path / "home")
 
-        pipeline.run_full_micro_sam_workflow(list(source_images(source)))
+        annotate(pipeline)
 
         assert omero.labels == {} and omero.tables == {}
         masks = list((pipeline.bundle_dir / "annotation_output").glob("*_mask.tif"))
         assert len(masks) == 2
-        assert all(a.processed and a.mask_digest for a in config.annotations)
+        assert all(a.processed and a.mask_digest for a in pipeline.rows)

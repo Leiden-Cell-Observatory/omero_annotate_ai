@@ -38,8 +38,8 @@ from .session import NEEDS_REVIEW, check_cancel, upload_unit
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .core.annotation_config import ImageAnnotation
-    from .core.annotation_pipeline import AnnotationPipeline
+    from .rows import Row
+    from .trainingset import TrainingSet
 
 Step = Literal["mirror", "verify", "find_tagged", "reset", "nothing"]
 
@@ -75,7 +75,7 @@ def decide(
     return "nothing"
 
 
-def _record(annotation: ImageAnnotation | None) -> Record | None:
+def _record(annotation: Row | None) -> Record | None:
     if annotation is None:
         return None
     return Record(annotation.processed, annotation.label_id, annotation.roi_id)
@@ -86,14 +86,14 @@ DIVERGENT = NEEDS_REVIEW + "the local mask differs from the uploaded label file"
 
 @dataclass(slots=True)
 class _Reconciler:
-    pipeline: AnnotationPipeline
+    training_set: TrainingSet
     prune_duplicates: bool
     changed: bool = False
 
     def event(self, annotation_id: str, action: RepairKind, detail: str = "") -> None:
-        self.pipeline.events(ReconcileAction(annotation_id, action, detail))
+        self.training_set.events(ReconcileAction(annotation_id, action, detail))
 
-    def mirror(self, unit: ImageAnnotation, mask: Path) -> None:
+    def mirror(self, unit: Row, mask: Path) -> None:
         """OMERO has the unit; only report local files that no longer match it."""
         if unit.mask_digest and mask.exists() and file_digest(mask) != unit.mask_digest:
             self.event(
@@ -101,7 +101,7 @@ class _Reconciler:
                 "divergent",
                 "the local mask differs from the one uploaded to OMERO; kept OMERO's",
             )
-        image = input_path(self.pipeline.bundle_dir, unit.annotation_id)
+        image = input_path(self.training_set.bundle_dir, unit.annotation_id)
         if (
             unit.input_digest
             and image.exists()
@@ -113,9 +113,9 @@ class _Reconciler:
                 "the local input image differs from the one annotated",
             )
 
-    def verify(self, unit: ImageAnnotation, local: ImageAnnotation, mask: Path) -> None:
+    def verify(self, unit: Row, local: Row, mask: Path) -> None:
         """The local copy has upload IDs the table lacks: check them, then adopt."""
-        writes, conn = self.pipeline.omero_writes, self.pipeline.conn
+        writes, conn = self.training_set.omero_writes, self.training_set.conn
         assert local.label_id is not None
         pixels = writes.download_label(conn, local.label_id)
         if pixels is None:  # the label file is gone: as if it was never uploaded
@@ -128,7 +128,7 @@ class _Reconciler:
         if local.roi_id is not None and writes.object_exists(conn, "Roi", local.roi_id):
             unit.roi_id = local.roi_id
         elif unit.image_id is not None:  # the ROI may be posted but never recorded
-            tag = self.pipeline.upload_tag(unit.annotation_id)
+            tag = self.training_set.upload_tag(unit.annotation_id)
             _, rois = writes.find_tagged(conn, unit.image_id, tag)
             unit.roi_id = self._keep_first(unit, "Roi", rois)
         unit.session = local.session
@@ -136,12 +136,12 @@ class _Reconciler:
         unit.annotation_created_at = local.annotation_created_at
         self._accept(unit, mask, "adopted", f"label {unit.label_id}")
 
-    def find_tagged(self, unit: ImageAnnotation, mask: Path) -> None:
+    def find_tagged(self, unit: Row, mask: Path) -> None:
         """Adopt uploads carrying the unit's tag; upload what is missing."""
         if unit.image_id is None:
             return
-        writes, conn = self.pipeline.omero_writes, self.pipeline.conn
-        tag = self.pipeline.upload_tag(unit.annotation_id)
+        writes, conn = self.training_set.omero_writes, self.training_set.conn
+        tag = self.training_set.upload_tag(unit.annotation_id)
         labels, rois = writes.find_tagged(conn, unit.image_id, tag)
         label_id = self._keep_first(unit, "FileAnnotation", labels)
         roi_id = self._keep_first(unit, "Roi", rois)
@@ -156,23 +156,19 @@ class _Reconciler:
         unit.roi_id = roi_id
         self._accept(unit, mask, "adopted" if pixels is not None else "uploaded")
 
-    def _keep_first(
-        self, unit: ImageAnnotation, kind: str, ids: list[int]
-    ) -> int | None:
+    def _keep_first(self, unit: Row, kind: str, ids: list[int]) -> int | None:
         """The oldest tagged upload; later copies are reported (deleted if pruning)."""
         if len(ids) > 1:
             if self.prune_duplicates:
-                self.pipeline.omero_writes.delete_objects(
-                    self.pipeline.conn, kind, ids[1:]
+                self.training_set.omero_writes.delete_objects(
+                    self.training_set.conn, kind, ids[1:]
                 )
                 self.event(unit.annotation_id, "pruned", f"{kind} {ids[1:]}")
             else:
                 self.event(unit.annotation_id, "duplicate", f"{kind} {ids[1:]}")
         return ids[0] if ids else None
 
-    def _match_mask(
-        self, unit: ImageAnnotation, mask: Path, pixels: np.ndarray
-    ) -> bool:
+    def _match_mask(self, unit: Row, mask: Path, pixels: np.ndarray) -> bool:
         """Write the mask from the upload if missing; report it if it differs."""
         if not mask.exists():
             atomic_write(mask, lambda tmp: tifffile.imwrite(tmp, pixels))
@@ -184,24 +180,24 @@ class _Reconciler:
         return True
 
     def _accept(
-        self, unit: ImageAnnotation, mask: Path, action: RepairKind, detail: str = ""
+        self, unit: Row, mask: Path, action: RepairKind, detail: str = ""
     ) -> None:
         """Mark the unit done and upload whatever is still missing."""
         unit.processed = True
         unit.mask_digest = file_digest(mask)
-        self.pipeline.save_local_table()
-        if upload_unit(self.pipeline, unit, mask):
+        self.training_set.save_local_table()
+        if upload_unit(self.training_set, unit, mask):
             self.changed = True
             self.event(unit.annotation_id, action, detail)
 
 
 def reconcile(
-    pipeline: AnnotationPipeline,
+    training_set: TrainingSet,
     *,
     prune_duplicates: bool = False,
     cancel: Callable[[], bool] | None = None,
 ) -> bool:
-    """Repair the resumed set in ``pipeline.config.annotations`` (loaded from the table).
+    """Repair an opened set's ``rows`` (loaded from the OMERO table).
 
     Rows only the local CSV has (e.g. images added when the table update failed)
     are added back. Changed rows are written to the table and the local CSV.
@@ -209,23 +205,23 @@ def reconcile(
     Returns:
         Whether anything was repaired.
     """
-    config = pipeline.config
-    local_rows = pipeline.read_local_table()
+    rows = training_set.rows
+    local_rows = training_set.read_local_table()
     local_known = local_rows is not None
     local_rows = local_rows or {}
-    remote_ids = {a.annotation_id for a in config.annotations}
-    remote_flags = {a.annotation_id: _record(a) for a in config.annotations}
+    remote_ids = {a.annotation_id for a in rows}
+    remote_flags = {a.annotation_id: _record(a) for a in rows}
     for annotation_id, row in local_rows.items():
         if annotation_id not in remote_ids:
-            config.add_annotation(row.model_copy(update={"processed": False}))
+            rows.append(row.model_copy(update={"processed": False}))
             remote_flags[annotation_id] = None
 
-    fixer = _Reconciler(pipeline, prune_duplicates)
-    units = list(config.annotations)
+    fixer = _Reconciler(training_set, prune_duplicates)
+    units = list(rows)
     for done, unit in enumerate(units, start=1):
-        check_cancel(pipeline, cancel, "reconcile")
+        check_cancel(training_set, cancel, "reconcile")
         local = local_rows.get(unit.annotation_id)
-        mask = mask_path(pipeline.bundle_dir, unit.annotation_id)
+        mask = mask_path(training_set.bundle_dir, unit.annotation_id)
         step = decide(
             remote_flags[unit.annotation_id], _record(local), mask.exists(), local_known
         )
@@ -240,9 +236,9 @@ def reconcile(
             fixer.event(unit.annotation_id, "reset", "marked done locally, but no mask")
         if local is not None and not unit.processed and local.error and not unit.error:
             unit.error = local.error
-        pipeline.events(Progress("reconcile", done, len(units)))
+        training_set.events(Progress("reconcile", done, len(units)))
 
-    pipeline.save_local_table()
-    if fixer.changed or len(config.annotations) > len(remote_ids):
-        pipeline.write_table()
+    training_set.save_local_table()
+    if fixer.changed or len(rows) > len(remote_ids):
+        training_set.write_table()
     return fixer.changed

@@ -11,6 +11,7 @@ import json
 import random
 import string
 import tempfile
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
@@ -118,13 +119,11 @@ def list_manifests_from_omero(conn, container_type: str, container_id: int) -> l
                 content = b"".join(ann.getFileInChunks())
                 data = json.loads(content)
                 config = AnnotationConfig.from_json(data)
-                progress = config.get_progress_summary()
                 manifests.append(
                     {
                         "set_id": set_id,
                         "name": config.name,
                         "created": str(config.created),
-                        "progress": progress,
                         "annotation_id": ann.getId(),
                     }
                 )
@@ -134,13 +133,14 @@ def list_manifests_from_omero(conn, container_type: str, container_id: int) -> l
 
 
 def delete_manifest_from_omero(
-    conn, container_type: str, container_id: int, set_id: str
+    conn,
+    container_type: str,
+    container_id: int,
+    set_id: str,
+    image_ids: Iterable[int] = (),
 ) -> bool:
-    """Delete a manifest and all associated GeoJSON FileAnnotations."""
-    # Load manifest to find image IDs
-    config = load_manifest_from_omero(conn, container_type, container_id, set_id)
-    if config:
-        image_ids = {ann.image_id for ann in config.annotations}
+    """Delete a manifest and the GeoJSON FileAnnotations it put on ``image_ids``."""
+    if image_ids:
         ns = geojson_namespace(set_id)
         for image_id in image_ids:
             image = conn.getObject("Image", image_id)

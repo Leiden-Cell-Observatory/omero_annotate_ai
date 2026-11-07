@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from omero_annotate_ai.errors import ConnectionFailed
+
 try:
     import omero_annotate_ai.omero.simple_connection as sc
 
@@ -376,15 +378,13 @@ class TestConnectGatewayArgs:
     def test_gateway_closed_when_connect_returns_false(self, manager, gateway):
         gateway.return_value.connect.return_value = False
 
-        assert (
-            manager.connect("omero.example.org", "alice", "pw", verbose=False) is None
-        )
+        with pytest.raises(ConnectionFailed, match="log in"):
+            manager.connect("omero.example.org", "alice", "pw", verbose=False)
         gateway.return_value.close.assert_called_once()
 
     def test_gateway_closed_when_connect_raises(self, manager, gateway):
         gateway.return_value.connect.side_effect = RuntimeError("router refused")
 
-        assert (
-            manager.connect("omero.example.org", "alice", "pw", verbose=False) is None
-        )
+        with pytest.raises(ConnectionFailed, match="router refused"):
+            manager.connect("omero.example.org", "alice", "pw", verbose=False)
         gateway.return_value.close.assert_called_once()

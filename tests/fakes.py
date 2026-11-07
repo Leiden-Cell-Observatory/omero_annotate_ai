@@ -15,10 +15,16 @@ from unittest.mock import Mock
 import numpy as np
 import pandas as pd
 
-from omero_annotate_ai.core.annotation_pipeline import OmeroWrites
+from omero_annotate_ai.annotators import ScriptedAnnotator
+from omero_annotate_ai.core.annotation_config import (
+    AnnotationConfig,
+    create_default_config,
+)
+from omero_annotate_ai.rows import rows_to_frame
 from omero_annotate_ai.sources import ImageMeta
 from omero_annotate_ai.sources.base import clamp_region
 from omero_annotate_ai.sources.uri import omero_uri, parse_omero_uri
+from omero_annotate_ai.trainingset import OmeroWrites, TrainingSet
 
 
 class Crash(BaseException):
@@ -101,6 +107,7 @@ class FakeOmero(OmeroWrites):
     labels: dict[int, Upload] = field(default_factory=dict)
     rois: dict[int, Upload] = field(default_factory=dict)
     configs: list[int] = field(default_factory=list)
+    config_text: dict[int, str] = field(default_factory=dict)
     calls: dict[str, int] = field(default_factory=dict)
     _next_id: int = 100
 
@@ -116,6 +123,8 @@ class FakeOmero(OmeroWrites):
             return Mock() if int(object_id) in store else None
 
         conn.getObject.side_effect = get_object
+        conn.host, conn.port = "fake.omero", 4064
+        conn.getUser.return_value.getName.return_value = "tester"
         return conn
 
     def _new_id(self) -> int:
@@ -130,18 +139,18 @@ class FakeOmero(OmeroWrites):
             raise ConnectionError(f"simulated {name} failure")
 
     # tables -------------------------------------------------------------------
-    def create_table(self, conn, config, title, container_type, container_ids):
+    def create_table(self, conn, rows, title, container_type, container_ids):
         table_id = self._new_id()
-        self.tables[table_id] = config.to_dataframe()
+        self.tables[table_id] = rows_to_frame(rows)
         return table_id
 
     def read_table(self, conn, table_id):
         self._call("read")
         return self.tables[table_id].copy()
 
-    def write_config_to_table(self, conn, table_id, config):
+    def write_rows(self, conn, table_id, rows):
         self._call("table")
-        new = config.to_dataframe().set_index("annotation_id")
+        new = rows_to_frame(rows).set_index("annotation_id")
         old = self.tables[table_id].set_index("annotation_id")
         added = len(new.index.difference(old.index))
         merged = pd.concat([old.drop(new.index, errors="ignore"), new])
@@ -150,7 +159,13 @@ class FakeOmero(OmeroWrites):
 
     def replace_config(self, conn, table_id, file_path, container_type, container_id):
         self.configs.append(table_id)
+        with open(file_path, encoding="utf-8") as handle:
+            self.config_text[table_id] = handle.read()
         return self._new_id()
+
+    def read_config(self, conn, table_id):
+        text = self.config_text.get(int(table_id))
+        return None if text is None else AnnotationConfig.from_yaml(text)
 
     # uploads ------------------------------------------------------------------
     def upload_label(self, conn, image_id, label_img, **fields):
@@ -199,3 +214,61 @@ class FakeOmero(OmeroWrites):
         for upload in self.rois.values():
             counts.setdefault(upload.tag, [0, 0])[1] += 1
         return {tag: (n[0], n[1]) for tag, n in counts.items()}
+
+
+# --- Training sets on the fakes -------------------------------------------------------
+
+
+def omero_set(tmp_path, n_images=3):
+    """A dataset of ``n_images`` 16x16 images (pixel value = image ID), all training."""
+    source = FakeImageSource(
+        {
+            i: np.full((1, 1, 1, 16, 16), i, dtype=np.uint16)
+            for i in range(1, n_images + 1)
+        }
+    )
+    config = create_default_config()
+    config.name = "fake_set"
+    config.omero.container_type = "dataset"
+    config.omero.container_id = 1
+    config.training.train_n = n_images
+    config.training.validate_n = 0
+    config.training.test_n = 0
+    return config, source, FakeOmero()
+
+
+def image_mask(pixels):
+    """The scripted user's mask: the whole plane, labelled with the image's ID."""
+    return np.full(np.asarray(pixels).shape, int(np.asarray(pixels).max()), np.uint16)
+
+
+def create_set(config, source, omero, home, events=None, **kwargs) -> TrainingSet:
+    """A new training set on the fakes (home folder ``home``), over all images."""
+    kwargs.setdefault("images", [source.get_image(i) for i in sorted(source.arrays)])
+    return TrainingSet.create(
+        config,
+        None if config.storage == "local" else omero.conn(),
+        home=home,
+        image_source=source,
+        omero_writes=omero,
+        events=None if events is None else events.append,
+        **kwargs,
+    )
+
+
+def reopen(ts, source, omero, events=None, **kwargs) -> TrainingSet:
+    """The same set opened again by its table ID (repairs it first)."""
+    return TrainingSet.open(
+        ts.table_id,
+        omero.conn(),
+        home=ts.home,
+        image_source=source,
+        omero_writes=omero,
+        events=None if events is None else events.append,
+        **kwargs,
+    )
+
+
+def annotate(ts, limit=None, **kwargs) -> int:
+    """Annotate the pending units like a scripted user (``limit`` units at most)."""
+    return ts.annotate(ScriptedAnnotator(image_mask, limit=limit), **kwargs)

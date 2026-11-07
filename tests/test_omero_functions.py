@@ -14,9 +14,7 @@ from omero_annotate_ai.core.annotation_config import (
     AnnotationMethodology,
     DatasetInfo,
     FeatureType,
-    ImageAnnotation,
     OMEROConfig,
-    OutputConfig,
     SpatialCoverage,
     StudyContext,
     TrainingConfig,
@@ -38,12 +36,13 @@ from omero_annotate_ai.omero.omero_functions import (
     generate_unique_table_name,
     link_table_to_containers,
     list_annotation_tables,
+    read_table_rows,
     replace_table_config,
-    sync_omero_table_to_config,
     upload_rois_and_labels,
-    write_config_to_table,
+    write_rows_to_table,
 )
 from omero_annotate_ai.omero.omero_utils import list_user_tables
+from omero_annotate_ai.rows import Row
 
 
 @pytest.mark.unit
@@ -106,77 +105,54 @@ class TestLinkTableToContainers:
             )
 
 
+def _rows():
+    return [
+        Row(image_id=i + 1, image_name=f"img{i}", annotation_id=f"a{i}", category=c)
+        for i, c in enumerate(["training", "validation", "test"])
+    ]
+
+
 @pytest.mark.unit
 class TestCreateTrackingTable:
     """create_tracking_table makes the table once, linked to every container."""
 
-    def _config(self):
-        from omero_annotate_ai.core.annotation_config import (
-            ImageAnnotation,
-            create_default_config,
-        )
-
-        config = create_default_config()
-        for i, category in enumerate(["training", "validation", "test"]):
-            config.add_annotation(
-                ImageAnnotation(
-                    image_id=i + 1,
-                    image_name=f"img{i}",
-                    annotation_id=f"a{i}",
-                    category=category,
-                )
-            )
-        return config
-
-    def test_links_all_containers_and_prepares_rows(self):
-        with (
-            patch(
-                "omero_annotate_ai.omero.tracking_table.create_table", return_value=100
-            ) as create,
-            patch("builtins.print"),
-        ):
-            table_id = create_tracking_table(
-                Mock(), self._config(), "run", "plate", [1, 2, 3]
-            )
+    def test_links_all_containers_and_types_rows(self):
+        with patch(
+            "omero_annotate_ai.omero.tracking_table.create_table", return_value=100
+        ) as create:
+            table_id = create_tracking_table(Mock(), _rows(), "run", "plate", [1, 2, 3])
 
         assert table_id == 100
         conn, df, title, ctype, cids = create.call_args.args
         assert (title, ctype, cids) == ("run", "plate", [1, 2, 3])
         assert list(df["category"]) == ["training", "validation", "test"]
         assert pd.api.types.is_integer_dtype(df["annotation_input_id"])
+        assert pd.api.types.is_integer_dtype(df["roi_id"])
 
-    def test_empty_config_is_an_error(self):
-        from omero_annotate_ai.core.annotation_config import create_default_config
-
-        with pytest.raises(ValueError, match="No annotations"):
-            create_tracking_table(Mock(), create_default_config(), "run", "plate", [1])
+    def test_no_rows_is_an_error(self):
+        with pytest.raises(ValueError, match="No rows"):
+            create_tracking_table(Mock(), [], "run", "plate", [1])
 
 
 @pytest.mark.unit
-class TestWriteAndSyncTable:
+class TestWriteAndReadTable:
     """Writing rows in place, and reading them back strictly."""
 
-    def test_write_empty_config_writes_nothing(self):
-        config = Mock()
-        config.to_dataframe.return_value = pd.DataFrame()
+    def test_write_nothing_for_no_rows(self):
         with patch("omero_annotate_ai.omero.tracking_table.write_rows") as write:
-            assert write_config_to_table(Mock(), 7, config) == {
-                "updated": 0,
-                "added": 0,
-            }
+            assert write_rows_to_table(Mock(), 7, []) == {"updated": 0, "added": 0}
         write.assert_not_called()
 
-    def test_write_passes_prepared_rows(self):
-        config = TestCreateTrackingTable()._config()
+    def test_write_passes_typed_rows(self):
         with patch(
             "omero_annotate_ai.omero.tracking_table.write_rows",
             return_value={"updated": 3, "added": 0},
         ) as write:
-            write_config_to_table(Mock(), 7, config)
+            write_rows_to_table(Mock(), 7, _rows())
         assert write.call_args.args[1] == 7
         assert list(write.call_args.args[2]["annotation_id"]) == ["a0", "a1", "a2"]
 
-    def test_sync_raises_on_empty_table(self):
+    def test_read_raises_on_empty_table(self):
         with (
             patch(
                 "omero_annotate_ai.omero.omero_functions.read_tracking_table",
@@ -184,9 +160,9 @@ class TestWriteAndSyncTable:
             ),
             pytest.raises(ValueError, match="no rows"),
         ):
-            sync_omero_table_to_config(Mock(), 7, Mock())
+            read_table_rows(Mock(), 7)
 
-    def test_sync_raises_when_read_fails(self):
+    def test_read_raises_when_read_fails(self):
         with (
             patch(
                 "omero_annotate_ai.omero.omero_functions.read_tracking_table",
@@ -194,7 +170,7 @@ class TestWriteAndSyncTable:
             ),
             pytest.raises(RuntimeError),
         ):
-            sync_omero_table_to_config(Mock(), 7, Mock())
+            read_table_rows(Mock(), 7)
 
 
 @pytest.mark.unit
@@ -396,10 +372,8 @@ def _make_test_config():
         training=TrainingConfig(),
         ai_model=AIModelConfig(),
         workflow=WorkflowConfig(),
-        output=OutputConfig(),
         omero=OMEROConfig(container_type="dataset", container_id=1),
         feature_types=[FeatureType(name="cell", color="#FF0000")],
-        annotations=[ImageAnnotation(image_id=1, image_name="img1")],
     )
 
 
@@ -752,40 +726,6 @@ class TestNormalizeOmeroTableDf:
         rows = [["Image", "Roi"], [101, 5012]]
 
         assert _normalize_omero_table_df(rows) == rows
-
-
-@pytest.mark.unit
-class TestPrepareDataframeForOmero:
-    """roi_id/label_id must reach OMERO as integers so they can be typed columns."""
-
-    def test_roi_and_label_ids_are_integers_with_zero_sentinel(self):
-        from omero_annotate_ai.omero.omero_functions import _prepare_dataframe_for_omero
-
-        df = pd.DataFrame(
-            {
-                "image_id": [101, 102],
-                "roi_id": [5012, None],
-                "label_id": [77, None],
-            }
-        )
-
-        out = _prepare_dataframe_for_omero(df)
-
-        assert out["roi_id"].tolist() == [5012, 0]
-        assert out["label_id"].tolist() == [77, 0]
-        assert pd.api.types.is_integer_dtype(out["roi_id"])
-        assert pd.api.types.is_integer_dtype(out["label_id"])
-
-    def test_legacy_none_string_is_coerced_to_zero(self):
-        """to_dataframe used to emit the string "None" for an unset id."""
-        from omero_annotate_ai.omero.omero_functions import _prepare_dataframe_for_omero
-
-        df = pd.DataFrame({"image_id": [101], "roi_id": ["None"], "label_id": ["None"]})
-
-        out = _prepare_dataframe_for_omero(df)
-
-        assert out["roi_id"].tolist() == [0]
-        assert out["label_id"].tolist() == [0]
 
 
 @pytest.mark.unit

@@ -36,7 +36,6 @@ STRING_WIDTHS: dict[str, int] = {
     "annotation_type": 64,
     "annotation_created_at": 64,
     "annotation_updated_at": 64,
-    "schema_attachment_id": 32,
     "well": 32,
     "field": 64,
     "well_metadata": 4096,

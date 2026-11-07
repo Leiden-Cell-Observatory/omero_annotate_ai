@@ -11,7 +11,6 @@ import pytest
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    ImageAnnotation,
     create_default_config,
 )
 from omero_annotate_ai.processing import training_functions as tf
@@ -19,6 +18,7 @@ from omero_annotate_ai.processing.training_functions import (
     prepare_training_data_from_table,
     reorganize_local_data_for_training,
 )
+from omero_annotate_ai.rows import Row, rows_to_frame
 
 
 class TestPrepareTrainingDataFromTable:
@@ -140,13 +140,18 @@ class TestExternalClassificationWorkflow:
         assert config2.annotation_methodology.annotation_method == "automatic"
 
 
+def _write_rows(folder, rows):
+    """A training set's tracking_table.csv, as reorganize reads it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    rows_to_frame(rows, local=True).to_csv(folder / "tracking_table.csv", index=False)
+
+
 @pytest.mark.unit
 class TestReorganizeOntoRecords:
     """The offline producer emits the unified layout, paired by annotation_id."""
 
     def _config(self, tmp_path, categories, separate_channels=False):
         config = create_default_config()
-        config.output.output_directory = str(tmp_path)
         if separate_channels:
             config.spatial_coverage.channels = [0, 1]
             config.spatial_coverage.label_channel = 0
@@ -155,8 +160,8 @@ class TestReorganizeOntoRecords:
             config.spatial_coverage.channels = [0]
             config.spatial_coverage.label_channel = None
             config.spatial_coverage.training_channels = None
-        config.annotations = [
-            ImageAnnotation(
+        rows = [
+            Row(
                 image_id=100 + i,
                 image_name=f"img_{i}",
                 annotation_id=str(i),
@@ -165,6 +170,7 @@ class TestReorganizeOntoRecords:
             )
             for i, category in enumerate(categories)
         ]
+        _write_rows(tmp_path, rows)
         return config
 
     def _populate(self, annotation_dir, ids, separate_channels=False):
@@ -484,10 +490,12 @@ class TestReorganizeOntoRecords:
         annotation_dir.mkdir()
         self._populate(annotation_dir, [0])
         config = self._config(annotation_dir, ["training"])
-        for ann in config.annotations:
-            ann.processed = False
+        _write_rows(
+            annotation_dir,
+            [Row(image_id=100, image_name="img_0", annotation_id="0")],
+        )
 
-        with pytest.raises(ValueError, match="No processed annotations"):
+        with pytest.raises(ValueError, match="No annotated units"):
             reorganize_local_data_for_training(
                 config=config,
                 annotation_dir=annotation_dir,
@@ -637,15 +645,18 @@ class TestEmptyTrainingSetIsLoud:
         config = create_default_config()
         config.spatial_coverage.label_channel = None
         config.spatial_coverage.training_channels = None
-        config.annotations = [
-            ImageAnnotation(
-                image_id=100,
-                image_name="img",
-                annotation_id="0",
-                category="training",
-                processed=True,
-            )
-        ]
+        _write_rows(
+            annotation_dir,
+            [
+                Row(
+                    image_id=100,
+                    image_name="img",
+                    annotation_id="0",
+                    category="training",
+                    processed=True,
+                )
+            ],
+        )
         # No files on disk: every record will be dropped as missing.
 
         with pytest.raises(ValueError, match="no training data"):
@@ -671,15 +682,18 @@ class TestEmptyTrainingSetIsLoud:
         config = create_default_config()
         config.spatial_coverage.label_channel = None
         config.spatial_coverage.training_channels = None
-        config.annotations = [
-            ImageAnnotation(
-                image_id=100,
-                image_name="img",
-                annotation_id="0",
-                category="test",
-                processed=True,
-            )
-        ]
+        _write_rows(
+            annotation_dir,
+            [
+                Row(
+                    image_id=100,
+                    image_name="img",
+                    annotation_id="0",
+                    category="test",
+                    processed=True,
+                )
+            ],
+        )
 
         with pytest.raises(ValueError, match="no training data"):
             reorganize_local_data_for_training(

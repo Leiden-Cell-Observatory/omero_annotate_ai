@@ -10,11 +10,11 @@ from .omero_functions import (
     get_table_progress_summary,
     link_table_to_containers,
     list_annotation_tables,
+    read_table_rows,
     replace_table_config,
-    sync_omero_table_to_config,
     upload_annotation_input_image,
     upload_rois_and_labels,
-    write_config_to_table,
+    write_rows_to_table,
 )
 
 __all__ = [
@@ -28,8 +28,8 @@ __all__ = [
     "link_table_to_containers",
     "list_annotation_tables",
     "replace_table_config",
-    "sync_omero_table_to_config",
-    "write_config_to_table",
+    "read_table_rows",
+    "write_rows_to_table",
     "upload_annotation_input_image",
     "upload_rois_and_labels",
 ]

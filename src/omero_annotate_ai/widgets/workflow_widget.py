@@ -18,8 +18,8 @@ from ..omero.omero_functions import (
 from ..omero.omero_utils import get_container_info
 
 # Settings that must match the rows already in a tracking table: changing them
-# on resume makes validate_annotations_against_config fail (channel, 3D, patch)
-# or gives new rows a different shape than the old ones (patch size, z-range).
+# on resume gives new rows a different channel, 3D or patch setting than the old
+# ones, or new rows a different shape than the old ones (patch size, z-range).
 # Timepoints, z-slices and patches per image decide which planes new rows use;
 # "Annotate all images" changes how the table grows.
 RESUME_LOCKED_KEYS = (
@@ -60,6 +60,8 @@ class WorkflowWidget:
         self.selected_table_id = None
         self._locked_settings = {}
         self.working_directory = None
+        # Folder holding the training sets' folders; pass it to TrainingSet as home=
+        self.home: Path | None = None
         self._create_widgets()
 
     def _create_widgets(self):
@@ -673,14 +675,14 @@ class WorkflowWidget:
         """Create workflow settings group."""
         # Read-only mode
         read_only_mode = widgets.Checkbox(
-            value=self.config.workflow.read_only_mode,
-            description="Read-only mode (save locally only)",
+            value=self.config.storage == "local",
+            description="Read-only mode (keep locally, storage: local)",
             style={"description_width": "initial"},
         )
 
         # Display only: set by Continue Existing / Name New Table in step 3
         resume_from_table = widgets.Checkbox(
-            value=self.config.workflow.resume_from_table,
+            value=self.config.identity.table_id is not None,
             description="Resume from existing table",
             style={"description_width": "initial"},
             disabled=True,
@@ -880,8 +882,8 @@ class WorkflowWidget:
                 f"✅ Directory ready: {self.working_directory}"
             )
 
-            # Update config output folder
-            self.config.output.output_directory = Path(self.working_directory)
+            # Training sets' folders go under the chosen directory
+            self.home = Path(self.working_directory)
             self._update_progress()
         except Exception as e:
             self.directory_status.value = f"❌ Error creating directory: {e}"
@@ -1006,8 +1008,7 @@ class WorkflowWidget:
         The selected table's ID goes into the config, so the pipeline resumes
         that exact table even when several tables share its name.
         """
-        self.config.workflow.resume_from_table = resume
-        self.config.omero.table_id = self.selected_table_id if resume else None
+        self.config.identity.table_id = self.selected_table_id if resume else None
         if not resume:
             self._unlock_resume_fields()
         if hasattr(self, "workflow_widgets"):
@@ -1175,7 +1176,7 @@ class WorkflowWidget:
                 widgets_by_key[key].disabled = True
         # A resumed table lives on OMERO; read-only runs would not update it,
         # so the next resume would miss their rows.
-        self._locked_settings["read_only_mode"] = False
+        self._locked_settings["storage"] = "omero"
         read_only = getattr(self, "workflow_widgets", {}).get("read_only_mode")
         if read_only is not None:
             read_only.value = False
@@ -1241,8 +1242,8 @@ class WorkflowWidget:
                 setattr(sc, key, list(locked[key]))
         if "segment_all" in locked:
             self.config.training.segment_all = locked["segment_all"]
-        if "read_only_mode" in locked:
-            self.config.workflow.read_only_mode = locked["read_only_mode"]
+        if "storage" in locked:
+            self.config.storage = locked["storage"]
 
     def _on_new_table(self, button):
         """Pick a name for a new table. The table itself is created at pipeline run."""
@@ -1353,7 +1354,8 @@ class WorkflowWidget:
                     container_id,
                     extra_lines=[
                         f"<b>Training Set:</b> {self.config.name}",
-                        f"<b>Resume from table:</b> {self.config.workflow.resume_from_table}",
+                        "<b>Resume from table:</b> "
+                        f"{self.config.identity.table_id is not None}",
                     ],
                 )
 
@@ -1367,9 +1369,9 @@ class WorkflowWidget:
             # Update workflow settings from widgets
             self._update_workflow_settings()
 
-            # Update working directory
+            # Update working directory (the home of the training sets' folders)
             if self.working_directory:
-                self.config.output.output_directory = Path(self.working_directory)
+                self.home = Path(self.working_directory)
 
             with self.status_output:
                 clear_output()
@@ -1508,9 +1510,7 @@ class WorkflowWidget:
         if "model_type" in technical_widgets:
             self.config.ai_model.pretrained_from = technical_widgets["model_type"].value
         if "output_folder" in technical_widgets:
-            self.config.output.output_directory = technical_widgets[
-                "output_folder"
-            ].value
+            self.home = Path(technical_widgets["output_folder"].value)
 
     def _update_workflow_settings(self):
         """Update workflow settings from widgets."""
@@ -1523,9 +1523,8 @@ class WorkflowWidget:
 
         # Update configuration from widgets
         if "read_only_mode" in workflow_widgets:
-            self.config.workflow.read_only_mode = workflow_widgets[
-                "read_only_mode"
-            ].value
+            local = workflow_widgets["read_only_mode"].value
+            self.config.storage = "local" if local else "omero"
         # resume_from_table is not read back: the checkbox only mirrors the
         # table choice (Continue Existing / Name New Table) made in step 3.
 
@@ -1549,7 +1548,6 @@ class WorkflowWidget:
                 / f"annotation_config_{self.config.name}.yaml"
             )
 
-            # This will now set config.config_file_path automatically
             self.config.save_yaml(config_path)
 
             self.save_status.value = f"✅ Configuration saved to: {config_path}"
