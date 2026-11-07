@@ -873,15 +873,33 @@ class TestFindAnnotationConfigForTable:
             listing.append({"id": ann_id, "file_name": file_name})
         return paths, listing
 
-    def _find(self, tmp_path, entries, table_name):
+    def _find(self, tmp_path, entries, table_name, table_id=None, saved_ids=None):
         from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
 
         paths, listing = self._setup(tmp_path, entries)
+        for ann_id, saved_id in (saved_ids or {}).items():
+            config = AnnotationConfig.from_yaml(paths[ann_id])
+            config.omero.table_id = saved_id
+            config.save_yaml(paths[ann_id])
         with patch("omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
                    return_value=listing), \
              patch("omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
                    side_effect=lambda conn, ann_id, folder: paths[ann_id]):
-            return find_annotation_config_for_table(Mock(), "plate", 803, table_name)
+            return find_annotation_config_for_table(Mock(), "plate", 803, table_name,
+                                                    table_id=table_id)
+
+    def test_prefers_config_of_the_same_table_id(self, tmp_path):
+        """Same-name tables: the config saved by another table is skipped."""
+        config = self._find(tmp_path, [
+            (51, "annotation_config_run.yaml", "run"),
+            (52, "annotation_config_run.yaml", "run"),
+        ], "run", table_id=100, saved_ids={51: 100, 52: 200})
+        assert config.spatial_coverage.channels == [51 % 5]
+
+    def test_skips_configs_of_other_tables(self, tmp_path):
+        config = self._find(tmp_path, [(61, "annotation_config_run.yaml", "run")],
+                            "run", table_id=100, saved_ids={61: 200})
+        assert config is None
 
     def test_matches_by_config_name(self, tmp_path):
         config = self._find(tmp_path, [

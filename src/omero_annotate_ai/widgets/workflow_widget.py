@@ -996,16 +996,32 @@ class WorkflowWidget:
         container_id = self.container_widgets["container"].value
         try:
             saved = find_annotation_config_for_table(
-                self.connection, container_type, container_id, self.config.name
+                self.connection, container_type, container_id, self.config.name,
+                table_id=self.selected_table_id,
             )
-            if saved is not None:
-                settings, source = self._settings_from_config(saved), "the saved config"
-            else:
-                df = read_tracking_table(self.connection, self.selected_table_id)
-                settings, source = infer_settings_from_table(df), "the table rows"
+        except Exception:
+            saved = None
+        try:
+            rows = infer_settings_from_table(
+                read_tracking_table(self.connection, self.selected_table_id)
+            )
         except Exception as e:
-            self.resume_note.value = f"<small>⚠️ Could not load settings from the table: {e}</small>"
+            rows, row_error = {}, e
+        else:
+            row_error = None
+        if saved is None and not rows:
+            self.resume_note.value = (
+                f"<small>⚠️ Could not load settings from the table: {row_error}</small>"
+            )
             return
+
+        settings, overridden = self._merge_resume_settings(
+            self._settings_from_config(saved) if saved is not None else {}, rows
+        )
+        source = "the saved config" if saved is not None else "the table rows"
+        if overridden:
+            source += (" (it did not match the table, so the table rows were used for: "
+                       + ", ".join(overridden) + ")")
 
         self._apply_settings_to_widgets(settings)
         self._lock_resume_fields(settings)
@@ -1019,6 +1035,26 @@ class WorkflowWidget:
             "settings are locked to match the existing rows. Raise the image counts "
             "to add new images to this table.</i></small>"
         )
+
+    @staticmethod
+    def _merge_resume_settings(saved: dict, rows: dict):
+        """The table rows decide the locked settings and the counts.
+
+        A saved config may belong to another run of the same name, so it only
+        fills in what the rows cannot show (model, batch size, ...). Returns
+        the merged settings and the keys where the saved config disagreed.
+        """
+        merged = dict(saved)
+        overridden = []
+        for key, value in rows.items():
+            if key in saved and saved[key] != value and key in RESUME_LOCKED_KEYS:
+                overridden.append(key)
+            merged[key] = value
+        if "channel" in overridden:
+            # The saved channel list describes the wrong channel.
+            merged.pop("channels", None)
+            merged.pop("label_channel", None)
+        return merged, overridden
 
     @staticmethod
     def _settings_from_config(config: AnnotationConfig) -> dict:

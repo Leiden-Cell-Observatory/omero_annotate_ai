@@ -760,6 +760,37 @@ class TestWorkflowWidgetDisplay:
 
         assert widget.get_config().spatial_coverage.use_patches is True
 
+    def test_table_rows_win_over_a_mismatched_saved_config(self):
+        """A saved config from another same-name run must not set locked fields."""
+        import pandas as pd
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        saved = create_default_config()           # channel 0, no patches, 3/2
+        saved.name = "plate_run"
+        rows = pd.DataFrame([
+            {"image_uri": f"omero:image:{i}", "category": cat, "channel": 1,
+             "is_volumetric": False, "is_patch": True,
+             "patch_width": 256, "patch_height": 256}
+            for i, cat in enumerate(["training"] * 3 + ["validation"] * 3)
+        ])
+        widget = self._widget_with_table()
+        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                   return_value=saved), \
+             patch("omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
+                   return_value=rows):
+            widget._on_continue_table(None)
+
+        fields = widget._annotation_widget_map()
+        assert fields["channel"].value == 1 and fields["channel"].disabled
+        assert fields["use_patches"].value is True
+        assert fields["validate_n"].value == 3
+        config = widget.get_config()
+        assert config.spatial_coverage.get_label_channel() == 1
+        assert config.spatial_coverage.use_patches is True
+        assert config.spatial_coverage.patch_size == [256, 256]
+        assert config.training.validate_n == 3
+        assert "did not match the table" in widget.resume_note.value
+
     def test_locked_values_win_over_widgets_on_update(self):
         widget = self._continue_with_saved_config()
         fields = widget._annotation_widget_map()

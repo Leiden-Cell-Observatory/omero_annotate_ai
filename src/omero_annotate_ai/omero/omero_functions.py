@@ -744,7 +744,8 @@ def download_annotation_config_from_omero(conn, object_type: str, object_id: int
 
 
 def find_annotation_config_for_table(
-    conn, container_type: str, container_id: int, table_name: str
+    conn, container_type: str, container_id: int, table_name: str,
+    table_id: Optional[int] = None,
 ) -> Optional[AnnotationConfig]:
     """Find the saved annotation config that belongs to a tracking table.
 
@@ -758,6 +759,9 @@ def find_annotation_config_for_table(
         container_type: 'dataset', 'plate', 'project' or 'screen'
         container_id: Container ID
         table_name: Name of the tracking table
+        table_id: ID of the tracking table. Several tables can share a name;
+            a config that records this ID wins, and one that records another
+            table's ID is skipped.
 
     Returns:
         The matching AnnotationConfig, or None if no saved config matches.
@@ -770,6 +774,7 @@ def find_annotation_config_for_table(
     annotations = sorted(annotations, key=lambda a: a["id"], reverse=True)
     annotations.sort(key=lambda a: a.get("file_name") != expected_file)
 
+    fallback = None
     with tempfile.TemporaryDirectory() as tmp_dir:
         for ann in annotations:
             try:
@@ -779,9 +784,14 @@ def find_annotation_config_for_table(
                 config = AnnotationConfig.from_yaml(file_path)
             except Exception:
                 continue
-            if config.name == table_name:
+            if config.name != table_name:
+                continue
+            saved_id = config.omero.table_id
+            if table_id is None or saved_id == table_id:
                 return config
-    return None
+            if saved_id is None and fallback is None:
+                fallback = config
+    return fallback
 
 
 def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
