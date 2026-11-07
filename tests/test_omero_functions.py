@@ -22,6 +22,7 @@ from omero_annotate_ai.core.annotation_config import (
     TrainingConfig,
     WorkflowConfig,
 )
+from omero_annotate_ai.errors import TableValueTooLongError, UnsupportedTableError
 from omero_annotate_ai.omero.biomero import (
     generate_set_id,
     geojson_namespace,
@@ -683,7 +684,7 @@ class TestTrackingTableModule:
         )
         with (
             patch.object(tt, "_open", return_value=table),
-            pytest.raises(tt.TableValueTooLongError, match="annotation_id"),
+            pytest.raises(TableValueTooLongError, match="annotation_id"),
         ):
             tt.write_rows(Mock(), 7, df)
         table.addData.assert_not_called()
@@ -703,7 +704,7 @@ class TestTrackingTableModule:
 
         conn = Mock()
         conn.getObject.return_value.getDescription.return_value = ""
-        with pytest.raises(tt.UnsupportedTableError, match="not supported"):
+        with pytest.raises(UnsupportedTableError, match="not supported"):
             tt.check_supported(conn, 7)
 
         conn.getObject.return_value.getDescription.return_value = tt.TABLE_MARKER

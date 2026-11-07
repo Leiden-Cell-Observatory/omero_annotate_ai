@@ -19,6 +19,7 @@ from collections.abc import Iterable
 
 import pandas as pd
 
+from ..errors import TableValueTooLongError, UnsupportedTableError
 from ._untyped import NSBULKANNOTATIONS, omero_grid, omero_model, omero_rtypes
 
 rstring = omero_rtypes.rstring
@@ -56,14 +57,6 @@ _LINK_COLUMNS_REVERSED = {
 }
 
 KEY_COLUMN = "annotation_id"
-
-
-class UnsupportedTableError(ValueError):
-    """The table was not written by this version of omero-annotate-ai."""
-
-
-class TableValueTooLongError(ValueError):
-    """A string value is longer than its column allows."""
 
 
 def _require_omero():

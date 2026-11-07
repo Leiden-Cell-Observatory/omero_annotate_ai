@@ -317,9 +317,6 @@ def _categories_per_well(pipeline):
 
 class TestFractionShuffle:
     def test_fraction_mode_is_not_in_list_order(self, tmp_path):
-        import random
-
-        random.seed(1)
         pipeline, images = _condition_pipeline(
             tmp_path,
             segment_all=True,
@@ -328,7 +325,8 @@ class TestFractionShuffle:
             test_fraction=0.25,
         )
         orders = set()
-        for _ in range(5):
+        for seed in range(5):  # the order is random per seed, fixed for one seed
+            pipeline.config.training.seed = seed
             pipeline._prepare_processing_units(images)
             orders.add(
                 tuple(

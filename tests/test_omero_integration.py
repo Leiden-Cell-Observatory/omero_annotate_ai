@@ -12,6 +12,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from omero_annotate_ai.errors import TableValueTooLongError, UnsupportedTableError
 from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 from tests.omero_seed import CHANNEL_NAMES, IMAGE_SHAPE, synthetic_plane
 
@@ -284,12 +285,11 @@ class TestTrackingTableOnOmero:
     def test_over_long_string_is_refused_with_a_clear_error(
         self, omero_conn, training_set
     ):
-        from omero_annotate_ai.omero import tracking_table
         from omero_annotate_ai.omero.omero_functions import write_config_to_table
 
         config, table_id = training_set
         config.annotations[0].image_name = "x" * 600
-        with pytest.raises(tracking_table.TableValueTooLongError, match="image_name"):
+        with pytest.raises(TableValueTooLongError, match="image_name"):
             write_config_to_table(omero_conn, table_id, config)
 
     def test_uploads_are_tagged_and_deleted_with_the_set(
@@ -401,7 +401,7 @@ class TestTrackingTableOnOmero:
             title="oai_old_table",
         )
         try:
-            with pytest.raises(tracking_table.UnsupportedTableError):
+            with pytest.raises(UnsupportedTableError):
                 tracking_table.read_table(omero_conn, old_id)
         finally:
             omero_conn.deleteObjects("Annotation", [old_id], wait=True)

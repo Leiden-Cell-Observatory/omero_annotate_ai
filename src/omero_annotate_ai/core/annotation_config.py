@@ -798,6 +798,15 @@ class TrainingConfig(BaseModel):
     )
 
     segment_all: bool = Field(default=False, description="Process all images vs subset")
+    seed: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Seed for every random choice (split, timepoints, z-slices, patches, "
+            "extension), so the selection can be reproduced. Generated and stored "
+            "when the pipeline starts if left empty."
+        ),
+    )
     quality_threshold: float | None = Field(
         default=None, description="Minimum quality score"
     )
