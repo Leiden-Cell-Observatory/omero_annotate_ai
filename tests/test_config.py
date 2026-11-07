@@ -1652,31 +1652,37 @@ class TestAnnotationInputIdRename:
         config.from_dataframe(df)
         assert config.annotations[0].annotation_input_id == 555
 
-    def test_legacy_label_input_id_column_still_loads(self):
-        """Tables written to OMERO before the rename must not break.
-
-        This is the one backwards-compatibility guarantee in the folder-layout
-        change: the column lives on users' OMERO servers and cannot be migrated.
-        """
+    def test_legacy_label_input_id_column_is_ignored(self):
+        """Old tables (label_input_id) are not supported from 0.5.0 on."""
         config = self._config_with_annotation(annotation_input_id=777)
         df = config.to_dataframe().rename(
             columns={"annotation_input_id": "label_input_id"}
         )
-        assert "label_input_id" in df.columns
 
-        config.annotations = []
-        config.from_dataframe(df)
-
-        assert config.annotations[0].annotation_input_id == 777
-
-    def test_absent_column_yields_none(self):
-        config = self._config_with_annotation()
-
-        df = config.to_dataframe()
         config.annotations = []
         config.from_dataframe(df)
 
         assert config.annotations[0].annotation_input_id is None
+
+    def test_category_column_keeps_the_test_split(self):
+        """The explicit category column survives a round trip, test included."""
+        config = self._config_with_annotation()
+        config.annotations[0].category = "test"
+        df = config.to_dataframe()
+        assert list(df["category"]) == ["test"]
+
+        config.annotations = []
+        config.from_dataframe(df)
+        assert config.annotations[0].category == "test"
+
+    def test_rows_without_category_fall_back_to_flags(self):
+        config = self._config_with_annotation()
+        df = config.to_dataframe().drop(columns=["category"])
+        df["train"] = [False]
+        df["validate"] = [False]
+        config.annotations = []
+        config.from_dataframe(df)
+        assert config.annotations[0].category == "test"
 
 
 @pytest.mark.unit

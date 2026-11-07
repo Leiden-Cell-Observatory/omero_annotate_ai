@@ -10,10 +10,10 @@ from pathlib import Path
 from omero_annotate_ai.omero.omero_functions import (
     upload_rois_and_labels,
     link_table_to_containers,
-    create_or_replace_tracking_table,
-    download_annotation_config_from_omero,
-    sync_config_to_omero_table,
-    update_workflow_status_map,
+    create_tracking_table,
+    replace_table_config,
+    sync_omero_table_to_config,
+    write_config_to_table,
     generate_unique_table_name,
     list_annotation_tables,
     CONFIG_NS,
@@ -85,274 +85,100 @@ class TestLinkTableToContainers:
 
 
 @pytest.mark.unit
-class TestCreateOrReplaceTrackingTableMultiContainer:
-    """Test create_or_replace_tracking_table with multiple containers."""
+class TestCreateTrackingTable:
+    """create_tracking_table makes the table once, linked to every container."""
 
-    def test_create_table_multiple_containers(self):
-        """Test creating table attached to multiple containers."""
-        mock_conn = Mock()
-        mock_update_service = Mock()
-        mock_conn.getUpdateService.return_value = mock_update_service
+    def _config(self):
+        from omero_annotate_ai.core.annotation_config import (
+            ImageAnnotation, create_default_config,
+        )
+        config = create_default_config()
+        for i, category in enumerate(["training", "validation", "test"]):
+            config.add_annotation(ImageAnnotation(
+                image_id=i + 1, image_name=f"img{i}", annotation_id=f"a{i}",
+                category=category,
+            ))
+        return config
 
-        # Mock FileAnnotation for linking
-        mock_file_ann = Mock()
-        mock_file_ann._obj = Mock()
-        mock_conn.getObject.return_value = mock_file_ann
+    def test_links_all_containers_and_prepares_rows(self):
+        with patch("omero_annotate_ai.omero.tracking_table.create_table",
+                   return_value=100) as create, patch("builtins.print"):
+            table_id = create_tracking_table(
+                Mock(), self._config(), "run", "plate", [1, 2, 3])
 
-        # Mock save link
-        def mock_save(link):
-            mock_saved = Mock()
-            mock_saved.getId.return_value.getValue.return_value = 999
-            return mock_saved
+        assert table_id == 100
+        conn, df, title, ctype, cids = create.call_args.args
+        assert (title, ctype, cids) == ("run", "plate", [1, 2, 3])
+        assert list(df["category"]) == ["training", "validation", "test"]
+        assert pd.api.types.is_integer_dtype(df["annotation_input_id"])
 
-        mock_update_service.saveAndReturnObject.side_effect = mock_save
-
-        config_df = pd.DataFrame({
-            "image_id": [1, 2, 3],
-            "processed": [False, False, False]
-        })
-
-        with patch(
-            'omero_annotate_ai.omero.omero_functions.post_typed_table'
-        ) as mock_post_table:
-            mock_post_table.return_value = 100  # Table ID
-
-            table_id = create_or_replace_tracking_table(
-                conn=mock_conn,
-                config_df=config_df,
-                table_title="test_table",
-                container_type="dataset",
-                container_ids=[1, 2, 3]
-            )
-
-            assert table_id == 100
-            # Should create table on first container
-            mock_post_table.assert_called_once()
-            call_kwargs = mock_post_table.call_args.kwargs
-            assert call_kwargs['object_id'] == 1  # Primary container
-
-            # Should link to additional containers (2 and 3)
-            assert mock_update_service.saveAndReturnObject.call_count == 2
-
-    def test_create_table_single_container_backward_compatible(self):
-        """Test that single container_id still works."""
-        mock_conn = Mock()
-        config_df = pd.DataFrame({"image_id": [1]})
-
-        with patch(
-            'omero_annotate_ai.omero.omero_functions.post_typed_table'
-        ) as mock_post_table:
-            mock_post_table.return_value = 100
-
-            table_id = create_or_replace_tracking_table(
-                conn=mock_conn,
-                config_df=config_df,
-                table_title="test_table",
-                container_type="dataset",
-                container_id=123
-            )
-
-            assert table_id == 100
-            call_kwargs = mock_post_table.call_args.kwargs
-            assert call_kwargs['object_id'] == 123
+    def test_empty_config_is_an_error(self):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        with pytest.raises(ValueError, match="No annotations"):
+            create_tracking_table(Mock(), create_default_config(), "run", "plate", [1])
 
 
 @pytest.mark.unit
-class TestDownloadAnnotationConfigFromOmero:
-    """Test download_annotation_config_from_omero function."""
+class TestWriteAndSyncTable:
+    """Writing rows in place, and reading them back strictly."""
 
-    def test_returns_none_when_no_config_annotation(self):
-        """Returns None when no config FileAnnotation is found."""
-        mock_conn = Mock()
-        with patch(
-            "omero_annotate_ai.omero.omero_utils.list_annotations_by_namespace",
-            return_value=[],
-        ):
-            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
-        assert result is None
+    def test_write_empty_config_writes_nothing(self):
+        config = Mock()
+        config.to_dataframe.return_value = pd.DataFrame()
+        with patch("omero_annotate_ai.omero.tracking_table.write_rows") as write:
+            assert write_config_to_table(Mock(), 7, config) == {"updated": 0, "added": 0}
+        write.assert_not_called()
 
-    def test_returns_annotation_config_from_yaml(self, tmp_path):
-        """Downloads config YAML and parses it into an AnnotationConfig."""
-        from omero_annotate_ai.core.annotation_config import AnnotationConfig
+    def test_write_passes_prepared_rows(self):
+        config = TestCreateTrackingTable()._config()
+        with patch("omero_annotate_ai.omero.tracking_table.write_rows",
+                   return_value={"updated": 3, "added": 0}) as write:
+            write_config_to_table(Mock(), 7, config)
+        assert write.call_args.args[1] == 7
+        assert list(write.call_args.args[2]["annotation_id"]) == ["a0", "a1", "a2"]
 
-        # Write a minimal valid YAML to tmp_path
-        yaml_path = tmp_path / "annotation_config_test.yaml"
-        config = AnnotationConfig(name="test_workflow")
-        config.save_yaml(yaml_path)
+    def test_sync_raises_on_empty_table(self):
+        with patch("omero_annotate_ai.omero.omero_functions.read_tracking_table",
+                   return_value=pd.DataFrame()):
+            with pytest.raises(ValueError, match="no rows"):
+                sync_omero_table_to_config(Mock(), 7, Mock())
 
-        mock_conn = Mock()
-        with (
-            patch(
-                "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
-                return_value=[{"id": 42}],
-            ),
-            patch(
-                "omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
-                return_value=str(yaml_path),
-            ),
-        ):
-            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
-
-        assert result is not None
-        assert result.name == "test_workflow"
-
-    def test_returns_none_when_download_fails(self):
-        """Returns None when ezomero.get_file_annotation returns None."""
-        mock_conn = Mock()
-        with (
-            patch(
-                "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
-                return_value=[{"id": 42}],
-            ),
-            patch(
-                "omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
-                return_value=None,
-            ),
-        ):
-            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
-        assert result is None
-
-    def test_uses_last_annotation_when_multiple(self, tmp_path):
-        """Uses the last (most recent) config annotation when multiple exist."""
-        from omero_annotate_ai.core.annotation_config import AnnotationConfig
-
-        yaml_path = tmp_path / "config.yaml"
-        config = AnnotationConfig(name="latest_config")
-        config.save_yaml(yaml_path)
-
-        mock_conn = Mock()
-        with (
-            patch(
-                "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
-                return_value=[{"id": 10}, {"id": 20}],
-            ),
-            patch(
-                "omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
-                return_value=str(yaml_path),
-            ) as mock_get,
-        ):
-            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
-
-        # Should use ann_id 20 (last in list)
-        mock_get.assert_called_once()
-        assert mock_get.call_args[0][1] == 20
-        assert result.name == "latest_config"
+    def test_sync_raises_when_read_fails(self):
+        with patch("omero_annotate_ai.omero.omero_functions.read_tracking_table",
+                   side_effect=RuntimeError("network")):
+            with pytest.raises(RuntimeError):
+                sync_omero_table_to_config(Mock(), 7, Mock())
 
 
 @pytest.mark.unit
-class TestConfigNSConstant:
-    """Test that the CONFIG_NS constant is defined and used consistently."""
+class TestReplaceTableConfig:
+    """Each training set keeps exactly one config YAML on OMERO."""
 
     def test_config_ns_value(self):
-        """CONFIG_NS has the expected namespace string."""
         assert CONFIG_NS == "openmicroscopy.org/omero/annotate/config"
 
-    def test_upload_uses_config_ns(self):
-        """upload_annotation_config_to_omero uses the CONFIG_NS constant."""
-        mock_conn = Mock()
-        with patch(
-            "omero_annotate_ai.omero.omero_functions.ezomero.post_file_annotation",
-            return_value=42,
-        ) as mock_post:
-            from omero_annotate_ai.omero.omero_functions import (
-                upload_annotation_config_to_omero,
-            )
+    def test_posts_new_then_deletes_old(self, tmp_path):
+        local = tmp_path / "annotation_config_run.yaml"
+        local.write_text("name: run\n")
+        conn = Mock()
+        posted = {}
 
-            result = upload_annotation_config_to_omero(
-                mock_conn, "Dataset", 1, file_path="/tmp/config.yaml"
-            )
+        def post(conn_, file_path, ns, object_type, object_id):
+            posted.update(name=Path(file_path).name, ns=ns, type=object_type, id=object_id)
+            return 300
 
-        assert result == 42
-        call_kwargs = mock_post.call_args.kwargs
-        assert call_kwargs["ns"] == CONFIG_NS
+        mod = "omero_annotate_ai.omero.omero_functions"
+        listing = [{"id": 300, "file_name": "annotation_config_table_7.yaml"},
+                   {"id": 200, "file_name": "annotation_config_table_7.yaml"},
+                   {"id": 150, "file_name": "annotation_config_table_8.yaml"}]
+        with patch(f"{mod}.ezomero.post_file_annotation", side_effect=post), \
+             patch(f"{mod}.list_annotations_by_namespace", return_value=listing):
+            new_id = replace_table_config(conn, 7, str(local), "plate", 803)
 
-    def test_download_uses_config_ns(self):
-        """download_annotation_config_from_omero searches with CONFIG_NS."""
-        mock_conn = Mock()
-        with patch(
-            "omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
-            return_value=[],
-        ) as mock_list:
-            result = download_annotation_config_from_omero(mock_conn, "Dataset", 1)
-
-        assert result is None
-        mock_list.assert_called_once_with(mock_conn, "Dataset", 1, CONFIG_NS)
-
-
-
-
-@pytest.mark.unit
-class TestSyncConfigToOmeroTableEdgeCases:
-    """Test edge cases in sync_config_to_omero_table."""
-
-    def test_returns_none_when_empty_config(self):
-        """Returns None (not -1) when config has no annotations."""
-        mock_conn = Mock()
-        mock_config = Mock()
-        mock_config.to_dataframe.return_value = pd.DataFrame()
-
-        result = sync_config_to_omero_table(
-            conn=mock_conn,
-            config=mock_config,
-            table_title="test",
-            container_type="dataset",
-            container_id=1,
-        )
-
-        assert result is None
-
-    def test_returns_existing_table_id_when_empty_config_and_existing(self):
-        """Returns existing_table_id when config is empty and table already exists."""
-        mock_conn = Mock()
-        mock_config = Mock()
-        mock_config.to_dataframe.return_value = pd.DataFrame()
-
-        result = sync_config_to_omero_table(
-            conn=mock_conn,
-            config=mock_config,
-            table_title="test",
-            container_type="dataset",
-            container_id=1,
-            existing_table_id=99,
-        )
-
-        assert result == 99
-
-
-@pytest.mark.unit
-class TestUpdateWorkflowStatusDatetime:
-    """Test that update_workflow_status_map uses timezone-aware datetimes."""
-
-    def test_last_updated_is_timezone_aware(self):
-        """last_updated field in status map should be a timezone-aware ISO string."""
-        from datetime import timezone
-
-        mock_conn = Mock()
-        mock_df = pd.DataFrame({"processed": [True, False, True]})
-
-        captured_status_map = {}
-
-        def capture_post_map_annotation(*args, **kwargs):
-            captured_status_map.update(kwargs.get("kv_dict", {}))
-            return 123
-
-        with patch(
-            "omero_annotate_ai.omero.omero_functions.ezomero.get_table",
-            return_value=mock_df,
-        ), patch(
-            "omero_annotate_ai.omero.omero_functions.ezomero.get_map_annotation",
-            side_effect=Exception("no annotation"),
-        ), patch(
-            "omero_annotate_ai.omero.omero_functions.ezomero.post_map_annotation",
-            side_effect=capture_post_map_annotation,
-        ):
-            update_workflow_status_map(mock_conn, "dataset", 1, 10)
-
-        assert "last_updated" in captured_status_map
-        from datetime import datetime
-
-        dt = datetime.fromisoformat(captured_status_map["last_updated"])
-        assert dt.tzinfo is not None, "last_updated must be timezone-aware"
+        assert new_id == 300
+        assert posted == {"name": "annotation_config_table_7.yaml", "ns": CONFIG_NS,
+                          "type": "Plate", "id": 803}
+        conn.deleteObjects.assert_called_once_with("Annotation", [200], wait=True)
 
 
 @pytest.mark.unit
@@ -655,11 +481,11 @@ class TestGeoJSONPersistence:
 
 @pytest.mark.unit
 class TestTypedTableColumns:
-    """Test that the tracking table is written with OMERO semantic link columns.
+    """The tracking table is written with OMERO link columns and fixed widths.
 
-    OMERO.web only renders a table row in an Image's "Tables" panel when the table
-    has a column *named* ``Image``, and only hyperlinks a cell when that column is
-    *typed* as ImageColumn/RoiColumn. See _build_omero_columns.
+    OMERO.web only renders a table row in an Image's "Tables" panel when the
+    table has a column *named* ``Image``, and only links a cell when that
+    column is *typed* as ImageColumn/RoiColumn.
     """
 
     def _make_df(self):
@@ -675,73 +501,121 @@ class TestTypedTableColumns:
             }
         )
 
+    def _cols(self):
+        from omero_annotate_ai.omero.tracking_table import build_columns
+        return {c.name: c for c in build_columns(self._make_df())}
+
     def test_image_id_becomes_image_column_named_image(self):
-        """image_id is emitted as an ImageColumn named 'Image'."""
         from omero.grid import ImageColumn
-        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
-
-        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
-
-        assert "Image" in cols, "OMERO.web looks up the column by the name 'Image'"
+        cols = self._cols()
         assert isinstance(cols["Image"], ImageColumn)
         assert cols["Image"].values == [101, 102]
         assert "image_id" not in cols
 
     def test_roi_id_becomes_roi_column_named_roi(self):
-        """roi_id is emitted as a RoiColumn named 'Roi'."""
         from omero.grid import RoiColumn
-        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
-
-        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
-
-        assert "Roi" in cols
+        cols = self._cols()
         assert isinstance(cols["Roi"], RoiColumn)
         assert cols["Roi"].values == [5012, 0]
-        assert "roi_id" not in cols
-
-    def test_unannotated_row_carries_roi_sentinel_zero(self):
-        """A row that has not been annotated yet carries Roi == 0, not a string."""
-        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
-
-        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
-
-        assert cols["Roi"].values[1] == 0
 
     def test_remaining_columns_typed_by_dtype(self):
-        """Non-link columns fall back to the plain dtype-based column types."""
         from omero.grid import BoolColumn, LongColumn, StringColumn
-        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
-
-        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
-
+        cols = self._cols()
         assert isinstance(cols["label_id"], LongColumn)
         assert isinstance(cols["channel"], LongColumn)
         assert isinstance(cols["processed"], BoolColumn)
         assert isinstance(cols["image_name"], StringColumn)
 
-    def test_string_column_is_sized_to_longest_value(self):
-        """StringColumn size must cover the longest value, or OMERO truncates."""
-        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
-
-        cols = {c.name: c for c in _build_omero_columns(self._make_df())}
-
-        assert cols["image_name"].size >= len("bb.tif")
+    def test_string_columns_get_fixed_generous_widths(self):
+        """Widths are fixed up front: later rows may be longer than the first ones."""
+        from omero_annotate_ai.omero.tracking_table import STRING_WIDTHS
+        cols = self._cols()
+        assert cols["image_name"].size == STRING_WIDTHS["image_name"]
+        assert STRING_WIDTHS["image_uri"] >= 1024
 
     def test_dataframe_column_order_is_preserved(self):
-        """Unlike ezomero, which regroups columns by dtype, we keep DataFrame order."""
-        from omero_annotate_ai.omero.omero_functions import _build_omero_columns
+        from omero_annotate_ai.omero.tracking_table import build_columns
+        names = [c.name for c in build_columns(self._make_df())]
+        assert names == ["Image", "image_name", "Roi", "label_id", "channel",
+                         "processed", "annotation_type"]
 
-        names = [c.name for c in _build_omero_columns(self._make_df())]
 
-        assert names == [
-            "Image",
-            "image_name",
-            "Roi",
-            "label_id",
-            "channel",
-            "processed",
-            "annotation_type",
-        ]
+@pytest.mark.unit
+class TestTrackingTableModule:
+    """In-place writes, length checks and the version marker (mocked table)."""
+
+    def _headers(self):
+        import omero.grid as g
+        return [g.StringColumn("annotation_id", "", 256, []),
+                g.BoolColumn("processed", "", []),
+                g.RoiColumn("Roi", "", [])]
+
+    def _table(self, keys):
+        import omero.grid as g
+        table = Mock()
+        table.getHeaders.side_effect = lambda: self._headers()
+        table.getNumberOfRows.return_value = len(keys)
+        key_data = Mock()
+        key_data.columns = [g.StringColumn("annotation_id", "", 256, list(keys))]
+        table.read.return_value = key_data
+
+        def read_coordinates(rows):
+            data = Mock()
+            data.columns = self._headers()
+            return data
+
+        table.readCoordinates.side_effect = read_coordinates
+        return table
+
+    def test_updates_existing_rows_and_appends_new_ones(self):
+        from omero_annotate_ai.omero import tracking_table as tt
+        table = self._table(["a", "b"])
+        df = pd.DataFrame({"annotation_id": ["b", "c"], "processed": [True, False],
+                           "roi_id": [9, 0]})
+        with patch.object(tt, "_open", return_value=table):
+            result = tt.write_rows(Mock(), 7, df)
+
+        assert result == {"updated": 1, "added": 1}
+        table.readCoordinates.assert_called_once_with([1])
+        updated = {c.name: c.values for c in table.update.call_args.args[0].columns}
+        assert updated == {"annotation_id": ["b"], "processed": [True], "Roi": [9]}
+        added = {c.name: c.values for c in table.addData.call_args.args[0]}
+        assert added == {"annotation_id": ["c"], "processed": [False], "Roi": [0]}
+        table.close.assert_called_once()
+
+    def test_too_long_string_is_refused_before_writing(self):
+        from omero_annotate_ai.omero import tracking_table as tt
+        table = self._table([])
+        df = pd.DataFrame({"annotation_id": ["x" * 300], "processed": [False],
+                           "roi_id": [0]})
+        with patch.object(tt, "_open", return_value=table):
+            with pytest.raises(tt.TableValueTooLongError, match="annotation_id"):
+                tt.write_rows(Mock(), 7, df)
+        table.addData.assert_not_called()
+        table.close.assert_called_once()
+
+    def test_duplicate_keys_are_refused(self):
+        from omero_annotate_ai.omero import tracking_table as tt
+        df = pd.DataFrame({"annotation_id": ["a", "a"], "processed": [1, 0], "roi_id": [0, 0]})
+        with pytest.raises(ValueError, match="Duplicate"):
+            tt.write_rows(Mock(), 7, df)
+
+    def test_tables_without_marker_are_refused(self):
+        from omero_annotate_ai.omero import tracking_table as tt
+        conn = Mock()
+        conn.getObject.return_value.getDescription.return_value = ""
+        with pytest.raises(tt.UnsupportedTableError, match="not supported"):
+            tt.check_supported(conn, 7)
+
+        conn.getObject.return_value.getDescription.return_value = tt.TABLE_MARKER
+        assert tt.check_supported(conn, 7) is conn.getObject.return_value
+
+    def test_tags_and_config_name(self):
+        from omero_annotate_ai.omero import tracking_table as tt
+        assert tt.tag_for(12, "abc_0_0") == "omero-annotate-ai:12:abc_0_0"
+        assert tt.tag_for(123, "x").startswith(tt.tag_prefix(123))
+        assert not tt.tag_for(123, "x").startswith(tt.tag_prefix(12))
+        assert tt.config_file_name(5) == "annotation_config_table_5.yaml"
 
 
 @pytest.mark.unit
@@ -856,74 +730,36 @@ class TestGetContainerInfoChannels:
 
 @pytest.mark.unit
 class TestFindAnnotationConfigForTable:
-    """Matching a saved config YAML to a tracking table."""
+    """A training set's config is found by table ID only."""
 
-    def _setup(self, tmp_path, entries):
-        """entries: [(annotation_id, file_name, config_name)]"""
+    def test_finds_newest_config_of_this_table(self, tmp_path):
         from omero_annotate_ai.core.annotation_config import create_default_config
-
-        paths, listing = {}, []
-        for ann_id, file_name, config_name in entries:
-            config = create_default_config()
-            config.name = config_name
-            config.spatial_coverage.channels = [ann_id % 5]
-            path = tmp_path / f"{ann_id}_{file_name}"
-            config.save_yaml(path)
-            paths[ann_id] = str(path)
-            listing.append({"id": ann_id, "file_name": file_name})
-        return paths, listing
-
-    def _find(self, tmp_path, entries, table_name, table_id=None, saved_ids=None):
         from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
 
-        paths, listing = self._setup(tmp_path, entries)
-        for ann_id, saved_id in (saved_ids or {}).items():
-            config = AnnotationConfig.from_yaml(paths[ann_id])
-            config.omero.table_id = saved_id
+        paths = {}
+        for ann_id in (20, 21):
+            config = create_default_config()
+            config.name = f"run{ann_id}"
+            paths[ann_id] = tmp_path / f"{ann_id}.yaml"
             config.save_yaml(paths[ann_id])
-        with patch("omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
-                   return_value=listing), \
-             patch("omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
-                   side_effect=lambda conn, ann_id, folder: paths[ann_id]):
-            return find_annotation_config_for_table(Mock(), "plate", 803, table_name,
-                                                    table_id=table_id)
+        listing = [{"id": 20, "file_name": "annotation_config_table_7.yaml"},
+                   {"id": 21, "file_name": "annotation_config_table_7.yaml"},
+                   {"id": 99, "file_name": "annotation_config_table_8.yaml"}]
+        mod = "omero_annotate_ai.omero.omero_functions"
+        with patch(f"{mod}._table_containers", return_value=[("plate", 803)]), \
+             patch(f"{mod}.list_annotations_by_namespace", return_value=listing), \
+             patch(f"{mod}.ezomero.get_file_annotation",
+                   side_effect=lambda c, ann_id, folder: str(paths[ann_id])):
+            config = find_annotation_config_for_table(Mock(), 7)
+        assert config.name == "run21"
 
-    def test_prefers_config_of_the_same_table_id(self, tmp_path):
-        """Same-name tables: the config saved by another table is skipped."""
-        config = self._find(tmp_path, [
-            (51, "annotation_config_run.yaml", "run"),
-            (52, "annotation_config_run.yaml", "run"),
-        ], "run", table_id=100, saved_ids={51: 100, 52: 200})
-        assert config.spatial_coverage.channels == [51 % 5]
-
-    def test_skips_configs_of_other_tables(self, tmp_path):
-        config = self._find(tmp_path, [(61, "annotation_config_run.yaml", "run")],
-                            "run", table_id=100, saved_ids={61: 200})
-        assert config is None
-
-    def test_matches_by_config_name(self, tmp_path):
-        config = self._find(tmp_path, [
-            (11, "annotation_config_other.yaml", "other"),
-            (12, "annotation_config_run.yaml", "run"),
-            (13, "annotation_config_third.yaml", "third"),
-        ], "run")
-        assert config.name == "run"
-        assert config.spatial_coverage.channels == [12 % 5]
-
-    def test_picks_newest_matching_config(self, tmp_path):
-        config = self._find(tmp_path, [
-            (21, "annotation_config_run.yaml", "run"),
-            (24, "annotation_config_run.yaml", "run"),
-            (22, "annotation_config_run.yaml", "run"),
-        ], "run")
-        assert config.spatial_coverage.channels == [24 % 5]
-
-    def test_matches_on_name_even_with_another_file_name(self, tmp_path):
-        config = self._find(tmp_path, [(31, "renamed.yaml", "run")], "run")
-        assert config is not None and config.name == "run"
-
-    def test_none_when_nothing_matches(self, tmp_path):
-        assert self._find(tmp_path, [(41, "annotation_config_x.yaml", "x")], "run") is None
+    def test_none_without_config(self):
+        from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
+        mod = "omero_annotate_ai.omero.omero_functions"
+        with patch(f"{mod}._table_containers", return_value=[("plate", 803)]), \
+             patch(f"{mod}.list_annotations_by_namespace",
+                   return_value=[{"id": 1, "file_name": "annotation_config_run.yaml"}]):
+            assert find_annotation_config_for_table(Mock(), 7) is None
 
 
 @pytest.mark.unit
@@ -963,74 +799,66 @@ class TestInferSettingsFromTable:
 
 @pytest.mark.unit
 class TestDeleteTrainingSet:
-    """delete_training_set removes a table and everything tied to it by ID."""
+    """delete_training_set removes a table and everything tied to it."""
 
     TABLE_ID = 100
 
-    def _conn(self, missing=()):
+    def _conn(self, missing=(), rois_on_images=None):
         conn = Mock()
 
         def get_object(omero_type, object_id):
             if (omero_type, object_id) in missing:
                 return None
-            obj = Mock()
-            if omero_type == "FileAnnotation" and object_id == self.TABLE_ID:
-                obj.getFile.return_value.getName.return_value = "run"
-            return obj
+            return Mock()
 
         conn.getObject.side_effect = get_object
+
+        def find_by_image(image_id, options, ctx=None):
+            result = Mock()
+            result.rois = []
+            for roi_id, description in (rois_on_images or {}).get(image_id, []):
+                roi = Mock()
+                roi.getId.return_value.getValue.return_value = roi_id
+                roi.getDescription.return_value.getValue.return_value = description
+                result.rois.append(roi)
+            return result
+
+        conn.getRoiService.return_value.findByImage.side_effect = find_by_image
         return conn
 
     @staticmethod
-    def _rows(input_column="annotation_input_id"):
+    def _rows():
         return pd.DataFrame({
             "annotation_id": ["a", "b", "c"],
+            "image_id": [1, 2, 2],
             "roi_id": [11, 12, np.nan],
             "label_id": [21, 22, -1],
-            input_column: [31, 0, None],
+            "annotation_input_id": [31, 0, None],
         })
 
-    def _run(self, tmp_path, conn, rows, configs=(), maps=None, tables=None,
-             dry_run=True):
-        """configs: (ann_id, name, table_id); maps: {ns: {map_id: kv}}."""
+    def _run(self, conn, rows, configs=(), labels_on_images=None, dry_run=True):
+        """configs: [(ann_id, file_name)]; labels_on_images: {image_id: [(id, desc)]}."""
         from omero_annotate_ai.omero.omero_functions import (
-            CONFIG_NS, delete_training_set,
+            CONFIG_NS, LABELS_NS, delete_training_set,
         )
-        from omero_annotate_ai.core.annotation_config import create_default_config
-
-        paths, listing = {}, []
-        for ann_id, name, saved_table_id in configs:
-            config = create_default_config()
-            config.name = name
-            config.omero.table_id = saved_table_id
-            path = tmp_path / f"{ann_id}.yaml"
-            config.save_yaml(path)
-            paths[ann_id] = str(path)
-            listing.append({"id": ann_id, "file_name": path.name})
-        maps = maps or {}
-        tables = tables if tables is not None else [{"id": self.TABLE_ID, "name": "run"}]
 
         def list_ns(conn_, obj_type, obj_id, ns):
-            return listing if ns == CONFIG_NS else []
+            if ns == CONFIG_NS:
+                return [{"id": i, "file_name": n} for i, n in configs]
+            if ns == LABELS_NS:
+                return [{"id": i, "description": d}
+                        for i, d in (labels_on_images or {}).get(obj_id, [])]
+            return []
 
         mod = "omero_annotate_ai.omero.omero_functions"
-        with patch(f"{mod}.read_tracking_table", return_value=rows), \
+        with patch(f"{mod}._read_any_table", return_value=rows), \
              patch(f"{mod}.list_annotations_by_namespace", side_effect=list_ns), \
-             patch(f"{mod}.list_annotation_tables", return_value=tables), \
-             patch(f"{mod}.ezomero.get_file_annotation",
-                   side_effect=lambda c, ann_id, folder: paths[ann_id]), \
-             patch(f"{mod}.ezomero.get_map_annotation_ids",
-                   side_effect=lambda c, t, i, ns=None: list(maps.get(ns, {}))), \
-             patch(f"{mod}.ezomero.get_map_annotation",
-                   side_effect=lambda c, map_id: {k: v for d in maps.values()
-                                                   for mid, v in d.items()
-                                                   if mid == map_id for k, v in v.items()}), \
              patch("builtins.print"):
             return delete_training_set(conn, self.TABLE_ID, "plate", 803, dry_run=dry_run)
 
-    def test_dry_run_deletes_nothing(self, tmp_path):
+    def test_dry_run_deletes_nothing(self):
         conn = self._conn()
-        report = self._run(tmp_path, conn, self._rows())
+        report = self._run(conn, self._rows())
 
         conn.deleteObjects.assert_not_called()
         assert report["deleted"] is False
@@ -1039,61 +867,47 @@ class TestDeleteTrainingSet:
         assert report["annotation_inputs"] == [31]
         assert report["table"] == [self.TABLE_ID]
 
-    def test_real_run_deletes_children_then_table(self, tmp_path):
-        from omero_annotate_ai.omero.omero_functions import WORKFLOW_STATUS_NS
-
+    def test_real_run_deletes_children_then_table(self):
         conn = self._conn()
         report = self._run(
-            tmp_path, conn, self._rows(),
-            configs=[(41, "run", self.TABLE_ID)],
-            maps={WORKFLOW_STATUS_NS: {51: {"table_id": str(self.TABLE_ID)},
-                                       52: {"table_id": "999"}}},
+            conn, self._rows(),
+            configs=[(41, "annotation_config_table_100.yaml"),
+                     (42, "annotation_config_table_200.yaml")],
             dry_run=False,
         )
 
         calls = conn.deleteObjects.call_args_list
         assert calls[0].args == ("Roi", [11, 12])
-        assert calls[1].args == ("Annotation", [21, 22, 31, 41, 51])
+        assert calls[1].args == ("Annotation", [21, 22, 31, 41])
         assert calls[-1].args == ("Annotation", [self.TABLE_ID])
         assert report["deleted"] is True
-        assert report["map_annotations"] == [51]
-
-    def test_other_tables_configs_untouched(self, tmp_path):
-        conn = self._conn()
-        report = self._run(
-            tmp_path, conn, self._rows(),
-            configs=[(41, "run", self.TABLE_ID), (42, "run", 200), (43, "other", None)],
-        )
         assert report["configs"] == [41]
 
-    def test_unlinked_config_only_when_name_is_unique(self, tmp_path):
-        conn = self._conn()
-        unique = self._run(tmp_path, conn, self._rows(), configs=[(44, "run", None)])
-        assert unique["configs"] == [44]
+    def test_tagged_uploads_missing_from_the_table_are_found(self):
+        """A crash between upload and table write leaves tagged, untracked objects."""
+        conn = self._conn(rois_on_images={
+            2: [(13, "omero-annotate-ai:100:c | Training set: run"),
+                (14, "omero-annotate-ai:1000:x"),       # another set (prefix 1000)
+                (15, "something else")],
+        })
+        report = self._run(conn, self._rows(), labels_on_images={
+            2: [(23, "omero-annotate-ai:100:c"), (24, "omero-annotate-ai:200:c")],
+        })
+        assert report["rois"] == [11, 12, 13]
+        assert report["labels"] == [21, 22, 23]
 
-        shared = self._run(
-            tmp_path, conn, self._rows(), configs=[(44, "run", None)],
-            tables=[{"id": self.TABLE_ID, "name": "run"}, {"id": 200, "name": "run"}],
-        )
-        assert shared["configs"] == []
-
-    def test_missing_objects_are_reported_not_deleted(self, tmp_path):
+    def test_missing_objects_are_reported_not_deleted(self):
         conn = self._conn(missing={("Roi", 12), ("FileAnnotation", 22)})
-        report = self._run(tmp_path, conn, self._rows(), dry_run=False)
+        report = self._run(conn, self._rows(), dry_run=False)
 
         assert report["rois"] == [11]
         assert report["missing"]["rois"] == [12]
         assert report["missing"]["labels"] == [22]
         assert conn.deleteObjects.call_args_list[0].args == ("Roi", [11])
 
-    def test_legacy_label_input_id_column(self, tmp_path):
-        conn = self._conn()
-        report = self._run(tmp_path, conn, self._rows("label_input_id"))
-        assert report["annotation_inputs"] == [31]
-
-    def test_missing_table_deletes_nothing(self, tmp_path):
+    def test_missing_table_deletes_nothing(self):
         conn = self._conn(missing={("FileAnnotation", self.TABLE_ID)})
-        report = self._run(tmp_path, conn, self._rows(), dry_run=False)
+        report = self._run(conn, self._rows(), dry_run=False)
         conn.deleteObjects.assert_not_called()
         assert report["missing"]["table"] == [self.TABLE_ID]
 
@@ -1110,3 +924,4 @@ class TestDeleteTrainingSet:
 
         conn.getAnnotationLinks.side_effect = links
         assert _table_containers(conn, self.TABLE_ID) == [("plate", 803), ("plate", 804)]
+

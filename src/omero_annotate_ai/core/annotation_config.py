@@ -179,6 +179,35 @@ def _optional_int_to_omero(value: Optional[int]) -> int:
     return OMERO_ID_UNSET if value is None else int(value)
 
 
+def _row_category(row) -> str:
+    """Split category of a table row: the ``category`` column, else train/validate.
+
+    Rows without a category column (local CSVs from older runs) fall back to
+    the train/validate flags; a row with neither flag set is a test row.
+    """
+    category = row.get("category")
+    if isinstance(category, str) and category in ("training", "validation", "test"):
+        return category
+    if "train" not in row and "validate" not in row:
+        return "training"
+    if _as_bool(row.get("train", False)):
+        return "training"
+    if _as_bool(row.get("validate", False)):
+        return "validation"
+    return "test"
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
+
+
 def _omero_id_to_optional_int(value: Any) -> Optional[int]:
     """Parse an id back from an OMERO table column.
 
@@ -279,6 +308,9 @@ class ImageAnnotation(BaseModel):
     )
     annotation_type: str = Field(
         default="segmentation_mask", description="Type of annotation"
+    )
+    session: int = Field(
+        default=-1, description="Annotation session that produced this unit (-1: none yet)"
     )
 
     # OMERO annotation IDs (None until uploaded)
@@ -1176,6 +1208,7 @@ class AnnotationConfig(BaseModel):
                 "image_uri": annotation.image_uri,
                 "image_name": annotation.image_name,
                 "annotation_id": annotation.annotation_id,
+                "category": annotation.category,
                 "train": annotation.category == "training",
                 "validate": annotation.category == "validation",
                 "channel": annotation.channel,
@@ -1196,7 +1229,8 @@ class AnnotationConfig(BaseModel):
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
-                "annotation_input_id": _optional_int_to_str(annotation.annotation_input_id),
+                "annotation_input_id": _optional_int_to_omero(annotation.annotation_input_id),
+                "session": annotation.session,
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
@@ -1213,6 +1247,7 @@ class AnnotationConfig(BaseModel):
             "image_uri",
             "image_name",
             "annotation_id",
+            "category",
             "train",
             "validate",
             "channel",
@@ -1232,6 +1267,7 @@ class AnnotationConfig(BaseModel):
             "annotation_updated_at",
             "schema_attachment_id",
             "annotation_input_id",
+            "session",
             "z_start",
             "z_end",
             "z_length",
@@ -1256,6 +1292,7 @@ class AnnotationConfig(BaseModel):
             "z_end",
             "z_length",
             "level",
+            "session",
         ]
         for col in numeric_columns:
             if col in df.columns:
@@ -1304,7 +1341,7 @@ class AnnotationConfig(BaseModel):
                 "well_metadata": json.loads(_row_str(row, "well_metadata") or "{}"),
                 "image_name": str(row.get("image_name", "")),
                 "annotation_id": annotation_ids[position],
-                "category": "training" if row.get("train", True) else "validation",
+                "category": _row_category(row),
                 "timepoint": int(row.get("timepoint", -1)),
                 "z_slice": int(row.get("z_slice", -1)),
                 "channel": int(row.get("channel", -1)),
@@ -1319,6 +1356,7 @@ class AnnotationConfig(BaseModel):
                 "patch_height": int(row.get("patch_height", 0)),
                 "processed": bool(row.get("processed", False)),
                 "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
+                "session": _row_int(row, "session", -1),
             }
 
             # Handle optional ID fields. These reach OMERO as typed link columns
@@ -1337,11 +1375,7 @@ class AnnotationConfig(BaseModel):
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
 
-            # Tables written to OMERO before the rename carry label_input_id.
-            # They live on users' servers and cannot be migrated, so read either.
-            annotation_input_id = _str_to_optional_int(
-                str(row.get("annotation_input_id", row.get("label_input_id", "None")))
-            )
+            annotation_input_id = _omero_id_to_optional_int(row.get("annotation_input_id"))
             if annotation_input_id is not None:
                 annotation_data["annotation_input_id"] = annotation_input_id
 

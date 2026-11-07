@@ -619,66 +619,6 @@ def _spread_sample(items: List[Any], n: int) -> List[Any]:
 # Generic Image Loading Utilities
 # =============================================================================
 
-def get_table_by_name(conn, table_name: str, container_type: str = None, container_id: int = None):
-    """Get OMERO table by name.
-    
-    This is a generic utility that could be contributed to ezomero in the future.
-    
-    Args:
-        conn: OMERO connection
-        table_name: Name of table to find
-        container_type: Optional container type to search within
-        container_id: Optional container ID to search within
-        
-    Returns:
-        Table object if found, None otherwise
-    """
-    print(f"Searching for table: {table_name}")
-    
-    try:
-        # Search strategy: Look through file annotations for tables
-        # OMERO tables are stored as file annotations with specific content type
-        
-        if container_type and container_id:
-            # Search within specific container
-            try:
-                # Get file annotations for the container
-                annotations = ezomero.get_file_annotation_ids(conn, container_type.capitalize(), container_id)
-                
-                for ann_id in annotations:
-                    try:
-                        # Get annotation details
-                        file_ann = conn.getObject("FileAnnotation", ann_id)
-                        if file_ann and hasattr(file_ann, 'getFile'):
-                            original_file = file_ann.getFile()
-                            if original_file and hasattr(original_file, 'getName'):
-                                file_name = original_file.getName()
-                                
-                                # Check if this is a table file and matches our name
-                                if file_name and table_name in file_name:
-                                    # Try to get the table
-                                    try:
-                                        table = conn.getSharedResources().openTable(original_file)
-                                        if table:
-                                            print(f"Found table: {file_name} (ID: {ann_id})")
-                                            return table
-                                    except Exception:
-                                        continue
-                    except Exception:
-                        continue
-                        
-            except Exception as e:
-                print(f"Error searching in container {container_type} {container_id}: {e}")
-        
-        # For now, we'll return None to trigger new table creation
-        print(f"Table '{table_name}' not found, will create new table")
-        return None
-        
-    except Exception as e:
-        print(f"Error searching for table {table_name}: {e}")
-        return None
-
-
 def get_dask_image_multiple(conn, image_list: List, timepoints: List[int], 
                            channels: List[int], z_slices: List[int]):
     """Load image data using dask for memory efficiency.
