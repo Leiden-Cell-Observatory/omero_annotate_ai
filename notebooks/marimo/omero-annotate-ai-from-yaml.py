@@ -39,26 +39,50 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    omero_host = mo.ui.text(value="", label="OMERO Host", placeholder="omero.server.edu")
+    omero_host = mo.ui.text(
+        value="", label="OMERO Host", placeholder="omero.server.edu"
+    )
     omero_username = mo.ui.text(value="", label="Username", placeholder="your_username")
-    omero_password = mo.ui.text(value="", label="Password", placeholder="password", kind="password")
-    omero_group = mo.ui.text(value="", label="Group (optional)", placeholder="Leave empty for default")
+    omero_password = mo.ui.text(
+        value="", label="Password", placeholder="password", kind="password"
+    )
+    omero_group = mo.ui.text(
+        value="", label="Group (optional)", placeholder="Leave empty for default"
+    )
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to OMERO")
 
-    mo.vstack([
+    mo.vstack(
+        [
+            omero_host,
+            omero_username,
+            omero_password,
+            omero_group,
+            omero_secure,
+            connect_button,
+        ]
+    )
+    return (
         omero_host,
         omero_username,
         omero_password,
         omero_group,
         omero_secure,
         connect_button,
-    ])
-    return omero_host, omero_username, omero_password, omero_group, omero_secure, connect_button
+    )
 
 
 @app.cell
-def _(connect_button, omero_host, omero_username, omero_password, omero_group, omero_secure, establish_connection, mo):
+def _(
+    connect_button,
+    omero_host,
+    omero_username,
+    omero_password,
+    omero_group,
+    omero_secure,
+    establish_connection,
+    mo,
+):
     conn = None
     connection_status = "Not connected"
 
@@ -75,7 +99,9 @@ def _(connect_button, omero_host, omero_username, omero_password, omero_group, o
                 if conn and conn.isConnected():
                     user = conn.getUser().getName()
                     group_name = conn.getGroupFromContext().getName()
-                    connection_status = f"Connected as **{user}** to group **{group_name}**"
+                    connection_status = (
+                        f"Connected as **{user}** to group **{group_name}**"
+                    )
                 else:
                     connection_status = "Connection failed"
             except Exception as e:
@@ -113,14 +139,17 @@ def _(mo):
 @app.cell
 def _(load_button, load_config_from_yaml, mo, yaml_path):
     config = None
-    mo.stop(not load_button.value, mo.md("Enter a YAML path and click 'Load Configuration'"))
+    mo.stop(
+        not load_button.value, mo.md("Enter a YAML path and click 'Load Configuration'")
+    )
 
     if not yaml_path.value:
         mo.output.replace(mo.md("**Error:** Please provide a YAML file path"))
     else:
         try:
             config = load_config_from_yaml(yaml_path.value)
-            mo.output.replace(mo.md(f"""
+            mo.output.replace(
+                mo.md(f"""
             **Configuration loaded!**
 
             | Setting | Value |
@@ -132,7 +161,8 @@ def _(load_button, load_config_from_yaml, mo, yaml_path):
             | Channel | {config.spatial_coverage.channels} |
             | Read-only Mode | {config.workflow.read_only_mode} |
             | Resume from Table | {config.workflow.resume_from_table} |
-            """))
+            """)
+            )
         except FileNotFoundError:
             mo.output.replace(mo.md(f"**Error:** File not found: `{yaml_path.value}`"))
         except Exception as e:
@@ -175,7 +205,11 @@ def _(config, conn, create_pipeline, mo, run_button, workflow_type):
             pipeline = create_pipeline(config, conn)
 
             if "micro-SAM" in workflow_type.value:
-                mo.output.replace(mo.md("**Starting micro-SAM pipeline...** Napari will open for interactive annotation."))
+                mo.output.replace(
+                    mo.md(
+                        "**Starting micro-SAM pipeline...** Napari will open for interactive annotation."
+                    )
+                )
                 table_id, updated_config = pipeline.run_full_micro_sam_workflow()
             else:
                 mo.output.replace(mo.md("**Starting CellPose export pipeline...**"))
@@ -211,14 +245,20 @@ def _(mo):
 
 @app.cell
 def _(Path, config, mo, save_button):
-    mo.stop(not save_button.value, mo.md("Click 'Save Configuration' to export your settings"))
+    mo.stop(
+        not save_button.value,
+        mo.md("Click 'Save Configuration' to export your settings"),
+    )
 
     _result = None
     if config is None:
         _result = mo.md("**Error:** No configuration loaded")
     else:
         try:
-            config_path = Path(config.output.output_directory) / f"annotation_config_{config.name}.yaml"
+            config_path = (
+                Path(config.output.output_directory)
+                / f"annotation_config_{config.name}.yaml"
+            )
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config.save_yaml(config_path)
             _result = mo.md(f"""
@@ -237,21 +277,24 @@ def _(Path, config, mo, save_button):
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
 @app.cell
 def _():
     from pathlib import Path
+
     return (Path,)
 
 
 @app.cell
 def _():
-    from omero_annotate_ai import load_config_from_yaml, create_pipeline
+    from omero_annotate_ai import create_pipeline, load_config_from_yaml
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
         OMERO_AVAILABLE = True
     except ImportError:
         OMERO_AVAILABLE = False
@@ -267,7 +310,9 @@ def _():
 def _(OMERO_AVAILABLE, SimpleOMEROConnection):
     def establish_connection(host, username, password, group=None, secure=True):
         if not OMERO_AVAILABLE:
-            raise ImportError("OMERO functionality not available. Install with: pip install -e .[omero]")
+            raise ImportError(
+                "OMERO functionality not available. Install with: pip install -e .[omero]"
+            )
 
         connection = SimpleOMEROConnection()
         config = {
@@ -283,6 +328,7 @@ def _(OMERO_AVAILABLE, SimpleOMEROConnection):
         if conn:
             conn.c.enableKeepAlive(60)
         return conn
+
     return (establish_connection,)
 
 

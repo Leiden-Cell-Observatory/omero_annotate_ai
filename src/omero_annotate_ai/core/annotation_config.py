@@ -5,25 +5,23 @@ import math
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Literal
 
 import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
-from typing_extensions import Literal
 
 from ..sources.uri import omero_uri
-
 
 # Helper functions for OMERO table serialization
 
 
-def _optional_int_to_str(value: Optional[int]) -> str:
+def _optional_int_to_str(value: int | None) -> str:
     """Convert optional int to string for OMERO table storage."""
     return str(value) if value is not None else "None"
 
 
-def _str_to_optional_int(value: str) -> Optional[int]:
+def _str_to_optional_int(value: str) -> int | None:
     """Parse string back to optional int from OMERO table."""
     if value == "None":
         return None
@@ -59,7 +57,7 @@ def _annotation_id_base(
     return f"{image_id}_{timepoint}_{z_slice}"
 
 
-def _regenerate_annotation_ids(df: pd.DataFrame) -> List[str]:
+def _regenerate_annotation_ids(df: pd.DataFrame) -> list[str]:
     """Rebuild the pipeline's annotation ids for a table, positionally.
 
     Legacy OMERO tables were written before ``annotation_id`` was persisted, so the
@@ -81,9 +79,9 @@ def _regenerate_annotation_ids(df: pd.DataFrame) -> List[str]:
     Returns:
         List of ids, one per row, in DataFrame row order.
     """
-    bases: List[str] = []
-    patch_flags: List[bool] = []
-    patch_groups: Dict[str, List[Tuple[int, int, int]]] = {}
+    bases: list[str] = []
+    patch_flags: list[bool] = []
+    patch_groups: dict[str, list[tuple[int, int, int]]] = {}
 
     for position, (_, row) in enumerate(df.iterrows()):
         base = _annotation_id_base(
@@ -105,7 +103,7 @@ def _regenerate_annotation_ids(df: pd.DataFrame) -> List[str]:
             )
 
     # Within each base group, sort patches on (patch_x, patch_y) -> 0-based index
-    patch_indices: Dict[int, int] = {}
+    patch_indices: dict[int, int] = {}
     for entries in patch_groups.values():
         for index, (_x, _y, position) in enumerate(sorted(entries)):
             patch_indices[position] = index
@@ -116,10 +114,10 @@ def _regenerate_annotation_ids(df: pd.DataFrame) -> List[str]:
     ]
 
 
-def _uniquify_annotation_ids(ids: List[str]) -> List[str]:
+def _uniquify_annotation_ids(ids: list[str]) -> list[str]:
     """Make ids unique by suffixing repeats, preserving order and determinism."""
     used: set = set()
-    unique: List[str] = []
+    unique: list[str] = []
     for value in ids:
         candidate = value
         suffix = 1
@@ -131,7 +129,7 @@ def _uniquify_annotation_ids(ids: List[str]) -> List[str]:
     return unique
 
 
-def _resolve_annotation_ids(df: pd.DataFrame) -> List[str]:
+def _resolve_annotation_ids(df: pd.DataFrame) -> list[str]:
     """Resolve one non-empty, unique annotation id per row of an OMERO table.
 
     Uses the stored ``annotation_id`` column where present and non-empty, and
@@ -139,7 +137,7 @@ def _resolve_annotation_ids(df: pd.DataFrame) -> List[str]:
     """
     fallback = _regenerate_annotation_ids(df)
 
-    resolved: List[str] = []
+    resolved: list[str] = []
     has_column = "annotation_id" in df.columns
     for position, (_, row) in enumerate(df.iterrows()):
         stored = ""
@@ -174,7 +172,7 @@ def _row_str(row, key: str, default: str = "") -> str:
 OMERO_ID_UNSET = 0
 
 
-def _optional_int_to_omero(value: Optional[int]) -> int:
+def _optional_int_to_omero(value: int | None) -> int:
     """Convert an optional id to the integer an OMERO id column can hold."""
     return OMERO_ID_UNSET if value is None else int(value)
 
@@ -208,7 +206,7 @@ def _as_bool(value: Any) -> bool:
     return bool(value)
 
 
-def _omero_id_to_optional_int(value: Any) -> Optional[int]:
+def _omero_id_to_optional_int(value: Any) -> int | None:
     """Parse an id back from an OMERO table column.
 
     Accepts both the current integer encoding (0 meaning unset) and the string
@@ -255,17 +253,19 @@ class ImageAnnotation(BaseModel):
     image_uri: str = Field(
         default="", description="Image URI: omero:image:<id> or the OME-Zarr image URL"
     )
-    image_id: Optional[int] = Field(
+    image_id: int | None = Field(
         default=None, description="OMERO image ID (OMERO images only)"
     )
     image_name: str = Field(description="Image name")
     annotation_id: str = Field(default="", description="Unique annotation identifier")
 
     # Where the image came from (OME-Zarr)
-    level: int = Field(default=0, description="Multiscale level the pixel coordinates refer to")
+    level: int = Field(
+        default=0, description="Multiscale level the pixel coordinates refer to"
+    )
     well: str = Field(default="", description="Plate well, e.g. B2")
     field: str = Field(default="", description="Field (well sample) path, e.g. 0")
-    well_metadata: Dict[str, str] = Field(
+    well_metadata: dict[str, str] = Field(
         default_factory=dict, description="Well metadata the image was selected with"
     )
 
@@ -300,34 +300,35 @@ class ImageAnnotation(BaseModel):
 
     # Processing status
     processed: bool = Field(default=False, description="Whether processing is complete")
-    annotation_created_at: Optional[str] = Field(
+    annotation_created_at: str | None = Field(
         default=None, description="Creation timestamp in ISO format"
     )
-    annotation_updated_at: Optional[str] = Field(
+    annotation_updated_at: str | None = Field(
         default=None, description="Last update timestamp in ISO format"
     )
     annotation_type: str = Field(
         default="segmentation_mask", description="Type of annotation"
     )
     session: int = Field(
-        default=-1, description="Annotation session that produced this unit (-1: none yet)"
+        default=-1,
+        description="Annotation session that produced this unit (-1: none yet)",
     )
 
     # OMERO annotation IDs (None until uploaded)
-    roi_id: Optional[int] = Field(default=None, description="OMERO ROI ID")
-    label_id: Optional[int] = Field(
+    roi_id: int | None = Field(default=None, description="OMERO ROI ID")
+    label_id: int | None = Field(
         default=None, description="OMERO label file annotation ID"
     )
-    annotation_input_id: Optional[int] = Field(
+    annotation_input_id: int | None = Field(
         default=None,
         description="OMERO file annotation ID for the annotation-channel image",
     )
-    schema_attachment_id: Optional[int] = Field(
+    schema_attachment_id: int | None = Field(
         default=None, description="OMERO schema attachment ID"
     )
 
     # Channel presentation (how the image was displayed during annotation)
-    channel_presentation: Optional[List[ChannelPresentation]] = Field(
+    channel_presentation: list[ChannelPresentation] | None = Field(
         default=None,
         description="Channel rendering parameters at annotation time (image-level, shared across patches)",
     )
@@ -335,8 +336,8 @@ class ImageAnnotation(BaseModel):
     def mark_processed(
         self,
         annotation_type: str = "segmentation_mask",
-        roi_id: Optional[int] = None,
-        label_id: Optional[int] = None,
+        roi_id: int | None = None,
+        label_id: int | None = None,
     ) -> None:
         """Mark this annotation as processed with proper timestamp handling.
 
@@ -363,23 +364,21 @@ class ImageAnnotation(BaseModel):
 class AuthorInfo(BaseModel):
     """Author information compatible with bioimage.io"""
 
-    name: Optional[str] = Field(default=None, description="Full name of the author")
-    affiliation: Optional[str] = Field(
-        default=None, description="Institution affiliation"
-    )
-    email: Optional[str] = Field(None, description="Contact email")
-    orcid: Optional[HttpUrl] = Field(None, description="ORCID identifier")
+    name: str | None = Field(default=None, description="Full name of the author")
+    affiliation: str | None = Field(default=None, description="Institution affiliation")
+    email: str | None = Field(None, description="Contact email")
+    orcid: HttpUrl | None = Field(None, description="ORCID identifier")
 
 
 class AnnotationTool(BaseModel):
     """Tool configuration for annotation workflows"""
 
     name: str = Field(description="Tool name (e.g., 'micro-sam', 'cellpose')")
-    version: Optional[str] = Field(default=None, description="Tool version")
+    version: str | None = Field(default=None, description="Tool version")
     mode: Literal["automatic", "interactive", "human_in_the_loop"] = Field(
         default="interactive", description="Annotation mode"
     )
-    parameters: Optional[Dict[str, Any]] = Field(
+    parameters: dict[str, Any] | None = Field(
         default=None, description="Tool-specific parameters"
     )
 
@@ -388,15 +387,18 @@ class AnnotationMethodology(BaseModel):
     """MIFA-compatible annotation methodology"""
 
     annotation_type: Literal[
-        "segmentation_mask", "bounding_box", "point", "classification",
+        "segmentation_mask",
+        "bounding_box",
+        "point",
+        "classification",
         "semantic_segmentation",
     ] = "segmentation_mask"
-    annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = (
-        Field(default=None, description="How annotations were produced")
+    annotation_method: Literal["manual", "semi_automatic", "automatic"] | None = Field(
+        default=None, description="How annotations were produced"
     )
     annotation_criteria: str = Field(description="Criteria used for annotation")
     annotation_coverage: Literal["all", "representative", "partial"] = "representative"
-    annotation_tool: Optional[AnnotationTool] = Field(
+    annotation_tool: AnnotationTool | None = Field(
         default=None, description="Tool used for annotation"
     )
 
@@ -407,17 +409,17 @@ _CONTEXT_COLORMAP_CYCLE = ["blue", "magenta", "green", "yellow", "cyan"]
 class SpatialCoverage(BaseModel):
     """Spatial scope of annotations (MIFA requirement)"""
 
-    channels: List[int] = Field(description="Channel indices processed")
-    timepoints: List[int] = Field(description="Timepoints as list")
-    n_timepoints: Optional[int] = Field(
+    channels: list[int] = Field(description="Channel indices processed")
+    timepoints: list[int] = Field(description="Timepoints as list")
+    n_timepoints: int | None = Field(
         default=None,
         description="Number of timepoints to randomly select (used when timepoint_mode='random'). "
         "If not specified, uses the length of timepoints list for backward compatibility.",
     )
     timepoint_mode: Literal["all", "random", "specific"] = "specific"
-    z_slices: List[int] = Field(description="Z-slices as list")
+    z_slices: list[int] = Field(description="Z-slices as list")
     # Number of slices/timepoints for random mode (optional, defaults to list length)
-    n_slices: Optional[int] = Field(
+    n_slices: int | None = Field(
         default=None,
         description="Number of z-slices to randomly select (used when z_slice_mode='random'). "
         "If not specified, uses the length of z_slices list for backward compatibility.",
@@ -426,20 +428,20 @@ class SpatialCoverage(BaseModel):
     three_d: bool = Field(default=False, description="3D volumetric processing mode")
 
     # 3D volumetric processing fields (used when three_d=True)
-    z_range_start: Optional[int] = Field(
+    z_range_start: int | None = Field(
         default=None, description="Starting z-slice for 3D volumes (when three_d=True)"
     )
-    z_range_end: Optional[int] = Field(
+    z_range_end: int | None = Field(
         default=None, description="Ending z-slice for 3D volumes (when three_d=True)"
     )
 
     # Multi-channel support for separate labeling and training channels
-    label_channel: Optional[int] = Field(
+    label_channel: int | None = Field(
         default=None,
         description="Channel index used for segmentation/labeling (e.g., fluorescence nuclei). "
         "If not specified, defaults to channels[0] for backward compatibility.",
     )
-    training_channels: Optional[List[int]] = Field(
+    training_channels: list[int] | None = Field(
         default=None,
         description="Channel index(es) used for model training input (e.g., brightfield). "
         "If not specified, defaults to [label_channel] for backward compatibility. "
@@ -448,17 +450,17 @@ class SpatialCoverage(BaseModel):
 
     # Display-only context channels shown alongside the label channel during annotation.
     # Never enter SAM embeddings, never saved as training pairs.
-    context_channels: List[int] = Field(
+    context_channels: list[int] = Field(
         default_factory=list,
         description="Display-only channel indices shown alongside the annotation channel in napari. "
         "Never enter SAM embeddings or training data. OMERO channel index space.",
     )
-    context_channel_names: Optional[List[str]] = Field(
+    context_channel_names: list[str] | None = Field(
         default=None,
         description="Display names for context_channels. "
         "Length must match context_channels when provided. Defaults to 'ch{idx}'.",
     )
-    context_channel_colormaps: Optional[List[str]] = Field(
+    context_channel_colormaps: list[str] | None = Field(
         default=None,
         description="Napari colormap names for context_channels. "
         "Length must match context_channels when provided. "
@@ -469,7 +471,7 @@ class SpatialCoverage(BaseModel):
     use_patches: bool = Field(
         default=False, description="Extract patches vs full images"
     )
-    patch_size: List[int] = Field(
+    patch_size: list[int] = Field(
         default=[512, 512], description="Patch dimensions [width, height]"
     )
     patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
@@ -498,7 +500,7 @@ class SpatialCoverage(BaseModel):
             else self.primary_channel
         )
 
-    def get_training_channels(self) -> List[int]:
+    def get_training_channels(self) -> list[int]:
         """Get the channel(s) to use for training input.
 
         Returns training_channels if explicitly set, otherwise falls back to [get_label_channel()]
@@ -523,7 +525,7 @@ class SpatialCoverage(BaseModel):
         """Return True if any context channels are configured."""
         return bool(self.context_channels)
 
-    def get_context_channel_specs(self) -> List[Tuple[int, str, str]]:
+    def get_context_channel_specs(self) -> list[tuple[int, str, str]]:
         """Return [(channel_index, display_name, colormap), ...] for each context channel."""
         specs = []
         for i, ch_idx in enumerate(self.context_channels):
@@ -540,7 +542,7 @@ class SpatialCoverage(BaseModel):
             specs.append((ch_idx, name, cmap))
         return specs
 
-    def get_z_range(self) -> Tuple[int, int]:
+    def get_z_range(self) -> tuple[int, int]:
         """Get the z-range for volumetric processing"""
         if (
             self.three_d
@@ -565,13 +567,13 @@ class SpatialCoverage(BaseModel):
     def model_dump(self, **kwargs):
         """Override model_dump to exclude patch fields when use_patches is False."""
         data = super().model_dump(**kwargs)
-        
+
         if not self.use_patches:
             # Remove patch-related fields when patches are not used
-            data.pop('patch_size', None)
-            data.pop('patches_per_image', None)
-            data.pop('random_patches', None)
-        
+            data.pop("patch_size", None)
+            data.pop("patches_per_image", None)
+            data.pop("random_patches", None)
+
         return data
 
     @model_validator(mode="after")
@@ -591,7 +593,6 @@ class SpatialCoverage(BaseModel):
                 raise ValueError("z_range_start must be <= z_range_end")
 
         return self
-
 
     @model_validator(mode="after")
     def validate_channel_settings(self):
@@ -679,10 +680,10 @@ class NormalizationConfig(BaseModel):
 class DatasetInfo(BaseModel):
     """Dataset identification and linking (both schemas)"""
 
-    source_dataset_id: Optional[str] = Field(
+    source_dataset_id: str | None = Field(
         default=None, description="BioImage Archive accession or DOI"
     )
-    source_dataset_url: Optional[HttpUrl] = Field(
+    source_dataset_url: HttpUrl | None = Field(
         default=None, description="URL to source dataset"
     )
     source_description: str = Field(description="Human-readable source description")
@@ -694,12 +695,12 @@ class StudyContext(BaseModel):
 
     title: str = Field(description="Study/experiment title")
     description: str = Field(description="Detailed study description")
-    keywords: List[str] = Field(default_factory=list, description="Study keywords/tags")
-    organism: Optional[str] = Field(default=None, description="Organism studied")
-    imaging_method: Optional[str] = Field(
+    keywords: list[str] = Field(default_factory=list, description="Study keywords/tags")
+    organism: str | None = Field(default=None, description="Organism studied")
+    imaging_method: str | None = Field(
         default=None, description="Microscopy technique used"
     )
-    funding_statement: Optional[str] = Field(
+    funding_statement: str | None = Field(
         default=None,
         description="How the study was funded (required by MIFA Study metadata)",
     )
@@ -714,25 +715,21 @@ class AIModelConfig(BaseModel):
     framework: Literal["micro_sam", "cellpose", "web_annotation"] = Field(
         default="micro_sam", description="AI framework"
     )
-    framework_version: Optional[str] = Field(
-        default=None, description="Framework version"
-    )
+    framework_version: str | None = Field(default=None, description="Framework version")
 
     # Model information
     model_name: str = Field(default="", description="Model name/identifier")
     model_version: str = Field(default="latest", description="Model version")
-    model_url: Optional[HttpUrl] = Field(
+    model_url: HttpUrl | None = Field(
         default=None, description="URL to model weights/repository"
     )
-    model_doi: Optional[str] = Field(
-        default=None, description="DOI for model citation"
-    )
+    model_doi: str | None = Field(default=None, description="DOI for model citation")
 
     # Training configuration
     training_mode: Literal["inference", "finetuning", "from_scratch"] = Field(
         default="inference", description="Training mode"
     )
-    pretrained_from: Optional[str] = Field(
+    pretrained_from: str | None = Field(
         default="vit_b_lm", description="Base model for finetuning (e.g., 'vit_b_lm')"
     )
 
@@ -753,11 +750,11 @@ class TrainingConfig(BaseModel):
             "timepoints/z-slices) or 'well' (all fields of a plate well)"
         ),
     )
-    split_rationale: Optional[str] = Field(
+    split_rationale: str | None = Field(
         default=None,
         description="Why this split unit was chosen, e.g. 'fields within a well do not overlap'",
     )
-    stratify_by: List[str] = Field(
+    stratify_by: list[str] = Field(
         default_factory=list,
         description=(
             "Well key-value pairs (e.g. ['cell_line', 'treatment']) or 'well' to split "
@@ -801,7 +798,7 @@ class TrainingConfig(BaseModel):
     )
 
     segment_all: bool = Field(default=False, description="Process all images vs subset")
-    quality_threshold: Optional[float] = Field(
+    quality_threshold: float | None = Field(
         default=None, description="Minimum quality score"
     )
 
@@ -857,8 +854,10 @@ class OMEROConfig(BaseModel):
     """OMERO connection and data selection configuration"""
 
     container_type: str = Field(default="dataset", description="OMERO container type")
-    container_id: int = Field(default=0, description="OMERO container ID (single container)")
-    container_ids: Optional[List[int]] = Field(
+    container_id: int = Field(
+        default=0, description="OMERO container ID (single container)"
+    )
+    container_ids: list[int] | None = Field(
         default=None,
         description="List of OMERO container IDs of the same type. "
         "Takes precedence over container_id when set.",
@@ -866,7 +865,7 @@ class OMEROConfig(BaseModel):
     source_desc: str = Field(default="", description="Source description for tracking")
 
     # Well filtering based on key-value pairs (for plate containers)
-    well_filters: Optional[Dict[str, List[str]]] = Field(
+    well_filters: dict[str, list[str]] | None = Field(
         default=None,
         description="Filter wells by map annotation key-value pairs. "
         "Example: {'cellline': ['U2OS', 'HeLa'], 'treatment': ['Control']}. "
@@ -878,12 +877,12 @@ class OMEROConfig(BaseModel):
     )
 
     # Table tracking
-    table_id: Optional[int] = Field(
+    table_id: int | None = Field(
         default=None,
         description="OMERO tracking table ID (updated automatically when table is replaced)",
     )
 
-    def get_all_container_ids(self) -> List[int]:
+    def get_all_container_ids(self) -> list[int]:
         """Get all container IDs, with container_ids taking precedence over container_id.
 
         Returns:
@@ -918,7 +917,7 @@ class OMEROConfig(BaseModel):
 class ZarrConfig(BaseModel):
     """OME-Zarr image selection (used when ``source == "zarr"``)."""
 
-    uris: List[str] = Field(
+    uris: list[str] = Field(
         default_factory=list,
         description="OME-Zarr plates, wells or images (http(s) URL or local path)",
     )
@@ -926,11 +925,14 @@ class ZarrConfig(BaseModel):
     fields: Literal["first", "all"] = Field(
         default="first", description="Fields per well: the first one, or all"
     )
-    wells: Optional[List[str]] = Field(default=None, description="Only these wells, e.g. ['B2']")
-    well_metadata: Optional[str] = Field(
-        default=None, description="CSV with a 'well' column (optional 'plate') and metadata columns"
+    wells: list[str] | None = Field(
+        default=None, description="Only these wells, e.g. ['B2']"
     )
-    well_filters: Optional[Dict[str, List[str]]] = Field(
+    well_metadata: str | None = Field(
+        default=None,
+        description="CSV with a 'well' column (optional 'plate') and metadata columns",
+    )
+    well_filters: dict[str, list[str]] | None = Field(
         default=None, description="Filter wells on well_metadata values (AND logic)"
     )
     well_filter_mode: Literal["include", "exclude"] = Field(default="include")
@@ -962,14 +964,14 @@ class AnnotationConfig(BaseModel):
     )
 
     # Config file tracking for persistence
-    config_file_path: Optional[Path] = Field(
+    config_file_path: Path | None = Field(
         default=None, description="Path to the configuration file for persistence"
     )
 
     # Core identification (both schemas)
     name: str = Field(description="Annotation workflow name")
     version: str = Field(default="1.0.0", description="Configuration version")
-    authors: List[AuthorInfo] = Field(
+    authors: list[AuthorInfo] = Field(
         default_factory=list, description="Workflow authors"
     )
     created: datetime = Field(
@@ -1001,34 +1003,32 @@ class AnnotationConfig(BaseModel):
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
-    source: Literal["omero", "zarr"] = Field(default="omero", description="Where images come from")
+    source: Literal["omero", "zarr"] = Field(
+        default="omero", description="Where images come from"
+    )
     zarr: ZarrConfig = Field(default_factory=ZarrConfig)
 
     # Annotation tracking
-    annotations: List[ImageAnnotation] = Field(
+    annotations: list[ImageAnnotation] = Field(
         default_factory=list,
         description="List of image annotations for tracking processing state",
     )
 
     # Workflow metadata
-    documentation: Optional[HttpUrl] = Field(
-        default=None, description="Documentation URL"
-    )
-    repository: Optional[HttpUrl] = Field(
-        default=None, description="Code repository URL"
-    )
-    tags: List[str] = Field(default_factory=list, description="Classification tags")
-    feature_types: List[FeatureType] = Field(
+    documentation: HttpUrl | None = Field(default=None, description="Documentation URL")
+    repository: HttpUrl | None = Field(default=None, description="Code repository URL")
+    tags: list[str] = Field(default_factory=list, description="Classification tags")
+    feature_types: list[FeatureType] = Field(
         default_factory=list,
         description="Annotation classes (e.g. cell, nucleus) with display colors",
     )
 
     # Open fields for anything the structured schema does not cover
-    notes: Optional[str] = Field(
+    notes: str | None = Field(
         default=None,
         description="Free-text notes about the annotation set (context, caveats, known issues)",
     )
-    custom_metadata: Dict[str, Any] = Field(
+    custom_metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional key-value metadata not covered by the schema",
     )
@@ -1066,7 +1066,9 @@ class AnnotationConfig(BaseModel):
             # pipeline write masks and the table locally instead.
             self.workflow.read_only_mode = True
         if self.zarr.well_filters and not self.zarr.well_metadata:
-            raise ValueError("zarr.well_filters needs zarr.well_metadata (a CSV) to filter on")
+            raise ValueError(
+                "zarr.well_filters needs zarr.well_metadata (a CSV) to filter on"
+            )
         return self
 
     def model_dump(self, **kwargs):
@@ -1100,7 +1102,7 @@ class AnnotationConfig(BaseModel):
         self.annotations.append(annotation)
         return annotation
 
-    def get_unprocessed(self) -> List[ImageAnnotation]:
+    def get_unprocessed(self) -> list[ImageAnnotation]:
         """Get annotations where processed=False.
 
         Returns:
@@ -1108,7 +1110,7 @@ class AnnotationConfig(BaseModel):
         """
         return [ann for ann in self.annotations if not ann.processed]
 
-    def get_processed(self) -> List[ImageAnnotation]:
+    def get_processed(self) -> list[ImageAnnotation]:
         """Get annotations where processed=True.
 
         Returns:
@@ -1119,8 +1121,8 @@ class AnnotationConfig(BaseModel):
     def mark_completed(
         self,
         image_id: int,
-        roi_id: Optional[int] = None,
-        label_id: Optional[int] = None,
+        roi_id: int | None = None,
+        label_id: int | None = None,
         **kwargs,
     ):
         """Mark annotation as completed with OMERO IDs.
@@ -1146,7 +1148,7 @@ class AnnotationConfig(BaseModel):
                     if hasattr(annotation, key):
                         setattr(annotation, key, value)
 
-    def get_progress_summary(self) -> Dict[str, Union[int, float]]:
+    def get_progress_summary(self) -> dict[str, int | float]:
         """Get completion statistics.
 
         Returns:
@@ -1161,14 +1163,14 @@ class AnnotationConfig(BaseModel):
             "progress_percent": round(100 * completed / total, 1) if total > 0 else 0,
         }
 
-    def split_report(self) -> Dict[str, Any]:
+    def split_report(self) -> dict[str, Any]:
         """Report how images and wells are distributed over the splits.
 
         Records rather than judges: for the declared ``training.split_unit`` and every
         level above it, lists the units whose annotations fall in more than one split.
         The ``wells`` section is present only when annotations carry well information.
         """
-        report: Dict[str, Any] = {
+        report: dict[str, Any] = {
             "split_unit": self.training.split_unit,
             "split_rationale": self.training.split_rationale,
             "images": _split_level(self.annotations, lambda a: a.image_uri),
@@ -1179,10 +1181,12 @@ class AnnotationConfig(BaseModel):
             )
         keys = self.training.stratify_by
         if keys:
-            unit = (lambda a: a.well) if self.training.split_unit == "well" else (
-                lambda a: a.image_uri
+            unit = (
+                (lambda a: a.well)
+                if self.training.split_unit == "well"
+                else (lambda a: a.image_uri)
             )
-            by_stratum: Dict[str, list] = {}
+            by_stratum: dict[str, list] = {}
             for a in self.annotations:
                 label = ", ".join(
                     f"{k}={a.well if k == 'well' else a.well_metadata.get(k, '(missing)')}"
@@ -1217,7 +1221,9 @@ class AnnotationConfig(BaseModel):
                     f"more than one split ({', '.join(spanning)})."
                 )
             else:
-                parts.append(f"None of {section['total']} {label} span more than one split.")
+                parts.append(
+                    f"None of {section['total']} {label} span more than one split."
+                )
         if "strata" in report:
             stratified = f"Stratified by {', '.join(report['stratify_by'])}"
             missing = report["strata_missing_splits"]
@@ -1275,7 +1281,9 @@ class AnnotationConfig(BaseModel):
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
-                "annotation_input_id": _optional_int_to_omero(annotation.annotation_input_id),
+                "annotation_input_id": _optional_int_to_omero(
+                    annotation.annotation_input_id
+                ),
                 "session": annotation.session,
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
@@ -1421,7 +1429,9 @@ class AnnotationConfig(BaseModel):
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
 
-            annotation_input_id = _omero_id_to_optional_int(row.get("annotation_input_id"))
+            annotation_input_id = _omero_id_to_optional_int(
+                row.get("annotation_input_id")
+            )
             if annotation_input_id is not None:
                 annotation_data["annotation_input_id"] = annotation_input_id
 
@@ -1437,7 +1447,7 @@ class AnnotationConfig(BaseModel):
             self.add_annotation(ImageAnnotation(**annotation_data))
 
     def to_mifa(
-        self, *, file_id_source: str = "auto", funding_statement: Optional[str] = None
+        self, *, file_id_source: str = "auto", funding_statement: str | None = None
     ):
         """Build the three MIFA documents (Study, Annotations, Version) for this config.
 
@@ -1460,10 +1470,10 @@ class AnnotationConfig(BaseModel):
         self,
         directory,
         *,
-        accession: Optional[str] = None,
+        accession: str | None = None,
         file_id_source: str = "auto",
-        funding_statement: Optional[str] = None,
-    ) -> Dict[str, Path]:
+        funding_statement: str | None = None,
+    ) -> dict[str, Path]:
         """Write the three MIFA YAML documents to ``directory`` (``<Class>_<accession>.yaml``).
 
         Returns a dict mapping ``"study"``/``"annotations"``/``"version"`` to written paths.
@@ -1482,10 +1492,10 @@ class AnnotationConfig(BaseModel):
         self,
         dest_dir,
         *,
-        accession: Optional[str] = None,
-        funding_statement: Optional[str] = None,
+        accession: str | None = None,
+        funding_statement: str | None = None,
         move_data: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Assemble a self-contained BioImage Archive submission bundle in ``dest_dir``.
 
         Writes ``metadata/`` (the MIFA YAMLs), the two BIA ``file_list_*.tsv`` files, and
@@ -1506,7 +1516,7 @@ class AnnotationConfig(BaseModel):
             move_data=move_data,
         )
 
-    def to_mifa_metadata(self, *, funding_statement: Optional[str] = None) -> dict:
+    def to_mifa_metadata(self, *, funding_statement: str | None = None) -> dict:
         """Export the MIFA documents (Study, Annotations, Version) as plain dicts."""
         from .mifa_export import to_mifa_dicts
 
@@ -1526,7 +1536,7 @@ class AnnotationConfig(BaseModel):
             "git_repo": self.repository,
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
         return self.model_dump()
 
@@ -1563,9 +1573,7 @@ class AnnotationConfig(BaseModel):
             allow_unicode=True,
         )
 
-    def save_yaml(
-        self, file_path: Union[str, Path], *, sort_keys: bool = False
-    ) -> None:
+    def save_yaml(self, file_path: str | Path, *, sort_keys: bool = False) -> None:
         """Save configuration to YAML file and remember the path."""
         file_path = Path(file_path)
 
@@ -1580,18 +1588,18 @@ class AnnotationConfig(BaseModel):
         print(f"Configuration saved to: {file_path}")
 
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "AnnotationConfig":
+    def from_dict(cls, config_dict: dict[str, Any]) -> "AnnotationConfig":
         """Create configuration from dictionary."""
         return cls(**config_dict)
 
     @classmethod
-    def from_yaml(cls, yaml_source: Union[str, Path]) -> "AnnotationConfig":
+    def from_yaml(cls, yaml_source: str | Path) -> "AnnotationConfig":
         """Create configuration from YAML string or file path."""
         yaml_path = Path(yaml_source)
 
         # A multi-line string is YAML text; Path.exists() raises on long ones.
         if "\n" not in str(yaml_source) and yaml_path.exists():
-            with open(yaml_path, "r", encoding="utf-8") as f:
+            with open(yaml_path, encoding="utf-8") as f:
                 config_dict = yaml.safe_load(f)
             config = cls.from_dict(config_dict)
             config.config_file_path = yaml_path
@@ -1610,7 +1618,7 @@ class AnnotationConfig(BaseModel):
         return json.dumps(self.to_dict(), default=str, **kwargs)
 
     @classmethod
-    def from_json(cls, json_source: Union[str, Path, dict]) -> "AnnotationConfig":
+    def from_json(cls, json_source: str | Path | dict) -> "AnnotationConfig":
         """Load from JSON string, file path, or dict.
 
         Args:
@@ -1635,17 +1643,20 @@ class AnnotationConfig(BaseModel):
 SPLIT_CATEGORIES = ("training", "validation", "test")
 
 
-def _split_level(annotations, key) -> Dict[str, Any]:
+def _split_level(annotations, key) -> dict[str, Any]:
     """Count units (grouped by ``key``) per split and list units in several splits."""
-    categories: Dict[str, set] = {}
+    categories: dict[str, set] = {}
     for annotation in annotations:
         categories.setdefault(key(annotation), set()).add(annotation.category)
     return {
         "total": len(categories),
         "per_split": {
-            c: sum(1 for cats in categories.values() if c in cats) for c in SPLIT_CATEGORIES
+            c: sum(1 for cats in categories.values() if c in cats)
+            for c in SPLIT_CATEGORIES
         },
-        "spanning_splits": sorted(unit for unit, cats in categories.items() if len(cats) > 1),
+        "spanning_splits": sorted(
+            unit for unit, cats in categories.items() if len(cats) > 1
+        ),
     }
 
 
@@ -1660,8 +1671,8 @@ class ValidationResult(BaseModel):
     """Result from validate_annotations_against_config()."""
 
     is_valid: bool
-    errors: List[ValidationIssue]
-    warnings: List[ValidationIssue]
+    errors: list[ValidationIssue]
+    warnings: list[ValidationIssue]
     annotation_count: int
 
     @property
@@ -1688,8 +1699,8 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
     Returns:
         ValidationResult with categorised errors and warnings.
     """
-    errors: List[ValidationIssue] = []
-    warnings: List[ValidationIssue] = []
+    errors: list[ValidationIssue] = []
+    warnings: list[ValidationIssue] = []
     annotations = config.annotations
     sc = config.spatial_coverage
     training = config.training
@@ -1701,65 +1712,77 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
     # ERROR: channel mismatch
     bad_channel = [a for a in annotations if a.channel != expected_channel]
     if bad_channel:
-        errors.append(ValidationIssue(
-            field="channel",
-            message=(
-                f"{len(bad_channel)}/{len(annotations)} annotations have channel != "
-                f"{expected_channel} (current label_channel). "
-                f"Example: image_id={bad_channel[0].image_id} has channel={bad_channel[0].channel}"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="channel",
+                message=(
+                    f"{len(bad_channel)}/{len(annotations)} annotations have channel != "
+                    f"{expected_channel} (current label_channel). "
+                    f"Example: image_id={bad_channel[0].image_id} has channel={bad_channel[0].channel}"
+                ),
+            )
+        )
 
     # ERROR: is_volumetric mismatch
     bad_vol = [a for a in annotations if a.is_volumetric != expected_volumetric]
     if bad_vol:
-        errors.append(ValidationIssue(
-            field="is_volumetric",
-            message=(
-                f"{len(bad_vol)}/{len(annotations)} annotations have "
-                f"is_volumetric={not expected_volumetric} but three_d={expected_volumetric} in config"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="is_volumetric",
+                message=(
+                    f"{len(bad_vol)}/{len(annotations)} annotations have "
+                    f"is_volumetric={not expected_volumetric} but three_d={expected_volumetric} in config"
+                ),
+            )
+        )
 
     # ERROR: is_patch mismatch
     bad_patch = [a for a in annotations if a.is_patch != expected_patch]
     if bad_patch:
-        errors.append(ValidationIssue(
-            field="is_patch",
-            message=(
-                f"{len(bad_patch)}/{len(annotations)} annotations have "
-                f"is_patch={not expected_patch} but use_patches={expected_patch} in config"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="is_patch",
+                message=(
+                    f"{len(bad_patch)}/{len(annotations)} annotations have "
+                    f"is_patch={not expected_patch} but use_patches={expected_patch} in config"
+                ),
+            )
+        )
 
     # WARNING: patch dimensions mismatch (may be legitimately clipped to image boundary)
     if expected_patch and len(sc.patch_size) >= 2:
         expected_w, expected_h = sc.patch_size[0], sc.patch_size[1]
         bad_size = [
-            a for a in annotations
-            if a.is_patch and (a.patch_width != expected_w or a.patch_height != expected_h)
+            a
+            for a in annotations
+            if a.is_patch
+            and (a.patch_width != expected_w or a.patch_height != expected_h)
         ]
         if bad_size:
-            warnings.append(ValidationIssue(
-                field="patch_size",
-                message=(
-                    f"{len(bad_size)} patch annotations have dimensions that do not match "
-                    f"patch_size={sc.patch_size}. "
-                    f"May be expected if patches were clipped to image boundaries."
-                ),
-            ))
+            warnings.append(
+                ValidationIssue(
+                    field="patch_size",
+                    message=(
+                        f"{len(bad_size)} patch annotations have dimensions that do not match "
+                        f"patch_size={sc.patch_size}. "
+                        f"May be expected if patches were clipped to image boundaries."
+                    ),
+                )
+            )
 
     # ERROR: annotations of one split unit landed in different splits
     unit_level = "wells" if training.split_unit == "well" else "images"
     spanning = config.split_report().get(unit_level, {}).get("spanning_splits", [])
     if spanning:
-        errors.append(ValidationIssue(
-            field="split_unit",
-            message=(
-                f"split_unit='{training.split_unit}' but {len(spanning)} {unit_level} have "
-                f"annotations in more than one split. Example: {spanning[0]}"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="split_unit",
+                message=(
+                    f"split_unit='{training.split_unit}' but {len(spanning)} {unit_level} have "
+                    f"annotations in more than one split. Example: {spanning[0]}"
+                ),
+            )
+        )
 
     # WARNING: category distribution mismatch
     actual_train = sum(1 for a in annotations if a.category == "training")
@@ -1768,27 +1791,31 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
 
     if not training.segment_all:
         if actual_train != training.train_n or actual_val != training.validate_n:
-            warnings.append(ValidationIssue(
-                field="category_counts",
-                message=(
-                    f"Category counts (train={actual_train}, val={actual_val}) "
-                    f"do not match config (train_n={training.train_n}, "
-                    f"validate_n={training.validate_n}). "
-                    f"Config may have been changed after annotations were generated."
-                ),
-            ))
+            warnings.append(
+                ValidationIssue(
+                    field="category_counts",
+                    message=(
+                        f"Category counts (train={actual_train}, val={actual_val}) "
+                        f"do not match config (train_n={training.train_n}, "
+                        f"validate_n={training.validate_n}). "
+                        f"Config may have been changed after annotations were generated."
+                    ),
+                )
+            )
     else:
         actual_total = actual_train + actual_val + actual_test
         if actual_total > 0:
             actual_ratio = actual_train / actual_total
             if abs(actual_ratio - training.train_fraction) > 0.15:
-                warnings.append(ValidationIssue(
-                    field="category_fractions",
-                    message=(
-                        f"Actual training fraction {actual_ratio:.2f} differs from "
-                        f"configured train_fraction={training.train_fraction:.2f} by more than 0.15"
-                    ),
-                ))
+                warnings.append(
+                    ValidationIssue(
+                        field="category_fractions",
+                        message=(
+                            f"Actual training fraction {actual_ratio:.2f} differs from "
+                            f"configured train_fraction={training.train_fraction:.2f} by more than 0.15"
+                        ),
+                    )
+                )
 
     return ValidationResult(
         is_valid=len(errors) == 0,
@@ -1798,7 +1825,7 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
     )
 
 
-def load_config(config_source: Union[str, Path, Dict[str, Any]]) -> AnnotationConfig:
+def load_config(config_source: str | Path | dict[str, Any]) -> AnnotationConfig:
     """Load configuration from various sources."""
     if isinstance(config_source, dict):
         return AnnotationConfig.from_dict(config_source)

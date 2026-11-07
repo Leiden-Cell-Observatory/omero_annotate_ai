@@ -26,7 +26,7 @@ import re
 import shutil
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import pandas as pd
 import yaml
@@ -60,7 +60,7 @@ _LICENSE_MAP = {
 }
 
 
-def map_license(license_str: Optional[str]) -> str:
+def map_license(license_str: str | None) -> str:
     """Map a free-form license string to a MIFA ``LicenseType`` code."""
     key = (license_str or "").strip()
     if key in _LICENSE_MAP:
@@ -73,7 +73,7 @@ def map_license(license_str: Optional[str]) -> str:
     return "CC_BY"
 
 
-def map_annotation_type(annotation_type: Optional[str]) -> str:
+def map_annotation_type(annotation_type: str | None) -> str:
     """Map an annotation-type string to a MIFA ``AnnotationType`` code."""
     key = (annotation_type or "").strip()
     if key in _ANNOTATION_TYPE_MAP:
@@ -86,7 +86,7 @@ def map_annotation_type(annotation_type: Optional[str]) -> str:
     return "other"
 
 
-def split_author_name(name: Optional[str]) -> Optional[Tuple[str, str]]:
+def split_author_name(name: str | None) -> tuple[str, str] | None:
     """Split a single author name string into ``(first_name, last_name)``.
 
     MIFA requires both an author first and last name. Returns ``None`` when the
@@ -102,7 +102,7 @@ def split_author_name(name: Optional[str]) -> Optional[Tuple[str, str]]:
     return (tokens[0], " ".join(tokens[1:]))
 
 
-def version_to_float(version: Optional[str]) -> float:
+def version_to_float(version: str | None) -> float:
     """Coerce a (possibly semver) version string to a float for the MIFA Version doc.
 
     The upstream ``Version.version`` dataclass slot is mistyped as ``float`` (the
@@ -190,7 +190,11 @@ def compose_normalization(config) -> str:
     norm = config.normalization
     if norm.method == "none":
         return "Model input: raw intensities, no normalisation."
-    where = "applied at export (float32)" if norm.apply_at_export else "applied by the trainer"
+    where = (
+        "applied at export (float32)"
+        if norm.apply_at_export
+        else "applied by the trainer"
+    )
     clip = "clipped to [0, 1]" if norm.clip else "not clipped"
     return (
         f"Model input normalisation: per-image percentiles {norm.percentile_low}-"
@@ -198,13 +202,13 @@ def compose_normalization(config) -> str:
     )
 
 
-def _slugify(text: Optional[str]) -> str:
+def _slugify(text: str | None) -> str:
     """Filesystem-safe identifier (keeps alphanumerics, ``.`` ``_`` ``-``)."""
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", (text or "").strip()).strip("_")
     return slug or "export"
 
 
-def resolve_accession(config, accession: Optional[str] = None) -> str:
+def resolve_accession(config, accession: str | None = None) -> str:
     """Pick the accession used in MIFA filenames: explicit > source id > name slug."""
     return accession or config.dataset.source_dataset_id or _slugify(config.name)
 
@@ -233,7 +237,7 @@ def _import_mifa():
     return models, yaml_dumper
 
 
-def build_mifa_authors(config) -> List[Any]:
+def build_mifa_authors(config) -> list[Any]:
     """Map ``config.authors`` to MIFA ``Author`` objects (blank-name authors dropped)."""
     models, _ = _import_mifa()
     authors = []
@@ -242,7 +246,7 @@ def build_mifa_authors(config) -> List[Any]:
         if split is None:
             continue
         first, last = split
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "author_first_name": first,
             "author_last_name": last,
         }
@@ -271,7 +275,7 @@ def _spatial_information(img) -> str:
     return ",".join(bits)
 
 
-def _source_paths(config, img) -> Tuple[str, str]:
+def _source_paths(config, img) -> tuple[str, str]:
     """``(mask, image)`` paths relative to ``config.output.output_directory``.
 
     This is the annotation pipeline's own on-disk layout: ``annotation_input`` holds
@@ -284,7 +288,7 @@ def _source_paths(config, img) -> Tuple[str, str]:
     )
 
 
-def _bundle_paths(img) -> Tuple[str, str]:
+def _bundle_paths(img) -> tuple[str, str]:
     """``(mask, image)`` paths relative to the BIA submission root.
 
     The BioImage Archive prescribes no folder names - the file lists just carry paths
@@ -298,7 +302,7 @@ def _bundle_paths(img) -> Tuple[str, str]:
     )
 
 
-def _file_ids(config, img, file_id_source: str) -> Tuple[str, str]:
+def _file_ids(config, img, file_id_source: str) -> tuple[str, str]:
     """Return ``(annotation_id, source_image_id)`` for one ImageAnnotation record.
 
     ``file_id_source`` is one of ``"omero"``, ``"local"`` or ``"auto"`` (default).
@@ -316,13 +320,13 @@ def _file_ids(config, img, file_id_source: str) -> Tuple[str, str]:
     return _bundle_paths(img)
 
 
-def build_mifa_file_metadata(config, *, file_id_source: str = "auto") -> List[Any]:
+def build_mifa_file_metadata(config, *, file_id_source: str = "auto") -> list[Any]:
     """Map each ``ImageAnnotation`` to a MIFA ``FileLevelMetadata`` record."""
     models, _ = _import_mifa()
     records = []
     for img in config.annotations:
         annotation_id, source_image_id = _file_ids(config, img, file_id_source)
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "annotation_id": annotation_id,
             "annotation_type": [map_annotation_type(img.annotation_type)],
             "source_image_id": source_image_id,
@@ -334,7 +338,7 @@ def build_mifa_file_metadata(config, *, file_id_source: str = "auto") -> List[An
     return records
 
 
-def build_mifa_study(config, *, funding_statement: Optional[str] = None) -> Any:
+def build_mifa_study(config, *, funding_statement: str | None = None) -> Any:
     """Build the MIFA ``Study`` document from the config (with fallbacks for requireds)."""
     models, _ = _import_mifa()
     study = config.study
@@ -352,7 +356,7 @@ def build_mifa_study(config, *, funding_statement: Optional[str] = None) -> Any:
     ] or [_PROJECT_REPO_URL]
     funding = funding_statement or study.funding_statement or "Not specified."
 
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "title": title,
         "description": description,
         "keywords": keywords,
@@ -372,7 +376,7 @@ def build_mifa_annotations(config, *, file_id_source: str = "auto") -> Any:
     """Build the MIFA ``Annotations`` document (per-image records + summary metadata)."""
     models, _ = _import_mifa()
     meth = config.annotation_methodology
-    kwargs: Dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "annotation_overview": compose_overview(config),
         "annotation_method": compose_method(config),
     }
@@ -405,8 +409,8 @@ def build_mifa_version(config) -> Any:
 
 
 def to_mifa(
-    config, *, file_id_source: str = "auto", funding_statement: Optional[str] = None
-) -> Dict[str, Any]:
+    config, *, file_id_source: str = "auto", funding_statement: str | None = None
+) -> dict[str, Any]:
     """Build all three MIFA documents as upstream dataclass objects.
 
     Returns a dict with keys ``"study"``, ``"annotations"`` and ``"version"``.
@@ -421,12 +425,12 @@ def to_mifa(
 
 def save_mifa(
     config,
-    directory: Union[str, Path],
+    directory: str | Path,
     *,
-    accession: Optional[str] = None,
+    accession: str | None = None,
     file_id_source: str = "auto",
-    funding_statement: Optional[str] = None,
-) -> Dict[str, Path]:
+    funding_statement: str | None = None,
+) -> dict[str, Path]:
     """Write the three MIFA YAML documents to ``directory``.
 
     Files are named ``<Class>_<accession>.yaml``. Returns a dict mapping
@@ -439,7 +443,7 @@ def save_mifa(
     docs = to_mifa(
         config, file_id_source=file_id_source, funding_statement=funding_statement
     )
-    paths: Dict[str, Path] = {}
+    paths: dict[str, Path] = {}
     for key, class_name in (
         ("study", "Study"),
         ("annotations", "Annotations"),
@@ -451,7 +455,7 @@ def save_mifa(
     return paths
 
 
-def to_mifa_dicts(config, *, funding_statement: Optional[str] = None) -> Dict[str, Any]:
+def to_mifa_dicts(config, *, funding_statement: str | None = None) -> dict[str, Any]:
     """Return the three MIFA documents as plain dicts (study/annotations/version)."""
     _, yaml_dumper = _import_mifa()
     docs = to_mifa(config, funding_statement=funding_statement)
@@ -470,7 +474,7 @@ BUNDLE_IMAGE_DIR = "images"
 BUNDLE_ANNOTATION_DIR = "annotations"
 
 
-def _drop_constant_optional_columns(df: "pd.DataFrame") -> "pd.DataFrame":
+def _drop_constant_optional_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Drop optional BIA columns with < 2 distinct values (BIA guidance)."""
     for col in [c for c in df.columns if c not in _BIA_REQUIRED_COLUMNS]:
         if df[col].nunique(dropna=False) < 2:
@@ -478,7 +482,7 @@ def _drop_constant_optional_columns(df: "pd.DataFrame") -> "pd.DataFrame":
     return df
 
 
-def build_bia_file_lists(config) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
+def build_bia_file_lists(config) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build the BioImage Archive file lists (images, annotations) as DataFrames.
 
     The annotation list has ``Files`` (the mask path) as the first column and a required
@@ -486,8 +490,8 @@ def build_bia_file_lists(config) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
     (Channel/Timepoint/Z/Category) are dropped when they carry fewer than two distinct
     values. Paths are local, matching the pipeline's on-disk layout.
     """
-    ann_rows: List[Dict[str, Any]] = []
-    img_rows: List[Dict[str, Any]] = []
+    ann_rows: list[dict[str, Any]] = []
+    img_rows: list[dict[str, Any]] = []
     seen = set()
     for img in config.annotations:
         annotation_id, source_image_id = _file_ids(config, img, "local")
@@ -518,12 +522,12 @@ def build_bia_file_lists(config) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
 
 def save_bia_package(
     config,
-    dest_dir: Union[str, Path],
+    dest_dir: str | Path,
     *,
-    accession: Optional[str] = None,
-    funding_statement: Optional[str] = None,
+    accession: str | None = None,
+    funding_statement: str | None = None,
     move_data: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Assemble a self-contained BioImage Archive submission bundle in ``dest_dir``.
 
     Writes ``metadata/`` (the three MIFA YAMLs), ``file_list_images.tsv`` and
@@ -564,7 +568,7 @@ def save_bia_package(
     annotations_df.to_csv(annotations_path, sep="\t", index=False)
 
     # Map each file from where the pipeline left it to where the bundle wants it.
-    transfers: Dict[str, str] = {}
+    transfers: dict[str, str] = {}
     for img in config.annotations:
         source_mask, source_image = _source_paths(config, img)
         bundle_mask, bundle_image = _bundle_paths(img)

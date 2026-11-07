@@ -11,7 +11,6 @@ import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 
@@ -23,7 +22,7 @@ IMAGE_SHAPE = {"size_t": 2, "size_c": 2, "size_z": 3, "size_y": 64, "size_x": 80
 CHANNEL_NAMES = ["DAPI", "GFP"]
 
 
-def compose_cmd(*args: str) -> List[str]:
+def compose_cmd(*args: str) -> list[str]:
     """``docker compose`` command for the test stack."""
     return ["docker", "compose", "-p", COMPOSE_PROJECT, "-f", str(COMPOSE_FILE), *args]
 
@@ -42,12 +41,12 @@ class SeedData:
     tag: str
     project_id: int
     dataset_id: int
-    image_ids: List[int]
-    plate_id: Optional[int] = None
-    plate_image_ids: List[int] = field(default_factory=list)
+    image_ids: list[int]
+    plate_id: int | None = None
+    plate_image_ids: list[int] = field(default_factory=list)
 
 
-def _create_images(conn, dataset, tag: str, n_images: int) -> List[int]:
+def _create_images(conn, dataset, tag: str, n_images: int) -> list[int]:
     sz, sc, st = IMAGE_SHAPE["size_z"], IMAGE_SHAPE["size_c"], IMAGE_SHAPE["size_t"]
     ids = []
     for index in range(n_images):
@@ -59,10 +58,15 @@ def _create_images(conn, dataset, tag: str, n_images: int) -> List[int]:
             for t in range(st)
         )
         image = conn.createImageFromNumpySeq(
-            planes, f"{tag}_img{index}", sizeZ=sz, sizeC=sc, sizeT=st,
-            dataset=dataset, channelList=list(range(sc)),
+            planes,
+            f"{tag}_img{index}",
+            sizeZ=sz,
+            sizeC=sc,
+            sizeT=st,
+            dataset=dataset,
+            channelList=list(range(sc)),
         )
-        for channel, name in zip(image.getChannels(), CHANNEL_NAMES):
+        for channel, name in zip(image.getChannels(), CHANNEL_NAMES, strict=True):
             logical = channel.getLogicalChannel()
             logical.setName(name)
             logical.save()
@@ -70,7 +74,7 @@ def _create_images(conn, dataset, tag: str, n_images: int) -> List[int]:
     return ids
 
 
-def _import_plate(conn, tag: str, user: str, password: str) -> Optional[int]:
+def _import_plate(conn, tag: str, user: str, password: str) -> int | None:
     """Import a 2x2 fake plate inside the server container; None if that is impossible."""
     from omero.rtypes import rstring
 
@@ -83,7 +87,9 @@ def _import_plate(conn, tag: str, user: str, password: str) -> Optional[int]:
     try:
         result = subprocess.run(
             compose_cmd("exec", "-T", "omero", "sh", "-c", script),
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -134,7 +140,8 @@ def cleanup(conn, data: SeedData) -> None:
         deletions.append(("Plate", [data.plate_id]))
     for object_type, ids in deletions:
         try:
-            conn.deleteObjects(object_type, ids, deleteAnns=True,
-                               deleteChildren=True, wait=True)
+            conn.deleteObjects(
+                object_type, ids, deleteAnns=True, deleteChildren=True, wait=True
+            )
         except Exception as exc:  # cleanup must not hide test results
             print(f"Cleanup of {object_type} {ids} failed: {exc}")

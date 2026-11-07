@@ -1,6 +1,6 @@
 """Interactive widget for OMERO server connections with keychain support."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import ipywidgets as widgets
 from IPython.display import clear_output, display
@@ -17,13 +17,13 @@ class OMEROConnectionWidget:
         """Initialize the OMERO connection widget."""
         self.connection_manager = SimpleOMEROConnection()
         self.connection = None
-        self._connections_by_key: Dict[str, Dict[str, Any]] = {}
+        self._connections_by_key: dict[str, dict[str, Any]] = {}
         self._suppress_dropdown_events = False
         # A password loaded from the keychain stays here, in the kernel, rather
         # than in the password field, whose value ipywidgets can save into the
         # .ipynb. Keyed by (host, username) so it is never sent to another server.
-        self._keychain_password: Optional[str] = None
-        self._keychain_key: Optional[tuple] = None
+        self._keychain_password: str | None = None
+        self._keychain_key: tuple | None = None
         self._create_widgets()
         self._setup_observers()
         self._load_existing_config()
@@ -95,7 +95,10 @@ class OMEROConnectionWidget:
             value=False,
             description="Save password to keychain",
             style={"description_width": "initial"},
-            tooltip="When checked, your password will be securely saved and auto-loaded for future connections to this server",
+            tooltip=(
+                "When checked, your password will be securely saved and "
+                "auto-loaded for future connections to this server"
+            ),
         )
 
         self.expire_widget = widgets.Dropdown(
@@ -159,7 +162,8 @@ class OMEROConnectionWidget:
         password_options = widgets.VBox(
             [
                 widgets.HTML(
-                    "<b>Password Options</b><br><i>Note: Passwords are only saved to keychain when explicitly requested</i>"
+                    "<b>Password Options</b><br><i>Note: Passwords are only saved "
+                    "to keychain when explicitly requested</i>"
                 ),
                 self.save_password_widget,
                 self.expire_widget,
@@ -239,7 +243,7 @@ class OMEROConnectionWidget:
         return f"{host}:{username}"
 
     @staticmethod
-    def _expire_text(expire_hours: Optional[int]) -> str:
+    def _expire_text(expire_hours: int | None) -> str:
         """Describe a keychain expiry period for display."""
         if expire_hours:
             return f" (expires in {expire_hours} hours)"
@@ -272,7 +276,7 @@ class OMEROConnectionWidget:
 
         self._populate_connection_dropdown()
 
-    def _parse_port(self, value: Any) -> Optional[int]:
+    def _parse_port(self, value: Any) -> int | None:
         """Coerce a port from a config file into a value the widget accepts."""
         try:
             port = int(value)
@@ -291,7 +295,7 @@ class OMEROConnectionWidget:
             for conn in connections
         }
 
-        options = [("Manual entry", None)]
+        options: list[tuple[str, str | None]] = [("Manual entry", None)]
         for key, conn in self._connections_by_key.items():
             display_text = (
                 f"{conn['display_name']} (last used: {conn['last_used_display']})"
@@ -349,7 +353,7 @@ class OMEROConnectionWidget:
                 self._load_password_into_field(
                     connection["host"], connection["username"]
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error loading password from keychain: {e}")
 
     def _load_password_into_field(self, host: str, username: str) -> bool:
@@ -389,7 +393,7 @@ class OMEROConnectionWidget:
 
                 self._load_password_into_field(host, username)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error loading password from keychain: {e}")
 
     def _test_connection(self, button):
@@ -413,7 +417,7 @@ class OMEROConnectionWidget:
 
                 print(f"{'✅' if success else '❌'} {message}")
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error testing connection: {e}")
 
     def _connect(self, button):
@@ -429,8 +433,8 @@ class OMEROConnectionWidget:
                 self._close_existing_connection()
 
                 print("🔌 Creating connection...")
-                self.connection = (
-                    self.connection_manager.create_connection_from_config(config)
+                self.connection = self.connection_manager.create_connection_from_config(
+                    config
                 )
 
                 if not self.connection:
@@ -447,7 +451,7 @@ class OMEROConnectionWidget:
                 print("💾 Connection details saved to history")
                 self._persist_password(config)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error creating connection: {e}")
             finally:
                 # Never leave a typed password sitting in the widget model
@@ -460,20 +464,22 @@ class OMEROConnectionWidget:
 
         try:
             self.connection.close()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
             print(f"⚠️ Could not close previous connection: {e}")
         finally:
             self.connection = None
 
     def _print_connection_details(self):
         """Show who we connected as, without failing an otherwise good connection."""
+        if self.connection is None:
+            return
         try:
             print(f"👤 User: {self.connection.getUser().getName()}")
             print(f"🏢 Group: {self.connection.getGroupFromContext().getName()}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
             print(f"⚠️ Connected, but could not read user/group details: {e}")
 
-    def _persist_password(self, config: Dict[str, Any]):
+    def _persist_password(self, config: dict[str, Any]):
         """Save the password to the keychain if the user asked for it."""
         if not config["save_password"]:
             print("🔓 Password not saved (keychain saving was not requested)")
@@ -494,7 +500,7 @@ class OMEROConnectionWidget:
         else:
             print("⚠️ Password could NOT be saved to keychain")
 
-    def _get_widget_config(self) -> Dict[str, Any]:
+    def _get_widget_config(self) -> dict[str, Any]:
         """Get configuration from widget values, including the plaintext password.
 
         A typed password wins; otherwise a keychain password loaded for the same
@@ -522,7 +528,7 @@ class OMEROConnectionWidget:
             "expire_hours": self.expire_widget.value,
         }
 
-    def _validate_config(self, config: Dict[str, Any]) -> bool:
+    def _validate_config(self, config: dict[str, Any]) -> bool:
         """Validate configuration."""
         if not config["host"]:
             print("❌ Host is required")
@@ -561,7 +567,7 @@ class OMEROConnectionWidget:
                 self._populate_connection_dropdown()
                 print("✅ Connection saved successfully!")
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error saving connection: {e}")
 
     def _save_password_if_requested(self, host: str, username: str):
@@ -617,7 +623,7 @@ class OMEROConnectionWidget:
                 self._populate_connection_dropdown()
                 print("✅ Connection deleted successfully!")
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error deleting connection: {e}")
 
     def display(self):
@@ -632,7 +638,7 @@ class OMEROConnectionWidget:
         """
         return self.connection
 
-    def get_config(self, include_password: bool = False) -> Dict[str, Any]:
+    def get_config(self, include_password: bool = False) -> dict[str, Any]:
         """Get the current widget configuration.
 
         The password is left out by default: printing the returned dictionary in

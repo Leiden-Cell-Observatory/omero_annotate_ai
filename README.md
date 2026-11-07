@@ -73,7 +73,11 @@ See the [installation guide](https://leiden-cell-observatory.github.io/omero_ann
 **With widgets** (in Jupyter):
 
 ```python
-from omero_annotate_ai import create_omero_connection_widget, create_workflow_widget, create_pipeline
+from omero_annotate_ai import (
+    create_omero_connection_widget,
+    create_workflow_widget,
+    create_pipeline,
+)
 
 conn_widget = create_omero_connection_widget()
 conn_widget.display()

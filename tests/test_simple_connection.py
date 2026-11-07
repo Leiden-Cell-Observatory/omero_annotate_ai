@@ -5,6 +5,7 @@ where a secret could escape - the keychain, ``.env`` and ``~/.ezomero``.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -16,6 +17,8 @@ try:
     CONNECTION_AVAILABLE = True
 except ImportError:
     CONNECTION_AVAILABLE = False
+
+LOGGER = "omero_annotate_ai.omero.simple_connection"
 
 
 pytestmark = [
@@ -47,7 +50,6 @@ class FakeKeyring:
 
 class _GoodBackend:
     priority = 5
-
 
 
 @pytest.fixture
@@ -234,12 +236,16 @@ class TestCreateConnectionFromConfig:
 
         def fake_connect(host, username, password, group=None, secure=True, **kwargs):
             seen["password"] = password
-            return None
+            return
 
         monkeypatch.setattr(manager, "connect", fake_connect)
 
         manager.create_connection_from_config(
-            {"host": "omero.example.org", "username": "alice", "password": "  s3 cret  "}
+            {
+                "host": "omero.example.org",
+                "username": "alice",
+                "password": "  s3 cret  ",
+            }
         )
 
         assert seen["password"] == "  s3 cret  "
@@ -270,41 +276,56 @@ def _backend(module, name="Keyring", priority=1):
 class TestKeyringBackendChecks:
     """Saving refuses backends that keep nothing, and warns for plaintext ones."""
 
-    @pytest.mark.parametrize("backend", [
-        _backend("keyring.backends.fail", priority=0),
-        _backend("keyring.backends.null", priority=-1),
-        _backend("some.thirdparty", priority=0.5),
-    ])
-    def test_unusable_backend_refuses_to_save(self, manager, fake_keyring, backend, capsys):
+    @pytest.mark.parametrize(
+        "backend",
+        [
+            _backend("keyring.backends.fail", priority=0),
+            _backend("keyring.backends.null", priority=-1),
+            _backend("some.thirdparty", priority=0.5),
+        ],
+    )
+    def test_unusable_backend_refuses_to_save(
+        self, manager, fake_keyring, backend, caplog
+    ):
         fake_keyring.backend = backend
 
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is False
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert (
+                manager.save_password("omero.example.org", "alice", "s3cret") is False
+            )
         assert fake_keyring.store == {}
-        assert "no usable keyring backend" in capsys.readouterr().out
+        assert "no usable keyring backend" in caplog.text
 
-    def test_plaintext_backend_saves_with_warning(self, manager, fake_keyring, capsys):
+    def test_plaintext_backend_saves_with_warning(self, manager, fake_keyring, caplog):
         fake_keyring.backend = _backend("keyrings.alt.file", "PlaintextKeyring")
 
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is True
-        out = capsys.readouterr().out
-        assert "unencrypted" in out
-        assert "keyrings.alt.file.PlaintextKeyring" in out
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert manager.save_password("omero.example.org", "alice", "s3cret") is True
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("unencrypted" in r.getMessage() for r in warnings)
+        assert "keyrings.alt.file.PlaintextKeyring" in caplog.text
 
     def test_read_back_mismatch_is_not_reported_as_saved(
-        self, manager, fake_keyring, monkeypatch, capsys
+        self, manager, fake_keyring, monkeypatch, caplog
     ):
         monkeypatch.setattr(fake_keyring, "set_password", lambda *a: None)
 
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is False
-        assert "did not keep it" in capsys.readouterr().out
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert (
+                manager.save_password("omero.example.org", "alice", "s3cret") is False
+            )
+        assert "did not keep it" in caplog.text
 
-    def test_success_names_the_backend(self, manager, fake_keyring, capsys):
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is True
-        assert "_GoodBackend" in capsys.readouterr().out
+    def test_success_names_the_backend(self, manager, fake_keyring, caplog):
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            assert manager.save_password("omero.example.org", "alice", "s3cret") is True
+        assert "_GoodBackend" in caplog.text
 
 
 class TestForgetPassword:
-    def test_delete_without_history_row_still_removes_password(self, manager, fake_keyring):
+    def test_delete_without_history_row_still_removes_password(
+        self, manager, fake_keyring
+    ):
         manager.save_password("omero.example.org", "alice", "s3cret")
 
         assert manager.delete_connection("omero.example.org", "alice") is True
@@ -312,14 +333,14 @@ class TestForgetPassword:
 
 
 class TestHistoryMessage:
-    def test_history_message_does_not_name_user_or_host(self, manager, capsys):
+    def test_history_message_does_not_name_user_or_host(self, manager, caplog):
         manager.save_connection_details("omero.example.org", "alice", verbose=False)
 
-        manager.load_config_files()
+        with caplog.at_level(logging.INFO, logger=LOGGER):
+            manager.load_config_files()
 
-        out = capsys.readouterr().out
-        assert "connection history" in out
-        assert "alice" not in out and "omero.example.org" not in out
+        assert "connection history" in caplog.text
+        assert "alice" not in caplog.text and "omero.example.org" not in caplog.text
 
 
 class TestConnectGatewayArgs:
@@ -328,12 +349,14 @@ class TestConnectGatewayArgs:
     @pytest.fixture
     def gateway(self, monkeypatch):
         from unittest.mock import MagicMock
+
         gw_cls = MagicMock()
         monkeypatch.setattr(sc, "BlitzGateway", gw_cls)
         return gw_cls
 
-    @pytest.mark.parametrize("host", ["wss://omero.example.org/omero-ws",
-                                      "WS://omero.example.org/omero-ws"])
+    @pytest.mark.parametrize(
+        "host", ["wss://omero.example.org/omero-ws", "WS://omero.example.org/omero-ws"]
+    )
     def test_url_host_forces_secure_and_drops_port(self, manager, gateway, host):
         manager.connect(host, "alice", "pw", secure=False, port=4064, verbose=False)
 
@@ -342,8 +365,9 @@ class TestConnectGatewayArgs:
         assert "port" not in kwargs
 
     def test_plain_host_keeps_secure_and_port(self, manager, gateway):
-        manager.connect("omero.example.org", "alice", "pw", secure=False,
-                        port=4064, verbose=False)
+        manager.connect(
+            "omero.example.org", "alice", "pw", secure=False, port=4064, verbose=False
+        )
 
         kwargs = gateway.call_args.kwargs
         assert kwargs["secure"] is False
@@ -352,11 +376,15 @@ class TestConnectGatewayArgs:
     def test_gateway_closed_when_connect_returns_false(self, manager, gateway):
         gateway.return_value.connect.return_value = False
 
-        assert manager.connect("omero.example.org", "alice", "pw", verbose=False) is None
+        assert (
+            manager.connect("omero.example.org", "alice", "pw", verbose=False) is None
+        )
         gateway.return_value.close.assert_called_once()
 
     def test_gateway_closed_when_connect_raises(self, manager, gateway):
         gateway.return_value.connect.side_effect = RuntimeError("router refused")
 
-        assert manager.connect("omero.example.org", "alice", "pw", verbose=False) is None
+        assert (
+            manager.connect("omero.example.org", "alice", "pw", verbose=False) is None
+        )
         gateway.return_value.close.assert_called_once()

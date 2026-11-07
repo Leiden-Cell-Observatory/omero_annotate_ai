@@ -8,6 +8,7 @@ install-hooks`); this check catches commits made without the hook.
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 
 def main() -> int:
@@ -16,7 +17,7 @@ def main() -> int:
     ).stdout.split()
     dirty = []
     for path in paths:
-        with open(path, encoding="utf-8") as f:
+        with Path(path).open(encoding="utf-8") as f:
             notebook = json.load(f)
         for cell in notebook.get("cells", []):
             if cell.get("cell_type") == "code" and (

@@ -4,14 +4,17 @@ Most people only need the functions below, all importable from the top-level pac
 
 ```python
 from omero_annotate_ai import (
-    load_config_from_yaml, create_default_config,       # configuration
-    create_pipeline,                                    # run annotation
-    create_omero_connection_widget,                     # Jupyter widgets
-    create_workflow_widget, create_training_data_widget,
-    prepare_training_data_from_table,                   # training data
+    load_config_from_yaml,
+    create_default_config,  # configuration
+    create_pipeline,  # run annotation
+    create_omero_connection_widget,  # Jupyter widgets
+    create_workflow_widget,
+    create_training_data_widget,
+    prepare_training_data_from_table,  # training data
     reorganize_local_data_for_training,
-    setup_training, run_training,                       # micro-SAM training
-    prepare_bia_data_from_table,                        # BioImage Archive export
+    setup_training,
+    run_training,  # micro-SAM training
+    prepare_bia_data_from_table,  # BioImage Archive export
 )
 ```
 

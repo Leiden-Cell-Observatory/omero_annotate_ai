@@ -203,3 +203,6 @@ zarr_annotations/
 **/embeddings*.zarr/
 sam_embeddings/
 Untitled*.ipynb
+
+# Editor settings are personal
+.vscode/

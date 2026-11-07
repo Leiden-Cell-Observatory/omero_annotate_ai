@@ -15,28 +15,19 @@ description. Tables without it (written by versions before 0.5.0) are refused:
 old tables are not supported.
 """
 
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Iterable
 
 import pandas as pd
 
-try:
-    import ezomero
-    import omero.grid as omero_grid
-    import omero.model as omero_model
-    from omero.constants.namespaces import NSBULKANNOTATIONS
-    from omero.rtypes import rstring
-except ImportError:  # pragma: no cover - exercised only without OMERO installed
-    ezomero = None
-    omero_grid = None
-    omero_model = None
-    NSBULKANNOTATIONS = None
-    rstring = None
+from ._untyped import NSBULKANNOTATIONS, omero_grid, omero_model, omero_rtypes
+
+rstring = omero_rtypes.rstring
 
 
 TABLE_MARKER = "omero-annotate-ai table v2"
 
 # Width of each string column. Anything not listed gets DEFAULT_STRING_WIDTH.
-STRING_WIDTHS: Dict[str, int] = {
+STRING_WIDTHS: dict[str, int] = {
     "image_uri": 1024,
     "image_name": 512,
     "annotation_id": 256,
@@ -60,7 +51,9 @@ LINK_COLUMNS = {
     "image_id": ("Image", "ImageColumn", "Annotated OMERO image"),
     "roi_id": ("Roi", "RoiColumn", "ROI holding the annotation"),
 }
-_LINK_COLUMNS_REVERSED = {omero_name: df_name for df_name, (omero_name, _, _) in LINK_COLUMNS.items()}
+_LINK_COLUMNS_REVERSED = {
+    omero_name: df_name for df_name, (omero_name, _, _) in LINK_COLUMNS.items()
+}
 
 KEY_COLUMN = "annotation_id"
 
@@ -106,7 +99,9 @@ def _string_width(name: str) -> int:
     return STRING_WIDTHS.get(name, DEFAULT_STRING_WIDTH)
 
 
-def check_string_lengths(df: pd.DataFrame, widths: Optional[Dict[str, int]] = None) -> None:
+def check_string_lengths(
+    df: pd.DataFrame, widths: dict[str, int] | None = None
+) -> None:
     """Raise TableValueTooLongError if any string is wider than its column."""
     for name in df.columns:
         series = df[name]
@@ -118,14 +113,18 @@ def check_string_lengths(df: pd.DataFrame, widths: Optional[Dict[str, int]] = No
         for position, value in enumerate(series):
             text = "" if value is None else str(value)
             if len(text) > width:
-                key = df[KEY_COLUMN].iloc[position] if KEY_COLUMN in df.columns else position
+                key = (
+                    df[KEY_COLUMN].iloc[position]
+                    if KEY_COLUMN in df.columns
+                    else position
+                )
                 raise TableValueTooLongError(
                     f"Column '{name}' allows {width} characters, but row {key!r} has "
                     f"{len(text)}: {text[:60]}..."
                 )
 
 
-def build_columns(df: pd.DataFrame) -> List:
+def build_columns(df: pd.DataFrame) -> list:
     """OMERO columns for a prepared DataFrame, with fixed string widths."""
     _require_omero()
     columns = []
@@ -135,16 +134,22 @@ def build_columns(df: pd.DataFrame) -> List:
         if link is not None:
             omero_name, class_name, description = link
             column_class = getattr(omero_grid, class_name)
-            columns.append(column_class(omero_name, description, [int(v) for v in series]))
+            columns.append(
+                column_class(omero_name, description, [int(v) for v in series])
+            )
         elif pd.api.types.is_bool_dtype(series):
             columns.append(omero_grid.BoolColumn(name, "", [bool(v) for v in series]))
         elif pd.api.types.is_integer_dtype(series):
             columns.append(omero_grid.LongColumn(name, "", [int(v) for v in series]))
         elif pd.api.types.is_float_dtype(series):
-            columns.append(omero_grid.DoubleColumn(name, "", [float(v) for v in series]))
+            columns.append(
+                omero_grid.DoubleColumn(name, "", [float(v) for v in series])
+            )
         else:
             values = ["" if v is None else str(v) for v in series]
-            columns.append(omero_grid.StringColumn(name, "", _string_width(name), values))
+            columns.append(
+                omero_grid.StringColumn(name, "", _string_width(name), values)
+            )
     return columns
 
 
@@ -152,16 +157,19 @@ def _values_for(header, series: pd.Series) -> list:
     """Values of a DataFrame column converted to the type of a table column."""
     if isinstance(header, (omero_grid.BoolColumn,)):
         return [bool(v) for v in series]
-    if isinstance(header, (omero_grid.LongColumn, omero_grid.ImageColumn, omero_grid.RoiColumn)):
+    if isinstance(
+        header, (omero_grid.LongColumn, omero_grid.ImageColumn, omero_grid.RoiColumn)
+    ):
         return [int(v) for v in series]
     if isinstance(header, omero_grid.DoubleColumn):
         return [float(v) for v in series]
     return ["" if v is None else str(v) for v in series]
 
 
-def _header_widths(headers) -> Dict[str, int]:
+def _header_widths(headers) -> dict[str, int]:
     return {
-        h.name: h.size for h in headers
+        h.name: h.size
+        for h in headers
         if isinstance(h, omero_grid.StringColumn) and getattr(h, "size", None)
     }
 
@@ -209,7 +217,9 @@ def _open(conn, table_id: int):
     file_ann = check_supported(conn, table_id)
     resources = conn.c.sf.sharedResources()
     file_id = file_ann.getFile().getId()
-    table = resources.openTable(omero_model.OriginalFileI(int(file_id), False), conn.SERVICE_OPTS)
+    table = resources.openTable(
+        omero_model.OriginalFileI(int(file_id), False), conn.SERVICE_OPTS
+    )
     if table is None:
         raise ValueError(f"Could not open tracking table {table_id}")
     return table
@@ -288,7 +298,7 @@ def read_table(conn, table_id: int) -> pd.DataFrame:
         table.close()
 
 
-def write_rows(conn, table_id: int, df: pd.DataFrame) -> Dict[str, int]:
+def write_rows(conn, table_id: int, df: pd.DataFrame) -> dict[str, int]:
     """Update rows that exist (by annotation_id) and append the others.
 
     The table keeps its ID. Rows in the table that are not in ``df`` are left
@@ -313,21 +323,23 @@ def write_rows(conn, table_id: int, df: pd.DataFrame) -> Dict[str, int]:
         check_string_lengths(df, _header_widths(headers))
         key_index = [h.name for h in headers].index(KEY_COLUMN)
         n_rows = table.getNumberOfRows()
-        existing: Dict[str, int] = {}
+        existing: dict[str, int] = {}
         if n_rows:
             keys = table.read([key_index], 0, n_rows).columns[0].values
             existing = {str(k): i for i, k in enumerate(keys)}
 
         keys = df[KEY_COLUMN].astype(str)
-        to_update = df[keys.isin(existing)]
-        to_add = df[~keys.isin(existing)]
+        to_update = df.loc[keys.isin(existing)]
+        to_add = df.loc[~keys.isin(existing)]
 
         if len(to_update):
             row_numbers = [existing[str(k)] for k in to_update[KEY_COLUMN]]
             data = table.readCoordinates(row_numbers)
             # readCoordinates returns the rows in the order asked for.
             for column in data.columns:
-                column.values = _values_for(column, to_update[_df_name(column.name)])
+                column.values = _values_for(
+                    column, to_update.loc[:, _df_name(column.name)]
+                )
             table.update(data)
         if len(to_add):
             table.addData(_fill_columns(table.getHeaders(), to_add))

@@ -46,7 +46,9 @@ Load and run it:
 from omero_annotate_ai import load_config_from_yaml, create_pipeline
 
 config = load_config_from_yaml("hela_nuclei_v1.yaml")
-config.config_file_path = None     # keep this file unchanged; progress is saved in output_directory
+config.config_file_path = (
+    None  # keep this file unchanged; progress is saved in output_directory
+)
 pipeline = create_pipeline(config, conn)
 table_id, config = pipeline.run_full_micro_sam_workflow()
 ```
@@ -55,6 +57,7 @@ A fully commented template is available from Python:
 
 ```python
 from omero_annotate_ai.core.annotation_config import get_config_template
+
 print(get_config_template())
 ```
 
@@ -358,11 +361,11 @@ reuse a config for a new run.
 ```python
 from omero_annotate_ai import load_config, create_default_config
 
-config = load_config("my_run.yaml")       # also accepts a dict
+config = load_config("my_run.yaml")  # also accepts a dict
 config.save_yaml("copy.yaml")
 print(config.to_yaml())
 
-config = create_default_config()          # start from defaults
+config = create_default_config()  # start from defaults
 config.name = "new_run"
 config.omero.container_id = 123
 ```
