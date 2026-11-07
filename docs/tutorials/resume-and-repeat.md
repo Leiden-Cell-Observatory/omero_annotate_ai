@@ -7,23 +7,39 @@ set.
 ## Resume an interrupted run
 
 A training set tracked in OMERO is identified by its tracking table's ID, which never
-changes. To continue it, point the config at that table:
+changes. To continue it, open it by that ID:
 
 ```python
-from omero_annotate_ai import load_config_from_yaml, create_pipeline
+from omero_annotate_ai import TrainingSet
 
-config = load_config_from_yaml(
-    "~/omero_annotate_ai/<server>/<table id>_hela_nuclei_v1/config.yaml"
-)
-config.workflow.resume_from_table = True
-config.omero.table_id = 12345  # the table ID, shown in OMERO.web on the container
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()  # or run_cp_workflow()
+ts = TrainingSet.open(12345, conn)  # the table ID, shown in OMERO.web on the container
+ts.annotate(note="second session")
 ```
 
 The units are read back from the table and only the unfinished ones are opened, with
-the same images and patches as before. In the widget, choose *Continue Existing* on the
-table instead.
+the same images and patches as before. A local set (`storage: local`) is opened by its
+folder: `TrainingSet.open("~/omero_annotate_ai/local/<id>_<name>")`. In the widget,
+choose *Continue Existing* on the table instead.
+
+On an opened set you can change only what does not alter the existing rows:
+
+- more images: `ts.extend(train_n=10, validate_n=4)` adds images to the same table
+  (counts can only be raised);
+- the model and batch size of a session: `ts.annotate(model="vit_l_lm", batch_size=4)`.
+
+### Session notes
+
+Every session is recorded in the set's `config.yaml` (and its copy on OMERO): who
+annotated, when, how many units, and a free-text note.
+
+```python
+ts.annotate(note="nuclei only; small debris skipped")
+ts.set_session_note(2, "image 14 needs another look")  # add or change a note later
+print(ts.config.sessions)
+```
+
+A session that stopped without finishing (napari closed, kernel died) is marked
+`interrupted` the next time the set is opened.
 
 ### What resuming repairs
 
@@ -71,25 +87,21 @@ from omero_annotate_ai.core.annotation_config import get_config_template
 print(get_config_template())
 ```
 
-Remove the `annotations:` section if you copy a saved progress file, change `name` and
-the `omero` container, then:
+If you copy a set's `config.yaml`, remove its `identity` and `sessions` sections, change
+`name` and the `omero` container, then:
 
 ```python
-config = load_config_from_yaml("my_run.yaml")
-config.config_file_path = (
-    None  # keep my_run.yaml unchanged; progress goes to the working directory
-)
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+from omero_annotate_ai import TrainingSet, load_config_from_yaml
+
+config = load_config_from_yaml("my_run.yaml")  # the file itself is not changed
+ts = TrainingSet.create(config, conn)
+ts.annotate()
 ```
 
-!!! tip "Check what was read"
-    Keys that the package does not know are silently ignored, so a typo means a setting
-    is not applied. After loading, print what matters:
-    ```python
-    print(config.spatial_coverage)
-    print(config.training)
-    ```
+!!! tip "Typos are errors"
+    Unknown keys are refused when the file is loaded, and keys from older versions name
+    their replacement (for example `workflow.read_only_mode` → `storage: local`), so a
+    misspelt setting never goes unnoticed.
 
 Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-from-yaml.ipynb)
 · [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-from-yaml.py)
