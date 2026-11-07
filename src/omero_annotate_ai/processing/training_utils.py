@@ -2,27 +2,27 @@
 
 import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 
 def setup_training(
-    training_result: Dict[str, Any],
+    training_result: dict[str, Any],
     model_name: str = "",
     # Model parameters
     model_type: str = "vit_b_lm",
     # Training parameters
     epochs: int = 50,
-    n_iterations: Optional[int] = None,
+    n_iterations: int | None = None,
     batch_size: int = 2,
     learning_rate: float = 1e-5,
     # Data parameters
-    patch_shape: Union[Tuple[int, int], Tuple[int, int, int]] = (512, 512),
+    patch_shape: tuple[int, int] | tuple[int, int, int] = (512, 512),
     n_objects_per_batch: int = 25,
     # Checkpointing
     save_every: int = 1000,
     validate_every: int = 500,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Setup training configuration from training_result dict.
 
@@ -125,8 +125,8 @@ def setup_training(
 
 
 def run_training(
-    training_config: Dict[str, Any], framework: str = "microsam"
-) -> Dict[str, Any]:
+    training_config: dict[str, Any], framework: str = "microsam"
+) -> dict[str, Any]:
     """
     Execute training with framework-specific implementation.
 
@@ -143,15 +143,14 @@ def run_training(
     """
     if framework.lower() == "microsam":
         return _run_microsam_training(training_config)
-    else:
-        supported_frameworks = ["microsam"]
-        raise ValueError(
-            f"Unsupported framework: {framework}. "
-            f"Supported frameworks: {supported_frameworks}"
-        )
+    supported_frameworks = ["microsam"]
+    raise ValueError(
+        f"Unsupported framework: {framework}. "
+        f"Supported frameworks: {supported_frameworks}"
+    )
 
 
-def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
+def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
     """
     Internal micro-SAM training implementation.
 
@@ -166,9 +165,8 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         import micro_sam.training as sam_training
-        from torch_em.data import MinInstanceSampler
         import torch
-        import os
+        from torch_em.data import MinInstanceSampler
     except ImportError as e:
         raise ImportError(
             "micro-SAM dependencies not available. Install with: "
@@ -179,10 +177,10 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
     checkpoint_folder = config["checkpoint_folder"]
     checkpoint_folder.mkdir(exist_ok=True, parents=True)
 
-    print(f"Starting micro-SAM training...")
+    print("Starting micro-SAM training...")
     print(f"Model name: {config['model_name']}")
     print(f"Model type: {config['model_type']}")
-    print(f"Training configuration:")
+    print("Training configuration:")
     print(f"  Patch shape: {config['patch_shape']}")
     print(f"  Batch size: {config['batch_size']}")
     print(f"  Learning rate: {config['learning_rate']}")
@@ -314,7 +312,7 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
         },
     }
 
-    print(f"\nTraining summary:")
+    print("\nTraining summary:")
     print(f"  Model name: {config['model_name']}")
     print(f"  Output directory: {config['output_dir']}")
     print(f"  Checkpoints saved: {len(checkpoints)}")

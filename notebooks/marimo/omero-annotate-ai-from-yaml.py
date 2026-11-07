@@ -290,7 +290,7 @@ def _():
 
 @app.cell
 def _():
-    from omero_annotate_ai import load_config_from_yaml, create_pipeline
+    from omero_annotate_ai import create_pipeline, load_config_from_yaml
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection

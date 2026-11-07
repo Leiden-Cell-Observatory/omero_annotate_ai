@@ -1,9 +1,9 @@
 """Tests for image processing functions."""
 
-import pytest
 import numpy as np
+import pytest
+
 from omero_annotate_ai.processing.image_functions import (
-    generate_patch_coordinates,
     _rectangles_overlap,
 )
 
@@ -11,8 +11,8 @@ from omero_annotate_ai.processing.image_functions import (
 try:
     from omero_annotate_ai.processing.image_functions import (
         label_to_rois,
-        process_label_plane,
         mask_to_contour,
+        process_label_plane,
     )
 
     OPENCV_AVAILABLE = True

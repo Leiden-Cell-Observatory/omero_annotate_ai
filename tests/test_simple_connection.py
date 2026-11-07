@@ -233,7 +233,7 @@ class TestCreateConnectionFromConfig:
 
         def fake_connect(host, username, password, group=None, secure=True, **kwargs):
             seen["password"] = password
-            return None
+            return
 
         monkeypatch.setattr(manager, "connect", fake_connect)
 

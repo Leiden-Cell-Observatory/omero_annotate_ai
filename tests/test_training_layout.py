@@ -1,9 +1,10 @@
 """Tests for the training layout writer."""
 
-import numpy as np
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import numpy as np
+import pytest
 
 from omero_annotate_ai.processing.training_layout import (
     AnnotationRecord,

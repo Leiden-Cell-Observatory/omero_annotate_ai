@@ -196,7 +196,7 @@ def _training_set_config(image_ids, categories):
 
     config = create_default_config()
     config.name = "oai_table_layer"
-    for image_id, category in zip(image_ids, categories):
+    for image_id, category in zip(image_ids, categories, strict=True):
         config.add_annotation(
             ImageAnnotation(
                 image_id=image_id,
@@ -296,6 +296,7 @@ class TestTrackingTableOnOmero:
         self, omero_conn, omero_seed, tmp_path
     ):
         import imageio.v3 as imageio
+
         from omero_annotate_ai.omero.omero_functions import (
             create_tracking_table,
             delete_training_set,
@@ -389,6 +390,7 @@ class TestTrackingTableOnOmero:
     def test_tables_from_older_versions_are_refused(self, omero_conn, omero_seed):
         import ezomero
         import pandas as pd
+
         from omero_annotate_ai.omero import tracking_table
 
         old_id = ezomero.post_table(
@@ -428,18 +430,6 @@ class TestOMEROConnectionManagerUnit:
         dictionary with default empty values.
         """
         conn_manager = SimpleOMEROConnection()
-
-        # Environment variables to clear
-        env_vars_to_clear = [
-            "HOST",
-            "USER_NAME",
-            "GROUP",
-            "OMERO_USER",
-            "OMERO_PASSWORD",
-            "OMERO_HOST",
-            "OMERO_GROUP",
-            "OMERO_PORT",
-        ]
 
         with (
             patch.dict(os.environ, {}, clear=True),

@@ -1,17 +1,22 @@
 """Tests for well filtering functionality."""
 
+from unittest.mock import Mock, patch
+
+import pandas as pd
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+
+from omero_annotate_ai.core.annotation_config import AnnotationConfig, ZarrConfig
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-from omero_annotate_ai.core.annotation_config import AnnotationConfig
 from omero_annotate_ai.sources import ImageMeta
+from omero_annotate_ai.sources.wells import match_well_filter, normalize_well
+from omero_annotate_ai.sources.zarr_discovery import discover_zarr_images
 
 
 def _map_annotation(kv):
     ann = Mock()
     ann.OMERO_TYPE.__name__ = "MapAnnotationI"
     ann.getMapValue.return_value = [Mock(name=k, value=v) for k, v in kv.items()]
-    for item, k in zip(ann.getMapValue.return_value, kv):
+    for item, k in zip(ann.getMapValue.return_value, kv, strict=True):
         item.name = k
     return ann
 
@@ -302,7 +307,7 @@ class TestMultiContainerImageRetrieval:
             def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
                 if dataset == 1:
                     return [101, 102]
-                elif dataset == 2:
+                if dataset == 2:
                     return [201, 202]
                 return []
 
@@ -328,7 +333,7 @@ class TestMultiContainerImageRetrieval:
             def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
                 if dataset == 1:
                     return [101, 102, 103]
-                elif dataset == 2:
+                if dataset == 2:
                     return [102, 103, 104]  # 102, 103 are duplicates
                 return []
 
@@ -446,16 +451,6 @@ class TestMultiContainerTableTitle:
         title = pipeline._get_table_title()
 
         assert title == "my_custom_table"
-
-
-import warnings
-from pathlib import Path
-
-import pandas as pd
-
-from omero_annotate_ai.core.annotation_config import ZarrConfig
-from omero_annotate_ai.sources.wells import match_well_filter, normalize_well
-from omero_annotate_ai.sources.zarr_discovery import discover_zarr_images
 
 
 @pytest.mark.unit

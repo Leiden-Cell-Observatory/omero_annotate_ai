@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from typing import Any, Optional
+from typing import Any
 
 _OMERO_PREFIX = "omero:image:"
 
@@ -20,7 +20,7 @@ def omero_uri(image_id: int) -> str:
     return f"{_OMERO_PREFIX}{int(image_id)}"
 
 
-def parse_omero_uri(uri: Any) -> Optional[int]:
+def parse_omero_uri(uri: Any) -> int | None:
     """OMERO image id of ``uri``, or ``None`` when it is not an OMERO URI."""
     if isinstance(uri, str) and uri.startswith(_OMERO_PREFIX):
         rest = uri[len(_OMERO_PREFIX) :]
@@ -35,7 +35,9 @@ def normalize_zarr_uri(uri: str) -> str:
     well and field URIs join the same way on Windows)."""
     if re.match(r"^https?://", uri):
         return uri.split("?", 1)[0].rstrip("/")
-    return os.path.abspath(os.path.expanduser(uri)).replace(os.sep, "/")
+    # os.path, not pathlib: abspath normalises ".." without resolving symlinks, and
+    # the os.sep replacement keeps Windows paths joinable as URIs.
+    return os.path.abspath(os.path.expanduser(uri)).replace(os.sep, "/")  # noqa: PTH100, PTH111
 
 
 def uri_key(uri: str) -> str:
@@ -49,7 +51,7 @@ def annotation_id(
     z: int,
     *,
     volumetric: bool = False,
-    patch: Optional[int] = None,
+    patch: int | None = None,
 ) -> str:
     """Annotation id ``{key}_{t}_{z}`` (or ``{key}_{t}_3d``), plus ``_{patch}``."""
     base = f"{uri_key(uri)}_{t}_3d" if volumetric else f"{uri_key(uri)}_{t}_{z}"

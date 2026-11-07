@@ -93,6 +93,11 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "T20", "BLE", "PTH", "RET"]
 
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps code at 88; E501 only flags what it cannot wrap (long strings,
+# docstrings, comments) beyond 100.
+max-line-length = 100
+
 [tool.ruff.lint.per-file-ignores]
 # Tests and notebooks may print and use broad patterns.
 "tests/**" = ["T20", "BLE", "PTH"]

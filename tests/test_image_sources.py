@@ -11,6 +11,13 @@ from omero_annotate_ai.sources import (
     OmeroImageSource,
     clamp_region,
 )
+from omero_annotate_ai.sources.uri import (
+    annotation_id,
+    normalize_zarr_uri,
+    omero_uri,
+    parse_omero_uri,
+    uri_key,
+)
 
 
 def make_omero_image(planes, image_id=7, name="img.tif", pixels_type="uint16"):
@@ -143,15 +150,6 @@ class TestOmeroImageSource:
         self.image.getPrimaryPixels().getPlane.side_effect = RuntimeError("ice down")
         with pytest.raises(RuntimeError, match="ice down"):
             self.source.read_plane(self.image, t=0, c=0, z=0)
-
-
-from omero_annotate_ai.sources.uri import (
-    annotation_id,
-    normalize_zarr_uri,
-    omero_uri,
-    parse_omero_uri,
-    uri_key,
-)
 
 
 @pytest.mark.unit

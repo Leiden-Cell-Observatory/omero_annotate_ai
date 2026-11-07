@@ -25,7 +25,6 @@ import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Optional
 
 import numpy as np
 import pytest
@@ -46,7 +45,7 @@ def mask_value_for(image: np.ndarray) -> int:
     return int(np.asarray(image).min()) // 1000 + 1
 
 
-def mask_for(image: np.ndarray, value: Optional[int] = None) -> np.ndarray:
+def mask_for(image: np.ndarray, value: int | None = None) -> np.ndarray:
     """One rectangular object in the middle of the image (every z for volumes)."""
     image = np.asarray(image)
     value = mask_value_for(image) if value is None else value
@@ -64,10 +63,10 @@ class ScriptedAnnotator:
     closing napari after that many images in a session.
     """
 
-    def __init__(self, limit: Optional[int] = None, value: Optional[int] = None):
+    def __init__(self, limit: int | None = None, value: int | None = None):
         self.limit = limit
         self.value = value
-        self.calls: List[Dict] = []
+        self.calls: list[dict] = []
 
     def __call__(
         self,
@@ -126,7 +125,7 @@ def annotator(monkeypatch):
     monkeypatch.setattr(ap, "MICRO_SAM_AVAILABLE", True)
 
     def install(
-        limit: Optional[int] = None, value: Optional[int] = None
+        limit: int | None = None, value: int | None = None
     ) -> ScriptedAnnotator:
         scripted = ScriptedAnnotator(limit=limit, value=value)
         monkeypatch.setattr(ap, "image_series_annotator", scripted)
@@ -197,12 +196,12 @@ def table_rows(conn, table_id: int):
     return read_tracking_table(conn, table_id)
 
 
-def tagged_rois(conn, table_id: int, image_ids) -> Dict[str, List[int]]:
+def tagged_rois(conn, table_id: int, image_ids) -> dict[str, list[int]]:
     """annotation_id -> ROI IDs whose description carries this table's tag."""
     from omero_annotate_ai.omero.tracking_table import tag_prefix
 
     prefix = tag_prefix(table_id)
-    found: Dict[str, List[int]] = {}
+    found: dict[str, list[int]] = {}
     service = conn.getRoiService()
     for image_id in {int(i) for i in image_ids}:
         for roi in service.findByImage(image_id, None, conn.SERVICE_OPTS).rois:
@@ -646,6 +645,7 @@ class TestTrainingData:
         """
         pytest.importorskip("micro_sam")
         import micro_sam.training as sam_training
+
         from omero_annotate_ai.processing.training_utils import run_training
 
         table_id, config = finished_set
@@ -668,7 +668,7 @@ class TestTrainingData:
 
         for name in ("train", "val"):
             low, high, label_max = seen[name]
-            assert 0.0 <= low and high <= 255.0 and high > 1.0, (name, low, high)
+            assert low >= 0.0 and high <= 255.0 and high > 1.0, (name, low, high)
             assert label_max > 0, name
 
     @pytest.mark.slow

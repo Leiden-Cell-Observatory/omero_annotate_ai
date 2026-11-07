@@ -4,15 +4,14 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
 
 
 def setup_logger(
     name: str = "omero_annotate_ai",
     level: int = logging.INFO,
-    log_file: Optional[Union[str, Path]] = None,
+    log_file: str | Path | None = None,
     verbose: bool = False,
-    console_level: Optional[int] = None,
+    console_level: int | None = None,
     jupyter_mode: bool = None,
 ) -> logging.Logger:
     """
@@ -80,7 +79,7 @@ def setup_logger(
 
 
 def create_training_logger(
-    output_dir: Union[str, Path], verbose: bool = False, timestamp: Optional[str] = None
+    output_dir: str | Path, verbose: bool = False, timestamp: str | None = None
 ) -> logging.Logger:
     """
     Create a logger specifically for training data preparation.

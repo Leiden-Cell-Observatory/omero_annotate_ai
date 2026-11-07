@@ -8,7 +8,6 @@
 # ========================================
 
 # Standard library imports
-import logging
 import math
 import random
 import shutil
@@ -16,12 +15,13 @@ import traceback
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
+
+import ezomero
 
 # Third-party imports
 import numpy as np
 import pandas as pd
-import ezomero
 
 # Optional imports (with error handling)
 try:
@@ -39,13 +39,10 @@ except Exception:
     image_series_annotator = None
 
 # Local imports
-from .annotation_config import (
-    AnnotationConfig,
-    ImageAnnotation,
-    validate_annotations_against_config,
-)
 from ..omero.omero_functions import (
     create_tracking_table as create_omero_tracking_table,
+)
+from ..omero.omero_functions import (
     replace_table_config,
     sync_omero_table_to_config,
     upload_rois_and_labels,
@@ -56,11 +53,18 @@ from ..processing.image_functions import generate_patch_coordinates
 from ..sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
 from ..sources.uri import (
     annotation_id as make_annotation_id,
+)
+from ..sources.uri import (
     omero_uri,
     parse_omero_uri,
 )
-from ..sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 from ..sources.wells import match_well_filter
+from ..sources.zarr_discovery import ZarrImageRef, discover_zarr_images
+from .annotation_config import (
+    AnnotationConfig,
+    ImageAnnotation,
+    validate_annotations_against_config,
+)
 
 
 def _well_name(row: int, column: int) -> str:
@@ -83,8 +87,8 @@ class AnnotationPipeline:
         self,
         config: AnnotationConfig,
         conn=None,
-        config_file_path: Optional[Union[str, Path]] = None,
-        image_source: Optional[ImageSource] = None,
+        config_file_path: str | Path | None = None,
+        image_source: ImageSource | None = None,
     ):
         """Initialize the pipeline with configuration and OMERO connection.
 
@@ -102,11 +106,11 @@ class AnnotationPipeline:
             if image_source is not None
             else make_image_source(config, conn)
         )
-        self._zarr_refs: Dict[str, ZarrImageRef] = {}
+        self._zarr_refs: dict[str, ZarrImageRef] = {}
         # OMERO plate images: URI -> well, field and well key-value pairs
-        self._omero_wells: Dict[str, dict] = {}
+        self._omero_wells: dict[str, dict] = {}
         # OMERO plate images: URI -> plate id, so equal well names on two plates differ
-        self._omero_plates: Dict[str, int] = {}
+        self._omero_plates: dict[str, int] = {}
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
@@ -127,11 +131,11 @@ class AnnotationPipeline:
         self.table_id = table_id
         self.config.omero.table_id = table_id
 
-    def get_table_id(self) -> Optional[int]:
+    def get_table_id(self) -> int | None:
         """Get the current table ID."""
         return self.table_id
 
-    def save_config_to_yaml(self, file_path: Optional[Union[str, Path]] = None) -> None:
+    def save_config_to_yaml(self, file_path: str | Path | None = None) -> None:
         """Save current config state back to YAML file for persistence.
 
         Args:
@@ -256,7 +260,7 @@ class AnnotationPipeline:
             fields.update(well, well_metadata=dict(well["well_metadata"]))
         return fields
 
-    def _well_info(self, uri: str) -> Optional[Tuple[str, str, Dict[str, str]]]:
+    def _well_info(self, uri: str) -> tuple[str, str, dict[str, str]] | None:
         """(plate, well, well key-value pairs) of a plate image, else None."""
         ref = self._zarr_refs.get(uri)
         if ref is not None and ref.well:
@@ -289,7 +293,7 @@ class AnnotationPipeline:
             for key in self.config.training.stratify_by
         )
 
-    def _check_stratify_keys(self, uris: List[str]) -> None:
+    def _check_stratify_keys(self, uris: list[str]) -> None:
         """Error on a ``stratify_by`` key that no image has: most likely a typo."""
         for key in self.config.training.stratify_by:
             infos = [self._well_info(uri) for uri in uris]
@@ -303,7 +307,7 @@ class AnnotationPipeline:
                     f"Available well keys: {available + ['well']}"
                 )
 
-    def _plan_split(self, uris: List[str]) -> Dict[str, str]:
+    def _plan_split(self, uris: list[str]) -> dict[str, str]:
         """Assign images to splits, keeping every split unit within one split.
 
         Counts (``train_n``...) and fractions refer to split units (images or wells).
@@ -314,17 +318,17 @@ class AnnotationPipeline:
         training = self.config.training
         unit_name = f"{training.split_unit}s"
         self._check_stratify_keys(uris)
-        units: Dict[str, List[str]] = {}
+        units: dict[str, list[str]] = {}
         for uri in uris:
             units.setdefault(self._split_unit_key(uri), []).append(uri)
-        strata: Dict[str, List[str]] = {}
+        strata: dict[str, list[str]] = {}
         for key, unit_uris in units.items():
             strata.setdefault(self._stratum(unit_uris[0]), []).append(key)
         for keys in strata.values():
             random.shuffle(keys)
         n_total = len(units)
 
-        assignment: Dict[str, str] = {}
+        assignment: dict[str, str] = {}
         if training.segment_all:
             fractions = {
                 "validation": training.validation_fraction,
@@ -407,7 +411,7 @@ class AnnotationPipeline:
             for uri in units[key]
         }
 
-    def _prepare_processing_units(self, images_list: List[Any]) -> None:
+    def _prepare_processing_units(self, images_list: list[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
 
         # Clear existing annotations first
@@ -425,9 +429,9 @@ class AnnotationPipeline:
             for annotation in self._units_for_image(image, category):
                 self.config.add_annotation(annotation)
 
-    def _units_for_image(self, image: Any, category: str) -> List[ImageAnnotation]:
+    def _units_for_image(self, image: Any, category: str) -> list[ImageAnnotation]:
         """Processing units (timepoints, z-slices, patches) for one image."""
-        units: List[ImageAnnotation] = []
+        units: list[ImageAnnotation] = []
         image_meta = self.image_source.metadata(image)
         identity = self._identity_fields(image_meta)
         image_uri = identity["image_uri"]
@@ -540,7 +544,7 @@ class AnnotationPipeline:
                         units.append(annotation)
         return units
 
-    def _upload_annotation_config_to_omero(self) -> Optional[int]:
+    def _upload_annotation_config_to_omero(self) -> int | None:
         """Replace the training set's one config YAML on OMERO with the local one."""
         if self.table_id in (None, -1) or self.config_file_path is None:
             return None
@@ -552,7 +556,7 @@ class AnnotationPipeline:
             container_id=self.config.omero.get_primary_container_id(),
         )
 
-    def _get_timepoints_for_image(self, image) -> List[int]:
+    def _get_timepoints_for_image(self, image) -> list[int]:
         """Get timepoints to process for an image based on configuration."""
         max_t = self.image_source.metadata(image).size_t
 
@@ -568,7 +572,7 @@ class AnnotationPipeline:
         else:  # specific
             return [t for t in self.config.spatial_coverage.timepoints if t < max_t]
 
-    def _get_z_slices_for_image(self, image) -> List[int]:
+    def _get_z_slices_for_image(self, image) -> list[int]:
         """Get z-slices to process for an image based on configuration."""
         max_z = self.image_source.metadata(image).size_z
 
@@ -586,7 +590,7 @@ class AnnotationPipeline:
 
     def _generate_patch_coordinates(
         self, image
-    ) -> Tuple[List[Tuple[int, int]], List[int]]:
+    ) -> tuple[list[tuple[int, int]], list[int]]:
         """Generate patch coordinates for an image and return actual patch size."""
         patch_size = self.config.spatial_coverage.patch_size
         patches_per_image = self.config.spatial_coverage.patches_per_image
@@ -604,7 +608,7 @@ class AnnotationPipeline:
 
         return coordinates, actual_patch_size
 
-    def _run_micro_sam_annotation(self, batch_data: List[Tuple]) -> dict:
+    def _run_micro_sam_annotation(self, batch_data: list[tuple]) -> dict:
         """Run micro-SAM annotation on a batch of data."""
         # Single comprehensive dependency check for micro-SAM annotation
         if not MICRO_SAM_AVAILABLE or napari is None or image_series_annotator is None:
@@ -712,7 +716,7 @@ class AnnotationPipeline:
         return image_data
 
     def _load_and_stack_channels(
-        self, image_obj, meta: dict, channel_indices: List[int]
+        self, image_obj, meta: dict, channel_indices: list[int]
     ) -> np.ndarray:
         """Load multiple channels and stack them channels-last: (Y,X,C) or (Z,Y,X,C)."""
         arrays = [
@@ -721,7 +725,7 @@ class AnnotationPipeline:
         ]
         return np.stack(arrays, axis=-1)
 
-    def _build_context_images(self, batch_data: List[Tuple]) -> List[dict]:
+    def _build_context_images(self, batch_data: list[tuple]) -> list[dict]:
         """Build context_images parallel list for the context channel hook.
 
         Returns a list of dicts, one per batch item. Each dict maps
@@ -745,8 +749,8 @@ class AnnotationPipeline:
     def _install_context_channel_hook(
         self,
         viewer,
-        images: List,
-        context_images: List[dict],
+        images: list,
+        context_images: list[dict],
     ) -> None:
         """Install a napari events.data hook that keeps context layers in sync.
 
@@ -989,7 +993,7 @@ class AnnotationPipeline:
                 )
 
     def _save_image_to_disk(
-        self, image_data: np.ndarray, file_path: Path, axes: Optional[str] = None
+        self, image_data: np.ndarray, file_path: Path, axes: str | None = None
     ) -> bool:
         """Save image data to disk using tifffile (preferred) or imageio fallback.
 
@@ -1030,7 +1034,7 @@ class AnnotationPipeline:
 
     def _save_training_image(
         self, image_obj, meta: dict, annotation_id: str, output_folder: Path
-    ) -> Optional[Path]:
+    ) -> Path | None:
         """Save an image for training/annotation purposes.
 
         Args:
@@ -1099,7 +1103,7 @@ class AnnotationPipeline:
         return kv_pairs
 
     def _check_well_filter(
-        self, well_kv_pairs: dict, filters: Dict[str, List[str]]
+        self, well_kv_pairs: dict, filters: dict[str, list[str]]
     ) -> bool:
         """Check if well key-value pairs match filter criteria.
 
@@ -1114,7 +1118,7 @@ class AnnotationPipeline:
         """
         return match_well_filter(well_kv_pairs, filters)
 
-    def _get_image_ids_from_plate(self, container_id: int) -> List[int]:
+    def _get_image_ids_from_plate(self, container_id: int) -> list[int]:
         """Get image IDs from a single plate, applying well filters if configured.
 
         Args:
@@ -1164,7 +1168,7 @@ class AnnotationPipeline:
 
     def _get_image_ids_from_single_container(
         self, container_type: str, container_id: int
-    ) -> List[int]:
+    ) -> list[int]:
         """Get image IDs from a single OMERO container.
 
         Args:
@@ -1195,7 +1199,7 @@ class AnnotationPipeline:
         else:
             raise ValueError(f"Unsupported container type: {container_type}")
 
-    def get_image_uris(self) -> List[str]:
+    def get_image_uris(self) -> list[str]:
         """URIs of the images the config selects (OMERO container or OME-Zarr URIs)."""
         if self.config.source == "zarr":
             refs = discover_zarr_images(
@@ -1206,7 +1210,7 @@ class AnnotationPipeline:
             return list(self._zarr_refs)
         return [omero_uri(i) for i in self.get_image_ids_from_container()]
 
-    def get_image_ids_from_container(self) -> List[int]:
+    def get_image_ids_from_container(self) -> list[int]:
         """Get image IDs from the configured OMERO container(s).
 
         Supports multiple containers of the same type via container_ids.
@@ -1243,7 +1247,7 @@ class AnnotationPipeline:
 
         return unique_image_ids
 
-    def get_images_by_ids(self, image_ids: List[int]) -> List[Any]:
+    def get_images_by_ids(self, image_ids: list[int]) -> list[Any]:
         """Get image handles for the given image IDs, skipping ones that do not exist."""
         images = []
         for img_id in image_ids:
@@ -1254,7 +1258,7 @@ class AnnotationPipeline:
         print(f"Loaded {len(images)} images (by ID)")
         return images
 
-    def get_images_from_container(self) -> List[Any]:
+    def get_images_from_container(self) -> list[Any]:
         """Get OMERO image objects from the configured container.
 
         Returns:
@@ -1264,7 +1268,7 @@ class AnnotationPipeline:
         return self.get_images_by_ids(image_ids)
 
     def _save_local_progress(
-        self, completed_row_indices: List[int], metadata: List[Tuple]
+        self, completed_row_indices: list[int], metadata: list[tuple]
     ) -> None:
         """Save progress locally in read-only mode by creating/updating a CSV table."""
         output_path = Path(self.config.output.output_directory)
@@ -1371,8 +1375,8 @@ class AnnotationPipeline:
         return self.table_id
 
     def initialize_workflow(
-        self, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, List[Any]]:
+        self, images_list: list[Any] | None = None
+    ) -> tuple[int, list[Any]]:
         """Initialize the workflow: setup directories, load only required images, handle resume logic.
 
         Args:
@@ -1417,7 +1421,7 @@ class AnnotationPipeline:
         table_id = self.table_id if self.table_id is not None else -1
         return table_id, images_list
 
-    def define_annotation_schema(self, images_list: List[Any]) -> AnnotationConfig:
+    def define_annotation_schema(self, images_list: list[Any]) -> AnnotationConfig:
         """Define the annotation schema by populating config.annotations.
 
         Args:
@@ -1544,8 +1548,8 @@ class AnnotationPipeline:
         return self.table_id
 
     def _convert_annotations_to_processing_units(
-        self, annotations: List
-    ) -> List[Tuple]:
+        self, annotations: list
+    ) -> list[tuple]:
         """Convert annotation objects to processing unit format.
 
         Args:
@@ -1576,7 +1580,7 @@ class AnnotationPipeline:
         return processing_units
 
     def _run_annotation_batches(
-        self, processing_units: List[Tuple], annotation_func
+        self, processing_units: list[tuple], annotation_func
     ) -> int:
         """Run annotation function on batches of processing units.
 
@@ -1673,7 +1677,7 @@ class AnnotationPipeline:
         else:
             print("Workflow failed - no units were processed")
 
-    def run_microsam_annotation(self) -> Tuple[int, AnnotationConfig]:
+    def run_microsam_annotation(self) -> tuple[int, AnnotationConfig]:
         """Run micro-SAM annotation workflow on unprocessed annotations.
 
         Returns:
@@ -1711,11 +1715,11 @@ class AnnotationPipeline:
             self.table_id = -1
         return self.table_id, self.config
 
-    def run_micro_sam_annotation(self) -> Tuple[int, AnnotationConfig]:
+    def run_micro_sam_annotation(self) -> tuple[int, AnnotationConfig]:
         """Alias for run_microsam_annotation for backward compatibility."""
         return self.run_microsam_annotation()
 
-    def run_cellpose_preparation(self) -> Tuple[int, AnnotationConfig]:
+    def run_cellpose_preparation(self) -> tuple[int, AnnotationConfig]:
         """Run Cellpose preparation workflow - save images locally for training.
 
         Returns:
@@ -1759,7 +1763,7 @@ class AnnotationPipeline:
         table_id = self.table_id if self.table_id is not None else -1
         return table_id, self.config
 
-    def _save_images_for_cellpose(self, processing_units: List[Tuple]) -> None:
+    def _save_images_for_cellpose(self, processing_units: list[tuple]) -> None:
         """Save images locally for Cellpose training.
 
         Single-channel: saves to annotation_input/{annotation_id}.tif
@@ -1900,7 +1904,7 @@ class AnnotationPipeline:
 
     def collect_annotations_from_disk(
         self, folder_pattern: str = "annotation_output"
-    ) -> Tuple[int, AnnotationConfig]:
+    ) -> tuple[int, AnnotationConfig]:
         """Collect annotation masks from disk and upload to OMERO.
 
         This method scans output folder(s) for annotation masks, matches them with
@@ -2045,8 +2049,8 @@ class AnnotationPipeline:
         return status
 
     def run_cp_workflow(
-        self, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, AnnotationConfig]:
+        self, images_list: list[Any] | None = None
+    ) -> tuple[int, AnnotationConfig]:
         """Complete Cellpose workflow: setup + schema + table + preparation.
 
         Args:
@@ -2069,8 +2073,8 @@ class AnnotationPipeline:
 
     # Convenience methods for common workflows
     def run_full_microsam_workflow(
-        self, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, AnnotationConfig]:
+        self, images_list: list[Any] | None = None
+    ) -> tuple[int, AnnotationConfig]:
         """Complete micro-SAM workflow: setup + schema + table + annotation.
 
         Args:
@@ -2092,19 +2096,19 @@ class AnnotationPipeline:
         return self.run_microsam_annotation()
 
     def run_full_micro_sam_workflow(
-        self, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, AnnotationConfig]:
+        self, images_list: list[Any] | None = None
+    ) -> tuple[int, AnnotationConfig]:
         """Alias for run_full_microsam_workflow for backward compatibility."""
         return self.run_full_microsam_workflow(images_list)
 
     def prepare_training_data_from_local(
         self,
-        output_dir: Optional[Union[str, Path]] = None,
+        output_dir: str | Path | None = None,
         file_mode: str = "copy",
         clean_existing: bool = True,
         include_test: bool = False,
         verbose: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Reorganize locally-stored annotation data into training folder structure.
 
         This is a convenience method that wraps reorganize_local_data_for_training().
@@ -2150,8 +2154,8 @@ class AnnotationPipeline:
         )
 
     def run_custom_annotation(
-        self, annotation_func, images_list: Optional[List[Any]] = None
-    ) -> Tuple[int, AnnotationConfig]:
+        self, annotation_func, images_list: list[Any] | None = None
+    ) -> tuple[int, AnnotationConfig]:
         """Run a custom annotation function with the standard workflow.
 
         Args:
@@ -2199,7 +2203,7 @@ class AnnotationPipeline:
 def create_pipeline(
     config: AnnotationConfig,
     conn=None,
-    config_file_path: Optional[Union[str, Path]] = None,
+    config_file_path: str | Path | None = None,
 ) -> AnnotationPipeline:
     """Create a micro-SAM annotation pipeline with the given configuration.
 

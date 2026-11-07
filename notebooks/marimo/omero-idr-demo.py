@@ -570,8 +570,8 @@ def _():
 
 @app.cell
 def _():
-    from pathlib import Path
     from datetime import datetime
+    from pathlib import Path
 
     return Path, datetime
 
@@ -582,8 +582,8 @@ def _():
         create_default_config,
         create_pipeline,
         reorganize_local_data_for_training,
-        setup_training,
         run_training,
+        setup_training,
     )
 
     try:

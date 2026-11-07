@@ -23,7 +23,7 @@ from __future__ import annotations
 import shutil
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 import ezomero
 import numpy as np
@@ -43,7 +43,7 @@ MASK_DIR = "annotation_output"
 IMAGE_DIR = "annotation_input"
 
 
-def _non_negative(value: Optional[int], default: int = 0) -> int:
+def _non_negative(value: int | None, default: int = 0) -> int:
     """Coerce an ImageAnnotation coordinate to a usable index (``-1``/None -> default)."""
     if value is None:
         return default
@@ -51,7 +51,7 @@ def _non_negative(value: Optional[int], default: int = 0) -> int:
     return value if value >= 0 else default
 
 
-def _z_slices(annotation: "ImageAnnotation") -> List[int]:
+def _z_slices(annotation: ImageAnnotation) -> list[int]:
     """Z indices to fetch: the volume's range for 3D records, one plane otherwise."""
     if not annotation.is_volumetric:
         return [_non_negative(annotation.z_slice)]
@@ -62,7 +62,7 @@ def _z_slices(annotation: "ImageAnnotation") -> List[int]:
 
 
 def _fetch_plane(
-    conn: Any, annotation: "ImageAnnotation", z: int, channel: int, timepoint: int
+    conn: Any, annotation: ImageAnnotation, z: int, channel: int, timepoint: int
 ) -> np.ndarray:
     """Fetch one 2D plane (or patch) from OMERO as a ``(y, x)`` array, native dtype.
 
@@ -120,7 +120,7 @@ def _fetch_plane(
     return pixels
 
 
-def _write_image(conn: Any, annotation: "ImageAnnotation", dest: Path) -> None:
+def _write_image(conn: Any, annotation: ImageAnnotation, dest: Path) -> None:
     """Fetch the plane/patch/volume for one annotation and write it to ``dest``.
 
     No intensity rescaling: the array is written at the dtype OMERO returned.
@@ -178,10 +178,10 @@ def _clean_data_dirs(output_dir: Path) -> None:
 def prepare_bia_data_from_table(
     conn: Any,
     table_id: int,
-    output_dir: Union[str, Path],
-    config: Optional["AnnotationConfig"] = None,
+    output_dir: str | Path,
+    config: AnnotationConfig | None = None,
     clean_existing: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Download the data referenced by an OMERO annotation table for a BIA export.
 
     Loads the table, rebuilds the annotation records from it (each carries a unique
@@ -208,12 +208,14 @@ def prepare_bia_data_from_table(
     Args:
         conn: OMERO connection (``BlitzGateway``).
         table_id: OMERO ID of the annotation table (``OriginalFile``).
-        output_dir: Directory to write the ``annotation_input`` and ``annotation_output`` trees into.
+        output_dir: Directory to write the ``annotation_input`` and
+            ``annotation_output`` trees into.
         config: Annotation config, **mutated in place**: its ``annotations`` are rebuilt from
             the table (as :func:`sync_omero_table_to_config` does), then pruned to the
             exported records, so the ids on disk match the ones the MIFA/BIA file lists
             reference. A default config is used when omitted.
-        clean_existing: Remove existing ``annotation_input``/``annotation_output`` directories first.
+        clean_existing: Remove existing ``annotation_input``/``annotation_output``
+            directories first.
 
     Returns:
         Dict with ``output_dir``, ``n_images``, ``n_masks``, ``skipped_unprocessed``
@@ -253,7 +255,7 @@ def prepare_bia_data_from_table(
     n_masks = 0
     skipped_unprocessed = 0
     skipped_no_mask = 0
-    exported: List["ImageAnnotation"] = []
+    exported: list[ImageAnnotation] = []
 
     try:
         for annotation in config.annotations:
@@ -269,7 +271,7 @@ def prepare_bia_data_from_table(
             try:
                 _write_image(conn, annotation, image_dir / f"{annotation_id}.tif")
                 n_images += 1
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best effort per record
                 warnings.warn(
                     f"Failed to export image for annotation {annotation_id!r} "
                     f"(image {annotation.image_id}): {exc}",
@@ -287,7 +289,7 @@ def prepare_bia_data_from_table(
                 ):
                     n_masks += 1
                     exported.append(annotation)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best effort per record
                 warnings.warn(
                     f"Failed to export mask for annotation {annotation_id!r} "
                     f"(label {annotation.label_id}): {exc}",

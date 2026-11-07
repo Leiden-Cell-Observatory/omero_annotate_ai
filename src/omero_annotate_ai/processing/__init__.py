@@ -14,10 +14,9 @@ from .training_functions import (
     reorganize_local_data_for_training,
 )
 from .training_utils import (
-    setup_training,
     run_training,
+    setup_training,
 )
-
 from .utils import (
     validate_table_schema,
 )

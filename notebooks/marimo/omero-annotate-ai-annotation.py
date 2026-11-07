@@ -465,8 +465,8 @@ def _():
 
 @app.cell
 def _():
-    from pathlib import Path
     from datetime import datetime
+    from pathlib import Path
 
     return Path, datetime
 

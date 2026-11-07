@@ -6,6 +6,7 @@ segment_all flag, catching invalid configurations that would cause runtime error
 
 import pytest
 from pydantic import ValidationError
+
 from omero_annotate_ai.core.annotation_config import TrainingConfig
 
 

@@ -47,8 +47,8 @@ def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
     if not pd.api.types.is_numeric_dtype(df["image_id"]):
         try:
             pd.to_numeric(df["image_id"], errors="raise")
-        except (ValueError, TypeError):
-            raise ValueError("Column 'image_id' contains non-numeric data")
+        except (ValueError, TypeError) as e:
+            raise ValueError("Column 'image_id' contains non-numeric data") from e
 
     # Log optional columns that are available
     available_optional = optional_columns.intersection(set(df.columns))

@@ -5,12 +5,12 @@ This module provides reusable utilities for common OMERO operations that are
 useful across different workflows and not specific to micro-SAM annotation.
 """
 
-from typing import List, Dict, Optional, Any, Tuple
-import numpy as np
-import dask.array as da
-from dask.delayed import delayed
-import ezomero
+from typing import Any
 
+import dask.array as da
+import ezomero
+import numpy as np
+from dask.delayed import delayed
 
 # =============================================================================
 # Table Management Utilities
@@ -19,7 +19,7 @@ import ezomero
 
 def list_user_tables(
     conn, container_type: str = None, container_id: int = None, namespace: str = None
-) -> List[Dict]:
+) -> list[dict]:
     """List all OMERO.tables accessible to the user.
 
     Args:
@@ -66,7 +66,7 @@ def list_user_tables(
                         date = file_ann.getDate()
                         if date:
                             created = date.isoformat()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
                         pass
 
                     tables.append(
@@ -80,14 +80,14 @@ def list_user_tables(
                             "namespace": file_ann.getNs() or "",
                         }
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
                     continue
         else:
             print(
                 "Tip: Specify container_type and container_id for more efficient search"
             )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         print(f"Error listing tables: {e}")
 
     return tables
@@ -124,14 +124,14 @@ def delete_table(conn, table_id: int) -> bool:
         print(f"Successfully deleted table {table_id}")
         return True
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         print(f"Error deleting table {table_id}: {e}")
         return False
 
 
 def validate_table_schema(
-    conn, table_id: int, expected_columns: List[str]
-) -> Tuple[bool, List[str]]:
+    conn, table_id: int, expected_columns: list[str]
+) -> tuple[bool, list[str]]:
     """Validate that table has expected columns.
 
     Args:
@@ -164,7 +164,7 @@ def validate_table_schema(
 
         return is_valid, missing_columns
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         print(f"Error validating table {table_id}: {e}")
         return False, expected_columns
 
@@ -176,7 +176,7 @@ def validate_table_schema(
 
 def list_annotations_by_namespace(
     conn, object_type: str, object_id: int, namespace: str
-) -> List[Dict]:
+) -> list[dict]:
     """List annotations by namespace.
 
     Args:
@@ -213,12 +213,12 @@ def list_annotations_by_namespace(
                             else 0,
                         }
                     )
-            except Exception:
+            except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
                 continue
 
         print(f"Found {len(annotations)} annotations with namespace '{namespace}'")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         print(f"Error listing annotations: {e}")
 
     return annotations
@@ -254,7 +254,7 @@ def delete_annotations_by_namespace(
         print(f"Deleted {len(ann_ids)} annotations with namespace '{namespace}'")
         return len(ann_ids)
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         print(f"Error deleting annotations: {e}")
         return 0
 
@@ -266,7 +266,7 @@ def delete_annotations_by_namespace(
 
 def get_container_info(
     conn, container_type: str, container_id: int
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Get summary information about a container (Project, Dataset, etc.).
 
     Args:
@@ -370,21 +370,21 @@ def get_container_info(
 
         return info
 
-    except Exception:
+    except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         return None
 
 
-def _channel_labels(image) -> Optional[List[str]]:
+def _channel_labels(image) -> list[str] | None:
     """Channel names of an OMERO image, or None if they cannot be read."""
     if image is None:
         return None
     try:
         return [str(label) for label in image.getChannelLabels()]
-    except Exception:
+    except Exception:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
         return None
 
 
-def _spread_sample(items: List[Any], n: int) -> List[Any]:
+def _spread_sample(items: list[Any], n: int) -> list[Any]:
     """Up to n items spread evenly across the list, always including the last."""
     if len(items) <= n:
         return list(items)
@@ -398,7 +398,7 @@ def _spread_sample(items: List[Any], n: int) -> List[Any]:
 
 
 def _create_dask_array_for_image(
-    conn, image, timepoints: List[int], channels: List[int], z_slices: List[int]
+    conn, image, timepoints: list[int], channels: list[int], z_slices: list[int]
 ):
     """Create a dask array for a single OMERO image with lazy loading.
 
@@ -434,10 +434,9 @@ def _create_dask_array_for_image(
                 return np.zeros((height, width), dtype=np.uint16)
 
             pix = img.getPrimaryPixels()
-            plane_data = pix.getPlane(z_idx, c_idx, t_idx)
-            return plane_data
+            return pix.getPlane(z_idx, c_idx, t_idx)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - best effort: OMERO/Ice raise many unrelated types
             print(
                 f"Error loading plane {z_idx},{c_idx},{t_idx} for image {image_id}: {e}"
             )
@@ -451,14 +450,9 @@ def _create_dask_array_for_image(
     chunk_size = min(1024, height, width)
     chunks = (chunk_size, chunk_size)
 
-    dask_array = da.from_delayed(
+    return da.from_delayed(
         delayed_plane,
         shape=(height, width),
         dtype=np.uint16,
         meta=np.array([], dtype=np.uint16),
-    )
-
-    # Rechunk for better performance
-    dask_array = dask_array.rechunk(chunks)
-
-    return dask_array
+    ).rechunk(chunks)

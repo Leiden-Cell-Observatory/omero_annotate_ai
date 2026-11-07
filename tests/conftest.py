@@ -1,17 +1,18 @@
 """Simple pytest configuration and fixtures for testing."""
 
-import numpy as np
-import pytest
-import time
-import subprocess
 import os
+import subprocess
 import tempfile
+import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 from unittest.mock import Mock
 
+import numpy as np
+import pytest
+
 try:
-    import ezomero
+    import ezomero  # noqa: F401 - availability check
     from omero.gateway import BlitzGateway
 
     OMERO_AVAILABLE = True
@@ -125,7 +126,7 @@ OMERO_READY_TIMEOUT = 600  # seconds; a cold start takes a few minutes
 
 
 @pytest.fixture(scope="session")
-def omero_params() -> Dict[str, Any]:
+def omero_params() -> dict[str, Any]:
     """Connection parameters of the test server (overridable by environment)."""
     return {
         "host": os.environ.get("OAI_OMERO_HOST", "localhost"),

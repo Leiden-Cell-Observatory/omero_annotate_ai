@@ -1,22 +1,44 @@
 """Tests for OMERO integration functions."""
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-import pandas as pd
-import numpy as np
-import tempfile
+import json
 from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
 
+import numpy as np
+import pandas as pd
+import pytest
+
+from omero_annotate_ai.core.annotation_config import (
+    AIModelConfig,
+    AnnotationConfig,
+    AnnotationMethodology,
+    DatasetInfo,
+    FeatureType,
+    ImageAnnotation,
+    OMEROConfig,
+    OutputConfig,
+    SpatialCoverage,
+    StudyContext,
+    TrainingConfig,
+    WorkflowConfig,
+)
 from omero_annotate_ai.omero.omero_functions import (
-    upload_rois_and_labels,
-    link_table_to_containers,
+    CONFIG_NS,
     create_tracking_table,
+    generate_set_id,
+    generate_unique_table_name,
+    geojson_namespace,
+    link_table_to_containers,
+    list_annotation_tables,
+    list_manifests_from_omero,
+    load_geojson_from_omero,
+    load_manifest_from_omero,
+    manifest_namespace,
+    merge_geojson_patches,
     replace_table_config,
     sync_omero_table_to_config,
+    upload_rois_and_labels,
     write_config_to_table,
-    generate_unique_table_name,
-    list_annotation_tables,
-    CONFIG_NS,
 )
 from omero_annotate_ai.omero.omero_utils import list_user_tables
 
@@ -152,20 +174,24 @@ class TestWriteAndSyncTable:
         assert list(write.call_args.args[2]["annotation_id"]) == ["a0", "a1", "a2"]
 
     def test_sync_raises_on_empty_table(self):
-        with patch(
-            "omero_annotate_ai.omero.omero_functions.read_tracking_table",
-            return_value=pd.DataFrame(),
+        with (
+            patch(
+                "omero_annotate_ai.omero.omero_functions.read_tracking_table",
+                return_value=pd.DataFrame(),
+            ),
+            pytest.raises(ValueError, match="no rows"),
         ):
-            with pytest.raises(ValueError, match="no rows"):
-                sync_omero_table_to_config(Mock(), 7, Mock())
+            sync_omero_table_to_config(Mock(), 7, Mock())
 
     def test_sync_raises_when_read_fails(self):
-        with patch(
-            "omero_annotate_ai.omero.omero_functions.read_tracking_table",
-            side_effect=RuntimeError("network"),
+        with (
+            patch(
+                "omero_annotate_ai.omero.omero_functions.read_tracking_table",
+                side_effect=RuntimeError("network"),
+            ),
+            pytest.raises(RuntimeError),
         ):
-            with pytest.raises(RuntimeError):
-                sync_omero_table_to_config(Mock(), 7, Mock())
+            sync_omero_table_to_config(Mock(), 7, Mock())
 
 
 @pytest.mark.unit
@@ -355,35 +381,6 @@ class TestListAnnotationTablesSortsByCreated:
 # =============================================================================
 # Manifest and GeoJSON persistence tests
 # =============================================================================
-
-import json
-from omero_annotate_ai.omero.omero_functions import (
-    generate_set_id,
-    manifest_namespace,
-    geojson_namespace,
-    save_manifest_to_omero,
-    load_manifest_from_omero,
-    list_manifests_from_omero,
-    delete_manifest_from_omero,
-    save_geojson_to_omero,
-    load_geojson_from_omero,
-    merge_geojson_patches,
-)
-from omero_annotate_ai.core.annotation_config import (
-    AnnotationConfig,
-    StudyContext,
-    DatasetInfo,
-    AnnotationMethodology,
-    SpatialCoverage,
-    TrainingConfig,
-    AIModelConfig,
-    WorkflowConfig,
-    OutputConfig,
-    OMEROConfig,
-    FeatureType,
-    ImageAnnotation,
-    ChannelPresentation,
-)
 
 
 def _make_test_config():
@@ -682,9 +679,11 @@ class TestTrackingTableModule:
         df = pd.DataFrame(
             {"annotation_id": ["x" * 300], "processed": [False], "roi_id": [0]}
         )
-        with patch.object(tt, "_open", return_value=table):
-            with pytest.raises(tt.TableValueTooLongError, match="annotation_id"):
-                tt.write_rows(Mock(), 7, df)
+        with (
+            patch.object(tt, "_open", return_value=table),
+            pytest.raises(tt.TableValueTooLongError, match="annotation_id"),
+        ):
+            tt.write_rows(Mock(), 7, df)
         table.addData.assert_not_called()
         table.close.assert_called_once()
 
@@ -889,7 +888,7 @@ class TestInferSettingsFromTable:
 
         rows = []
         for img, category in [(1, "training"), (2, "training"), (3, "validation")]:
-            for patch in range(2):
+            for patch_index in range(2):
                 rows.append(
                     {
                         "image_uri": f"omero:image:{img}",
@@ -901,7 +900,7 @@ class TestInferSettingsFromTable:
                         "patch_height": 128,
                         "timepoint": 0,
                         "z_slice": 0,
-                        "annotation_id": f"{img}_{patch}",
+                        "annotation_id": f"{img}_{patch_index}",
                     }
                 )
         settings = infer_settings_from_table(pd.DataFrame(rows))
@@ -1114,7 +1113,6 @@ class TestLabelUpload:
 
     def test_upload_is_compressed_lossless_and_tagged(self, tmp_path):
         import tifffile
-        from omero_annotate_ai.omero.omero_functions import upload_rois_and_labels
 
         mask = np.zeros((40, 50), np.uint16)
         mask[5:15, 5:20] = 1

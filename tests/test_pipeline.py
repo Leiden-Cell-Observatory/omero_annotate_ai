@@ -1,22 +1,25 @@
 """Tests for the annotation pipeline."""
 
-import pytest
-from unittest.mock import patch, Mock, MagicMock
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
+
 import numpy as np
 import pandas as pd
+import pytest
 import tifffile
 
-from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     ImageAnnotation,
     create_default_config,
 )
+from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
 from omero_annotate_ai.sources.uri import (
     annotation_id as make_annotation_id,
+)
+from omero_annotate_ai.sources.uri import (
     omero_uri,
     parse_omero_uri,
 )
@@ -250,7 +253,7 @@ class TestAnnotationPipeline:
 
         # Should raise ValueError when no connection provided
         with pytest.raises(ValueError, match="OMERO connection is required"):
-            pipeline = AnnotationPipeline(config, conn=None)
+            AnnotationPipeline(config, conn=None)
 
     def test_pipeline_initialization_with_connection(self):
         """Test pipeline initialization with mock connection."""
@@ -540,7 +543,7 @@ class TestAnnotationPipeline:
         assert categories.count("validation") == 2  # 1 image × 2 patches
 
     def test_prepare_processing_units_with_patches_too_many(self):
-        """Test preparing processing units with patch processing. Test when patches too many patches to fit the image."""
+        """Patch processing when more patches are requested than fit in the image."""
         config = create_default_config()
         config.spatial_coverage.use_patches = True
         config.spatial_coverage.patches_per_image = 2
@@ -577,7 +580,7 @@ class TestAnnotationPipeline:
         assert categories.count("validation") == 1  # 1 image × 1 patches
 
     def test_prepare_processing_units_with_patches_small_image(self):
-        """Test preparing processing units with patch processing. Test when patches are larger than image."""
+        """Patch processing when the patches are larger than the image."""
         config = create_default_config()
         config.spatial_coverage.use_patches = True
         config.spatial_coverage.patches_per_image = 2
@@ -649,7 +652,7 @@ class TestAnnotationPipeline:
     def test_config_annotation_management(self):
         """Test config annotation management methods."""
         config = create_default_config()
-        pipeline = AnnotationPipeline(config, conn=Mock())
+        AnnotationPipeline(config, conn=Mock())
 
         # Add test annotations
         from omero_annotate_ai.core.annotation_config import ImageAnnotation
@@ -1134,7 +1137,7 @@ class TestPipelineIntegration:
         pipeline.initialize_workflow(mock_images)
         pipeline.define_annotation_schema(mock_images)
         # Set processed flags
-        for ann, flag in zip(config.annotations, processed_flags):
+        for ann, flag in zip(config.annotations, processed_flags, strict=True):
             ann.processed = flag
         # Patch annotation runner and OMERO table creation to avoid real OMERO logic
         with (
@@ -1369,6 +1372,7 @@ class TestContextChannelHook:
     def test_build_context_images_empty_when_no_context_channels(self):
         """With no context_channels, context_images should be list of empty dicts."""
         import numpy as np
+
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
@@ -1389,6 +1393,7 @@ class TestContextChannelHook:
     def test_build_context_images_loads_correct_channel(self):
         """With context_channels=[1], loads channel 1 for each batch item."""
         import numpy as np
+
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
@@ -1416,6 +1421,7 @@ class TestContextChannelHook:
     def test_install_context_channel_hook_no_op_when_empty(self):
         """Hook install is a no-op when context_images contains empty dicts."""
         import numpy as np
+
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
@@ -1433,6 +1439,7 @@ class TestContextChannelHook:
     def test_install_context_channel_hook_adds_initial_layer(self):
         """Hook install should add a context layer for the initial image."""
         import numpy as np
+
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
@@ -1470,6 +1477,7 @@ class TestContextChannelHook:
     def test_context_hook_callback_updates_layer_on_next_image(self):
         """Simulating next-image event: callback should update DAPI layer data."""
         import numpy as np
+
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
@@ -1543,8 +1551,7 @@ class TestCellposeMultiChannelSaving:
         )
         config.spatial_coverage.label_channel = label_channel
         config.spatial_coverage.training_channels = training_channels
-        pipeline = AnnotationPipeline(config, conn=Mock())
-        return pipeline
+        return AnnotationPipeline(config, conn=Mock())
 
     def test_single_channel_saves_as_YXC(self, tmp_path):
         """Single training channel is saved as (Y, X, 1) channels-last."""
@@ -1607,7 +1614,7 @@ class TestCellposeMultiChannelSaving:
         assert stacked.shape == (z, h, w, 2)
 
     def test_all_training_channels_in_output(self, tmp_path):
-        """All channels in training_channels appear in the stacked output — none silently dropped."""
+        """Every training channel appears in the stacked output; none is dropped."""
         pipeline = self._make_pipeline(training_channels=[0, 1, 2])
 
         h, w = 16, 16

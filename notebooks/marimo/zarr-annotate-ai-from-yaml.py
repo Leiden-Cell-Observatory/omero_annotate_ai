@@ -16,6 +16,7 @@ app = marimo.App(width="medium")
 def _():
     import marimo as mo
     import pandas as pd
+
     from omero_annotate_ai import create_pipeline, load_config_from_yaml
 
     return create_pipeline, load_config_from_yaml, mo, pd

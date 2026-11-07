@@ -8,7 +8,6 @@ import ipywidgets as widgets
 from IPython.display import clear_output, display
 
 from ..core.annotation_config import AnnotationConfig, create_default_config
-from ..omero.omero_utils import get_container_info
 from ..omero.omero_functions import (
     find_annotation_config_for_table,
     generate_unique_table_name,
@@ -16,6 +15,7 @@ from ..omero.omero_functions import (
     list_annotation_tables,
     read_tracking_table,
 )
+from ..omero.omero_utils import get_container_info
 
 # Settings that must match the rows already in a tracking table: changing them
 # on resume makes validate_annotations_against_config fail (channel, 3D, patch)

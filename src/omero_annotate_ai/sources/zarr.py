@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -36,10 +36,10 @@ class ZarrImage:
     name: str
     level: int
     data: Any  # dask array of the chosen level
-    axes: Tuple[str, ...]
+    axes: tuple[str, ...]
 
 
-def _default_name(uri: str, metadata_name: Optional[str]) -> str:
+def _default_name(uri: str, metadata_name: str | None) -> str:
     name = (metadata_name or "").strip("/")
     if name:
         return name.replace("/", "_")
@@ -56,7 +56,7 @@ class ZarrImageSource:
 
     def __init__(self, level: int = 0):
         self.level = level
-        self._cache: Dict[str, ZarrImage] = {}
+        self._cache: dict[str, ZarrImage] = {}
 
     def get_image(self, uri: str) -> ZarrImage:
         uri = normalize_zarr_uri(uri)
@@ -95,7 +95,7 @@ class ZarrImageSource:
         )
 
     def metadata(self, image: ZarrImage) -> ImageMeta:
-        sizes = dict(zip(image.axes, image.data.shape))
+        sizes = dict(zip(image.axes, image.data.shape, strict=True))
         return ImageMeta(
             image_uri=image.uri,
             name=image.name,
@@ -107,10 +107,8 @@ class ZarrImageSource:
             dtype=str(image.data.dtype),
         )
 
-    def _index(
-        self, image: ZarrImage, t: int, c: int, z: Any, region: Optional[Region]
-    ):
-        sizes = dict(zip(image.axes, image.data.shape))
+    def _index(self, image: ZarrImage, t: int, c: int, z: Any, region: Region | None):
+        sizes = dict(zip(image.axes, image.data.shape, strict=True))
         _check_index("t", t, sizes.get("t", 1))
         _check_index("c", c, sizes.get("c", 1))
         for z_value in (z.start, z.stop - 1) if isinstance(z, slice) else (z,):
@@ -130,7 +128,7 @@ class ZarrImageSource:
         t: int,
         c: int,
         z: int,
-        region: Optional[Region] = None,
+        region: Region | None = None,
     ) -> np.ndarray:
         return np.asarray(image.data[self._index(image, t, c, z, region)].compute())
 
@@ -142,7 +140,7 @@ class ZarrImageSource:
         c: int,
         z_start: int,
         z_end: int,
-        region: Optional[Region] = None,
+        region: Region | None = None,
     ) -> np.ndarray:
         volume = np.asarray(
             image.data[

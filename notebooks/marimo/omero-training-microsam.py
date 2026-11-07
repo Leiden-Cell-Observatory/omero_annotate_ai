@@ -438,8 +438,8 @@ def _():
 
 @app.cell
 def _():
-    from pathlib import Path
     from datetime import datetime
+    from pathlib import Path
 
     return Path, datetime
 
@@ -448,12 +448,12 @@ def _():
 def _():
     from omero_annotate_ai import (
         prepare_training_data_from_table,
-        setup_training,
         run_training,
+        setup_training,
     )
     from omero_annotate_ai.omero.omero_functions import (
-        list_annotation_tables,
         find_annotation_config_for_table,
+        list_annotation_tables,
     )
 
     try:

@@ -1,21 +1,23 @@
 """Tests for training data preparation functions."""
 
-import pytest
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import tempfile
 import shutil
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch
 
-from omero_annotate_ai.processing.training_functions import (
-    prepare_training_data_from_table,
-    reorganize_local_data_for_training,
-)
+import numpy as np
+import pandas as pd
+import pytest
+
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     ImageAnnotation,
     create_default_config,
+)
+from omero_annotate_ai.processing import training_functions as tf
+from omero_annotate_ai.processing.training_functions import (
+    prepare_training_data_from_table,
+    reorganize_local_data_for_training,
 )
 
 
@@ -703,8 +705,6 @@ class TestChannelParsing:
 # patch origin or the wrong channel being requested.
 # ---------------------------------------------------------------------------
 
-from omero_annotate_ai.processing import training_functions as tf
-
 
 PLANE_X, PLANE_Y, PLANE_Z = (
     7,
@@ -923,8 +923,10 @@ class TestFetchPlane3D:
 @pytest.mark.unit
 class TestFetchPlaneErrors:
     def test_missing_image_raises(self, fake_ezomero):
-        with patch.object(fake_ezomero, "get_image", return_value=(None, None)):
-            with pytest.raises(ValueError, match="not found in OMERO"):
-                tf._fetch_plane(
-                    None, _plane_row(is_volumetric=True, z_slice="all"), channel=0
-                )
+        with (
+            patch.object(fake_ezomero, "get_image", return_value=(None, None)),
+            pytest.raises(ValueError, match="not found in OMERO"),
+        ):
+            tf._fetch_plane(
+                None, _plane_row(is_volumetric=True, z_slice="all"), channel=0
+            )

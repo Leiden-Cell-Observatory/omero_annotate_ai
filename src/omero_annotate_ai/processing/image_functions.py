@@ -1,7 +1,6 @@
 """Image processing functions for annotation workflows."""
 
 import random as rnd
-from typing import List, Tuple
 
 # Optional dependencies for ROI functionality
 import cv2
@@ -10,11 +9,11 @@ import numpy as np
 
 
 def generate_patch_coordinates(
-    image_shape: Tuple[int, int],
-    patch_size: List[int],
+    image_shape: tuple[int, int],
+    patch_size: list[int],
     n_patches: int,
     random_patch: bool = True,
-) -> Tuple[List[Tuple[int, int]], Tuple[int, int]]:
+) -> tuple[list[tuple[int, int]], tuple[int, int]]:
     """Generate non-overlapping patch coordinates for an image.
 
     CRUCIAL: Ensures patches do not overlap when generating multiple patches.
@@ -92,15 +91,8 @@ def generate_patch_coordinates(
             n_patches = max_grid_patches
 
         # Calculate spacing to distribute patches evenly
-        if patches_x > 1:
-            step_x = (width - patch_w) // (patches_x - 1)
-        else:
-            step_x = 0
-
-        if patches_y > 1:
-            step_y = (height - patch_h) // (patches_y - 1)
-        else:
-            step_y = 0
+        step_x = (width - patch_w) // (patches_x - 1) if patches_x > 1 else 0
+        step_y = (height - patch_h) // (patches_y - 1) if patches_y > 1 else 0
 
         # Generate grid coordinates
         patch_count = 0
@@ -121,7 +113,7 @@ def generate_patch_coordinates(
 
 
 def _rectangles_overlap(
-    rect1: Tuple[int, int, int, int], rect2: Tuple[int, int, int, int]
+    rect1: tuple[int, int, int, int], rect2: tuple[int, int, int, int]
 ) -> bool:
     """Check if two rectangles overlap.
 
@@ -135,12 +127,8 @@ def _rectangles_overlap(
     x1_1, y1_1, x2_1, y2_1 = rect1
     x1_2, y1_2, x2_2, y2_2 = rect2
 
-    # Check if rectangles do NOT overlap (then return False)
-    if x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1:
-        return False
-
-    # If not non-overlapping, they must overlap
-    return True
+    # They overlap unless one lies entirely to one side of the other.
+    return not (x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1)
 
 
 def mask_to_contour(mask):

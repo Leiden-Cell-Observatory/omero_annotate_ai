@@ -1,10 +1,13 @@
 """Tests for widget modules."""
 
+import importlib
+import importlib.util
 import sys
-import pytest
-import pandas as pd
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
+
+import pandas as pd
+import pytest
 
 # Test imports with fallbacks for missing dependencies
 try:
@@ -208,7 +211,7 @@ class TestOMEROConnectionWidget:
                 "OMERO_PORT": "4064",
             }.get(key, default)
 
-            widget = OMEROConnectionWidget()
+            OMEROConnectionWidget()
 
             # Check that the widget's fields were populated from config
             # Note: The actual population happens during widget initialization
@@ -626,9 +629,8 @@ class TestWorkflowWidget:
         widget.status_output.__exit__ = Mock(return_value=None)
 
         # Call update config to populate self.config from widget values
-        with patch("builtins.print"):  # Suppress print output
-            with patch("IPython.display.clear_output"):  # Suppress clear_output
-                widget._on_update_config(None)
+        with patch("builtins.print"), patch("IPython.display.clear_output"):
+            widget._on_update_config(None)
 
         config = widget.get_config()
 
@@ -834,7 +836,6 @@ class TestWorkflowWidgetDisplay:
 
     def test_table_rows_win_over_a_mismatched_saved_config(self):
         """A saved config from another same-name run must not set locked fields."""
-        import pandas as pd
         from omero_annotate_ai.core.annotation_config import create_default_config
 
         saved = create_default_config()  # channel 0, no patches, 3/2
@@ -951,7 +952,6 @@ class TestWorkflowWidgetDisplay:
         assert widget.get_config().spatial_coverage.channels[0] == 3
 
     def test_continue_infers_settings_from_rows_without_saved_config(self):
-        import pandas as pd
 
         widget = self._widget_with_table()
         rows = pd.DataFrame(
@@ -1024,11 +1024,11 @@ class TestWidgetFallbacks:
         if widget_module in sys.modules:
             del sys.modules[widget_module]
 
-        with patch.dict("sys.modules", {"ipywidgets": None}):
-            with pytest.raises(ImportError):
-                from omero_annotate_ai.widgets.omero_connection_widget import (
-                    OMEROConnectionWidget,
-                )
+        with (
+            patch.dict("sys.modules", {"ipywidgets": None}),
+            pytest.raises(ImportError),
+        ):
+            importlib.import_module(widget_module)
 
     def test_widget_creation_without_ipywidgets(self):
         """
@@ -1037,13 +1037,8 @@ class TestWidgetFallbacks:
         is not available.
         """
         # This test verifies that the module structure handles missing dependencies
-        try:
-            import ipywidgets
-
+        if importlib.util.find_spec("ipywidgets") is not None:
             pytest.skip("ipywidgets is available, cannot test fallback")
-        except ImportError:
-            # This is expected when ipywidgets is not available
-            assert True
 
 
 @pytest.mark.unit
@@ -1116,9 +1111,8 @@ class TestWidgetIntegration:
             )
             conn_widget.status_output.__exit__ = Mock(return_value=None)
 
-            with patch("builtins.print"):  # Suppress print output
-                with patch("IPython.display.clear_output"):  # Suppress clear_output
-                    conn_widget._connect(Mock())
+            with patch("builtins.print"), patch("IPython.display.clear_output"):
+                conn_widget._connect(Mock())
 
             # Use connection in workflow widget
             workflow_widget = WorkflowWidget(connection=conn_widget.connection)

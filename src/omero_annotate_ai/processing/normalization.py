@@ -1,7 +1,8 @@
 """Intensity normalisation of model input images, defined once in the config.
 
-The ``normalization`` block of an :class:`~omero_annotate_ai.core.annotation_config.AnnotationConfig`
-states how raw intensities become model input. It is applied in one of two places:
+The ``normalization`` block of an
+:class:`~omero_annotate_ai.core.annotation_config.AnnotationConfig` states how raw
+intensities become model input. It is applied in one of two places:
 
 - at export (``apply_at_export: true``): images are written as float32 after per-image
   percentile normalisation, and the bounds used for every image are recorded in a
@@ -15,8 +16,9 @@ annotation set and travels with the exported dataset.
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -28,8 +30,8 @@ def percentile_normalize(
     percentile_low: float,
     percentile_high: float,
     clip: bool = True,
-    channel_axis: Optional[int] = None,
-) -> Tuple[np.ndarray, List[Tuple[float, float]]]:
+    channel_axis: int | None = None,
+) -> tuple[np.ndarray, list[tuple[float, float]]]:
     """Scale an image so the low/high percentiles map to 0 and 1.
 
     Bounds are computed per channel over all other axes (one image, so per image).
@@ -69,7 +71,7 @@ def percentile_normalize(
     return np.stack(normalised, axis=channel_axis), bounds
 
 
-def channel_axis_for(image: np.ndarray) -> Optional[int]:
+def channel_axis_for(image: np.ndarray) -> int | None:
     """Channel axis of an exported model-input image.
 
     Model input is written channels-last (YXC or ZYXC) when several training channels
@@ -84,7 +86,7 @@ class NormalizationRecorder:
 
     def __init__(self, spec: Any):
         self.spec = spec
-        self.bounds: Dict[str, List[Tuple[float, float]]] = {}
+        self.bounds: dict[str, list[tuple[float, float]]] = {}
 
     def __call__(self, annotation_id: str, image: np.ndarray) -> np.ndarray:
         normalised, bounds = percentile_normalize(
@@ -131,7 +133,7 @@ def write_native_sidecar(spec: Any, output_dir: Path) -> Path:
     return path
 
 
-def biapy_normalization(spec: Any) -> Dict[str, Any]:
+def biapy_normalization(spec: Any) -> dict[str, Any]:
     """BiaPy ``DATA.NORMALIZATION`` block that realises a normalisation spec.
 
     BiaPy's ``div`` and ``scale_range`` types infer the bit depth from the image

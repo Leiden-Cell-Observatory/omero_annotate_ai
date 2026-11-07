@@ -1,5 +1,7 @@
 """Test package installation and basic imports with modern package structure."""
 
+import importlib.util
+
 import pytest
 
 
@@ -10,6 +12,8 @@ def test_package_import():
     and that there are no syntax errors in the `__init__.py` file.
     """
     import omero_annotate_ai
+
+    assert omero_annotate_ai.__version__
 
 
 def test_core_imports():
@@ -24,6 +28,9 @@ def test_core_imports():
         load_config,
     )
     from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+
+    assert callable(load_config)
+    assert isinstance(AnnotationPipeline, type)
 
     # Test that we can create instances
     config = create_default_config()
@@ -62,9 +69,10 @@ def test_pipeline_creation():
     This test ensures that the `AnnotationPipeline` can be instantiated correctly
     with a mock OMERO connection.
     """
-    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-    from omero_annotate_ai.core.annotation_config import create_default_config
     from unittest.mock import Mock
+
+    from omero_annotate_ai.core.annotation_config import create_default_config
+    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
     config = create_default_config()
     config.omero.container_id = 123  # Set required field
@@ -83,15 +91,12 @@ def test_optional_dependencies():
     dependencies, such as `ezomero`, gracefully.
     """
     # Test ezomero import handling
-    try:
-        import ezomero
-
-        ezomero_available = True
-    except ImportError:
-        ezomero_available = False
+    ezomero_available = importlib.util.find_spec("ezomero") is not None
 
     # Should be able to import omero functions even without ezomero
     from omero_annotate_ai.omero import omero_functions
+
+    assert hasattr(omero_functions, "upload_rois_and_labels")
 
     if not ezomero_available:
         # Functions should raise ImportError when ezomero is needed

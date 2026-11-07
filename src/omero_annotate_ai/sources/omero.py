@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -46,7 +46,7 @@ class OmeroImageSource:
         )
 
     def read_plane(
-        self, image: Any, *, t: int, c: int, z: int, region: Optional[Region] = None
+        self, image: Any, *, t: int, c: int, z: int, region: Region | None = None
     ) -> np.ndarray:
         pixels = image.getPrimaryPixels()
         if region is None:
@@ -62,7 +62,7 @@ class OmeroImageSource:
         c: int,
         z_start: int,
         z_end: int,
-        region: Optional[Region] = None,
+        region: Region | None = None,
     ) -> np.ndarray:
         return np.stack(
             [

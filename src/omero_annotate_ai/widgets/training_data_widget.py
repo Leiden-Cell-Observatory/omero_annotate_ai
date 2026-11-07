@@ -212,7 +212,7 @@ class TrainingDataWidget:
                 else:
                     print("ℹ️ No annotation tables found")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
             with self.status_output:
                 clear_output()
                 print(f"❌ Error scanning tables: {e}")
@@ -247,7 +247,7 @@ class TrainingDataWidget:
 
             self.container_dropdown.options = options
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
             with self.status_output:
                 clear_output()
                 print(f"❌ Error loading containers: {e}")
@@ -327,10 +327,11 @@ def create_training_data_widget(connection=None):
     Raises:
         ValueError: If the provided connection is not active
     """
-    if connection is not None:
-        if not hasattr(connection, "isConnected") or not connection.isConnected():
-            raise ValueError(
-                "Provided OMERO connection is not active. Please establish a valid connection first."
-            )
+    if connection is not None and (
+        not hasattr(connection, "isConnected") or not connection.isConnected()
+    ):
+        raise ValueError(
+            "Provided OMERO connection is not active. Please establish a valid connection first."
+        )
 
     return TrainingDataWidget(connection=connection)

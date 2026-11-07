@@ -6,28 +6,22 @@ import random
 import string
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
+import ezomero
+import imageio.v3 as imageio
 import numpy as np
-import omero.grid as omero_grid
 import omero.model as omero_model
 import pandas as pd
-from omero.constants.namespaces import NSBULKANNOTATIONS
-from omero.rtypes import rstring
+import tifffile
 
+from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
+from ..processing.image_functions import label_to_rois
+from . import tracking_table
 from .omero_utils import (
     list_annotations_by_namespace,
     list_user_tables,
 )
-
-import ezomero
-
-import imageio.v3 as imageio
-import tifffile
-
-from ..processing.image_functions import label_to_rois
-from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
-from . import tracking_table
 
 # Namespace for annotation config file annotations
 CONFIG_NS = "openmicroscopy.org/omero/annotate/config"
@@ -400,8 +394,8 @@ def link_table_to_containers(
     conn,
     table_id: int,
     container_type: str,
-    container_ids: List[int],
-) -> Dict[int, int]:
+    container_ids: list[int],
+) -> dict[int, int]:
     """Link an existing table (FileAnnotation) to multiple containers.
 
     Uses OMERO AnnotationLink objects (e.g., PlateAnnotationLinkI) to attach
@@ -486,7 +480,7 @@ def create_tracking_table(
     config,
     table_title: str,
     container_type: str,
-    container_ids: List[int],
+    container_ids: list[int],
 ) -> int:
     """Create the tracking table for a training set from config.annotations.
 
@@ -513,7 +507,7 @@ def create_tracking_table(
     return table_id
 
 
-def write_config_to_table(conn, table_id: int, config) -> Dict[str, int]:
+def write_config_to_table(conn, table_id: int, config) -> dict[str, int]:
     """Write config.annotations to an existing tracking table, in place.
 
     Rows are matched on annotation_id: existing rows are updated, new rows
@@ -587,7 +581,7 @@ def replace_table_config(
     return new_id
 
 
-def _table_config_annotations(conn, table_id: int, containers=None) -> List[Dict]:
+def _table_config_annotations(conn, table_id: int, containers=None) -> list[dict]:
     """Config FileAnnotations of one table on its containers, newest first."""
     name = tracking_table.config_file_name(table_id)
     containers = (
@@ -605,7 +599,7 @@ def _table_config_annotations(conn, table_id: int, containers=None) -> List[Dict
     return sorted(found, key=lambda a: a["id"], reverse=True)
 
 
-def find_annotation_config_for_table(conn, table_id: int) -> Optional[AnnotationConfig]:
+def find_annotation_config_for_table(conn, table_id: int) -> AnnotationConfig | None:
     """The config YAML a training set keeps on OMERO, looked up by table ID.
 
     Returns:
@@ -625,7 +619,7 @@ def find_annotation_config_for_table(conn, table_id: int) -> Optional[Annotation
 _CONTAINER_TYPES = ("Dataset", "Plate", "Project", "Screen")
 
 
-def _valid_omero_ids(values) -> List[int]:
+def _valid_omero_ids(values) -> list[int]:
     """Positive integer IDs from a column, skipping NaN/None/0/-1, deduplicated."""
     ids = []
     for value in values:
@@ -640,7 +634,7 @@ def _valid_omero_ids(values) -> List[int]:
     return ids
 
 
-def _table_containers(conn, table_id: int) -> List[Tuple[str, int]]:
+def _table_containers(conn, table_id: int) -> list[tuple[str, int]]:
     """Every container the table FileAnnotation is linked to."""
     containers = []
     for container_type in _CONTAINER_TYPES:
@@ -659,8 +653,8 @@ def _table_containers(conn, table_id: int) -> List[Tuple[str, int]]:
 
 
 def _tagged_objects(
-    conn, image_ids: List[int], table_id: int
-) -> Tuple[List[int], List[int]]:
+    conn, image_ids: list[int], table_id: int
+) -> tuple[list[int], list[int]]:
     """ROIs and label files on the images whose description carries the set's tag."""
     prefix = tracking_table.tag_prefix(table_id)
     rois, labels = [], []
@@ -687,10 +681,10 @@ def _tagged_objects(
 def delete_training_set(
     conn,
     table_id: int,
-    container_type: Optional[str] = None,
-    container_id: Optional[int] = None,
+    container_type: str | None = None,
+    container_id: int | None = None,
     dry_run: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Delete a tracking table and everything a run created for it.
 
     Everything is found by ID or by the set's tag
@@ -719,7 +713,7 @@ def delete_training_set(
         ``deleted`` (False on a dry run).
     """
     kinds = ("rois", "labels", "annotation_inputs", "configs", "table")
-    report: Dict[str, Any] = {kind: [] for kind in kinds}
+    report: dict[str, Any] = {kind: [] for kind in kinds}
     report["missing"] = {kind: [] for kind in kinds}
     report["containers"] = []
     report["deleted"] = False
@@ -786,14 +780,14 @@ def delete_training_set(
     return report
 
 
-def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
+def infer_settings_from_table(df: pd.DataFrame) -> dict[str, Any]:
     """Infer the run settings that a tracking table's rows pin down.
 
     Used when no saved config matches the table. Returns only what the rows
     show: the annotated channel, 3D and patch settings, and the number of
     distinct images per category.
     """
-    settings: Dict[str, Any] = {}
+    settings: dict[str, Any] = {}
     if df is None or df.empty:
         return settings
 
@@ -849,7 +843,7 @@ def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
 
 
 def _label_file_name(
-    annotation_file: str, trainingset_name: Optional[str], tag: Optional[str]
+    annotation_file: str, trainingset_name: str | None, tag: str | None
 ) -> str:
     """``<trainingset>_<annotation_id>_mask.tif``, falling back to the local name.
 
@@ -874,15 +868,15 @@ def upload_rois_and_labels(
     conn,
     image_id: int,
     annotation_file: str,
-    patch_offset: Optional[Tuple[int, int]] = None,
-    trainingset_name: Optional[str] = None,
-    trainingset_description: Optional[str] = None,
-    timepoint: Optional[int] = None,
-    z_slice: Optional[int] = None,
-    channel: Optional[int] = None,
-    is_volumetric: Optional[bool] = False,
-    z_start: Optional[int] = 0,
-    tag: Optional[str] = None,
+    patch_offset: tuple[int, int] | None = None,
+    trainingset_name: str | None = None,
+    trainingset_description: str | None = None,
+    timepoint: int | None = None,
+    z_slice: int | None = None,
+    channel: int | None = None,
+    is_volumetric: bool | None = False,
+    z_start: int | None = 0,
+    tag: str | None = None,
 ):
     """Upload ROIs and labels to OMERO image.
 
@@ -992,10 +986,10 @@ def upload_annotation_input_image(
     conn,
     image_id: int,
     annotation_input_file: str,
-    trainingset_name: Optional[str] = None,
-    channel: Optional[int] = None,
-    timepoint: Optional[int] = None,
-    z_slice: Optional[int] = None,
+    trainingset_name: str | None = None,
+    channel: int | None = None,
+    timepoint: int | None = None,
+    z_slice: int | None = None,
 ) -> int:
     """Upload label input channel image as file annotation to OMERO.
 
@@ -1052,7 +1046,7 @@ def upload_annotation_input_image(
 
 def list_annotation_tables(
     conn, container_type: str, container_id: int
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Find all tables attached to a container.
 
     Args:
@@ -1117,7 +1111,7 @@ def generate_unique_table_name(
     return unique_name
 
 
-def analyze_table_completion_status(conn, table_id: int) -> Dict[str, Any]:
+def analyze_table_completion_status(conn, table_id: int) -> dict[str, Any]:
     """Analyze the completion status of an annotation table.
 
     Args:
@@ -1159,7 +1153,7 @@ def analyze_table_completion_status(conn, table_id: int) -> Dict[str, Any]:
             completed_units = (
                 table_data[completion_column].sum()
                 if table_data[completion_column].dtype == bool
-                else (table_data[completion_column] == True).sum()
+                else table_data[completion_column].eq(True).sum()
             )
         else:
             # Check for roi_id or label_id columns as completion indicators

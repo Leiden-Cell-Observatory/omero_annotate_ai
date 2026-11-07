@@ -5,7 +5,6 @@ annotation of one unit lands in the same split. It is recorded in the config,
 enforced by the pipeline, checked by validation and reported at export.
 """
 
-import numpy as np
 import pytest
 from pydantic import ValidationError
 
@@ -296,6 +295,7 @@ def _condition_pipeline(tmp_path, n_fields=4, **training):
     for well, (line, drug) in zip(
         ["B2", "B3", "C2", "C3"],
         [("MDA", "DMSO"), ("MDA", "drug"), ("HCC", "DMSO"), ("HCC", "drug")],
+        strict=True,
     ):
         for field in range(n_fields):
             image_id += 1
@@ -417,7 +417,7 @@ class TestStratifiedSplit:
             validation_fraction=0.25,
             test_fraction=0.25,
         )
-        for uri, well in pipeline._omero_wells.items():
+        for well in pipeline._omero_wells.values():
             if well["well"] == "B2":
                 well["well_metadata"] = {}
         pipeline._prepare_processing_units(images)

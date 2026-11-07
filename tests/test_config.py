@@ -1,21 +1,20 @@
 """Modern tests for configuration management with updated package structure."""
 
+import tempfile
+from pathlib import Path
+
+import pandas as pd
 import pytest
 import yaml
-import tempfile
-import pandas as pd
-from pathlib import Path
-from dataclasses import asdict
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     ImageAnnotation,
     create_default_config,
+    get_config_template,
     load_config,
     load_config_from_yaml,
-    get_config_template,
     validate_annotations_against_config,
-    ValidationResult,
 )
 
 
@@ -328,7 +327,7 @@ class TestMultiChannelSupport:
         assert config.spatial_coverage.uses_separate_channels() is True
 
     def test_uses_separate_channels_false_when_same(self):
-        """Test that uses_separate_channels() is False when label channel is in training channels."""
+        """uses_separate_channels() is False when the label channel is a training channel."""
         config = create_default_config()
         config.spatial_coverage.channels = [0, 1]
         config.spatial_coverage.label_channel = 0
@@ -451,8 +450,9 @@ class TestContextChannelConfig:
         assert specs[0][2] == "magenta"
 
     def test_validation_rejects_overlap_with_label_channel(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
         from pydantic import ValidationError
+
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
 
         with pytest.raises(ValidationError, match="context_channels"):
             SpatialCoverage(
@@ -464,8 +464,9 @@ class TestContextChannelConfig:
             )
 
     def test_validation_rejects_mismatched_names_length(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
         from pydantic import ValidationError
+
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
 
         with pytest.raises(ValidationError):
             SpatialCoverage(
@@ -477,8 +478,9 @@ class TestContextChannelConfig:
             )  # length 1, should be 2
 
     def test_validation_rejects_mismatched_colormaps_length(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
         from pydantic import ValidationError
+
+        from omero_annotate_ai.core.annotation_config import SpatialCoverage
 
         with pytest.raises(ValidationError):
             SpatialCoverage(
@@ -874,6 +876,7 @@ class TestAnnotationValidation:
     def test_define_annotation_schema_raises_on_validation_error(self):
         """define_annotation_schema raises ValueError for invalid reused annotations."""
         from unittest.mock import Mock
+
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
         config = self._make_config(channels=[0, 1], label_channel=1)
@@ -955,19 +958,19 @@ class TestAnnotationConfigJSON:
 
     def _make_config(self):
         from omero_annotate_ai.core.annotation_config import (
-            AnnotationConfig,
-            FeatureType,
-            ChannelPresentation,
-            StudyContext,
-            DatasetInfo,
-            AnnotationMethodology,
-            SpatialCoverage,
-            TrainingConfig,
             AIModelConfig,
-            WorkflowConfig,
-            OutputConfig,
-            OMEROConfig,
+            AnnotationConfig,
+            AnnotationMethodology,
+            ChannelPresentation,
+            DatasetInfo,
+            FeatureType,
             ImageAnnotation,
+            OMEROConfig,
+            OutputConfig,
+            SpatialCoverage,
+            StudyContext,
+            TrainingConfig,
+            WorkflowConfig,
         )
 
         config = AnnotationConfig(
@@ -1073,16 +1076,18 @@ class TestTrainingConfigWarnings:
             TrainingConfig(segment_all=True, train_n=10, validate_n=2, test_n=0)
 
     def test_no_warning_when_only_active_count_set_changed(self):
-        from omero_annotate_ai.core.annotation_config import TrainingConfig
         import warnings
+
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             TrainingConfig(segment_all=False, train_n=5, validate_n=2, test_n=0)
 
     def test_no_warning_when_only_active_fraction_set_changed(self):
-        from omero_annotate_ai.core.annotation_config import TrainingConfig
         import warnings
+
+        from omero_annotate_ai.core.annotation_config import TrainingConfig
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -1298,8 +1303,8 @@ class TestMIFAExport:
 
     def test_to_mifa_returns_three_documents(self):
         from bia_mifa_models.datamodel.bia_mifa_models import (
-            Study,
             Annotations,
+            Study,
             Version,
         )
 
@@ -1396,8 +1401,8 @@ class TestMIFAExport:
         assert ann.annotation_method.strip()
 
     def test_save_mifa_writes_three_yaml_files_that_round_trip(self, tmp_path):
-        from linkml_runtime.loaders import yaml_loader
         from bia_mifa_models.datamodel.bia_mifa_models import Annotations
+        from linkml_runtime.loaders import yaml_loader
 
         paths = self._rich_config().save_mifa(tmp_path, accession="S-BIAD123")
         assert (tmp_path / "Study_S-BIAD123.yaml").exists()

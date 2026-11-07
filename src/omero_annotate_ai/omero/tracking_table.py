@@ -15,7 +15,7 @@ description. Tables without it (written by versions before 0.5.0) are refused:
 old tables are not supported.
 """
 
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Iterable
 
 import pandas as pd
 
@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - exercised only without OMERO installed
 TABLE_MARKER = "omero-annotate-ai table v2"
 
 # Width of each string column. Anything not listed gets DEFAULT_STRING_WIDTH.
-STRING_WIDTHS: Dict[str, int] = {
+STRING_WIDTHS: dict[str, int] = {
     "image_uri": 1024,
     "image_name": 512,
     "annotation_id": 256,
@@ -109,7 +109,7 @@ def _string_width(name: str) -> int:
 
 
 def check_string_lengths(
-    df: pd.DataFrame, widths: Optional[Dict[str, int]] = None
+    df: pd.DataFrame, widths: dict[str, int] | None = None
 ) -> None:
     """Raise TableValueTooLongError if any string is wider than its column."""
     for name in df.columns:
@@ -133,7 +133,7 @@ def check_string_lengths(
                 )
 
 
-def build_columns(df: pd.DataFrame) -> List:
+def build_columns(df: pd.DataFrame) -> list:
     """OMERO columns for a prepared DataFrame, with fixed string widths."""
     _require_omero()
     columns = []
@@ -175,7 +175,7 @@ def _values_for(header, series: pd.Series) -> list:
     return ["" if v is None else str(v) for v in series]
 
 
-def _header_widths(headers) -> Dict[str, int]:
+def _header_widths(headers) -> dict[str, int]:
     return {
         h.name: h.size
         for h in headers
@@ -307,7 +307,7 @@ def read_table(conn, table_id: int) -> pd.DataFrame:
         table.close()
 
 
-def write_rows(conn, table_id: int, df: pd.DataFrame) -> Dict[str, int]:
+def write_rows(conn, table_id: int, df: pd.DataFrame) -> dict[str, int]:
     """Update rows that exist (by annotation_id) and append the others.
 
     The table keeps its ID. Rows in the table that are not in ``df`` are left
@@ -332,7 +332,7 @@ def write_rows(conn, table_id: int, df: pd.DataFrame) -> Dict[str, int]:
         check_string_lengths(df, _header_widths(headers))
         key_index = [h.name for h in headers].index(KEY_COLUMN)
         n_rows = table.getNumberOfRows()
-        existing: Dict[str, int] = {}
+        existing: dict[str, int] = {}
         if n_rows:
             keys = table.read([key_index], 0, n_rows).columns[0].values
             existing = {str(k): i for i, k in enumerate(keys)}
