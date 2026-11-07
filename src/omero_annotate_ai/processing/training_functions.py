@@ -180,7 +180,7 @@ def prepare_training_data_from_table(
             )
 
         # Filter to only processed rows
-        table = table[table["processed"]].copy()
+        table = table.loc[table["processed"].astype(bool)].copy()
 
         if len(table) == 0:
             raise ValueError(
@@ -229,7 +229,9 @@ def prepare_training_data_from_table(
         table["validate"] = ~table["train"]
         logger.info(f"Applied automatic split with validation_split={validation_split}")
 
-    table = table[table["train"] | table["validate"]].copy()
+    table = table.loc[
+        table["train"].astype(bool) | table["validate"].astype(bool)
+    ].copy()
     n_train = int(table["train"].sum())
     n_val_rows = int(table["validate"].sum())
     logger.info(f"Using {n_train} training images and {n_val_rows} validation images")

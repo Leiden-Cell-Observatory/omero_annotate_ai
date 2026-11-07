@@ -44,7 +44,7 @@ def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
     # Check for completely null critical columns
     critical_columns = ["image_id", "label_id"]
     for col in critical_columns:
-        if col in df.columns and df[col].isna().all():
+        if col in df.columns and bool(df[col].isna().all()):
             raise ValueError(f"Column '{col}' contains no valid data")
 
     # Basic data type check for image_id (should be numeric)

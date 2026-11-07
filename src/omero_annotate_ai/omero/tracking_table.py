@@ -180,7 +180,7 @@ def _fill_columns(headers, df: pd.DataFrame) -> list:
     if missing:
         raise ValueError(f"Rows lack table columns: {', '.join(missing)}")
     for header in headers:
-        header.values = _values_for(header, df[_df_name(header.name)])
+        header.values = _values_for(header, df.loc[:, _df_name(header.name)])
     return headers
 
 
