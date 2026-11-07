@@ -5,9 +5,7 @@ This module provides reusable utilities for common OMERO operations that are
 useful across different workflows and not specific to micro-SAM annotation.
 """
 
-import os
 from typing import List, Dict, Optional, Any, Tuple
-import pandas as pd
 import numpy as np
 import dask.array as da
 from dask.delayed import delayed
@@ -89,29 +87,6 @@ def list_user_tables(conn, container_type: str = None, container_id: int = None,
     return tables
 
 
-def find_table_by_pattern(conn, container_type: str, container_id: int, pattern: str) -> Optional[Dict]:
-    """Find table matching a name pattern.
-    
-    Args:
-        conn: OMERO connection
-        container_type: Container type ('dataset', 'project', etc.)
-        container_id: Container ID  
-        pattern: Pattern to match in table name
-        
-    Returns:
-        Dictionary with table information or None
-    """
-    tables = list_user_tables(conn, container_type, container_id)
-    
-    for table in tables:
-        if pattern.lower() in table['name'].lower():
-            print(f"Found matching table: {table['name']} (ID: {table['id']})")
-            return table
-    
-    print(f"No table found matching pattern: {pattern}")
-    return None
-
-
 def delete_table(conn, table_id: int) -> bool:
     """Safely delete OMERO table.
     
@@ -143,40 +118,6 @@ def delete_table(conn, table_id: int) -> bool:
         
     except Exception as e:
         print(f"Error deleting table {table_id}: {e}")
-        return False
-
-
-def backup_table(conn, table_id: int, backup_path: str) -> bool:
-    """Export table data to local backup file.
-    
-    Args:
-        conn: OMERO connection
-        table_id: ID of table to backup
-        backup_path: Local path for backup file (.csv extension recommended)
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Local import: omero_functions imports this module, so importing it at
-        # module level would be circular.
-        from .omero_functions import read_tracking_table
-
-        # Get table data
-        df = read_tracking_table(conn, table_id)
-
-        # Create backup directory if needed
-        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
-        
-        # Save to CSV
-        df.to_csv(backup_path, index=False)
-        
-        print(f"Table {table_id} backed up to: {backup_path}")
-        print(f"   Rows: {len(df)}, Columns: {len(df.columns)}")
-        return True
-        
-    except Exception as e:
-        print(f"Error backing up table {table_id}: {e}")
         return False
 
 
@@ -216,72 +157,6 @@ def validate_table_schema(conn, table_id: int, expected_columns: List[str]) -> T
     except Exception as e:
         print(f"Error validating table {table_id}: {e}")
         return False, expected_columns
-
-
-def merge_tables(conn, table_ids: List[int], new_title: str, 
-                container_type: str, container_id: int) -> Optional[int]:
-    """Merge multiple tracking tables into one.
-    
-    Args:
-        conn: OMERO connection
-        table_ids: List of table IDs to merge
-        new_title: Title for the new merged table
-        container_type: Container type for new table
-        container_id: Container ID for new table
-        
-    Returns:
-        New table ID if successful, None otherwise
-    """
-    try:
-        from .omero_functions import post_typed_table, read_tracking_table
-
-        # Load all tables
-        dfs = []
-        for table_id in table_ids:
-            try:
-                df = read_tracking_table(conn, table_id)
-                df['source_table_id'] = table_id  # Track source
-                dfs.append(df)
-                print(f"Loaded table {table_id}: {len(df)} rows")
-            except Exception as e:
-                print(f"Could not load table {table_id}: {e}")
-        
-        if not dfs:
-            print("No tables could be loaded")
-            return None
-        
-        # Merge dataframes
-        merged_df = pd.concat(dfs, ignore_index=True, sort=False)
-        
-        # Remove duplicates based on key columns if they exist
-        key_columns = ['image_id', 'timepoint', 'z_slice', 'channel']
-        existing_keys = [col for col in key_columns if col in merged_df.columns]
-        
-        if existing_keys:
-            initial_rows = len(merged_df)
-            merged_df = merged_df.drop_duplicates(subset=existing_keys, keep='first')
-            final_rows = len(merged_df)
-            
-            if initial_rows != final_rows:
-                print(f"Removed {initial_rows - final_rows} duplicate rows")
-        
-        # Create new table (typed, so the merged table keeps its Image/Roi links)
-        new_table_id = post_typed_table(
-            conn,
-            df=merged_df,
-            object_type=container_type,
-            object_id=container_id,
-            title=new_title
-        )
-        
-        print(f"Created merged table '{new_title}' with {len(merged_df)} rows")
-        print(f"   New table ID: {new_table_id}")
-        
-        return new_table_id
-        
-    except Exception as e:
-        print(f"Error merging tables: {e}")
-        return None
 
 
 # =============================================================================
@@ -361,133 +236,9 @@ def delete_annotations_by_namespace(conn, object_type: str, object_id: int,
         return 0
 
 
-def validate_roi_integrity(conn, image_id: int) -> Dict[str, Any]:
-    """Check ROI data integrity for an image.
-    
-    Args:
-        conn: OMERO connection
-        image_id: ID of image to check
-        
-    Returns:
-        Dictionary with integrity check results
-    """
-    results = {
-        'image_id': image_id,
-        'total_rois': 0,
-        'total_shapes': 0,
-        'roi_types': {},
-        'issues': [],
-        'is_valid': True
-    }
-    
-    try:
-        # Get image object
-        image = conn.getObject("Image", image_id)
-        if not image:
-            results['issues'].append(f"Image {image_id} not found")
-            results['is_valid'] = False
-            return results
-        
-        # Get ROIs
-        roi_service = conn.getRoiService()
-        result = roi_service.findByImage(image_id, None)
-        
-        results['total_rois'] = len(result.rois)
-        
-        for roi in result.rois:
-            for shape in roi.getPrimaryIterator():
-                results['total_shapes'] += 1
-                
-                shape_type = type(shape).__name__
-                results['roi_types'][shape_type] = results['roi_types'].get(shape_type, 0) + 1
-                
-                # Check for basic validity
-                try:
-                    # Try to access basic shape properties
-                    _ = shape.getTheZ()
-                    _ = shape.getTheC() 
-                    _ = shape.getTheT()
-                except Exception as e:
-                    results['issues'].append(f"Invalid shape properties: {e}")
-                    results['is_valid'] = False
-        
-        print(f"ROI integrity check for image {image_id}:")
-        print(f"   Total ROIs: {results['total_rois']}")
-        print(f"   Total shapes: {results['total_shapes']}")
-        print(f"   Shape types: {results['roi_types']}")
-        
-        if results['issues']:
-            print(f"   Issues found: {len(results['issues'])}")
-            results['is_valid'] = False
-        else:
-            print("   No issues found")
-        
-    except Exception as e:
-        results['issues'].append(f"Error during integrity check: {e}")
-        results['is_valid'] = False
-        print(f"Error checking ROI integrity: {e}")
-    
-    return results
-
-
 # =============================================================================
 # Connection and Error Handling Utilities
 # =============================================================================
-
-def get_server_info(conn) -> Dict[str, Any]:
-    """Get OMERO server information and status.
-    
-    Args:
-        conn: OMERO connection
-        
-    Returns:
-        Dictionary with server information
-    """
-    info = {
-        'server_version': 'Unknown',
-        'user': 'Unknown',
-        'group': 'Unknown',
-        'session_id': 'Unknown',
-        'is_admin': False,
-        'connection_status': 'Unknown'
-    }
-    
-    try:
-        # Get basic connection info
-        if conn.isConnected():
-            info['connection_status'] = 'Connected'
-            
-            # Get user info
-            user = conn.getUser()
-            if user:
-                info['user'] = user.getName()
-                info['is_admin'] = user.isAdmin()
-            
-            # Get group info
-            group = conn.getGroupFromContext()
-            if group:
-                info['group'] = group.getName()
-            
-            # Get session info
-            session = conn.getSession()
-            if session:
-                info['session_id'] = str(session.getUuid())
-            
-            # Try to get server version
-            try:
-                config = conn.getConfigService()
-                info['server_version'] = config.getVersion()
-            except Exception:
-                pass
-                
-        else:
-            info['connection_status'] = 'Disconnected'
-        
-    except Exception as e:
-        print(f"Error getting server info: {e}")
-        info['connection_status'] = f'Error: {e}'
-    
-    return info
 
 
 def get_container_info(conn, container_type: str, container_id: int) -> Optional[Dict[str, Any]]:
@@ -618,121 +369,6 @@ def _spread_sample(items: List[Any], n: int) -> List[Any]:
 # =============================================================================
 # Generic Image Loading Utilities
 # =============================================================================
-
-def get_dask_image_multiple(conn, image_list: List, timepoints: List[int], 
-                           channels: List[int], z_slices: List[int]):
-    """Load image data using dask for memory efficiency.
-    
-    This function creates dask arrays for lazy loading and only materializes
-    them to numpy arrays when needed by downstream processing.
-    
-    This is a generic utility that could be contributed to ezomero in the future.
-    
-    Args:
-        conn: OMERO connection
-        image_list: List of OMERO image objects
-        timepoints: List of timepoint indices
-        channels: List of channel indices  
-        z_slices: List of z-slice indices
-        
-    Returns:
-        List of numpy arrays containing image data (materialized from dask)
-    """
-    if not image_list:
-        return []
-    
-    print(f"Loading {len(image_list)} images using dask...")
-    
-    # Create dask arrays for each image
-    dask_arrays = []
-    for i, image in enumerate(image_list):
-        if not image:
-            continue
-            
-        try:
-            # Create lazy-loaded dask array for this image
-            dask_array = _create_dask_array_for_image(conn, image, timepoints, channels, z_slices)
-            dask_arrays.append(dask_array)
-            
-        except Exception as e:
-            print(f"Could not create dask array for image {image.getId()}: {e}")
-            # Fallback: create zeros array
-            height = image.getSizeY()
-            width = image.getSizeX()
-            fallback_array = np.zeros((height, width), dtype=np.uint16)
-            dask_arrays.append(fallback_array)
-    
-    # Materialize dask arrays to numpy arrays in chunks for memory efficiency
-    print("Materializing dask arrays to numpy...")
-    materialized_images = []
-    
-    # Process in smaller chunks to avoid memory issues
-    chunk_size = min(3, len(dask_arrays))  # Process max 3 images at a time
-    
-    for chunk_start in range(0, len(dask_arrays), chunk_size):
-        chunk_end = min(chunk_start + chunk_size, len(dask_arrays))
-        chunk_arrays = dask_arrays[chunk_start:chunk_end]
-        
-        print(f"   Processing chunk {chunk_start//chunk_size + 1}/{(len(dask_arrays)-1)//chunk_size + 1}")
-        
-        # Compute this chunk
-        for dask_array in chunk_arrays:
-            if hasattr(dask_array, 'compute'):
-                # It's a dask array, compute it
-                numpy_array = dask_array.compute()
-            else:
-                # It's already a numpy array (fallback case)
-                numpy_array = dask_array
-            
-            materialized_images.append(numpy_array)
-    
-    print(f"Successfully loaded {len(materialized_images)} images")
-    return materialized_images
-
-
-def get_dask_image_single(conn, image, timepoints: List[int], 
-                         channels: List[int], z_slices: List[int]):
-    """Load a single image using dask for memory efficiency.
-    
-    This is a generic utility that could be contributed to ezomero in the future.
-    
-    Args:
-        conn: OMERO connection
-        image: Single OMERO image object
-        timepoints: List of timepoint indices
-        channels: List of channel indices
-        z_slices: List of z-slice indices
-        
-    Returns:
-        Numpy array containing image data
-    """
-    if not image:
-        return None
-    
-    try:
-        dask_array = _create_dask_array_for_image(conn, image, timepoints, channels, z_slices)
-        
-        if hasattr(dask_array, 'compute'):
-            return dask_array.compute()
-        else:
-            return dask_array
-            
-    except Exception as e:
-        print(f"Error with dask loading for image {image.getId()}: {e}")
-        # Direct loading fallback
-        pixels = image.getPrimaryPixels()
-        t = timepoints[0] if timepoints else 0
-        c = channels[0] if channels else 0
-        z = z_slices[0] if z_slices else 0
-
-        try:
-            plane_data = pixels.getPlane(z, c, t)
-            return plane_data
-        except Exception as e2:
-            print(f"Could not load plane for image {image.getId()}: {e2}")
-            height = image.getSizeY()
-            width = image.getSizeX()
-            return np.zeros((height, width), dtype=np.uint16)
 
 
 def _create_dask_array_for_image(conn, image, timepoints: List[int], 

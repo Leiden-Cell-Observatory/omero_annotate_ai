@@ -100,7 +100,18 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=omero_annotate_ai --cov-report=html --cov-report=term-missing"
+markers = [
+    "unit: fast unit tests with mocked dependencies",
+    "omero: needs an OMERO server",
+    "integration: integration tests",
+    "docker: needs the Docker test OMERO (tests/docker-compose.yml)",
+    "slow: takes longer than a few seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::FutureWarning",
+]
 
 # Pixi configuration
 [tool.pixi.workspace]
