@@ -9,6 +9,13 @@ on:
     types: [ published ]
 
 jobs:
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Notebooks have no outputs
+      run: python3 .github/scripts/check_notebook_outputs.py
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
