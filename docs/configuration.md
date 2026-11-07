@@ -1,247 +1,156 @@
-# YAML Configuration Guide
+# Configuration (YAML)
 
-The OMERO Annotate AI package uses structured YAML configuration files to define annotation workflows. This ensures reproducibility and allows fine-grained control over all aspects of the annotation process.
+Every run is described by one YAML file. The widgets write it for you; this page lists
+every option for when you want to read, edit or write one by hand.
 
-## Configuration Overview
+Only `name` is required. Everything else has a default.
 
-The configuration system is built around a robust Pydantic model that validates all settings and provides sensible defaults. You can use configurations in two ways:
+!!! warning "Misspelled keys are ignored without a warning"
+    If a key is not recognised, it is silently dropped and the default is used. After
+    loading a config, print the sections you changed to check that they were read:
+    `print(config.spatial_coverage)`.
 
-1. **Interactive widgets** - Generate configurations through Jupyter notebook widgets
-2. **YAML files** - Define configurations directly in YAML for batch processing
-
-## Quick Start Example
-
-Here's a minimal working configuration:
+## A minimal example
 
 ```yaml
-# Basic OMERO micro-SAM Configuration
-schema_version: "1.0.0"
-name: "nuclei_segmentation_demo"
+name: hela_nuclei_v1
 
-# OMERO data source
 omero:
-  container_type: "dataset"
+  container_type: dataset
   container_id: 123
-  source_desc: "HeLa cells for nuclei segmentation"
 
-# Spatial processing settings
 spatial_coverage:
-  channels: [0]           # DAPI channel
-  timepoints: [0]         # Single timepoint
-  z_slices: [0, 1, 2]     # Process 3 z-slices
-  three_d: false          # Process slice-by-slice
-
-# AI model configuration
-ai_model:
-  name: "micro-sam"
-  model_type: "vit_b_lm"
-
-# Processing parameters
-processing:
-  batch_size: 0           # Process all images
+  channels: [0]            # annotate channel 0 (e.g. DAPI)
   use_patches: true
   patch_size: [512, 512]
-  patches_per_image: 4
+  patches_per_image: 2
 
-# Training data split
 training:
-  train_n: 5
-  validate_n: 2
-```
+  train_n: 5               # images for training
+  validate_n: 2            # images for validation
 
-## Complete Configuration Schema
-
-### Core Identification
-
-```yaml
-schema_version: "1.0.0"     # Configuration schema version
-name: "workflow_name"       # Unique workflow identifier  
-version: "1.0.0"           # Your workflow version
-created: "2025-01-14T10:30:00Z"  # Auto-generated timestamp
-
-authors:                   # Optional author information
-  - name: "Your Name"
-    email: "your.email@institution.edu" 
-    affiliation: "Your Institution"
-```
-
-### OMERO Connection
-
-```yaml
-omero:
-  container_type: "dataset"    # "dataset", "project", or "plate"
-  container_id: 123           # OMERO container ID
-  source_desc: "Description"  # Human-readable description
-  table_id: null              # OMERO tracking table ID (auto-managed)
-```
-
-#### Well Filtering (Plates Only)
-
-When working with plate containers, you can filter wells based on map annotation key-value pairs attached to wells:
-
-```yaml
-omero:
-  container_type: "plate"
-  container_id: 456
-  well_filters:                 # Filter by well metadata (AND logic)
-    cellline: ["U2OS", "HeLa"]  # Include wells with cellline U2OS OR HeLa
-    treatment: ["Control"]      # AND treatment = Control
-  well_filter_mode: "include"   # "include" or "exclude" matching wells
-```
-
-- **`well_filters`**: Dictionary mapping metadata keys to lists of acceptable values. All conditions must be met (AND logic between keys, OR logic within values).
-- **`well_filter_mode`**: Set to `"include"` to process only matching wells, or `"exclude"` to skip matching wells.
-
-### Study Context (MIFA Compatible)
-
-```yaml
-study:
-  title: "Study title"
-  description: "Detailed study description" 
-  keywords: ["nuclei", "segmentation", "fluorescence"]
-  organism: "Homo sapiens"
-  imaging_method: "fluorescence microscopy"
-
-dataset:
-  source_dataset_id: "S-BIAD123"  # BioImage Archive accession
-  source_dataset_url: "https://www.ebi.ac.uk/bioimaging/studies/S-BIAD123"
-  source_description: "Dataset description"
-  license: "CC-BY-4.0"
-```
-
-### Spatial Coverage Settings
-
-The spatial coverage section defines which parts of your images to process:
-
-```yaml
-spatial_coverage:
-  # Basic spatial selection
-  channels: [0, 1]              # Channel indices to process
-  timepoints: [0]               # Timepoint indices  
-  z_slices: [0, 1, 2, 3, 4]     # Z-slice indices
-  
-  # Selection modes
-  timepoint_mode: "specific"     # "all", "random", "specific"
-  z_slice_mode: "specific"       # "all", "random", "specific"
-  
-  # 3D processing
-  three_d: false                 # Enable 3D volumetric processing
-  z_range_start: 0               # Start z-slice for 3D (when three_d=true)
-  z_range_end: 10                # End z-slice for 3D (when three_d=true)
-  
-  spatial_units: "pixels"        # Spatial measurement units
-```
-
-#### 2D vs 3D Processing
-
-**2D Mode (Default)**:
-```yaml
-spatial_coverage:
-  three_d: false
-  z_slices: [0, 1, 2, 3, 4]   # Each slice processed individually
-```
-
-**3D Volumetric Mode**:
-```yaml
-spatial_coverage:
-  three_d: true
-  z_range_start: 0             # Process z-slices 0-10 as one volume
-  z_range_end: 10
-  # OR alternatively:
-  z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-```
-
-#### Multi-Channel Workflows (Separate Label and Training Channels)
-
-For workflows where you want to segment/label on one channel (e.g., fluorescence) but train a model to predict from different channels (e.g., brightfield):
-
-```yaml
-spatial_coverage:
-  channels: [0, 1, 2]           # All channels available
-  label_channel: 0              # Channel for segmentation labels (e.g., DAPI)
-  training_channels: [1, 2]     # Channel(s) for model training input (e.g., brightfield)
-```
-
-- **`label_channel`**: Channel index used for creating segmentation labels. Defaults to `channels[0]` if not specified.
-- **`training_channels`**: Channel index(es) used as model training input. Supports multiple channels. Defaults to `[label_channel]` if not specified.
-
-This enables workflows like:
-- Segment nuclei using DAPI fluorescence (`label_channel: 0`)
-- Train a model to predict nuclei from brightfield images (`training_channels: [1]`)
-
-#### Random Selection with Fixed Count
-
-When using `random` mode for timepoints or z-slices, you can specify exactly how many to randomly select:
-
-```yaml
-spatial_coverage:
-  timepoints: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  timepoint_mode: "random"
-  n_timepoints: 5              # Randomly select exactly 5 timepoints
-
-  z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  z_slice_mode: "random"
-  n_slices: 3                  # Randomly select exactly 3 z-slices
-```
-
-- **`n_timepoints`**: Number of timepoints to randomly select when `timepoint_mode: "random"`. If not specified, uses the length of the `timepoints` list.
-- **`n_slices`**: Number of z-slices to randomly select when `z_slice_mode: "random"`. If not specified, uses the length of the `z_slices` list.
-
-### Annotation Methodology
-
-```yaml
-annotation_methodology:
-  annotation_type: "segmentation_mask"      # "segmentation_mask", "bounding_box", "point", "classification"
-  annotation_method: "automatic"            # "manual", "semi_automatic", "automatic"  
-  annotation_criteria: "Complete nuclei boundaries based on DAPI staining"
-  annotation_coverage: "representative"     # "all", "representative", "partial"
-```
-
-### AI Model Configuration
-
-```yaml
 ai_model:
-  name: "micro-sam"            # Model identifier
-  version: "latest"            # Model version
-  model_type: "vit_b_lm"       # "vit_b_lm", "vit_l_lm", "vit_h_lm"
-  framework: "pytorch"         # AI framework
+  pretrained_from: vit_b_lm
+
+workflow:
+  batch_size: 4            # images per napari session
+  read_only_mode: false    # true = write nothing to OMERO
+
+output:
+  output_directory: ./annotations/hela_nuclei_v1
 ```
 
-### Processing Parameters
+Load and run it:
+
+```python
+from omero_annotate_ai import load_config_from_yaml, create_pipeline
+
+config = load_config_from_yaml("hela_nuclei_v1.yaml")
+config.config_file_path = None     # keep this file unchanged; progress is saved in output_directory
+pipeline = create_pipeline(config, conn)
+table_id, config = pipeline.run_full_micro_sam_workflow()
+```
+
+A fully commented template is available from Python:
+
+```python
+from omero_annotate_ai.core.annotation_config import get_config_template
+print(get_config_template())
+```
+
+## `omero`: where the images come from
+
+| Key | Default | Meaning |
+|---|---|---|
+| `container_type` | `dataset` | `project`, `dataset`, `plate`, `screen` or `image` |
+| `container_id` | `0` | ID of the container. The config is attached here at the end of a run. |
+| `container_ids` | – | List of several containers of the same type to draw images from. Set `container_id` too. |
+| `source_desc` | `""` | Free-text description of the source. |
+| `well_filters` | – | Plates only: keep wells by their key-value pairs, e.g. `{treatment: [DMSO]}`. Several keys must all match. |
+| `well_filter_mode` | `include` | `include` keeps matching wells, `exclude` drops them. |
+| `table_id` | – | Filled in by the pipeline: the current tracking table. |
 
 ```yaml
-processing:
-  batch_size: 0                # Number of images to process (0 = all)
-  use_patches: true            # Extract patches vs full images
-  patch_size: [512, 512]       # Patch dimensions [width, height]
-  patches_per_image: 4         # Number of patches per image
-  random_patches: true         # Use random vs systematic patch extraction
+omero:
+  container_type: plate
+  container_id: 456
+  well_filters:
+    treatment: [DMSO, control]
+    cell_line: [HeLa]
+  well_filter_mode: include
 ```
 
-### Training Configuration
+## `spatial_coverage`: what to annotate in each image
 
-```yaml
-training:
-  validation_strategy: "random_split"    # "random_split", "expert_review", "cross_validation"
-  segment_all: false                     # Processing mode (see below)
-  split_unit: "image"                    # "image" or "well" (see Split Unit below)
-  split_rationale: null                  # Why this unit was chosen (free text, optional)
-  stratify_by: []                        # Well keys to split within, e.g. [cell_line, treatment]
+**Channels**
 
-  # Count-based splits (when segment_all: false)
-  train_n: 10                           # Number of training images (or wells)
-  validate_n: 5                         # Number of validation images (or wells)
-  test_n: 0                             # Number of test images (or wells)
+| Key | Default | Meaning |
+|---|---|---|
+| `channels` | `[0]` | Channels loaded from each image (0-based). |
+| `label_channel` | first of `channels` | Channel you annotate on. |
+| `training_channels` | `[label_channel]` | Channel(s) saved as model input. If different from `label_channel`, they are saved to `model_input/`. |
+| `context_channels` | `[]` | Extra channels shown in napari for orientation only; never used for training. |
+| `context_channel_names` | – | Display names for the context channels. |
+| `context_channel_colormaps` | – | napari colormaps for the context channels, e.g. `[magenta, green]`. |
 
-  # Fraction-based splits (when segment_all: true)
-  train_fraction: 0.7                   # Training data fraction
-  validation_fraction: 0.2              # Validation data fraction
-  test_fraction: 0.1                    # Test data fraction
+**Timepoints and z-slices**
 
-  quality_threshold: 0.8                # Minimum quality score (optional)
-```
+| Key | Default | Meaning |
+|---|---|---|
+| `timepoints` | `[0]` | Timepoints to use (with `timepoint_mode: specific`). |
+| `timepoint_mode` | `specific` | `specific` (the list above), `all`, or `random`. |
+| `n_timepoints` | – | Number of random timepoints (with `random`). |
+| `z_slices` | `[0]` | Z-slices to use (with `z_slice_mode: specific`). |
+| `z_slice_mode` | `specific` | `specific`, `all`, or `random`. |
+| `n_slices` | – | Number of random slices (with `random`). |
+| `three_d` | `false` | Annotate each timepoint as one 3D volume instead of separate planes. |
+| `z_range_start`, `z_range_end` | – | Volume range in 3D mode; filled from `z_slices` if not set. |
 
-#### Split Unit
+**Patches**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `use_patches` | `false` | Annotate crops instead of whole planes. |
+| `patch_size` | `[512, 512]` | Patch size in pixels. Square patches are safest. |
+| `patches_per_image` | `1` | Non-overlapping patches per plane. An image smaller than the patch gives one full-image unit. |
+| `random_patches` | `true` | Place patches at random positions. |
+
+## `training`: train, validation and test sets
+
+There are two ways to split, chosen by `segment_all`.
+
+=== "Pick a number of images (default)"
+
+    ```yaml
+    training:
+      segment_all: false
+      train_n: 10        # at least 1
+      validate_n: 3
+      test_n: 0
+    ```
+    Images are drawn at random from the container. Counts are images, not units: with
+    patches or several z-slices, one image gives several units.
+
+=== "Annotate everything"
+
+    ```yaml
+    training:
+      segment_all: true
+      train_fraction: 0.7
+      validation_fraction: 0.3
+      test_fraction: 0.0     # fractions add up to at most 1
+    ```
+    All images in the container are used and split by fraction.
+
+Setting the counts in fraction mode (or the other way round) gives a warning and has no
+effect.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `validation_strategy` | `random_split` | Recorded as metadata: `random_split`, `expert_review` or `cross_validation`. |
+| `quality_threshold` | – | Recorded as metadata. |
+
+### Split Unit
 
 `split_unit` sets the level at which data are assigned to a split. All annotations
 of one unit end up in the same split, and `train_n`/`validate_n`/`test_n` and the
@@ -269,7 +178,7 @@ one split, and `config.split_summary()` puts this in a sentence that is added to
 MIFA annotation method. Validation reports an error when annotations of one declared
 unit are found in different splits.
 
-#### Stratified Splits
+### Stratified Splits
 
 `stratify_by` divides the units over the splits per condition, so that validation
 and test cover every condition instead of whatever a random draw gives. Keys are
@@ -296,30 +205,7 @@ condition with `split_unit: well`), the split still runs with a warning, and
 an error, as it is most likely a typo. Images lacking a key that others have form
 their own `(missing)` group.
 
-#### Training Split Modes
-
-The `segment_all` field controls how training/validation/test splits are determined:
-
-**Count-based mode** (`segment_all: false`, default):
-```yaml
-training:
-  segment_all: false
-  train_n: 10        # Process exactly 10 training images
-  validate_n: 5      # Process exactly 5 validation images
-  test_n: 2          # Process exactly 2 test images
-```
-
-**Fraction-based mode** (`segment_all: true`):
-```yaml
-training:
-  segment_all: true
-  train_fraction: 0.7       # 70% for training
-  validation_fraction: 0.2  # 20% for validation
-  test_fraction: 0.1        # 10% for testing
-  # Fractions must sum to <= 1.0
-```
-
-### Normalisation of Model Input
+## `normalization`: intensity scaling of model input
 
 How raw intensities become model input is defined once, in the config, and travels with
 the annotation set (OMERO, YAML, MIFA export):
@@ -345,38 +231,70 @@ returns the matching BiaPy `DATA.NORMALIZATION` block. BiaPy's `div` and `scale_
 types guess the bit depth from the image maximum, so exporting with
 `apply_at_export: true` (BiaPy then applies the identity) is the most reliable route.
 
-### Workflow Control
+## `ai_model`: the model
+
+| Key | Default | Meaning |
+|---|---|---|
+| `pretrained_from` | `vit_b_lm` | micro-SAM model opened in napari, e.g. `vit_b_lm`, `vit_l_lm` or `vit_b_em_organelles`. |
+| `framework` | `micro_sam` | `micro_sam`, `cellpose` or `web_annotation`. Recorded as metadata; the workflow you call decides which tool is used. |
+| `model_name`, `model_version`, `model_url`, `model_doi` | | Describe the model for the record. |
+| `training_mode` | `inference` | `inference`, `finetuning` or `from_scratch`. |
+
+## `workflow`: how the run behaves
+
+| Key | Default | Meaning |
+|---|---|---|
+| `batch_size` | `0` | Units per napari session; progress is saved after each batch. `0` = all at once. |
+| `read_only_mode` | `false` | `true`: write nothing to OMERO; keep images, masks and `tracking_table.csv` locally. Use on public servers such as the IDR. |
+| `resume_from_table` | `false` | Not reliable in this version; to resume, reload the saved YAML instead. See [Resume or repeat a run](tutorials/resume-and-repeat.md). |
+
+## `output`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `output_directory` | `./annotations` | Working directory for this run. Progress is saved here as `annotation_config_<name>.yaml`. |
+
+## Metadata for sharing
+
+These sections describe your study for others and are used by the
+[BioImage Archive export](tutorials/bioimage-archive-export.md). They do not change how
+the run works.
 
 ```yaml
-workflow:
-  resume_from_table: false      # Resume from existing OMERO annotation table
-  read_only_mode: false         # View results without uploading changes
+authors:
+  - name: Jane Doe
+    affiliation: Leiden University
+    email: j.doe@example.org
+    orcid: https://orcid.org/0000-0000-0000-0000
+
+study:
+  title: "Nuclei annotations in HeLa cells"
+  description: "Instance masks of nuclei for training segmentation models."
+  keywords: [nuclei, segmentation]
+  organism: "Homo sapiens"
+  imaging_method: "widefield fluorescence microscopy"
+  funding_statement: "Funded by NWO."
+
+dataset:
+  source_dataset_id: "S-BIAD123"
+  source_dataset_url: "https://www.ebi.ac.uk/biostudies/bioimages/studies/S-BIAD123"
+  source_description: "HeLa cells, Hoechst channel"
+  license: "CC-BY-4.0"
+
+annotation_methodology:
+  annotation_type: segmentation_mask        # bounding_box, point, classification, semantic_segmentation
+  annotation_method: semi_automatic         # manual, automatic
+  annotation_criteria: "Every nucleus fully inside the field."
+  annotation_coverage: representative       # all, partial
+  annotation_tool:
+    name: micro-sam
+    mode: interactive                       # automatic, human_in_the_loop
+
+tags: [segmentation, nuclei]
 ```
 
-- **`resume_from_table`**: When `true`, loads existing annotations from an OMERO table and resumes processing from where it left off. Useful for continuing interrupted workflows.
-- **`read_only_mode`**: When `true`, prevents any uploads to OMERO. Use this to review existing results without modifications.
-
-### Output Configuration
-
-```yaml
-output:
-  output_directory: "./annotations"    # Output directory path
-  format: "ome_tif"                    # "tif", "ome_tif", "png", "numpy"
-  compression: null                    # Compression method (optional)
-  resume_from_checkpoint: false        # Resume interrupted workflow
-```
-
-### Metadata and Tracking
-
-```yaml
-# Workflow metadata (bioimage.io compatible)
-documentation: "https://github.com/your-org/your-repo/docs"
-repository: "https://github.com/your-org/your-repo"  
-tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
-
-# Annotation tracking (auto-populated during processing)
-annotations: []  # List of ImageAnnotation records
-```
+Other top-level keys: `version` (your version of this config), `documentation` and
+`repository` (URLs), and `feature_types` (list of `name` and `color`).
 
 ### Notes and Custom Metadata
 
@@ -390,239 +308,63 @@ custom_metadata:
   objective: "10x"
 ```
 
-## Working with Configuration Files
+## Filled in by the pipeline
 
-### Loading Configurations
+`schema_version`, `created`, `config_file_path` and the `annotations:` list are written
+by the pipeline. `annotations:` holds one entry per annotation unit with its split,
+position and `processed` flag; this is what makes a run resumable. Remove it when you
+reuse a config for a new run.
 
-```python
-from omero_annotate_ai.core.annotation_config import load_config
+## Example recipes
 
-# From YAML file
-config = load_config("my_config.yaml")
+??? example "Time-lapse: 5 random timepoints"
+    ```yaml
+    spatial_coverage:
+      channels: [0]
+      timepoint_mode: random
+      n_timepoints: 5
+    ```
 
-# From dictionary  
-config_dict = {...}
-config = load_config(config_dict)
+??? example "Annotate fluorescence, train on brightfield"
+    ```yaml
+    spatial_coverage:
+      channels: [0, 1]
+      label_channel: 0          # nuclei stain
+      training_channels: [1]    # brightfield
+    ```
 
-# Create default configuration
-config = create_default_config()
-```
+??? example "Large images on a CPU"
+    ```yaml
+    spatial_coverage:
+      use_patches: true
+      patch_size: [256, 256]
+      patches_per_image: 4
+    ai_model:
+      pretrained_from: vit_b_lm
+    workflow:
+      batch_size: 5
+    ```
 
-### Saving Configurations
+??? example "3D volumes"
+    ```yaml
+    spatial_coverage:
+      channels: [0]
+      three_d: true
+      z_slices: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    ```
 
-```python
-# Save to YAML file
-config.save_yaml("my_config.yaml")
-
-# Export as dictionary
-config_dict = config.to_dict()
-
-# Export as YAML string
-yaml_string = config.to_yaml()
-```
-
-### Configuration Templates
-
-Generate a complete template with all options:
-
-```python
-from omero_annotate_ai.core.annotation_config import get_config_template
-
-template = get_config_template()
-print(template)
-```
-
-## Advanced Configuration Examples
-
-### Multi-channel Time Series
-
-```yaml
-name: "multi_channel_timeseries"
-spatial_coverage:
-  channels: [0, 1, 2]         # DAPI, GFP, RFP
-  timepoints: [0, 5, 10, 15]  # Every 5th timepoint
-  z_slices: [2]               # Middle focal plane
-  timepoint_mode: "specific"
-```
-
-### 3D Volumetric Processing
-
-```yaml
-name: "3d_organoid_segmentation" 
-spatial_coverage:
-  channels: [0]
-  timepoints: [0]
-  three_d: true
-  z_range_start: 5
-  z_range_end: 25             # Process 20 z-slices as volume
-```
-
-### Large-scale Patch-based Processing
-
-```yaml
-name: "large_image_patches"
-processing:
-  use_patches: true
-  patch_size: [1024, 1024]    # Larger patches
-  patches_per_image: 16       # More patches per image
-  random_patches: false       # Systematic grid sampling
-training:
-  train_n: 100               # Process many images
-  validate_n: 20
-```
-
-### High-throughput Screening
-
-```yaml
-name: "hts_plate_processing"
-omero:
-  container_type: "plate"
-  container_id: 456
-spatial_coverage:
-  channels: [0, 1]            # Nuclei + marker
-  timepoints: [0]
-  z_slices: [0]               # Single focal plane
-processing:
-  batch_size: 50              # Process in batches
-  use_patches: false          # Full images only
-```
-
-### Plate with Well Filtering
-
-Filter wells based on metadata annotations (e.g., cell line and treatment conditions):
-
-```yaml
-name: "filtered_plate_workflow"
-omero:
-  container_type: "plate"
-  container_id: 789
-  well_filters:
-    cellline:
-      - MDA_iRFP
-      - HCC_iRFP
-    treatment:
-      - DMSO
-  well_filter_mode: include   # Only process matching wells
-spatial_coverage:
-  channels: [0]
-  timepoints: [0]
-  z_slices: [0]
-```
-
-### Multi-Channel Label-Free Prediction
-
-Train a model to predict segmentation from brightfield using fluorescence labels:
-
-```yaml
-name: "label_free_prediction"
-spatial_coverage:
-  channels: [0, 1]            # Both channels available
-  label_channel: 0            # Use DAPI fluorescence for labeling
-  training_channels: [1]      # Train model on brightfield input
-  timepoints: [0]
-  z_slices: [0]
-training:
-  train_n: 50
-  validate_n: 10
-```
-
-### Random Sampling with Fixed Count
-
-Randomly sample a fixed number of timepoints and z-slices from larger ranges:
-
-```yaml
-name: "random_sampling_workflow"
-spatial_coverage:
-  channels: [0]
-  timepoints: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-  timepoint_mode: "random"
-  n_timepoints: 4             # Randomly select 4 timepoints
-  z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-  z_slice_mode: "random"
-  n_slices: 3                 # Randomly select 3 z-slices
-```
-
-### Resume from Existing Annotation Table
-
-Continue an interrupted workflow by resuming from an OMERO annotation table:
-
-```yaml
-name: "resumed_workflow"
-omero:
-  container_type: "dataset"
-  container_id: 123
-  table_id: 456               # Existing annotation table ID
-workflow:
-  resume_from_table: true     # Resume from existing progress
-  read_only_mode: false
-```
-
-## Configuration Validation
-
-The configuration system provides thorough validation:
-
-- **Type checking** - All fields are validated against expected types
-- **Range validation** - Numeric fields are checked against valid ranges  
-- **Dependency validation** - Related fields are checked for consistency
-- **3D configuration validation** - 3D settings are validated for completeness
-
-## Integration with Widgets
-
-Widget-generated configurations are fully compatible with YAML configurations:
+## Working with configs in Python
 
 ```python
-# Generate config with widgets
-workflow_widget = create_workflow_widget(connection=conn)
-workflow_widget.display()
-config = workflow_widget.get_config()
+from omero_annotate_ai import load_config, create_default_config
 
-# Save widget config as YAML
-config.save_yaml("widget_generated_config.yaml")
+config = load_config("my_run.yaml")       # also accepts a dict
+config.save_yaml("copy.yaml")
+print(config.to_yaml())
 
-# Load and modify YAML config
-config = load_config("widget_generated_config.yaml")
-config.processing.batch_size = 10
-config.save_yaml("modified_config.yaml")
+config = create_default_config()          # start from defaults
+config.name = "new_run"
+config.omero.container_id = 123
 ```
 
-## Best Practices
-
-1. **Use descriptive names** - Make workflow names meaningful for tracking
-2. **Document your criteria** - Specify clear annotation criteria
-3. **Version your configs** - Update version numbers when making changes
-4. **Validate before running** - Test configurations on small datasets first
-5. **Keep configs with data** - Store configuration files alongside results
-6. **Use templates** - Start from the provided template for completeness
-
-## Troubleshooting
-
-Common configuration issues and solutions:
-
-**3D Configuration Errors**:
-```yaml
-# ❌ Incorrect - missing z_range when three_d=true
-spatial_coverage:
-  three_d: true
-  z_slices: [0, 1, 2]
-
-# ✅ Correct - specify z_range for 3D
-spatial_coverage:
-  three_d: true  
-  z_range_start: 0
-  z_range_end: 2
-```
-
-**Training Split Validation**:
-```yaml
-# ❌ Incorrect - fractions don't sum to 1.0
-training:
-  train_fraction: 0.8
-  validation_fraction: 0.3
-
-# ✅ Correct - use explicit counts or proper fractions
-training:
-  train_n: 8
-  validate_n: 2
-```
-
-For more examples and tutorials, see the [tutorial section](tutorials/index.md) for detailed workflow guides.
+Full details: [API: Configuration](api/config.md).
