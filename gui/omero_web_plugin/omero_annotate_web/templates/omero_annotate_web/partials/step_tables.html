@@ -1,0 +1,44 @@
+<div class="step-content">
+    <h2>Step 2: Annotation Table Management</h2>
+    <p class="step-description">Scan for existing annotation tables or create a new one.</p>
+
+    <div class="form-group">
+        <button id="btn-scan-tables" class="btn btn-primary">Scan for Existing Tables</button>
+    </div>
+
+    <div id="existing-tables" class="existing-tables" style="display: none;">
+        <h3>Existing Tables</h3>
+        <div id="tables-list" class="tables-list">
+            <p class="info-text">No existing tables found.</p>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <h3>Table Selection</h3>
+        <div class="radio-group">
+            <label class="radio-label">
+                <input type="radio" name="table-option" value="new" checked>
+                Create New Table
+            </label>
+            <label class="radio-label">
+                <input type="radio" name="table-option" value="existing">
+                Use Existing Table
+            </label>
+        </div>
+    </div>
+
+    <div id="new-table-section" class="form-section">
+        <div class="form-group">
+            <label for="table-name-input">Table Name:</label>
+            <div class="input-with-button">
+                <input type="text" id="table-name-input" class="form-control" placeholder="annotation_table">
+                <button id="btn-generate-name" class="btn btn-secondary">Generate Unique Name</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="selected-table-info" class="selected-table-info" style="display: none;">
+        <h3>Selected Table</h3>
+        <p><strong>Name:</strong> <span id="selected-table-name"></span></p>
+    </div>
+</div>

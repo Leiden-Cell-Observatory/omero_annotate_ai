@@ -200,9 +200,6 @@ stop-omero = {cmd = "cd tests && docker-compose down -v"}
 build = { cmd = "python -m build" }
 clean = {cmd = "rm -rf build/ dist/ *.egg-info/ && find . -type d -name __pycache__ -exec rm -rf {} + && find . -type f -name \"*.pyc\" -delete"}
 
-# Streamlit GUI
-streamlit-app = "streamlit run gui/streamlit_prototype/app.py"
-
 # Publishing tasks
 check-package = { cmd = "python -m twine check dist/*" }
 upload-test = { cmd = "python -m twine upload --repository testpypi dist/*" }

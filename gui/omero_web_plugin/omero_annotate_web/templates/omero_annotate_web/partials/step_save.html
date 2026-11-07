@@ -1,0 +1,30 @@
+<div class="step-content">
+    <h2>Step 4: Review and Save Configuration</h2>
+    <p class="step-description">Review the generated YAML configuration and save it to OMERO.</p>
+
+    <div class="form-group">
+        <button id="btn-preview-yaml" class="btn btn-primary">Preview Configuration</button>
+    </div>
+
+    <div id="yaml-preview-section" style="display: none;">
+        <h3>Configuration Preview (YAML)</h3>
+        <textarea id="yaml-preview" class="yaml-preview" readonly></textarea>
+
+        <div class="form-group">
+            <button id="btn-save-config" class="btn btn-success btn-lg">Save Configuration to OMERO</button>
+        </div>
+    </div>
+
+    <div id="save-result" class="save-result" style="display: none;">
+        <h3>Configuration Saved Successfully!</h3>
+        <div class="success-info">
+            <p><strong>File Annotation ID:</strong> <span id="file-ann-id"></span></p>
+            <p>The configuration has been attached to your selected container.</p>
+
+            <div class="action-buttons">
+                <a id="download-config-link" href="#" class="btn btn-primary">Download Configuration</a>
+                <button id="btn-new-config" class="btn btn-secondary">Create Another Configuration</button>
+            </div>
+        </div>
+    </div>
+</div>

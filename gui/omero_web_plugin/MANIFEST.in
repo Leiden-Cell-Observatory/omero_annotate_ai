@@ -1,0 +1,5 @@
+include README.md
+include INSTALL.md
+include LICENSE
+recursive-include omero_annotate_web/static *
+recursive-include omero_annotate_web/templates *

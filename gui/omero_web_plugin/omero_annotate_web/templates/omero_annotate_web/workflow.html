@@ -1,0 +1,77 @@
+{% extends "omero_annotate_web/base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="workflow-container">
+    <!-- Progress indicator -->
+    <div class="workflow-progress">
+        <div class="progress-step active" data-step="1">
+            <span class="step-number">1</span>
+            <span class="step-label">Container Selection</span>
+        </div>
+        <div class="progress-step" data-step="2">
+            <span class="step-number">2</span>
+            <span class="step-label">Table Management</span>
+        </div>
+        <div class="progress-step" data-step="3">
+            <span class="step-number">3</span>
+            <span class="step-label">Configuration</span>
+        </div>
+        <div class="progress-step" data-step="4">
+            <span class="step-number">4</span>
+            <span class="step-label">Save</span>
+        </div>
+    </div>
+
+    <!-- Status/message area -->
+    <div id="status-message" class="status-message" style="display: none;">
+        <span class="message-text"></span>
+    </div>
+
+    <!-- Workflow steps -->
+    <div class="workflow-steps">
+        <!-- Step 1: Container Selection -->
+        <div class="workflow-step" id="step-1" style="display: block;">
+            {% include "omero_annotate_web/partials/step_container.html" %}
+        </div>
+
+        <!-- Step 2: Table Management -->
+        <div class="workflow-step" id="step-2" style="display: none;">
+            {% include "omero_annotate_web/partials/step_tables.html" %}
+        </div>
+
+        <!-- Step 3: Configuration -->
+        <div class="workflow-step" id="step-3" style="display: none;">
+            {% include "omero_annotate_web/partials/step_config.html" %}
+        </div>
+
+        <!-- Step 4: Save -->
+        <div class="workflow-step" id="step-4" style="display: none;">
+            {% include "omero_annotate_web/partials/step_save.html" %}
+        </div>
+    </div>
+
+    <!-- Navigation buttons -->
+    <div class="workflow-navigation">
+        <button id="btn-previous" class="btn btn-secondary" style="display: none;">Previous</button>
+        <button id="btn-next" class="btn btn-primary">Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{% static 'omero_annotate_web/js/api-client.js' %}"></script>
+<script src="{% static 'omero_annotate_web/js/components/container-selector.js' %}"></script>
+<script src="{% static 'omero_annotate_web/js/components/table-manager.js' %}"></script>
+<script src="{% static 'omero_annotate_web/js/components/config-editor.js' %}"></script>
+<script src="{% static 'omero_annotate_web/js/components/yaml-preview.js' %}"></script>
+<script src="{% static 'omero_annotate_web/js/workflow-app.js' %}"></script>
+
+<script>
+    // Initialize workflow app on page load
+    $(document).ready(function() {
+        window.workflowApp = new WorkflowApp();
+        window.workflowApp.init();
+    });
+</script>
+{% endblock %}

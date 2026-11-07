@@ -7,34 +7,55 @@ through web interfaces, following OMERO.web patterns.
 
 import json
 import logging
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse
 from django.shortcuts import render
-from django.contrib.auth.decorators import login_required
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
+from omeroweb.decorators import login_required
 
 logger = logging.getLogger(__name__)
 
 
-@login_required
-def annotation_interface(request):
-    """Main annotation interface view"""
+@login_required()
+@ensure_csrf_cookie
+def workflow_view(request, conn=None, **kwargs):
+    """Main workflow interface view"""
     context = {
-        'page_title': 'OMERO Annotation Workflow',
+        'page_title': 'AI Annotation Workflow Configuration',
         'app_name': 'omero_annotate_web'
     }
-    return render(request, 'omero_annotate_web/annotation_interface.html', context)
+
+    # Add user info to context if connected
+    if conn and conn.isConnected():
+        user = conn.getUser()
+        context['omero_user'] = user.getOmeName()
+
+    return render(request, 'omero_annotate_web/workflow.html', context)
 
 
-@login_required
-@require_http_methods(["POST"])
+@login_required()
+@ensure_csrf_cookie
+def index_view(request, conn=None, **kwargs):
+    """Center panel integration view (for omero.web.ui.center_plugins)"""
+    context = {
+        'page_title': 'AI Annotation Workflow Configuration',
+        'app_name': 'omero_annotate_web'
+    }
+
+    # Add user info to context if connected
+    if conn and conn.isConnected():
+        user = conn.getUser()
+        context['omero_user'] = user.getOmeName()
+
+    return render(request, 'omero_annotate_web/index.html', context)
+
+
+@login_required()
+@require_http_methods(["POST", "GET"])
 @csrf_exempt
-def api_omero_connection(request):
+def api_omero_connection(request, conn=None, **kwargs):
     """API endpoint for OMERO connection testing"""
     try:
-        # Get OMERO connection from OMERO.web session
-        conn = request.session.get('connector')
-
         if conn and conn.isConnected():
             user = conn.getUser()
             return JsonResponse({
@@ -56,14 +77,16 @@ def api_omero_connection(request):
         }, status=500)
 
 
-@login_required
+@login_required()
 @require_http_methods(["GET"])
-def api_containers(request, container_type):
+def api_containers(request, container_type, conn=None, **kwargs):
     """API endpoint to list OMERO containers"""
     try:
-        conn = request.session.get('connector')
+        logger.info(f"API request for container_type: {container_type}")
+        logger.info(f"Connection status: {conn is not None and conn.isConnected()}")
 
         if not conn or not conn.isConnected():
+            logger.error("No OMERO connection available")
             return JsonResponse({
                 'success': False,
                 'message': 'No OMERO connection'
@@ -71,45 +94,57 @@ def api_containers(request, container_type):
 
         # List containers based on type
         containers = []
-        if container_type == 'projects':
+        if container_type == 'project':
             for project in conn.getObjects("Project"):
                 containers.append({
                     'id': project.getId(),
                     'name': project.getName(),
                     'description': project.getDescription() or ""
                 })
-        elif container_type == 'datasets':
+        elif container_type == 'dataset':
             for dataset in conn.getObjects("Dataset"):
                 containers.append({
                     'id': dataset.getId(),
                     'name': dataset.getName(),
                     'description': dataset.getDescription() or ""
                 })
-        # Add more container types as needed
+        elif container_type == 'plate':
+            for plate in conn.getObjects("Plate"):
+                containers.append({
+                    'id': plate.getId(),
+                    'name': plate.getName(),
+                    'description': plate.getDescription() or ""
+                })
+        elif container_type == 'screen':
+            for screen in conn.getObjects("Screen"):
+                containers.append({
+                    'id': screen.getId(),
+                    'name': screen.getName(),
+                    'description': screen.getDescription() or ""
+                })
 
+        logger.info(f"Found {len(containers)} containers of type {container_type}")
         return JsonResponse({
             'success': True,
             'containers': containers
         })
 
     except Exception as e:
-        logger.error(f"Container listing error: {e}")
+        logger.error(f"Container listing error: {e}", exc_info=True)
         return JsonResponse({
             'success': False,
             'message': str(e)
         }, status=500)
 
 
-@login_required
+@login_required()
 @require_http_methods(["POST"])
 @csrf_exempt
-def api_create_pipeline(request):
+def api_create_pipeline(request, conn=None, **kwargs):
     """API endpoint to create annotation pipeline"""
     try:
         data = json.loads(request.body)
 
-        # Get OMERO connection
-        conn = request.session.get('connector')
         if not conn or not conn.isConnected():
             return JsonResponse({
                 'success': False,
@@ -138,17 +173,15 @@ def api_create_pipeline(request):
         }, status=500)
 
 
-@login_required
+@login_required()
 @require_http_methods(["POST"])
 @csrf_exempt
-def api_launch_annotation(request):
+def api_launch_annotation(request, conn=None, **kwargs):
     """API endpoint to launch annotation workflow"""
     try:
         data = json.loads(request.body)
         pipeline_id = data.get('pipeline_id')
 
-        # Get OMERO connection
-        conn = request.session.get('connector')
         if not conn or not conn.isConnected():
             return JsonResponse({
                 'success': False,
@@ -168,6 +201,239 @@ def api_launch_annotation(request):
 
     except Exception as e:
         logger.error(f"Annotation launch error: {e}")
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@login_required()
+@require_http_methods(["GET"])
+def api_container_info(request, container_type, container_id, conn=None, **kwargs):
+    """API endpoint to get detailed container information"""
+    try:
+        from .utils import get_container_metadata
+
+        if not conn or not conn.isConnected():
+            return JsonResponse({
+                'success': False,
+                'message': 'No OMERO connection'
+            }, status=400)
+
+        metadata = get_container_metadata(conn, container_type, container_id)
+
+        if metadata:
+            return JsonResponse({
+                'success': True,
+                'metadata': metadata
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'message': f'Container {container_type} {container_id} not found'
+            }, status=404)
+
+    except Exception as e:
+        logger.error(f"Container info error: {e}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@login_required()
+@require_http_methods(["POST"])
+@csrf_exempt
+def api_tables_scan(request, conn=None, **kwargs):
+    """API endpoint to scan for existing annotation tables"""
+    try:
+        data = json.loads(request.body)
+        container_type = data.get('container_type')
+        container_id = data.get('container_id')
+
+        if not conn or not conn.isConnected():
+            return JsonResponse({
+                'success': False,
+                'message': 'No OMERO connection'
+            }, status=400)
+
+        # Scan for tables attached to the container
+        tables = []
+        container = conn.getObject(container_type.capitalize(), container_id)
+
+        if container:
+            for ann in container.listAnnotations():
+                if hasattr(ann, 'getFile') and ann.getFile():
+                    # Check if it's a table file
+                    file_name = ann.getFile().getName()
+                    if 'table' in file_name.lower() or file_name.endswith('.h5'):
+                        tables.append({
+                            'id': ann.getId(),
+                            'name': file_name,
+                            'description': ann.getDescription() or ''
+                        })
+
+        return JsonResponse({
+            'success': True,
+            'tables': tables
+        })
+
+    except Exception as e:
+        logger.error(f"Table scan error: {e}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@login_required()
+@require_http_methods(["POST"])
+@csrf_exempt
+def api_tables_generate_name(request, conn=None, **kwargs):
+    """API endpoint to generate unique table name"""
+    try:
+        data = json.loads(request.body)
+        base_name = data.get('base_name', 'annotation_table')
+
+        # Generate timestamp-based unique name
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        table_name = f"{base_name}_{timestamp}"
+
+        return JsonResponse({
+            'success': True,
+            'table_name': table_name
+        })
+
+    except Exception as e:
+        logger.error(f"Table name generation error: {e}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@login_required()
+@require_http_methods(["POST"])
+@csrf_exempt
+def api_config_validate(request, conn=None, **kwargs):
+    """API endpoint to validate configuration"""
+    try:
+        data = json.loads(request.body)
+
+        # Basic validation
+        errors = []
+        warnings = []
+
+        # Check required fields
+        if not data.get('container_type'):
+            errors.append('Container type is required')
+        if not data.get('container_id'):
+            errors.append('Container ID is required')
+        if not data.get('table_name'):
+            warnings.append('No table name specified')
+
+        # Validate image selection if not segment_all
+        if not data.get('segment_all', False):
+            train_n = data.get('train_n', 0)
+            validate_n = data.get('validate_n', 0)
+            if train_n < 1:
+                errors.append('At least 1 training image is required')
+            if validate_n < 1:
+                warnings.append('No validation images specified')
+
+        return JsonResponse({
+            'success': len(errors) == 0,
+            'valid': len(errors) == 0,
+            'errors': errors,
+            'warnings': warnings
+        })
+
+    except Exception as e:
+        logger.error(f"Config validation error: {e}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@login_required()
+@require_http_methods(["POST"])
+@csrf_exempt
+def api_config_preview(request, conn=None, **kwargs):
+    """API endpoint to preview YAML configuration"""
+    try:
+        from .utils import create_config_from_form, config_to_yaml
+
+        data = json.loads(request.body)
+
+        # Convert form data to config
+        config = create_config_from_form(data)
+
+        # Convert to YAML
+        yaml_content = config_to_yaml(config)
+
+        return JsonResponse({
+            'success': True,
+            'yaml': yaml_content
+        })
+
+    except Exception as e:
+        logger.error(f"Config preview error: {e}", exc_info=True)
+        return JsonResponse({
+            'success': False,
+            'message': str(e)
+        }, status=500)
+
+
+@login_required()
+@require_http_methods(["POST"])
+@csrf_exempt
+def api_config_save(request, conn=None, **kwargs):
+    """API endpoint to save configuration to OMERO"""
+    try:
+        from .utils import create_config_from_form, config_to_yaml, attach_yaml_to_container
+
+        data = json.loads(request.body)
+
+        if not conn or not conn.isConnected():
+            return JsonResponse({
+                'success': False,
+                'message': 'No OMERO connection'
+            }, status=400)
+
+        # Convert form data to config
+        config = create_config_from_form(data)
+
+        # Convert to YAML
+        yaml_content = config_to_yaml(config)
+
+        # Attach to container
+        container_type = data.get('container_type')
+        container_id = data.get('container_id')
+
+        file_ann_id = attach_yaml_to_container(
+            conn,
+            container_type,
+            container_id,
+            yaml_content,
+            description="AI Annotation Workflow Configuration"
+        )
+
+        if file_ann_id:
+            return JsonResponse({
+                'success': True,
+                'file_annotation_id': file_ann_id,
+                'message': 'Configuration saved successfully'
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'message': 'Failed to save configuration'
+            }, status=500)
+
+    except Exception as e:
+        logger.error(f"Config save error: {e}", exc_info=True)
         return JsonResponse({
             'success': False,
             'message': str(e)

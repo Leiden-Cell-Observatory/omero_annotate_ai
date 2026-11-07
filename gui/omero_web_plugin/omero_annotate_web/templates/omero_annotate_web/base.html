@@ -1,0 +1,45 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_title }}{% endblock %} - OMERO.web</title>
+
+    <!-- OMERO.web base styles -->
+    <link rel="stylesheet" type="text/css" href="{% static 'webgateway/css/ome.body.css' %}" />
+
+    <!-- App-specific styles -->
+    <link rel="stylesheet" type="text/css" href="{% static 'omero_annotate_web/css/workflow.css' %}" />
+
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <div class="container">
+        <header class="app-header">
+            <h1>{% block page_header %}{{ page_title }}{% endblock %}</h1>
+            <div class="user-info">
+                {% if omero_user %}
+                    Logged in as: <strong>{{ omero_user }}</strong>
+                {% else %}
+                    Not connected
+                {% endif %}
+            </div>
+        </header>
+
+        <main class="app-content">
+            {% block content %}{% endblock %}
+        </main>
+
+        <footer class="app-footer">
+            <p>OMERO AI Annotation Workflow Configuration v0.1.0</p>
+        </footer>
+    </div>
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <!-- App-specific JavaScript -->
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

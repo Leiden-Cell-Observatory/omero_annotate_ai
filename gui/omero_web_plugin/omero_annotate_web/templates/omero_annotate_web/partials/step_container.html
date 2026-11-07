@@ -1,0 +1,57 @@
+<div class="step-content">
+    <h2>Step 1: Select OMERO Container</h2>
+    <p class="step-description">Choose a project, dataset, plate, or screen to configure for annotation.</p>
+
+    <div class="form-group">
+        <label for="container-type">Container Type:</label>
+        <select id="container-type" class="form-control">
+            <option value="">-- Select Type --</option>
+            <option value="project">Project</option>
+            <option value="dataset">Dataset</option>
+            <option value="plate">Plate</option>
+            <option value="screen">Screen</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="container-list">Select Container:</label>
+        <button id="btn-refresh-containers" class="btn btn-sm btn-secondary">Refresh</button>
+        <select id="container-list" class="form-control" disabled>
+            <option value="">-- Select container type first --</option>
+        </select>
+    </div>
+
+    <div id="container-info" class="container-info" style="display: none;">
+        <h3>Container Information</h3>
+        <div class="info-grid">
+            <div class="info-item">
+                <strong>Name:</strong>
+                <span id="info-name"></span>
+            </div>
+            <div class="info-item">
+                <strong>ID:</strong>
+                <span id="info-id"></span>
+            </div>
+            <div class="info-item">
+                <strong>Description:</strong>
+                <span id="info-description"></span>
+            </div>
+            <div class="info-item">
+                <strong>Images:</strong>
+                <span id="info-image-count"></span>
+            </div>
+            <div class="info-item">
+                <strong>Dimensions (XYZ):</strong>
+                <span id="info-dimensions"></span>
+            </div>
+            <div class="info-item">
+                <strong>Channels:</strong>
+                <span id="info-channels"></span>
+            </div>
+            <div class="info-item">
+                <strong>Timepoints:</strong>
+                <span id="info-timepoints"></span>
+            </div>
+        </div>
+    </div>
+</div>

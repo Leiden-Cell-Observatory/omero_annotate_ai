@@ -1,0 +1,161 @@
+<div class="step-content">
+    <h2>Step 3: Configure Annotation Parameters</h2>
+    <p class="step-description">Set up all parameters for the AI annotation workflow.</p>
+
+    <!-- Tabs for different configuration sections -->
+    <div class="config-tabs">
+        <button class="tab-button active" data-tab="annotation">Annotation Settings</button>
+        <button class="tab-button" data-tab="technical">Technical Settings</button>
+        <button class="tab-button" data-tab="workflow">Workflow Settings</button>
+    </div>
+
+    <!-- Annotation Settings Tab -->
+    <div class="tab-content active" id="tab-annotation">
+        <h3>Annotation Settings</h3>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="segment-all">
+                Annotate all images in container
+            </label>
+            <p class="help-text">If unchecked, you can specify training and validation image counts.</p>
+        </div>
+
+        <div id="image-selection-section">
+            <div class="form-group">
+                <label for="train-n">Training Images:</label>
+                <input type="number" id="train-n" class="form-control" value="5" min="1" max="100">
+                <input type="range" id="train-n-slider" class="slider" value="5" min="1" max="100">
+            </div>
+
+            <div class="form-group">
+                <label for="validate-n">Validation Images:</label>
+                <input type="number" id="validate-n" class="form-control" value="2" min="1" max="100">
+                <input type="range" id="validate-n-slider" class="slider" value="2" min="1" max="100">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="channels">Channels (comma-separated indices):</label>
+            <input type="text" id="channels" class="form-control" value="0" placeholder="e.g., 0,1,2">
+            <p class="help-text">Enter channel indices to process (0-based).</p>
+        </div>
+
+        <div class="form-group">
+            <label>Timepoint Mode:</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="timepoint-mode" value="all" checked>
+                    All timepoints
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="timepoint-mode" value="first">
+                    First timepoint only
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="timepoint-mode" value="specific">
+                    Specific timepoints
+                </label>
+            </div>
+            <input type="text" id="timepoints" class="form-control" placeholder="e.g., 0,1,2" disabled>
+        </div>
+
+        <div class="form-group">
+            <label>Z-slice Mode:</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="z-mode" value="all" checked>
+                    All Z-slices
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="z-mode" value="max_projection">
+                    Max projection
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="z-mode" value="specific">
+                    Specific Z-slices
+                </label>
+            </div>
+            <input type="text" id="z-slices" class="form-control" placeholder="e.g., 0,1,2" disabled>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="process-3d">
+                Enable 3D processing
+            </label>
+        </div>
+
+        <div id="3d-settings" style="display: none;">
+            <div class="form-group">
+                <label for="z-range-start">Z-range Start:</label>
+                <input type="number" id="z-range-start" class="form-control" value="0" min="0">
+            </div>
+            <div class="form-group">
+                <label for="z-range-end">Z-range End:</label>
+                <input type="number" id="z-range-end" class="form-control" value="10" min="0">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="use-patches">
+                Use patch-based processing
+            </label>
+            <p class="help-text">Useful for very large images.</p>
+        </div>
+
+        <div id="patch-settings" style="display: none;">
+            <div class="form-group">
+                <label for="patch-size">Patch Size (pixels):</label>
+                <input type="number" id="patch-size" class="form-control" value="512" min="64" step="64">
+            </div>
+            <div class="form-group">
+                <label for="patch-overlap">Patch Overlap (%):</label>
+                <input type="number" id="patch-overlap" class="form-control" value="50" min="0" max="90">
+            </div>
+        </div>
+    </div>
+
+    <!-- Technical Settings Tab -->
+    <div class="tab-content" id="tab-technical">
+        <h3>Technical Settings</h3>
+
+        <div class="form-group">
+            <label for="batch-size">Batch Size:</label>
+            <input type="number" id="batch-size" class="form-control" value="1" min="1" max="32">
+            <p class="help-text">Number of images to process simultaneously.</p>
+        </div>
+
+        <div class="form-group">
+            <label for="sam-model">SAM Model:</label>
+            <select id="sam-model" class="form-control">
+                <option value="vit_b">ViT-B (Balanced)</option>
+                <option value="vit_l">ViT-L (Large)</option>
+                <option value="vit_h">ViT-H (Huge)</option>
+            </select>
+            <p class="help-text">Segment Anything Model variant to use.</p>
+        </div>
+    </div>
+
+    <!-- Workflow Settings Tab -->
+    <div class="tab-content" id="tab-workflow">
+        <h3>Workflow Settings</h3>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="read-only">
+                Read-only mode
+            </label>
+            <p class="help-text">Run annotation without modifying OMERO data.</p>
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="resume-from-table">
+                Resume from existing table
+            </label>
+            <p class="help-text">Automatically set based on table selection.</p>
+        </div>
+    </div>
+</div>
