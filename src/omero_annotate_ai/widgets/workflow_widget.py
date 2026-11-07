@@ -996,16 +996,11 @@ class WorkflowWidget:
     def _load_resume_settings(self):
         """Fill the Configure tab from the selected table and lock what must match.
 
-        Prefers the config YAML the earlier run attached to the container; falls
-        back to what the table rows show when no saved config matches.
+        Prefers the config YAML the training set keeps on OMERO (found by table
+        ID); falls back to what the table rows show when there is none.
         """
-        container_type = self.container_widgets["type"].value
-        container_id = self.container_widgets["container"].value
         try:
-            saved = find_annotation_config_for_table(
-                self.connection, container_type, container_id, self.config.name,
-                table_id=self.selected_table_id,
-            )
+            saved = find_annotation_config_for_table(self.connection, self.selected_table_id)
         except Exception:
             saved = None
         try:

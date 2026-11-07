@@ -170,7 +170,7 @@ def _(
     conn,
     container_id,
     container_type,
-    download_annotation_config_from_omero,
+    find_annotation_config_for_table,
     mo,
     table_id,
 ):
@@ -178,13 +178,11 @@ def _(
     _config_info = ""
     if conn and conn.isConnected() and table_id.value > 0 and container_id.value > 0:
         try:
-            annotation_config = download_annotation_config_from_omero(
-                conn, container_type.value.capitalize(), int(container_id.value)
-            )
+            annotation_config = find_annotation_config_for_table(conn, int(table_id.value))
             if annotation_config:
                 _config_info = f"Loaded config **{annotation_config.name}** (model: `{annotation_config.ai_model.pretrained_from}`)"
             else:
-                _config_info = "No annotation config found on this container — using defaults."
+                _config_info = "No annotation config found for this table — using defaults."
         except Exception as e:
             _config_info = f"Could not load config: {e}"
     mo.md(_config_info) if _config_info else mo.md("")
@@ -399,7 +397,7 @@ def _():
     )
     from omero_annotate_ai.omero.omero_functions import (
         list_annotation_tables,
-        download_annotation_config_from_omero,
+        find_annotation_config_for_table,
     )
 
     try:
@@ -410,7 +408,7 @@ def _():
     return (
         OMERO_AVAILABLE,
         SimpleOMEROConnection,
-        download_annotation_config_from_omero,
+        find_annotation_config_for_table,
         list_annotation_tables,
         prepare_training_data_from_table,
         run_training,

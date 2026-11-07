@@ -40,12 +40,13 @@ except Exception:
 # Local imports
 from .annotation_config import AnnotationConfig, ImageAnnotation, validate_annotations_against_config
 from ..omero.omero_functions import (
-    create_or_replace_tracking_table,
+    create_tracking_table as create_omero_tracking_table,
+    replace_table_config,
     sync_omero_table_to_config,
-    upload_annotation_config_to_omero,
-    upload_rois_and_labels
+    upload_rois_and_labels,
+    write_config_to_table,
 )
-from ..omero.omero_utils import get_table_by_name
+from ..omero.tracking_table import tag_for
 from ..processing.image_functions import generate_patch_coordinates
 from ..sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
 from ..sources.uri import annotation_id as make_annotation_id, omero_uri, parse_omero_uri
@@ -212,68 +213,6 @@ class AnnotationPipeline:
             else:
                 container_id = container_ids[0] if container_ids else 0
                 return f"{self.config.omero.container_type}_{container_id}_{timestamp}"
-
-    def _initialize_tracking_table(self, images_list: List[Any]) -> int:
-        """Initialize tracking table for the annotation process using config-first approach.
-        
-        This method only creates new tables from config state. Resume logic is handled elsewhere.
-        """
-        logger = logging.getLogger(__name__)
-
-        # Generate table name
-        table_title = self._get_table_title()
-        logger.info(f"Creating new tracking table: {table_title}")
-
-        # Prepare processing units by populating config.annotations
-        self._prepare_processing_units(images_list)
-
-        # Create table from config (all processed=False for new table)
-        config_df = self.config.to_dataframe()
-        config_df['processed'] = False  # Ensure all start as unprocessed
-        
-        table_id = create_or_replace_tracking_table(
-            conn=self.conn,
-            config_df=config_df,
-            table_title=table_title,
-            container_type=self.config.omero.container_type,
-            container_ids=self.config.omero.get_all_container_ids(),
-        )
-
-        # Store configuration in OMERO
-        config_dict = self.config.to_dict()
-
-        # Flatten nested config and convert to strings
-        flat_config = {}
-        for key, value in config_dict.items():
-            if isinstance(value, dict):
-                for sub_key, sub_value in value.items():
-                    flat_config[f"{key}.{sub_key}"] = str(sub_value)
-            else:
-                flat_config[key] = str(value)
-
-        # Add metadata
-        flat_config.update({
-            "config_type": "micro_sam_annotation_settings",
-            "created_at": pd.Timestamp.now().isoformat(),
-            "config_name": f"micro_sam_config_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}",
-        })
-
-        try:
-            container_type_str = str(self.config.omero.container_type).capitalize()
-            config_ann_id = ezomero.post_map_annotation(
-                self.conn,
-                object_type=container_type_str,
-                object_id=self.config.omero.container_id,
-                kv_dict=flat_config,
-                ns="openmicroscopy.org/omero/annotation",
-            )
-            print(f"Stored configuration as annotation ID: {config_ann_id}")
-        except Exception as e:
-            print(f"Warning: Could not store configuration annotation: {e}")
-
-        # Store table ID internally
-        self.table_id = table_id
-        return table_id
 
     def _identity_fields(self, image_meta: ImageMeta) -> dict:
         """ImageAnnotation fields that say which image a unit belongs to."""
@@ -552,16 +491,17 @@ class AnnotationPipeline:
                         units.append(annotation)
         return units
 
-    def _upload_annotation_config_to_omero(self) -> int: 
-        container_type_str = str(self.config.omero.container_type).capitalize()
-        file_path = str(self.config_file_path) if isinstance(self.config_file_path, Path) else self.config_file_path
-        id = upload_annotation_config_to_omero(
+    def _upload_annotation_config_to_omero(self) -> Optional[int]:
+        """Replace the training set's one config YAML on OMERO with the local one."""
+        if self.table_id in (None, -1) or self.config_file_path is None:
+            return None
+        return replace_table_config(
             self.conn,
-            object_type=container_type_str,
-            object_id=self.config.omero.container_id,
-            file_path=file_path
+            table_id=self.table_id,
+            file_path=str(self.config_file_path),
+            container_type=self.config.omero.container_type,
+            container_id=self.config.omero.get_primary_container_id(),
         )
-        return id
 
     def _get_timepoints_for_image(self, image) -> List[int]:
         """Get timepoints to process for an image based on configuration."""
@@ -911,7 +851,8 @@ class AnnotationPipeline:
                         channel=meta.get("channel"),
                         timepoint=meta.get("timepoint"),
                         is_volumetric=meta.get("is_volumetric"),
-                        z_start=meta.get("z_start")
+                        z_start=meta.get("z_start"),
+                        tag=self._upload_tag(matching_annotation.annotation_id),
                     )
 
                     # Update config annotation with OMERO IDs
@@ -1050,34 +991,6 @@ class AnnotationPipeline:
         except Exception as e:
             self._debug_print(f"Error saving training image for {annotation_id}: {e}")
             return None
-
-    # def _update_workflow_status_map(self, table_id: int) -> None:
-    #     """Update workflow status map annotation after batch completion."""
-    #     try:
-    #         update_workflow_status_map(
-    #             conn=self.conn,
-    #             container_type=self.config.omero.container_type,
-    #             container_id=self.config.omero.container_id,
-    #             table_id=table_id,
-    #         )
-    #     except ImportError:
-    #         print("Could not update workflow status - OMERO functions not available")
-    #     except Exception as e:
-    #         print(f"Could not update workflow status: {e}")
-
-    # def _get_workflow_status_map(self) -> Optional[Dict[str, str]]:
-    #     """Get current workflow status map annotation."""
-    #     try:
-    #         return get_workflow_status_map(
-    #             conn=self.conn,
-    #             container_type=self.config.omero.container_type,
-    #             container_id=self.config.omero.container_id,
-    #         )
-    #     except ImportError:
-    #         return None
-    #     except Exception as e:
-    #         print(f"Could not get workflow status: {e}")
-    #         return None
 
     def _get_well_map_annotations(self, well_id: int) -> dict:
         """Get map annotations from a well as a dictionary.
@@ -1318,65 +1231,47 @@ class AnnotationPipeline:
         print(f"Local progress saved: {completed_count}/{total_count} units completed")
         print(f" Progress file: {table_file}")
 
-    def _find_existing_table(self) -> Optional[int]:
-        """Find the table to resume.
+    def _upload_tag(self, annotation_id: str) -> str:
+        """Tag for an upload, tying it to this training set's table."""
+        if self.table_id in (None, -1):
+            raise RuntimeError("The tracking table must exist before anything is uploaded")
+        return tag_for(self.table_id, annotation_id)
 
-        Uses ``config.omero.table_id`` when set (the widget sets it from the
-        selected table), because table names need not be unique. Falls back
-        to a lookup by name, e.g. for YAML configs without a table ID.
+    def _find_existing_table(self) -> int:
+        """The table to resume: ``config.omero.table_id``, which must exist.
 
-        Returns:
-            Table ID if found, None otherwise
+        Training sets are identified by their table ID, never by name.
+
+        Raises:
+            ValueError: No table ID is set, or the table does not exist.
         """
         table_id = self.config.omero.table_id
-        if table_id:
-            if self.conn.getObject("FileAnnotation", table_id) is not None:
-                print(f"Resuming table ID {table_id}")
-                return table_id
-            print(f"Table ID {table_id} not found; looking it up by name instead")
-
-        table_title = self._get_table_title()
-        print(f"Looking for existing table: {table_title}")
-        
-        try:
-            existing_table = get_table_by_name(self.conn, table_title)
-            if existing_table:
-                table_id = existing_table.getId()
-                print(f"Found existing table: {table_title} (ID: {table_id})")
-                return table_id
-            else:
-                print(f"No existing table found with name: {table_title}")
-                return None
-        except Exception as e:
-            print(f"Error searching for existing table: {e}")
-            return None
-
-    def _replace_omero_table_from_config(self) -> int:
-        """Replace entire OMERO table with current config state.
-        
-        Returns:
-            Updated table ID
-        """
-        print("Updating OMERO table...")
-        
-        config_df = self.config.to_dataframe()
-        table_title = self._get_table_title()
-        
-        table_id = create_or_replace_tracking_table(
-            conn=self.conn,
-            config_df=config_df,
-            table_title=table_title,
-            container_type=self.config.omero.container_type,
-            container_ids=self.config.omero.get_all_container_ids(),
-            existing_table_id=self.table_id
-        )
-        
-        # Update internal table ID and sync to config for persistence
-        self.table_id = table_id
-        self.config.omero.table_id = table_id
-        print(f"OMERO table updated successfully (ID: {table_id})")
-
+        if not table_id:
+            raise ValueError(
+                "resume_from_table is set but config.omero.table_id is not: "
+                "choose the training set (table) to resume"
+            )
+        if self.conn.getObject("FileAnnotation", table_id) is None:
+            raise ValueError(f"Tracking table {table_id} not found (or not visible to you)")
+        print(f"Resuming table ID {table_id}")
         return table_id
+
+    def _write_omero_table(self) -> int:
+        """Write the config's rows to the tracking table, in place.
+
+        The table keeps its ID: changed rows are updated, new rows appended.
+        Creates the table first if the run has none yet.
+
+        Returns:
+            The table ID.
+        """
+        if self.table_id in (None, -1):
+            return self.create_tracking_table()
+        print("Updating OMERO table...")
+        result = write_config_to_table(self.conn, self.table_id, self.config)
+        print(f"OMERO table updated (ID: {self.table_id}; "
+              f"{result['updated']} rows updated, {result['added']} added)")
+        return self.table_id
 
     def initialize_workflow(self, images_list: Optional[List[Any]] = None) -> Tuple[int, List[Any]]:
         """Initialize the workflow: setup directories, load only required images, handle resume logic.
@@ -1412,10 +1307,9 @@ class AnnotationPipeline:
         # Handle resume logic (one-time sync at workflow start)
         if self.config.workflow.resume_from_table and not self.config.workflow.read_only_mode:
             existing_table_id = self._find_existing_table()
-            if existing_table_id:
-                print("Syncing OMERO table state to config...")
-                sync_omero_table_to_config(self.conn, existing_table_id, self.config)
-                self.table_id = existing_table_id
+            print("Syncing OMERO table state to config...")
+            sync_omero_table_to_config(self.conn, existing_table_id, self.config)
+            self.set_table_id(existing_table_id)
 
         # Always return int for table_id (use -1 if None)
         table_id = self.table_id if self.table_id is not None else -1
@@ -1447,7 +1341,7 @@ class AnnotationPipeline:
             if self.config.workflow.resume_from_table:
                 added = self._extend_annotations()
                 if added and self.table_id not in (None, -1) and not self.config.workflow.read_only_mode:
-                    self._replace_omero_table_from_config()
+                    self._write_omero_table()
             return self.config
 
         # Generate new annotation schema
@@ -1518,22 +1412,14 @@ class AnnotationPipeline:
         
         if self.table_id is None:
             print("Creating OMERO tracking table...")
-            config_df = self.config.to_dataframe()
-            
-            # Ensure all rows start as unprocessed for new table
-            if not self.config.workflow.resume_from_table:
-                config_df['processed'] = False
-                
-            table_id = create_or_replace_tracking_table(
-                conn=self.conn,
-                config_df=config_df,
+            table_id = create_omero_tracking_table(
+                self.conn,
+                self.config,
                 table_title=self._get_table_title(),
                 container_type=self.config.omero.container_type,
                 container_ids=self.config.omero.get_all_container_ids(),
             )
-            self.table_id = table_id
-            self.config.omero.table_id = table_id  # Sync to config for persistence
-            print(f"Created OMERO table with ID: {table_id}")
+            self.set_table_id(table_id)
 
         return self.table_id
 
@@ -1613,7 +1499,7 @@ class AnnotationPipeline:
                 # Update OMERO table and save config
                 if not self.config.workflow.read_only_mode:
                     self._debug_print("   Updating OMERO table...")
-                    self._replace_omero_table_from_config()
+                    self._write_omero_table()
                     self._debug_print(f"   OMERO table updated (ID: {self.table_id})")
                 else:
                     self._save_local_progress_from_annotations(self.config.get_processed())
@@ -1711,7 +1597,7 @@ class AnnotationPipeline:
         
         # Update tracking
         if not self.config.workflow.read_only_mode:
-            self._replace_omero_table_from_config()
+            self._write_omero_table()
         else:
             self._save_local_progress_from_annotations(self.config.get_processed())
 
@@ -1811,7 +1697,8 @@ class AnnotationPipeline:
                     channel=matching_annotation.channel,
                     timepoint=matching_annotation.timepoint,
                     is_volumetric=matching_annotation.is_volumetric,
-                    z_start=matching_annotation.z_start
+                    z_start=matching_annotation.z_start,
+                    tag=self._upload_tag(annotation_id),
                 )
 
                 # Update config annotation with OMERO IDs
@@ -1908,7 +1795,7 @@ class AnnotationPipeline:
         if processed_count > 0:
             if not self.config.workflow.read_only_mode:
                 print("Updating OMERO tracking table...")
-                self._replace_omero_table_from_config()
+                self._write_omero_table()
             
             print("Saving updated config...")
             self._auto_save_config()
