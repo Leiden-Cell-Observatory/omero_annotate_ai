@@ -69,5 +69,6 @@ with the error message, your config (without passwords) and the package version:
 
 ```python
 from importlib.metadata import version
+
 print(version("omero-annotate-ai"))
 ```

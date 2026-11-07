@@ -190,7 +190,11 @@ def compose_normalization(config) -> str:
     norm = config.normalization
     if norm.method == "none":
         return "Model input: raw intensities, no normalisation."
-    where = "applied at export (float32)" if norm.apply_at_export else "applied by the trainer"
+    where = (
+        "applied at export (float32)"
+        if norm.apply_at_export
+        else "applied by the trainer"
+    )
     clip = "clipped to [0, 1]" if norm.clip else "not clipped"
     return (
         f"Model input normalisation: per-image percentiles {norm.percentile_low}-"

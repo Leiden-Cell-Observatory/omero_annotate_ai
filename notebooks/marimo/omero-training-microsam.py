@@ -39,21 +39,29 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    omero_host = mo.ui.text(value="", label="OMERO Host", placeholder="omero.server.edu")
+    omero_host = mo.ui.text(
+        value="", label="OMERO Host", placeholder="omero.server.edu"
+    )
     omero_username = mo.ui.text(value="", label="Username", placeholder="your_username")
-    omero_password = mo.ui.text(value="", label="Password", placeholder="password", kind="password")
-    omero_group = mo.ui.text(value="", label="Group (optional)", placeholder="Leave empty for default")
+    omero_password = mo.ui.text(
+        value="", label="Password", placeholder="password", kind="password"
+    )
+    omero_group = mo.ui.text(
+        value="", label="Group (optional)", placeholder="Leave empty for default"
+    )
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to OMERO")
 
-    mo.vstack([
-        omero_host,
-        omero_username,
-        omero_password,
-        omero_group,
-        omero_secure,
-        connect_button,
-    ])
+    mo.vstack(
+        [
+            omero_host,
+            omero_username,
+            omero_password,
+            omero_group,
+            omero_secure,
+            connect_button,
+        ]
+    )
     return (
         connect_button,
         omero_group,
@@ -91,7 +99,9 @@ def _(
                 if conn and conn.isConnected():
                     user = conn.getUser().getName()
                     group_name = conn.getGroupFromContext().getName()
-                    connection_status = f"Connected as **{user}** to group **{group_name}**"
+                    connection_status = (
+                        f"Connected as **{user}** to group **{group_name}**"
+                    )
                 else:
                     connection_status = "Connection failed"
             except Exception as e:
@@ -136,7 +146,9 @@ def _(conn, container_id, container_type, list_annotation_tables, mo):
 
     if conn and conn.isConnected() and container_id.value > 0:
         try:
-            _tables = list_annotation_tables(conn, container_type.value, container_id.value)
+            _tables = list_annotation_tables(
+                conn, container_type.value, container_id.value
+            )
             if _tables:
                 rows = "\n".join(
                     f"    | {t['id']} | {t['name']} | {t.get('progress_percent', 'N/A')}% |"
@@ -178,11 +190,15 @@ def _(
     _config_info = ""
     if conn and conn.isConnected() and table_id.value > 0 and container_id.value > 0:
         try:
-            annotation_config = find_annotation_config_for_table(conn, int(table_id.value))
+            annotation_config = find_annotation_config_for_table(
+                conn, int(table_id.value)
+            )
             if annotation_config:
                 _config_info = f"Loaded config **{annotation_config.name}** (model: `{annotation_config.ai_model.pretrained_from}`)"
             else:
-                _config_info = "No annotation config found for this table — using defaults."
+                _config_info = (
+                    "No annotation config found for this table — using defaults."
+                )
         except Exception as e:
             _config_info = f"Could not load config: {e}"
     mo.md(_config_info) if _config_info else mo.md("")
@@ -201,16 +217,30 @@ def _(mo):
 def _(Path, annotation_config, datetime, mo):
     _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    _default_name = annotation_config.name if annotation_config else f"micro_sam_training_{_timestamp}"
-    _default_model = (annotation_config.ai_model.pretrained_from if annotation_config else "vit_b_lm") or "vit_b_lm"
+    _default_name = (
+        annotation_config.name
+        if annotation_config
+        else f"micro_sam_training_{_timestamp}"
+    )
+    _default_model = (
+        annotation_config.ai_model.pretrained_from if annotation_config else "vit_b_lm"
+    ) or "vit_b_lm"
     _default_patch = (
         f"{annotation_config.spatial_coverage.patch_size[0]}, {annotation_config.spatial_coverage.patch_size[1]}"
-        if annotation_config and annotation_config.spatial_coverage.patch_size else "512, 512"
+        if annotation_config and annotation_config.spatial_coverage.patch_size
+        else "512, 512"
     )
-    _default_val_split = annotation_config.training.validation_fraction if annotation_config else 0.2
+    _default_val_split = (
+        annotation_config.training.validation_fraction if annotation_config else 0.2
+    )
 
     output_directory = mo.ui.text(
-        value=str(Path.home() / "omero-annotate-ai" / "micro-sam_models" / f"micro-sam-{_timestamp}"),
+        value=str(
+            Path.home()
+            / "omero-annotate-ai"
+            / "micro-sam_models"
+            / f"micro-sam-{_timestamp}"
+        ),
         label="Output Directory",
         full_width=True,
     )
@@ -220,17 +250,27 @@ def _(Path, annotation_config, datetime, mo):
         value=_default_model,
         label="SAM Model",
     )
-    epochs = mo.ui.slider(start=1, stop=200, value=10, label="Epochs (use 50+ for real training)")
+    epochs = mo.ui.slider(
+        start=1, stop=200, value=10, label="Epochs (use 50+ for real training)"
+    )
     batch_size = mo.ui.slider(start=1, stop=8, value=1, label="Batch Size")
     patch_shape = mo.ui.text(value=_default_patch, label="Patch Shape (width, height)")
-    validation_split = mo.ui.slider(start=0.05, stop=0.5, step=0.05, value=_default_val_split, label="Validation Split")
+    validation_split = mo.ui.slider(
+        start=0.05,
+        stop=0.5,
+        step=0.05,
+        value=_default_val_split,
+        label="Validation Split",
+    )
 
-    mo.vstack([
-        output_directory,
-        mo.hstack([model_name, model_type], justify="start", gap=2),
-        mo.hstack([epochs, batch_size], justify="start", gap=2),
-        mo.hstack([patch_shape, validation_split], justify="start", gap=2),
-    ])
+    mo.vstack(
+        [
+            output_directory,
+            mo.hstack([model_name, model_type], justify="start", gap=2),
+            mo.hstack([epochs, batch_size], justify="start", gap=2),
+            mo.hstack([patch_shape, validation_split], justify="start", gap=2),
+        ]
+    )
     return (
         batch_size,
         epochs,
@@ -272,7 +312,10 @@ def _(
     validation_split,
 ):
     training_result = None
-    mo.stop(not prepare_button.value, mo.md("Click 'Prepare Training Data' to download from OMERO"))
+    mo.stop(
+        not prepare_button.value,
+        mo.md("Click 'Prepare Training Data' to download from OMERO"),
+    )
 
     if not conn or not conn.isConnected():
         mo.output.replace(mo.md("**Error:** Please connect to OMERO first"))
@@ -292,19 +335,23 @@ def _(
                 validation_split=validation_split.value,
             )
 
-            stats_rows = "\n".join(f"    | {k} | {v} |" for k, v in training_result['stats'].items())
-            mo.output.replace(mo.md(f"""
+            stats_rows = "\n".join(
+                f"    | {k} | {v} |" for k, v in training_result["stats"].items()
+            )
+            mo.output.replace(
+                mo.md(f"""
             **Training data prepared!**
 
             | Statistic | Value |
             |-----------|-------|
     {stats_rows}
 
-            - Training images: `{training_result['train_input']}`
-            - Training labels: `{training_result['train_label']}`
-            - Validation images: `{training_result['val_input']}`
-            - Validation labels: `{training_result['val_label']}`
-            """))
+            - Training images: `{training_result["train_input"]}`
+            - Training labels: `{training_result["train_label"]}`
+            - Validation images: `{training_result["val_input"]}`
+            - Validation labels: `{training_result["val_label"]}`
+            """)
+            )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error:** {str(e)}"))
     return (training_result,)
@@ -338,7 +385,10 @@ def _(
     train_button,
     training_result,
 ):
-    mo.stop(not train_button.value, mo.md("Click 'Start Training' to begin micro-SAM fine-tuning"))
+    mo.stop(
+        not train_button.value,
+        mo.md("Click 'Start Training' to begin micro-SAM fine-tuning"),
+    )
 
     if training_result is None:
         mo.output.replace(mo.md("**Error:** Prepare training data first"))
@@ -356,18 +406,24 @@ def _(
                 n_objects_per_batch=25,
             )
 
-            mo.output.replace(mo.md(f"**Training started...** This may take a while.\n\n- Model: {model_name.value}\n- Epochs: {epochs.value}\n- Iterations: {training_config['n_iterations']}"))
+            mo.output.replace(
+                mo.md(
+                    f"**Training started...** This may take a while.\n\n- Model: {model_name.value}\n- Epochs: {epochs.value}\n- Iterations: {training_config['n_iterations']}"
+                )
+            )
 
             training_results = run_training(training_config, framework="microsam")
 
-            mo.output.replace(mo.md(f"""
+            mo.output.replace(
+                mo.md(f"""
             **Training completed!**
 
-            - Model name: {training_results['model_name']}
-            - Final model: `{training_results.get('final_model_path', 'N/A')}`
-            - Checkpoints: {len(training_results.get('checkpoints', []))}
-            - Output: `{training_results['output_dir']}`
-            """))
+            - Model name: {training_results["model_name"]}
+            - Final model: `{training_results.get("final_model_path", "N/A")}`
+            - Checkpoints: {len(training_results.get("checkpoints", []))}
+            - Output: `{training_results["output_dir"]}`
+            """)
+            )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error during training:** {str(e)}"))
     return
@@ -402,6 +458,7 @@ def _():
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
         OMERO_AVAILABLE = True
     except ImportError:
         OMERO_AVAILABLE = False
@@ -420,7 +477,9 @@ def _():
 def _(OMERO_AVAILABLE, SimpleOMEROConnection):
     def establish_connection(host, username, password, group=None, secure=True):
         if not OMERO_AVAILABLE:
-            raise ImportError("OMERO functionality not available. Install with: pip install -e .[omero]")
+            raise ImportError(
+                "OMERO functionality not available. Install with: pip install -e .[omero]"
+            )
 
         connection = SimpleOMEROConnection()
         config = {

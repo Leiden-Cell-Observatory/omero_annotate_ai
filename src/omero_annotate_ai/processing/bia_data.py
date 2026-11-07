@@ -71,7 +71,11 @@ def _fetch_plane(
     ``tifffile`` expects.
     """
     image_id = int(annotation.image_id)
-    if annotation.is_patch and annotation.patch_width > 0 and annotation.patch_height > 0:
+    if (
+        annotation.is_patch
+        and annotation.patch_width > 0
+        and annotation.patch_height > 0
+    ):
         start_coords = (
             int(annotation.patch_x),
             int(annotation.patch_y),
@@ -91,7 +95,13 @@ def _fetch_plane(
         if omero_image is None:
             raise ValueError(f"Image {image_id} not found in OMERO")
         start_coords = (0, 0, int(z), int(channel), int(timepoint))
-        axis_lengths = (int(omero_image.getSizeX()), int(omero_image.getSizeY()), 1, 1, 1)
+        axis_lengths = (
+            int(omero_image.getSizeX()),
+            int(omero_image.getSizeY()),
+            1,
+            1,
+            1,
+        )
 
     _, pixels = ezomero.get_image(
         conn,

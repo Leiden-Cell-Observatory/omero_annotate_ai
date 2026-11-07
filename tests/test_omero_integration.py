@@ -16,7 +16,6 @@ from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 from tests.omero_seed import CHANNEL_NAMES, IMAGE_SHAPE, synthetic_plane
 
 
-
 @pytest.mark.docker
 @pytest.mark.integration
 class TestServer:
@@ -35,8 +34,10 @@ class TestServer:
         assert info["channel_names"] == CHANNEL_NAMES
         assert info["channel_names_vary"] is False
         assert info["dimensions"] == {
-            "T": IMAGE_SHAPE["size_t"], "C": IMAGE_SHAPE["size_c"],
-            "Z": IMAGE_SHAPE["size_z"], "Y": IMAGE_SHAPE["size_y"],
+            "T": IMAGE_SHAPE["size_t"],
+            "C": IMAGE_SHAPE["size_c"],
+            "Z": IMAGE_SHAPE["size_z"],
+            "Y": IMAGE_SHAPE["size_y"],
             "X": IMAGE_SHAPE["size_x"],
         }
 
@@ -65,8 +66,12 @@ class TestOmeroImageSource:
         meta = source.metadata(image)
         assert meta.image_uri == f"omero:image:{omero_seed.image_ids[1]}"
         assert (meta.size_t, meta.size_c, meta.size_z, meta.size_y, meta.size_x) == (
-            IMAGE_SHAPE["size_t"], IMAGE_SHAPE["size_c"], IMAGE_SHAPE["size_z"],
-            IMAGE_SHAPE["size_y"], IMAGE_SHAPE["size_x"])
+            IMAGE_SHAPE["size_t"],
+            IMAGE_SHAPE["size_c"],
+            IMAGE_SHAPE["size_z"],
+            IMAGE_SHAPE["size_y"],
+            IMAGE_SHAPE["size_x"],
+        )
         assert meta.dtype == "uint16"
 
     def test_plane_region_and_volume(self, omero_conn, omero_seed):
@@ -128,7 +133,11 @@ class TestTablesInPlace:
 
     def _append(self, table, uris, processed, roi_ids):
         columns = table.getHeaders()
-        columns[0].values, columns[1].values, columns[2].values = uris, processed, roi_ids
+        columns[0].values, columns[1].values, columns[2].values = (
+            uris,
+            processed,
+            roi_ids,
+        )
         table.addData(columns)
 
     def test_update_and_append_keep_file_id(self, scratch_table):
@@ -136,7 +145,9 @@ class TestTablesInPlace:
 
         table = _open(resources, file_id)
         try:
-            self._append(table, ["omero:image:1", "omero:image:2"], [False, False], [-1, -1])
+            self._append(
+                table, ["omero:image:1", "omero:image:2"], [False, False], [-1, -1]
+            )
         finally:
             table.close()
 
@@ -178,29 +189,42 @@ class TestTablesInPlace:
 
 
 def _training_set_config(image_ids, categories):
-    from omero_annotate_ai.core.annotation_config import ImageAnnotation, create_default_config
+    from omero_annotate_ai.core.annotation_config import (
+        ImageAnnotation,
+        create_default_config,
+    )
 
     config = create_default_config()
     config.name = "oai_table_layer"
     for image_id, category in zip(image_ids, categories):
-        config.add_annotation(ImageAnnotation(
-            image_id=image_id, image_name=f"img{image_id}",
-            annotation_id=f"{image_id}_0_0", category=category,
-            timepoint=0, z_slice=0, channel=0,
-        ))
+        config.add_annotation(
+            ImageAnnotation(
+                image_id=image_id,
+                image_name=f"img{image_id}",
+                annotation_id=f"{image_id}_0_0",
+                category=category,
+                timepoint=0,
+                z_slice=0,
+                channel=0,
+            )
+        )
     return config
 
 
 @pytest.fixture
 def training_set(omero_conn, omero_seed):
     """A schema-v2 tracking table on the seeded dataset; everything removed afterwards."""
-    from omero_annotate_ai.omero.omero_functions import create_tracking_table, delete_training_set
+    from omero_annotate_ai.omero.omero_functions import (
+        create_tracking_table,
+        delete_training_set,
+    )
 
     image_ids = omero_seed.image_ids[:3]
     config = _training_set_config(image_ids, ["training", "validation", "test"])
     with patch("builtins.print"):
         table_id = create_tracking_table(
-            omero_conn, config, "oai_table_layer", "dataset", [omero_seed.dataset_id])
+            omero_conn, config, "oai_table_layer", "dataset", [omero_seed.dataset_id]
+        )
     config.omero.table_id = table_id
     yield config, table_id
     with patch("builtins.print"):
@@ -220,9 +244,15 @@ class TestTrackingTableOnOmero:
         loaded = create_default_config()
         with patch("builtins.print"):
             sync_omero_table_to_config(omero_conn, table_id, loaded)
-        assert [a.category for a in loaded.annotations] == ["training", "validation", "test"]
+        assert [a.category for a in loaded.annotations] == [
+            "training",
+            "validation",
+            "test",
+        ]
 
-    def test_update_and_append_keep_the_table_id(self, omero_conn, omero_seed, training_set):
+    def test_update_and_append_keep_the_table_id(
+        self, omero_conn, omero_seed, training_set
+    ):
         from omero_annotate_ai.core.annotation_config import ImageAnnotation
         from omero_annotate_ai.omero import tracking_table
         from omero_annotate_ai.omero.omero_functions import write_config_to_table
@@ -232,9 +262,14 @@ class TestTrackingTableOnOmero:
         config.annotations[1].mark_processed(roi_id=None, label_id=None)
         config.annotations[1].session = 1
         extra = omero_seed.image_ids[3]
-        config.add_annotation(ImageAnnotation(
-            image_id=extra, image_name="extra", annotation_id=f"{extra}_0_0",
-            category="training"))
+        config.add_annotation(
+            ImageAnnotation(
+                image_id=extra,
+                image_name="extra",
+                annotation_id=f"{extra}_0_0",
+                category="training",
+            )
+        )
 
         result = write_config_to_table(omero_conn, table_id, config)
 
@@ -246,7 +281,9 @@ class TestTrackingTableOnOmero:
         assert list(df["session"]) == [-1, 1, -1, -1]
         assert list(df["image_id"])[-1] == extra
 
-    def test_over_long_string_is_refused_with_a_clear_error(self, omero_conn, training_set):
+    def test_over_long_string_is_refused_with_a_clear_error(
+        self, omero_conn, training_set
+    ):
         from omero_annotate_ai.omero import tracking_table
         from omero_annotate_ai.omero.omero_functions import write_config_to_table
 
@@ -255,10 +292,14 @@ class TestTrackingTableOnOmero:
         with pytest.raises(tracking_table.TableValueTooLongError, match="image_name"):
             write_config_to_table(omero_conn, table_id, config)
 
-    def test_uploads_are_tagged_and_deleted_with_the_set(self, omero_conn, omero_seed, tmp_path):
+    def test_uploads_are_tagged_and_deleted_with_the_set(
+        self, omero_conn, omero_seed, tmp_path
+    ):
         import imageio.v3 as imageio
         from omero_annotate_ai.omero.omero_functions import (
-            create_tracking_table, delete_training_set, upload_rois_and_labels,
+            create_tracking_table,
+            delete_training_set,
+            upload_rois_and_labels,
         )
         from omero_annotate_ai.omero.tracking_table import tag_for
 
@@ -266,7 +307,8 @@ class TestTrackingTableOnOmero:
         config = _training_set_config([image_id], ["training"])
         with patch("builtins.print"):
             table_id = create_tracking_table(
-                omero_conn, config, "oai_tagged", "dataset", [omero_seed.dataset_id])
+                omero_conn, config, "oai_tagged", "dataset", [omero_seed.dataset_id]
+            )
         mask = np.zeros((IMAGE_SHAPE["size_y"], IMAGE_SHAPE["size_x"]), np.uint16)
         mask[10:20, 10:30] = 1
         mask_file = tmp_path / "mask.tif"
@@ -276,8 +318,15 @@ class TestTrackingTableOnOmero:
         with patch("builtins.print"):
             # Uploaded, but (as after a crash) never written to the table.
             label_id, roi_id = upload_rois_and_labels(
-                omero_conn, image_id, str(mask_file), trainingset_name=config.name,
-                z_slice=0, channel=0, timepoint=0, tag=tag)
+                omero_conn,
+                image_id,
+                str(mask_file),
+                trainingset_name=config.name,
+                z_slice=0,
+                channel=0,
+                timepoint=0,
+                tag=tag,
+            )
 
         roi = omero_conn.getObject("Roi", roi_id)
         assert roi.getDescription().startswith(tag)
@@ -288,9 +337,12 @@ class TestTrackingTableOnOmero:
         # The label file round-trips losslessly (zlib-compressed TIFF).
         import ezomero
         import tifffile
+
         download_dir = tmp_path / "download"
         download_dir.mkdir()
-        downloaded = ezomero.get_file_annotation(omero_conn, label_id, str(download_dir))
+        downloaded = ezomero.get_file_annotation(
+            omero_conn, label_id, str(download_dir)
+        )
         assert np.array_equal(tifffile.imread(downloaded), mask)
 
         with patch("builtins.print"):
@@ -303,7 +355,9 @@ class TestTrackingTableOnOmero:
 
     def test_one_config_per_table(self, omero_conn, omero_seed, training_set, tmp_path):
         from omero_annotate_ai.omero.omero_functions import (
-            CONFIG_NS, find_annotation_config_for_table, replace_table_config,
+            CONFIG_NS,
+            find_annotation_config_for_table,
+            replace_table_config,
         )
         from omero_annotate_ai.omero.omero_utils import list_annotations_by_namespace
 
@@ -312,15 +366,25 @@ class TestTrackingTableOnOmero:
         for model in ("vit_b", "vit_l"):
             config.ai_model.pretrained_from = model
             config.save_yaml(local)
-            replace_table_config(omero_conn, table_id, str(local), "dataset",
-                                 omero_seed.dataset_id)
+            replace_table_config(
+                omero_conn, table_id, str(local), "dataset", omero_seed.dataset_id
+            )
 
         with patch("builtins.print"):
-            configs = [a for a in list_annotations_by_namespace(
-                omero_conn, "Dataset", omero_seed.dataset_id, CONFIG_NS)
-                if a["file_name"] == f"annotation_config_table_{table_id}.yaml"]
+            configs = [
+                a
+                for a in list_annotations_by_namespace(
+                    omero_conn, "Dataset", omero_seed.dataset_id, CONFIG_NS
+                )
+                if a["file_name"] == f"annotation_config_table_{table_id}.yaml"
+            ]
         assert len(configs) == 1
-        assert find_annotation_config_for_table(omero_conn, table_id).ai_model.pretrained_from == "vit_l"
+        assert (
+            find_annotation_config_for_table(
+                omero_conn, table_id
+            ).ai_model.pretrained_from
+            == "vit_l"
+        )
 
     def test_tables_from_older_versions_are_refused(self, omero_conn, omero_seed):
         import ezomero
@@ -328,8 +392,12 @@ class TestTrackingTableOnOmero:
         from omero_annotate_ai.omero import tracking_table
 
         old_id = ezomero.post_table(
-            omero_conn, pd.DataFrame({"image_id": [1], "train": [True]}),
-            object_type="Dataset", object_id=omero_seed.dataset_id, title="oai_old_table")
+            omero_conn,
+            pd.DataFrame({"image_id": [1], "train": [True]}),
+            object_type="Dataset",
+            object_id=omero_seed.dataset_id,
+            title="oai_old_table",
+        )
         try:
             with pytest.raises(tracking_table.UnsupportedTableError):
                 tracking_table.read_table(omero_conn, old_id)
@@ -340,7 +408,7 @@ class TestTrackingTableOnOmero:
 @pytest.mark.unit
 class TestOMEROConnectionManagerUnit:
     """Unit tests that don't require OMERO server."""
-    
+
     def test_connection_manager_creation(self):
         """
         Tests that the `SimpleOMEROConnection` manager can be created.
@@ -349,9 +417,9 @@ class TestOMEROConnectionManagerUnit:
         """
         conn_manager = SimpleOMEROConnection()
         assert conn_manager is not None
-        assert hasattr(conn_manager, 'connect')
-        assert hasattr(conn_manager, 'get_last_connection')
-    
+        assert hasattr(conn_manager, "connect")
+        assert hasattr(conn_manager, "get_last_connection")
+
     def test_config_loading_without_files(self):
         """
         Tests the configuration loading when no config files exist.
@@ -360,17 +428,27 @@ class TestOMEROConnectionManagerUnit:
         dictionary with default empty values.
         """
         conn_manager = SimpleOMEROConnection()
-        
+
         # Environment variables to clear
-        env_vars_to_clear = ['HOST', 'USER_NAME', 'GROUP', 'OMERO_USER', 'OMERO_PASSWORD', 'OMERO_HOST', 'OMERO_GROUP', 'OMERO_PORT']
-        
-        with patch.dict(os.environ, {}, clear=True), \
-            patch.object(Path, 'exists', return_value=False), \
-            patch.object(conn_manager, 'load_connection_history', return_value=[]), \
-            patch('builtins.print'):  # Suppress print statements
-            
+        env_vars_to_clear = [
+            "HOST",
+            "USER_NAME",
+            "GROUP",
+            "OMERO_USER",
+            "OMERO_PASSWORD",
+            "OMERO_HOST",
+            "OMERO_GROUP",
+            "OMERO_PORT",
+        ]
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(Path, "exists", return_value=False),
+            patch.object(conn_manager, "load_connection_history", return_value=[]),
+            patch("builtins.print"),
+        ):  # Suppress print statements
             config = conn_manager.load_config_files()
-            
+
             assert isinstance(config, dict)
             # Should be completely empty when no config sources exist
             assert config == {}

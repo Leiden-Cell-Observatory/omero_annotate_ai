@@ -3,7 +3,10 @@
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from .core.annotation_config import (
-    AnnotationConfig, create_default_config, load_config, load_config_from_yaml
+    AnnotationConfig,
+    create_default_config,
+    load_config,
+    load_config_from_yaml,
 )
 from .core.annotation_pipeline import AnnotationPipeline, create_pipeline
 from .widgets.omero_connection_widget import create_omero_connection_widget
@@ -12,7 +15,10 @@ from .widgets.training_data_widget import create_training_data_widget
 
 # Processing functions
 from .processing.bia_data import prepare_bia_data_from_table
-from .processing.training_functions import prepare_training_data_from_table, reorganize_local_data_for_training
+from .processing.training_functions import (
+    prepare_training_data_from_table,
+    reorganize_local_data_for_training,
+)
 from .processing.training_utils import setup_training, run_training
 
 # OMERO utilities

@@ -296,7 +296,9 @@ def write_training_layout(
             stats["n_skipped"] += 1
             continue
 
-        image_folder, label_folder, annotation_folder = split_folders_for(record.category)
+        image_folder, label_folder, annotation_folder = split_folders_for(
+            record.category
+        )
         prefix = _STATS_PREFIX[record.category]
         filename = f"{record.annotation_id}.tif"
         mapping = {}
@@ -322,6 +324,8 @@ def write_training_layout(
         stats["file_mapping"][str(record.annotation_id)] = mapping
 
         if logger:
-            logger.debug(f"Wrote annotation {record.annotation_id} to {record.category}")
+            logger.debug(
+                f"Wrote annotation {record.annotation_id} to {record.category}"
+            )
 
     return created_dirs, stats

@@ -22,7 +22,7 @@ from omero_annotate_ai.core.annotation_config import (
 @pytest.mark.unit
 class TestAnnotationConfig:
     """Test the AnnotationConfig class with modern structure."""
-    
+
     def test_default_config_creation(self):
         """
         Tests the creation of a default configuration object.
@@ -32,7 +32,7 @@ class TestAnnotationConfig:
         config = create_default_config()
         assert isinstance(config, AnnotationConfig)
         assert config.omero.container_type == "dataset"
-    
+
     def test_config_to_dict(self):
         """
         Tests the conversion of a configuration object to a dictionary.
@@ -41,12 +41,12 @@ class TestAnnotationConfig:
         """
         config = create_default_config()
         config_dict = config.to_dict()
-        
+
         assert isinstance(config_dict, dict)
         assert "omero" in config_dict
         assert "training" in config_dict
         assert "workflow" in config_dict
-    
+
     def test_config_to_yaml(self):
         """
         Tests the conversion of a configuration object to a YAML string.
@@ -55,10 +55,10 @@ class TestAnnotationConfig:
         """
         config = create_default_config()
         yaml_str = config.to_yaml()
-        
+
         assert isinstance(yaml_str, str)
         assert "omero:" in yaml_str
-        
+
         # Test that it's valid YAML
         parsed = yaml.safe_load(yaml_str)
         assert isinstance(parsed, dict)
@@ -71,39 +71,43 @@ class TestAnnotationConfig:
         yaml_str = config.to_yaml()
 
         # Extract the first-level keys order from the YAML text
-        lines = [ln for ln in yaml_str.splitlines() if ln and not ln.startswith(' ') and ':' in ln]
-        keys_in_yaml = [ln.split(':', 1)[0] for ln in lines]
+        lines = [
+            ln
+            for ln in yaml_str.splitlines()
+            if ln and not ln.startswith(" ") and ":" in ln
+        ]
+        keys_in_yaml = [ln.split(":", 1)[0] for ln in lines]
 
         # Expected order follows field declaration order of AnnotationConfig
         # Note: processing was removed in schema v2.0.0
         expected_prefix_order = [
-            'schema_version',
-            'config_file_path',
-            'name',
-            'version',
-            'authors',
-            'created',
-            'study',
-            'dataset',
-            'annotation_methodology',
-            'spatial_coverage',
-            'training',
-            'normalization',
-            'ai_model',
-            'workflow',
-            'output',
-            'omero',
-            'source',
-            'zarr',
-            'annotations',
-            'documentation',
-            'repository',
-            'tags',
+            "schema_version",
+            "config_file_path",
+            "name",
+            "version",
+            "authors",
+            "created",
+            "study",
+            "dataset",
+            "annotation_methodology",
+            "spatial_coverage",
+            "training",
+            "normalization",
+            "ai_model",
+            "workflow",
+            "output",
+            "omero",
+            "source",
+            "zarr",
+            "annotations",
+            "documentation",
+            "repository",
+            "tags",
         ]
 
         # Only compare until we reach a non-top-level sequence scalar line
         assert keys_in_yaml[: len(expected_prefix_order)] == expected_prefix_order
-    
+
     def test_config_from_dict(self):
         """
         Tests the creation of a configuration object from a dictionary.
@@ -114,12 +118,12 @@ class TestAnnotationConfig:
             "name": "test",
             "omero": {"container_type": "plate", "container_id": 123},
         }
-        
+
         config = AnnotationConfig.from_dict(config_dict)
-        
+
         assert config.omero.container_type == "plate"
         assert config.omero.container_id == 123
-    
+
     def test_config_from_yaml_string(self):
         """
         Tests the creation of a configuration object from a YAML string.
@@ -132,12 +136,12 @@ class TestAnnotationConfig:
           container_type: project
           container_id: 456
         """
-        
+
         config = AnnotationConfig.from_yaml(yaml_str)
-        
+
         assert config.omero.container_type == "project"
         assert config.omero.container_id == 456
-    
+
     def test_config_from_yaml_file(self):
         """
         Tests the creation of a configuration object from a YAML file.
@@ -149,18 +153,18 @@ class TestAnnotationConfig:
         training:
           trainingset_name: "test_set"
         """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
-            
+
             config = AnnotationConfig.from_yaml(f.name)
-            
+
             assert config.name == "test"
-        
+
         # Clean up
         Path(f.name).unlink()
-    
+
     def test_config_structure(self):
         """
         Tests the overall structure and key parameters of the configuration.
@@ -169,11 +173,11 @@ class TestAnnotationConfig:
         """
         config = create_default_config()
         config.omero.container_id = 123
-        
+
         # Test key configuration values
         assert config.omero.container_type == "dataset"
         assert config.omero.container_id == 123
-    
+
     def test_load_config_from_dict(self):
         """
         Tests the `load_config` function with a dictionary as input.
@@ -182,10 +186,10 @@ class TestAnnotationConfig:
         """
         config_dict = {"name": "test", "omero": {"container_id": 999}}
         config = load_config(config_dict)
-        
+
         assert isinstance(config, AnnotationConfig)
         assert config.omero.container_id == 999
-    
+
     def test_get_config_template(self):
         """
         Tests the `get_config_template` function.
@@ -193,10 +197,10 @@ class TestAnnotationConfig:
         YAML template with the expected content.
         """
         template = get_config_template()
-        
+
         assert isinstance(template, str)
         assert "name:" in template
-        
+
         # Test that template is valid YAML
         parsed = yaml.safe_load(template)
         assert isinstance(parsed, dict)
@@ -205,7 +209,7 @@ class TestAnnotationConfig:
 @pytest.mark.unit
 class TestConfigEdgeCases:
     """Test edge cases and error conditions."""
-    
+
     def test_invalid_config_source(self):
         """
         Tests the `load_config` function with an invalid source.
@@ -214,7 +218,7 @@ class TestConfigEdgeCases:
         """
         with pytest.raises(ValueError, match="config_source must be"):
             load_config(123)  # Invalid type
-    
+
     def test_config_save_and_load_roundtrip(self):
         """
         Tests that saving and loading a configuration preserves all data.
@@ -225,7 +229,7 @@ class TestConfigEdgeCases:
         config.omero.container_id = 999
         config.name = "test_roundtrip"
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             config.save_yaml(f.name)
 
             # Load it back
@@ -278,7 +282,10 @@ class TestMultiChannelSupport:
 
         # No label_channel set, should default to channels[0]
         assert config.spatial_coverage.get_label_channel() == 0
-        assert config.spatial_coverage.get_label_channel() == config.spatial_coverage.primary_channel
+        assert (
+            config.spatial_coverage.get_label_channel()
+            == config.spatial_coverage.primary_channel
+        )
 
     def test_get_label_channel_explicit(self):
         """Test that explicit label_channel is used when set."""
@@ -343,7 +350,7 @@ class TestMultiChannelValidation:
                 channels=[0, 1],
                 label_channel=2,  # Not in channels list
                 timepoints=[0],
-                z_slices=[0]
+                z_slices=[0],
             )
 
     def test_training_channels_must_be_in_channels(self):
@@ -355,7 +362,7 @@ class TestMultiChannelValidation:
                 channels=[0, 1],
                 training_channels=[2],  # Not in channels list
                 timepoints=[0],
-                z_slices=[0]
+                z_slices=[0],
             )
 
     def test_valid_channel_configuration(self):
@@ -367,7 +374,7 @@ class TestMultiChannelValidation:
             label_channel=0,
             training_channels=[1, 2],
             timepoints=[0],
-            z_slices=[0]
+            z_slices=[0],
         )
         assert coverage.label_channel == 0
         assert coverage.training_channels == [1, 2]
@@ -379,6 +386,7 @@ class TestContextChannelConfig:
 
     def test_defaults_empty(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
         sc = SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0])
         assert sc.context_channels == []
         assert sc.context_channel_names is None
@@ -387,19 +395,24 @@ class TestContextChannelConfig:
 
     def test_uses_context_channels_false_by_default(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
+
         sc = SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0])
         assert sc.uses_context_channels() is False
 
     def test_uses_context_channels_true_when_set(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
-        sc = SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
-                             context_channels=[1])
+
+        sc = SpatialCoverage(
+            channels=[0, 1], timepoints=[0], z_slices=[0], context_channels=[1]
+        )
         assert sc.uses_context_channels() is True
 
     def test_get_context_channel_specs_defaults(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
-        sc = SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0],
-                             context_channels=[1, 2])
+
+        sc = SpatialCoverage(
+            channels=[0, 1, 2], timepoints=[0], z_slices=[0], context_channels=[1, 2]
+        )
         specs = sc.get_context_channel_specs()
         assert len(specs) == 2
         ch_idx0, name0, cmap0 = specs[0]
@@ -413,51 +426,78 @@ class TestContextChannelConfig:
 
     def test_get_context_channel_specs_custom_names(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
-        sc = SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
-                             context_channels=[1],
-                             context_channel_names=["DAPI"])
+
+        sc = SpatialCoverage(
+            channels=[0, 1],
+            timepoints=[0],
+            z_slices=[0],
+            context_channels=[1],
+            context_channel_names=["DAPI"],
+        )
         specs = sc.get_context_channel_specs()
         assert specs[0][1] == "DAPI"
 
     def test_get_context_channel_specs_custom_colormaps(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
-        sc = SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
-                             context_channels=[1],
-                             context_channel_colormaps=["magenta"])
+
+        sc = SpatialCoverage(
+            channels=[0, 1],
+            timepoints=[0],
+            z_slices=[0],
+            context_channels=[1],
+            context_channel_colormaps=["magenta"],
+        )
         specs = sc.get_context_channel_specs()
         assert specs[0][2] == "magenta"
 
     def test_validation_rejects_overlap_with_label_channel(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError, match="context_channels"):
-            SpatialCoverage(channels=[0, 1], timepoints=[0], z_slices=[0],
-                            label_channel=0, context_channels=[0])
+            SpatialCoverage(
+                channels=[0, 1],
+                timepoints=[0],
+                z_slices=[0],
+                label_channel=0,
+                context_channels=[0],
+            )
 
     def test_validation_rejects_mismatched_names_length(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError):
-            SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0],
-                            context_channels=[1, 2],
-                            context_channel_names=["DAPI"])  # length 1, should be 2
+            SpatialCoverage(
+                channels=[0, 1, 2],
+                timepoints=[0],
+                z_slices=[0],
+                context_channels=[1, 2],
+                context_channel_names=["DAPI"],
+            )  # length 1, should be 2
 
     def test_validation_rejects_mismatched_colormaps_length(self):
         from omero_annotate_ai.core.annotation_config import SpatialCoverage
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError):
-            SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0],
-                            context_channels=[1, 2],
-                            context_channel_colormaps=["blue"])  # length 1, should be 2
+            SpatialCoverage(
+                channels=[0, 1, 2],
+                timepoints=[0],
+                z_slices=[0],
+                context_channels=[1, 2],
+                context_channel_colormaps=["blue"],
+            )  # length 1, should be 2
 
     def test_yaml_round_trip(self):
         from omero_annotate_ai.core.annotation_config import AnnotationConfig
+
         config = AnnotationConfig(name="test")
         config.spatial_coverage.channels = [0, 1]
         config.spatial_coverage.context_channels = [1]
         config.spatial_coverage.context_channel_names = ["DAPI"]
         config.spatial_coverage.context_channel_colormaps = ["blue"]
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             config.save_yaml(f.name)
             loaded = AnnotationConfig.from_yaml(f.name)
         Path(f.name).unlink()
@@ -477,7 +517,7 @@ class TestMultiChannelYamlSerialization:
         config.spatial_coverage.label_channel = 0
         config.spatial_coverage.training_channels = [1, 2]
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             config.save_yaml(f.name)
             loaded = AnnotationConfig.from_yaml(f.name)
 
@@ -529,16 +569,14 @@ class TestOMEROConfigMultiContainer:
     def test_get_all_container_ids_single(self):
         """Test get_all_container_ids with single container_id."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_id": 123}
+            name="test", omero={"container_type": "dataset", "container_id": 123}
         )
         assert config.omero.get_all_container_ids() == [123]
 
     def test_get_all_container_ids_multiple(self):
         """Test get_all_container_ids with container_ids list."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_ids": [1, 2, 3]}
+            name="test", omero={"container_type": "dataset", "container_ids": [1, 2, 3]}
         )
         assert config.omero.get_all_container_ids() == [1, 2, 3]
 
@@ -549,8 +587,8 @@ class TestOMEROConfigMultiContainer:
             omero={
                 "container_type": "dataset",
                 "container_id": 999,  # Should be ignored
-                "container_ids": [1, 2, 3]
-            }
+                "container_ids": [1, 2, 3],
+            },
         )
         assert config.omero.get_all_container_ids() == [1, 2, 3]
 
@@ -561,24 +599,22 @@ class TestOMEROConfigMultiContainer:
             omero={
                 "container_type": "dataset",
                 "container_id": 456,
-                "container_ids": []
-            }
+                "container_ids": [],
+            },
         )
         assert config.omero.get_all_container_ids() == [456]
 
     def test_get_all_container_ids_no_container(self):
         """Test get_all_container_ids with no containers configured."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_id": 0}
+            name="test", omero={"container_type": "dataset", "container_id": 0}
         )
         assert config.omero.get_all_container_ids() == []
 
     def test_get_primary_container_id_single(self):
         """Test get_primary_container_id with single container."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_id": 123}
+            name="test", omero={"container_type": "dataset", "container_id": 123}
         )
         assert config.omero.get_primary_container_id() == 123
 
@@ -586,39 +622,35 @@ class TestOMEROConfigMultiContainer:
         """Test get_primary_container_id with multiple containers."""
         config = AnnotationConfig(
             name="test",
-            omero={"container_type": "dataset", "container_ids": [10, 20, 30]}
+            omero={"container_type": "dataset", "container_ids": [10, 20, 30]},
         )
         assert config.omero.get_primary_container_id() == 10
 
     def test_get_primary_container_id_empty(self):
         """Test get_primary_container_id with no containers."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_id": 0}
+            name="test", omero={"container_type": "dataset", "container_id": 0}
         )
         assert config.omero.get_primary_container_id() == 0
 
     def test_is_multi_container_false_single(self):
         """Test is_multi_container returns False for single container."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_id": 123}
+            name="test", omero={"container_type": "dataset", "container_id": 123}
         )
         assert config.omero.is_multi_container() is False
 
     def test_is_multi_container_false_one_in_list(self):
         """Test is_multi_container returns False for single item in list."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_ids": [123]}
+            name="test", omero={"container_type": "dataset", "container_ids": [123]}
         )
         assert config.omero.is_multi_container() is False
 
     def test_is_multi_container_true(self):
         """Test is_multi_container returns True for multiple containers."""
         config = AnnotationConfig(
-            name="test",
-            omero={"container_type": "dataset", "container_ids": [1, 2]}
+            name="test", omero={"container_type": "dataset", "container_ids": [1, 2]}
         )
         assert config.omero.is_multi_container() is True
 
@@ -626,13 +658,10 @@ class TestOMEROConfigMultiContainer:
         """Test that container_ids survives YAML roundtrip."""
         config = AnnotationConfig(
             name="test_multi",
-            omero={
-                "container_type": "plate",
-                "container_ids": [1, 2, 3]
-            }
+            omero={"container_type": "plate", "container_ids": [1, 2, 3]},
         )
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             config.save_yaml(f.name)
             loaded = AnnotationConfig.from_yaml(f.name)
 
@@ -684,13 +713,20 @@ class TestAnnotationValidation:
 
     def test_valid_2d_annotations_pass(self):
         """Consistent 2D annotations produce no errors and no warnings."""
-        config = self._make_config(channels=[0], label_channel=0, three_d=False, use_patches=False)
+        config = self._make_config(
+            channels=[0], label_channel=0, three_d=False, use_patches=False
+        )
         config.training.segment_all = True
         config.training.train_fraction = 0.7
         config.training.validation_fraction = 0.3
         config.annotations = [
-            self._make_ann(image_id=i, channel=0, is_volumetric=False, is_patch=False,
-                           category="training" if i < 7 else "validation")
+            self._make_ann(
+                image_id=i,
+                channel=0,
+                is_volumetric=False,
+                is_patch=False,
+                category="training" if i < 7 else "validation",
+            )
             for i in range(10)
         ]
         result = validate_annotations_against_config(config)
@@ -700,7 +736,9 @@ class TestAnnotationValidation:
 
     def test_valid_3d_annotations_pass(self):
         """Consistent 3D annotations produce no errors."""
-        config = self._make_config(channels=[0], label_channel=0, three_d=True, use_patches=False)
+        config = self._make_config(
+            channels=[0], label_channel=0, three_d=True, use_patches=False
+        )
         config.annotations = [
             self._make_ann(channel=0, is_volumetric=True, is_patch=False)
         ]
@@ -711,8 +749,11 @@ class TestAnnotationValidation:
     def test_valid_patch_annotations_pass(self):
         """Consistent patch annotations produce no errors."""
         config = self._make_config(
-            channels=[0], label_channel=0, three_d=False,
-            use_patches=True, patch_size=[512, 512]
+            channels=[0],
+            label_channel=0,
+            three_d=False,
+            use_patches=True,
+            patch_size=[512, 512],
         )
         config.annotations = [
             self._make_ann(channel=0, is_patch=True, patch_width=512, patch_height=512)
@@ -741,7 +782,9 @@ class TestAnnotationValidation:
 
     def test_patch_flag_mismatch_is_error(self):
         """Annotations with wrong is_patch produce an error."""
-        config = self._make_config(channels=[0], use_patches=True, patch_size=[512, 512])
+        config = self._make_config(
+            channels=[0], use_patches=True, patch_size=[512, 512]
+        )
         config.annotations = [self._make_ann(is_patch=False)]  # should be True
         result = validate_annotations_against_config(config)
         assert not result.is_valid
@@ -751,7 +794,9 @@ class TestAnnotationValidation:
 
     def test_patch_size_mismatch_is_warning(self):
         """Patch dimension differences produce a warning, not an error."""
-        config = self._make_config(channels=[0], use_patches=True, patch_size=[512, 512])
+        config = self._make_config(
+            channels=[0], use_patches=True, patch_size=[512, 512]
+        )
         config.annotations = [
             self._make_ann(is_patch=True, patch_width=256, patch_height=256)
         ]
@@ -781,10 +826,9 @@ class TestAnnotationValidation:
         config.training.validation_fraction = 0.3
         config.spatial_coverage.channels = [0]
         # Only 2 training out of 10 → ratio = 0.2, far from 0.7
-        config.annotations = (
-            [self._make_ann(image_id=i, category="training") for i in range(2)]
-            + [self._make_ann(image_id=i + 10, category="validation") for i in range(8)]
-        )
+        config.annotations = [
+            self._make_ann(image_id=i, category="training") for i in range(2)
+        ] + [self._make_ann(image_id=i + 10, category="validation") for i in range(8)]
         result = validate_annotations_against_config(config)
         assert result.is_valid
         assert any(w.field == "category_fractions" for w in result.warnings)
@@ -806,7 +850,9 @@ class TestAnnotationValidation:
         config.training.train_n = 3
         config.training.validate_n = 0
         config.spatial_coverage.channels = [0]
-        config.annotations = [self._make_ann(image_id=i, category="training") for i in range(5)]
+        config.annotations = [
+            self._make_ann(image_id=i, category="training") for i in range(5)
+        ]
         result = validate_annotations_against_config(config)
         assert result.is_valid
         assert len(result.warnings) > 0
@@ -849,7 +895,10 @@ class TestChannelPresentation:
 
     def test_create_with_required_fields(self):
         from omero_annotate_ai.core.annotation_config import ChannelPresentation
-        cp = ChannelPresentation(channel_index=0, contrast_start=100.0, contrast_end=4500.0)
+
+        cp = ChannelPresentation(
+            channel_index=0, contrast_start=100.0, contrast_end=4500.0
+        )
         assert cp.channel_index == 0
         assert cp.visible is True
         assert cp.contrast_start == 100.0
@@ -858,16 +907,23 @@ class TestChannelPresentation:
 
     def test_create_with_all_fields(self):
         from omero_annotate_ai.core.annotation_config import ChannelPresentation
+
         cp = ChannelPresentation(
-            channel_index=1, visible=False,
-            contrast_start=0.0, contrast_end=255.0, color="#00FF00"
+            channel_index=1,
+            visible=False,
+            contrast_start=0.0,
+            contrast_end=255.0,
+            color="#00FF00",
         )
         assert cp.visible is False
         assert cp.color == "#00FF00"
 
     def test_serialization_round_trip(self):
         from omero_annotate_ai.core.annotation_config import ChannelPresentation
-        cp = ChannelPresentation(channel_index=0, contrast_start=100.0, contrast_end=4500.0, color="#FF0000")
+
+        cp = ChannelPresentation(
+            channel_index=0, contrast_start=100.0, contrast_end=4500.0, color="#FF0000"
+        )
         data = cp.model_dump()
         cp2 = ChannelPresentation(**data)
         assert cp == cp2
@@ -879,12 +935,14 @@ class TestFeatureType:
 
     def test_create(self):
         from omero_annotate_ai.core.annotation_config import FeatureType
+
         ft = FeatureType(name="cell", color="#FF0000")
         assert ft.name == "cell"
         assert ft.color == "#FF0000"
 
     def test_serialization_round_trip(self):
         from omero_annotate_ai.core.annotation_config import FeatureType
+
         ft = FeatureType(name="nucleus", color="#00FF00")
         data = ft.model_dump()
         ft2 = FeatureType(**data)
@@ -897,17 +955,29 @@ class TestAnnotationConfigJSON:
 
     def _make_config(self):
         from omero_annotate_ai.core.annotation_config import (
-            AnnotationConfig, FeatureType, ChannelPresentation,
-            StudyContext, DatasetInfo, AnnotationMethodology,
-            SpatialCoverage, TrainingConfig, AIModelConfig,
-            WorkflowConfig, OutputConfig, OMEROConfig, ImageAnnotation,
+            AnnotationConfig,
+            FeatureType,
+            ChannelPresentation,
+            StudyContext,
+            DatasetInfo,
+            AnnotationMethodology,
+            SpatialCoverage,
+            TrainingConfig,
+            AIModelConfig,
+            WorkflowConfig,
+            OutputConfig,
+            OMEROConfig,
+            ImageAnnotation,
         )
+
         config = AnnotationConfig(
             name="test_workflow",
             study=StudyContext(title="Test", description="Test study"),
             dataset=DatasetInfo(source_description="test"),
             annotation_methodology=AnnotationMethodology(annotation_criteria="test"),
-            spatial_coverage=SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0]),
+            spatial_coverage=SpatialCoverage(
+                channels=[0], timepoints=[0], z_slices=[0]
+            ),
             training=TrainingConfig(),
             ai_model=AIModelConfig(),
             workflow=WorkflowConfig(),
@@ -917,13 +987,16 @@ class TestAnnotationConfigJSON:
         )
         ann = ImageAnnotation(image_id=1, image_name="img1")
         ann.channel_presentation = [
-            ChannelPresentation(channel_index=0, contrast_start=100, contrast_end=4500, color="#00FF00")
+            ChannelPresentation(
+                channel_index=0, contrast_start=100, contrast_end=4500, color="#00FF00"
+            )
         ]
         config.annotations.append(ann)
         return config
 
     def test_to_json_returns_valid_json(self):
         import json
+
         config = self._make_config()
         json_str = config.to_json()
         data = json.loads(json_str)
@@ -943,6 +1016,7 @@ class TestAnnotationConfigJSON:
 
     def test_from_json_dict(self):
         import json
+
         config = self._make_config()
         data = json.loads(config.to_json())
         loaded = type(config).from_json(data)
@@ -951,6 +1025,7 @@ class TestAnnotationConfigJSON:
     def test_from_json_file(self):
         import tempfile
         from pathlib import Path
+
         config = self._make_config()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             f.write(config.to_json())
@@ -971,22 +1046,36 @@ class TestTrainingConfigWarnings:
 
     def test_warns_when_fractions_set_but_count_mode(self):
         from omero_annotate_ai.core.annotation_config import TrainingConfig
-        with pytest.warns(UserWarning, match="train_fraction.*ignored.*segment_all=False"):
-            TrainingConfig(segment_all=False, train_n=3, validate_n=2, test_n=0, train_fraction=0.5)
+
+        with pytest.warns(
+            UserWarning, match="train_fraction.*ignored.*segment_all=False"
+        ):
+            TrainingConfig(
+                segment_all=False, train_n=3, validate_n=2, test_n=0, train_fraction=0.5
+            )
 
     def test_warns_when_validation_fraction_set_but_count_mode(self):
         from omero_annotate_ai.core.annotation_config import TrainingConfig
+
         with pytest.warns(UserWarning, match="ignored.*segment_all=False"):
-            TrainingConfig(segment_all=False, train_n=3, validate_n=2, test_n=0, validation_fraction=0.1)
+            TrainingConfig(
+                segment_all=False,
+                train_n=3,
+                validate_n=2,
+                test_n=0,
+                validation_fraction=0.1,
+            )
 
     def test_warns_when_counts_set_but_fraction_mode(self):
         from omero_annotate_ai.core.annotation_config import TrainingConfig
+
         with pytest.warns(UserWarning, match="train_n.*ignored.*segment_all=True"):
             TrainingConfig(segment_all=True, train_n=10, validate_n=2, test_n=0)
 
     def test_no_warning_when_only_active_count_set_changed(self):
         from omero_annotate_ai.core.annotation_config import TrainingConfig
         import warnings
+
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             TrainingConfig(segment_all=False, train_n=5, validate_n=2, test_n=0)
@@ -994,6 +1083,7 @@ class TestTrainingConfigWarnings:
     def test_no_warning_when_only_active_fraction_set_changed(self):
         from omero_annotate_ai.core.annotation_config import TrainingConfig
         import warnings
+
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             TrainingConfig(
@@ -1010,12 +1100,16 @@ class TestStudyContextFundingStatement:
 
     def test_funding_statement_defaults_to_none(self):
         from omero_annotate_ai.core.annotation_config import StudyContext
+
         study = StudyContext(title="t", description="d")
         assert study.funding_statement is None
 
     def test_funding_statement_is_settable(self):
         from omero_annotate_ai.core.annotation_config import StudyContext
-        study = StudyContext(title="t", description="d", funding_statement="Funded by X")
+
+        study = StudyContext(
+            title="t", description="d", funding_statement="Funded by X"
+        )
         assert study.funding_statement == "Funded by X"
 
     def test_funding_statement_round_trips_through_yaml(self, tmp_path):
@@ -1033,6 +1127,7 @@ class TestMIFAExportHelpers:
 
     def test_map_license(self):
         from omero_annotate_ai.core.mifa_export import map_license
+
         assert map_license("CC-BY-4.0") == "CC_BY"
         assert map_license("CC-BY") == "CC_BY"
         assert map_license("CC_BY") == "CC_BY"
@@ -1041,6 +1136,7 @@ class TestMIFAExportHelpers:
 
     def test_map_license_unknown_falls_back_with_warning(self):
         from omero_annotate_ai.core.mifa_export import map_license
+
         with pytest.warns(UserWarning, match="license"):
             assert map_license("MIT") == "CC_BY"
 
@@ -1056,10 +1152,12 @@ class TestMIFAExportHelpers:
     )
     def test_map_annotation_type(self, ours, mifa):
         from omero_annotate_ai.core.mifa_export import map_annotation_type
+
         assert map_annotation_type(ours) == mifa
 
     def test_map_annotation_type_unknown_falls_back_to_other(self):
         from omero_annotate_ai.core.mifa_export import map_annotation_type
+
         with pytest.warns(UserWarning, match="annotation type"):
             assert map_annotation_type("nonsense") == "other"
 
@@ -1077,10 +1175,12 @@ class TestMIFAExportHelpers:
     )
     def test_split_author_name(self, name, expected):
         from omero_annotate_ai.core.mifa_export import split_author_name
+
         assert split_author_name(name) == expected
 
     def test_compose_overview_is_nonempty_and_mentions_name(self):
         from omero_annotate_ai.core.mifa_export import compose_overview
+
         config = create_default_config()
         config.name = "my_nuclei_workflow"
         overview = compose_overview(config)
@@ -1089,6 +1189,7 @@ class TestMIFAExportHelpers:
 
     def test_compose_method_is_nonempty_and_mentions_framework(self):
         from omero_annotate_ai.core.mifa_export import compose_method
+
         config = create_default_config()
         method = compose_method(config)
         assert isinstance(method, str) and method.strip()
@@ -1096,12 +1197,14 @@ class TestMIFAExportHelpers:
 
     def test_compose_overview_includes_notes(self):
         from omero_annotate_ai.core.mifa_export import compose_overview
+
         config = create_default_config()
         config.notes = "Wells A1-B2 use the key 'celline'."
         assert "Notes: Wells A1-B2 use the key 'celline'." in compose_overview(config)
 
     def test_compose_method_describes_normalisation(self):
         from omero_annotate_ai.core.mifa_export import compose_method
+
         config = create_default_config()
         config.normalization.apply_at_export = True
         method = compose_method(config)
@@ -1116,10 +1219,12 @@ class TestMIFAExportHelpers:
     )
     def test_version_to_float(self, version, expected):
         from omero_annotate_ai.core.mifa_export import version_to_float
+
         assert version_to_float(version) == expected
 
     def test_version_to_float_garbage_falls_back_with_warning(self):
         from omero_annotate_ai.core.mifa_export import version_to_float
+
         with pytest.warns(UserWarning, match="version"):
             assert version_to_float("not-a-version") == 1.0
 
@@ -1134,6 +1239,7 @@ class TestMIFAExport:
 
     def _rich_config(self):
         from omero_annotate_ai.core.annotation_config import AuthorInfo
+
         config = create_default_config()
         config.name = "nuclei_seg"
         config.study.title = "Nuclei segmentation"
@@ -1152,27 +1258,51 @@ class TestMIFAExport:
         ]
         config.annotations = [
             ImageAnnotation(
-                image_id=1, image_name="a.tif", annotation_id="1_0_0",
-                category="training", timepoint=0, z_slice=0, channel=0,
+                image_id=1,
+                image_name="a.tif",
+                annotation_id="1_0_0",
+                category="training",
+                timepoint=0,
+                z_slice=0,
+                channel=0,
                 annotation_type="segmentation_mask",
                 annotation_created_at="2026-06-22T11:00:00+00:00",
             ),
             ImageAnnotation(
-                image_id=2, image_name="b.tif", annotation_id="2_0_0",
-                category="validation", timepoint=0, z_slice=0, channel=0,
+                image_id=2,
+                image_name="b.tif",
+                annotation_id="2_0_0",
+                category="validation",
+                timepoint=0,
+                z_slice=0,
+                channel=0,
                 annotation_type="segmentation_mask",
             ),
             ImageAnnotation(
-                image_id=3, image_name="c.tif", annotation_id="3_0_0",
-                category="training", timepoint=0, z_slice=0, channel=0,
-                is_patch=True, patch_x=10, patch_y=20, patch_width=128, patch_height=128,
+                image_id=3,
+                image_name="c.tif",
+                annotation_id="3_0_0",
+                category="training",
+                timepoint=0,
+                z_slice=0,
+                channel=0,
+                is_patch=True,
+                patch_x=10,
+                patch_y=20,
+                patch_width=128,
+                patch_height=128,
                 annotation_type="segmentation_mask",
             ),
         ]
         return config
 
     def test_to_mifa_returns_three_documents(self):
-        from bia_mifa_models.datamodel.bia_mifa_models import Study, Annotations, Version
+        from bia_mifa_models.datamodel.bia_mifa_models import (
+            Study,
+            Annotations,
+            Version,
+        )
+
         docs = self._rich_config().to_mifa()
         assert isinstance(docs["study"], Study)
         assert isinstance(docs["annotations"], Annotations)
@@ -1254,7 +1384,10 @@ class TestMIFAExport:
         config = self._rich_config()
         config.study.funding_statement = "Funded by EMBO."
         assert config.to_mifa()["study"].funding_statement == "Funded by EMBO."
-        assert config.to_mifa(funding_statement="Override")["study"].funding_statement == "Override"
+        assert (
+            config.to_mifa(funding_statement="Override")["study"].funding_statement
+            == "Override"
+        )
 
     def test_no_annotations_still_builds_valid_annotations_doc(self):
         ann = create_default_config().to_mifa()["annotations"]
@@ -1265,6 +1398,7 @@ class TestMIFAExport:
     def test_save_mifa_writes_three_yaml_files_that_round_trip(self, tmp_path):
         from linkml_runtime.loaders import yaml_loader
         from bia_mifa_models.datamodel.bia_mifa_models import Annotations
+
         paths = self._rich_config().save_mifa(tmp_path, accession="S-BIAD123")
         assert (tmp_path / "Study_S-BIAD123.yaml").exists()
         assert (tmp_path / "Annotations_S-BIAD123.yaml").exists()
@@ -1303,7 +1437,9 @@ def _write_pipeline_layout(config):
         (folders["annotation_input"] / f"{ann.annotation_id}.tif").write_bytes(b"img")
         if "model_input" in folders:
             (folders["model_input"] / f"{ann.annotation_id}.tif").write_bytes(b"model")
-        (root / "annotation_output" / f"{ann.annotation_id}_mask.tif").write_bytes(b"mask")
+        (root / "annotation_output" / f"{ann.annotation_id}_mask.tif").write_bytes(
+            b"mask"
+        )
 
 
 @pytest.mark.unit
@@ -1325,9 +1461,14 @@ class TestBIAExport:
         config.output.output_directory = root
         config.annotations = [
             ImageAnnotation(
-                image_id=i, image_name=f"img{i}.tif", annotation_id=f"{i}_0_0",
+                image_id=i,
+                image_name=f"img{i}.tif",
+                annotation_id=f"{i}_0_0",
                 category=("training" if i % 2 else "validation"),
-                timepoint=0, z_slice=0, channel=0, annotation_type="segmentation_mask",
+                timepoint=0,
+                z_slice=0,
+                channel=0,
+                annotation_type="segmentation_mask",
             )
             for i in (1, 2, 3)
         ]
@@ -1336,6 +1477,7 @@ class TestBIAExport:
 
     def test_file_lists_headers_and_counts(self, tmp_path):
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+
         images, annotations = build_bia_file_lists(self._config_with_data(tmp_path))
         assert list(annotations.columns)[0] == "Files"
         assert "source_image" in annotations.columns
@@ -1347,6 +1489,7 @@ class TestBIAExport:
 
     def test_file_lists_drop_constant_optional_columns(self, tmp_path):
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+
         _, annotations = build_bia_file_lists(self._config_with_data(tmp_path))
         # constant optional columns dropped, varying ones kept, required always kept
         assert "Channel" not in annotations.columns
@@ -1361,6 +1504,7 @@ class TestBIAExport:
         channel the pipeline also writes to model_input/.
         """
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+
         store = tmp_path / "store"
         config = self._config_with_data(store)
         config.spatial_coverage.label_channel = 0
@@ -1440,8 +1584,12 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=101, image_name="img.tif", annotation_id="101_0_0",
-                    timepoint=0, z_slice=0, channel=0,
+                    image_id=101,
+                    image_name="img.tif",
+                    annotation_id="101_0_0",
+                    timepoint=0,
+                    z_slice=0,
+                    channel=0,
                 )
             ]
         )
@@ -1454,17 +1602,32 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=101, image_name="a.tif", annotation_id="101_0_0",
-                    timepoint=0, z_slice=0, channel=0,
+                    image_id=101,
+                    image_name="a.tif",
+                    annotation_id="101_0_0",
+                    timepoint=0,
+                    z_slice=0,
+                    channel=0,
                 ),
                 ImageAnnotation(
-                    image_id=101, image_name="a.tif", annotation_id="custom_name_xyz",
-                    timepoint=0, z_slice=1, channel=0,
+                    image_id=101,
+                    image_name="a.tif",
+                    annotation_id="custom_name_xyz",
+                    timepoint=0,
+                    z_slice=1,
+                    channel=0,
                 ),
                 ImageAnnotation(
-                    image_id=202, image_name="b.tif", annotation_id="202_0_3d",
-                    timepoint=0, z_slice=0, channel=0,
-                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                    image_id=202,
+                    image_name="b.tif",
+                    annotation_id="202_0_3d",
+                    timepoint=0,
+                    z_slice=0,
+                    channel=0,
+                    is_volumetric=True,
+                    z_start=0,
+                    z_end=4,
+                    z_length=5,
                 ),
             ]
         )
@@ -1480,8 +1643,11 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=101, image_name="a.tif",
-                    timepoint=t, z_slice=z, channel=0,
+                    image_id=101,
+                    image_name="a.tif",
+                    timepoint=t,
+                    z_slice=z,
+                    channel=0,
                 )
                 for t in (0, 1)
                 for z in (0, 2)
@@ -1498,10 +1664,16 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=101, image_name="a.tif",
-                    timepoint=0, z_slice=0, channel=0,
-                    is_patch=True, patch_x=x, patch_y=y,
-                    patch_width=256, patch_height=256,
+                    image_id=101,
+                    image_name="a.tif",
+                    timepoint=0,
+                    z_slice=0,
+                    channel=0,
+                    is_patch=True,
+                    patch_x=x,
+                    patch_y=y,
+                    patch_width=256,
+                    patch_height=256,
                 )
                 for x, y in coords
             ]
@@ -1515,10 +1687,16 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=image_id, image_name="a.tif",
-                    timepoint=0, z_slice=z, channel=0,
-                    is_patch=True, patch_x=x, patch_y=0,
-                    patch_width=256, patch_height=256,
+                    image_id=image_id,
+                    image_name="a.tif",
+                    timepoint=0,
+                    z_slice=z,
+                    channel=0,
+                    is_patch=True,
+                    patch_x=x,
+                    patch_y=0,
+                    patch_width=256,
+                    patch_height=256,
                 )
                 for image_id in (101, 202)
                 for z in (0, 1)
@@ -1527,10 +1705,14 @@ class TestAnnotationIdPersistence:
         )
         ids = self._reload(self._legacy_df(config))
         assert ids == [
-            "101_0_0_0", "101_0_0_1",
-            "101_0_1_0", "101_0_1_1",
-            "202_0_0_0", "202_0_0_1",
-            "202_0_1_0", "202_0_1_1",
+            "101_0_0_0",
+            "101_0_0_1",
+            "101_0_1_0",
+            "101_0_1_1",
+            "202_0_0_0",
+            "202_0_0_1",
+            "202_0_1_0",
+            "202_0_1_1",
         ]
         assert len(set(ids)) == len(ids)
 
@@ -1538,9 +1720,15 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=303, image_name="v.tif",
-                    timepoint=t, z_slice=0, channel=0,
-                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                    image_id=303,
+                    image_name="v.tif",
+                    timepoint=t,
+                    z_slice=0,
+                    channel=0,
+                    is_volumetric=True,
+                    z_start=0,
+                    z_end=4,
+                    z_length=5,
                 )
                 for t in (0, 1)
             ]
@@ -1551,11 +1739,20 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=303, image_name="v.tif",
-                    timepoint=0, z_slice=0, channel=0,
-                    is_volumetric=True, z_start=0, z_end=4, z_length=5,
-                    is_patch=True, patch_x=x, patch_y=0,
-                    patch_width=256, patch_height=256,
+                    image_id=303,
+                    image_name="v.tif",
+                    timepoint=0,
+                    z_slice=0,
+                    channel=0,
+                    is_volumetric=True,
+                    z_start=0,
+                    z_end=4,
+                    z_length=5,
+                    is_patch=True,
+                    patch_x=x,
+                    patch_y=0,
+                    patch_width=256,
+                    patch_height=256,
                 )
                 for x in (256, 0)
             ]
@@ -1570,8 +1767,11 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=101, image_name="a.tif",
-                    timepoint=0, z_slice=z, channel=0,
+                    image_id=101,
+                    image_name="a.tif",
+                    timepoint=0,
+                    z_slice=z,
+                    channel=0,
                 )
                 for z in (0, 1)
             ]
@@ -1584,10 +1784,16 @@ class TestAnnotationIdPersistence:
         config = self._config_with(
             [
                 ImageAnnotation(
-                    image_id=101, image_name="a.tif",
-                    timepoint=0, z_slice=0, channel=0,
-                    is_patch=True, patch_x=x, patch_y=y,
-                    patch_width=256, patch_height=256,
+                    image_id=101,
+                    image_name="a.tif",
+                    timepoint=0,
+                    z_slice=0,
+                    channel=0,
+                    is_patch=True,
+                    patch_x=x,
+                    patch_y=y,
+                    patch_width=256,
+                    patch_height=256,
                 )
                 for x, y in [(256, 0), (0, 256), (0, 0)]
             ]
@@ -1599,22 +1805,53 @@ class TestAnnotationIdPersistence:
         """Post-condition: every reloaded annotation has a non-empty, unique id."""
         annotations = [
             ImageAnnotation(
-                image_id=101, image_name="a.tif", timepoint=0, z_slice=0, channel=0,
+                image_id=101,
+                image_name="a.tif",
+                timepoint=0,
+                z_slice=0,
+                channel=0,
             ),
             ImageAnnotation(
-                image_id=101, image_name="a.tif", timepoint=0, z_slice=1, channel=0,
+                image_id=101,
+                image_name="a.tif",
+                timepoint=0,
+                z_slice=1,
+                channel=0,
             ),
             ImageAnnotation(
-                image_id=202, image_name="b.tif", timepoint=1, z_slice=0, channel=0,
-                is_patch=True, patch_x=0, patch_y=0, patch_width=256, patch_height=256,
+                image_id=202,
+                image_name="b.tif",
+                timepoint=1,
+                z_slice=0,
+                channel=0,
+                is_patch=True,
+                patch_x=0,
+                patch_y=0,
+                patch_width=256,
+                patch_height=256,
             ),
             ImageAnnotation(
-                image_id=202, image_name="b.tif", timepoint=1, z_slice=0, channel=0,
-                is_patch=True, patch_x=256, patch_y=0, patch_width=256, patch_height=256,
+                image_id=202,
+                image_name="b.tif",
+                timepoint=1,
+                z_slice=0,
+                channel=0,
+                is_patch=True,
+                patch_x=256,
+                patch_y=0,
+                patch_width=256,
+                patch_height=256,
             ),
             ImageAnnotation(
-                image_id=303, image_name="v.tif", timepoint=0, z_slice=0, channel=0,
-                is_volumetric=True, z_start=0, z_end=4, z_length=5,
+                image_id=303,
+                image_name="v.tif",
+                timepoint=0,
+                z_slice=0,
+                channel=0,
+                is_volumetric=True,
+                z_start=0,
+                z_end=4,
+                z_length=5,
             ),
         ]
         ids = self._reload(self._legacy_df(self._config_with(annotations)))
@@ -1625,7 +1862,11 @@ class TestAnnotationIdPersistence:
     def test_duplicate_rows_still_get_unique_ids(self):
         """Two identical rows cannot collapse onto the same id."""
         annotation = dict(
-            image_id=101, image_name="a.tif", timepoint=0, z_slice=0, channel=0,
+            image_id=101,
+            image_name="a.tif",
+            timepoint=0,
+            z_slice=0,
+            channel=0,
         )
         config = self._config_with(
             [ImageAnnotation(**annotation), ImageAnnotation(**annotation)]
@@ -1800,8 +2041,12 @@ class TestImageUriIdentity:
         config = create_default_config()
         config.annotations.append(
             ImageAnnotation(
-                image_uri="https://h/p.zarr/B/2/0", image_name="p_B2_0",
-                annotation_id="abc_0_0", level=1, well="B2", field="0",
+                image_uri="https://h/p.zarr/B/2/0",
+                image_name="p_B2_0",
+                annotation_id="abc_0_0",
+                level=1,
+                well="B2",
+                field="0",
                 well_metadata={"compound": "DMSO"},
             )
         )
@@ -1815,7 +2060,11 @@ class TestImageUriIdentity:
         restored.from_dataframe(df)
         ann = restored.annotations[0]
         assert (ann.image_uri, ann.image_id, ann.level, ann.well, ann.field) == (
-            "https://h/p.zarr/B/2/0", None, 1, "B2", "0"
+            "https://h/p.zarr/B/2/0",
+            None,
+            1,
+            "B2",
+            "0",
         )
         assert ann.well_metadata == {"compound": "DMSO"}
 
@@ -1833,8 +2082,17 @@ class TestImageUriIdentity:
         assert (ann.well, ann.field, ann.well_metadata) == ("", "", {})
 
     def test_legacy_table_without_uri_column(self):
-        df = pd.DataFrame([{"image_id": 101, "image_name": "img",
-                            "annotation_id": "101_0_0", "timepoint": 0, "z_slice": 0}])
+        df = pd.DataFrame(
+            [
+                {
+                    "image_id": 101,
+                    "image_name": "img",
+                    "annotation_id": "101_0_0",
+                    "timepoint": 0,
+                    "z_slice": 0,
+                }
+            ]
+        )
         config = create_default_config()
         config.from_dataframe(df)
         ann = config.annotations[0]
@@ -1855,20 +2113,29 @@ class TestZarrConfig:
 
     def test_filters_require_well_metadata(self):
         with pytest.raises(ValueError, match="well_metadata"):
-            AnnotationConfig(name="z", source="zarr",
-                             zarr={"uris": ["a.zarr"], "well_filters": {"c": ["x"]}})
+            AnnotationConfig(
+                name="z",
+                source="zarr",
+                zarr={"uris": ["a.zarr"], "well_filters": {"c": ["x"]}},
+            )
 
     def test_zarr_forces_read_only(self):
         config = AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
         assert config.workflow.read_only_mode is True
 
     def test_yaml_round_trip(self):
-        config = AnnotationConfig(name="z", source="zarr",
-                                  zarr={"uris": ["a.zarr"], "level": 1, "fields": "all",
-                                        "wells": ["B2"]})
+        config = AnnotationConfig(
+            name="z",
+            source="zarr",
+            zarr={"uris": ["a.zarr"], "level": 1, "fields": "all", "wells": ["B2"]},
+        )
         again = AnnotationConfig.from_yaml(config.to_yaml())
         assert again.source == "zarr"
-        assert (again.zarr.level, again.zarr.fields, again.zarr.wells) == (1, "all", ["B2"])
+        assert (again.zarr.level, again.zarr.fields, again.zarr.wells) == (
+            1,
+            "all",
+            ["B2"],
+        )
 
     def test_bad_fields_value_rejected(self):
         with pytest.raises(ValueError):
@@ -1877,7 +2144,8 @@ class TestZarrConfig:
     def test_example_yaml_loads(self):
         root = Path(__file__).resolve().parents[1]
         config = load_config_from_yaml(
-            str(root / "notebooks/marimo/configs/zarr-s-biad855-example.yaml"))
+            str(root / "notebooks/marimo/configs/zarr-s-biad855-example.yaml")
+        )
         assert config.source == "zarr"
         assert config.zarr.level == 1
         assert config.workflow.read_only_mode is True
@@ -1900,4 +2168,7 @@ class TestOpenFields:
         config.save_yaml(path)
         loaded = AnnotationConfig.from_yaml(path)
         assert loaded.notes == "Some wells are out of focus."
-        assert loaded.custom_metadata == {"instrument": "Incucyte SX5", "objective": "10x"}
+        assert loaded.custom_metadata == {
+            "instrument": "Incucyte SX5",
+            "objective": "10x",
+        }

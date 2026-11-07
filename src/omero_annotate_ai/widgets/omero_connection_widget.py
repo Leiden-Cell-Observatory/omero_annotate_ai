@@ -429,8 +429,8 @@ class OMEROConnectionWidget:
                 self._close_existing_connection()
 
                 print("🔌 Creating connection...")
-                self.connection = (
-                    self.connection_manager.create_connection_from_config(config)
+                self.connection = self.connection_manager.create_connection_from_config(
+                    config
                 )
 
                 if not self.connection:

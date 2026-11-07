@@ -41,26 +41,50 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    omero_host = mo.ui.text(value="", label="OMERO Host", placeholder="omero.server.edu")
+    omero_host = mo.ui.text(
+        value="", label="OMERO Host", placeholder="omero.server.edu"
+    )
     omero_username = mo.ui.text(value="", label="Username", placeholder="your_username")
-    omero_password = mo.ui.text(value="", label="Password", placeholder="password", kind="password")
-    omero_group = mo.ui.text(value="", label="Group (optional)", placeholder="Leave empty for default")
+    omero_password = mo.ui.text(
+        value="", label="Password", placeholder="password", kind="password"
+    )
+    omero_group = mo.ui.text(
+        value="", label="Group (optional)", placeholder="Leave empty for default"
+    )
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to OMERO")
 
-    mo.vstack([
+    mo.vstack(
+        [
+            omero_host,
+            omero_username,
+            omero_password,
+            omero_group,
+            omero_secure,
+            connect_button,
+        ]
+    )
+    return (
         omero_host,
         omero_username,
         omero_password,
         omero_group,
         omero_secure,
         connect_button,
-    ])
-    return omero_host, omero_username, omero_password, omero_group, omero_secure, connect_button
+    )
 
 
 @app.cell
-def _(connect_button, omero_host, omero_username, omero_password, omero_group, omero_secure, establish_connection, mo):
+def _(
+    connect_button,
+    omero_host,
+    omero_username,
+    omero_password,
+    omero_group,
+    omero_secure,
+    establish_connection,
+    mo,
+):
     conn = None
     connection_status = "Not connected"
 
@@ -77,7 +101,9 @@ def _(connect_button, omero_host, omero_username, omero_password, omero_group, o
                 if conn and conn.isConnected():
                     user = conn.getUser().getName()
                     group_name = conn.getGroupFromContext().getName()
-                    connection_status = f"Connected as **{user}** to group **{group_name}**"
+                    connection_status = (
+                        f"Connected as **{user}** to group **{group_name}**"
+                    )
                 else:
                     connection_status = "Connection failed"
             except Exception as e:
@@ -118,7 +144,9 @@ def _(conn, container_id, container_type, mo):
     container_info = None
     if conn and conn.isConnected() and container_id.value > 0:
         try:
-            container = conn.getObject(container_type.value.capitalize(), container_id.value)
+            container = conn.getObject(
+                container_type.value.capitalize(), container_id.value
+            )
             if container:
                 container_info = f"Found: **{container.getName()}**"
             else:
@@ -147,11 +175,17 @@ def _(mo):
     validate_n = mo.ui.slider(start=0, stop=50, value=2, label="Validation images")
     test_n = mo.ui.slider(start=0, stop=50, value=0, label="Test images")
 
-    mo.vstack([
-        segment_all,
-        mo.md("**Image split** (ignored if 'Annotate all' is checked):") if not segment_all.value else mo.md(""),
-        mo.hstack([train_n, validate_n, test_n], justify="start", gap=2) if not segment_all.value else mo.md(""),
-    ])
+    mo.vstack(
+        [
+            segment_all,
+            mo.md("**Image split** (ignored if 'Annotate all' is checked):")
+            if not segment_all.value
+            else mo.md(""),
+            mo.hstack([train_n, validate_n, test_n], justify="start", gap=2)
+            if not segment_all.value
+            else mo.md(""),
+        ]
+    )
     return segment_all, test_n, train_n, validate_n
 
 
@@ -171,11 +205,13 @@ def _(mo):
     )
     z_slices = mo.ui.text(value="0", label="Z-slices (comma-separated)")
 
-    mo.vstack([
-        mo.hstack([channel], justify="start"),
-        mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
-        mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
-    ])
+    mo.vstack(
+        [
+            mo.hstack([channel], justify="start"),
+            mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
+            mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
+        ]
+    )
     return channel, timepoint_mode, timepoints, z_slice_mode, z_slices
 
 
@@ -190,25 +226,37 @@ def _(mo):
 @app.cell
 def _(mo):
     use_patches = mo.ui.checkbox(value=False, label="Use patches")
-    patches_per_image = mo.ui.slider(start=1, stop=20, value=1, label="Patches per image")
+    patches_per_image = mo.ui.slider(
+        start=1, stop=20, value=1, label="Patches per image"
+    )
     patch_size = mo.ui.text(value="512, 512", label="Patch size (width, height)")
 
-    mo.vstack([
-        use_patches,
-        mo.hstack([patches_per_image, patch_size], justify="start", gap=2) if use_patches.value else mo.md(""),
-    ])
+    mo.vstack(
+        [
+            use_patches,
+            mo.hstack([patches_per_image, patch_size], justify="start", gap=2)
+            if use_patches.value
+            else mo.md(""),
+        ]
+    )
     return patch_size, patches_per_image, use_patches
 
 
 @app.cell
 def _(mo):
-    batch_size = mo.ui.slider(start=0, stop=10, value=0, label="Batch size (0 = all at once)")
-    read_only_mode = mo.ui.checkbox(value=False, label="Read-only mode (save locally only)")
+    batch_size = mo.ui.slider(
+        start=0, stop=10, value=0, label="Batch size (0 = all at once)"
+    )
+    read_only_mode = mo.ui.checkbox(
+        value=False, label="Read-only mode (save locally only)"
+    )
 
-    mo.vstack([
-        batch_size,
-        read_only_mode,
-    ])
+    mo.vstack(
+        [
+            batch_size,
+            read_only_mode,
+        ]
+    )
     return batch_size, read_only_mode
 
 
@@ -325,7 +373,9 @@ def _(mo):
 
 @app.cell
 def _(config, conn, container_id, create_pipeline, export_button, mo):
-    mo.stop(not export_button.value, mo.md("Click 'Export Images for CellPose' to start"))
+    mo.stop(
+        not export_button.value, mo.md("Click 'Export Images for CellPose' to start")
+    )
 
     pipeline = None
     table_id = None
@@ -341,7 +391,8 @@ def _(config, conn, container_id, create_pipeline, export_button, mo):
 
             table_id, _updated_config = pipeline.run_cp_workflow()
 
-            mo.output.replace(mo.md(f"""
+            mo.output.replace(
+                mo.md(f"""
             **Images exported successfully!**
 
             - Tracking table ID: {table_id}
@@ -354,7 +405,8 @@ def _(config, conn, container_id, create_pipeline, export_button, mo):
                (e.g. `annotation_input/12345_0_0.tif` → `annotation_output/12345_0_0_mask.tif`;
                Cellpose's own `_seg.npy` / `_cp_masks.png` files are not picked up)
             4. Return here and click 'Collect Annotations'
-            """))
+            """)
+            )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error:** {str(e)}"))
     return pipeline, table_id
@@ -379,24 +431,33 @@ def _(mo):
 
 @app.cell
 def _(collect_button, mo, pipeline):
-    mo.stop(not collect_button.value, mo.md("Click 'Collect Annotations' after CellPose annotation"))
+    mo.stop(
+        not collect_button.value,
+        mo.md("Click 'Collect Annotations' after CellPose annotation"),
+    )
 
     if pipeline is None:
         mo.output.replace(mo.md("**Error:** Run the export step first"))
     else:
         try:
             status = pipeline.get_annotation_status_from_disk()
-            if status['available_masks']:
-                uploaded_count, _updated_config = pipeline.collect_annotations_from_disk()
+            if status["available_masks"]:
+                uploaded_count, _updated_config = (
+                    pipeline.collect_annotations_from_disk()
+                )
                 progress = _updated_config.get_progress_summary()
-                mo.output.replace(mo.md(f"""
+                mo.output.replace(
+                    mo.md(f"""
                 **Annotations collected!**
 
                 - Processed: {uploaded_count} annotations
-                - Progress: {progress['completed_units']}/{progress['total_units']} ({progress['progress_percent']}%)
-                """))
+                - Progress: {progress["completed_units"]}/{progress["total_units"]} ({progress["progress_percent"]}%)
+                """)
+                )
             else:
-                mo.output.replace(mo.md("No mask files found yet. Annotate images in CellPose first."))
+                mo.output.replace(
+                    mo.md("No mask files found yet. Annotate images in CellPose first.")
+                )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error:** {str(e)}"))
     return
@@ -419,11 +480,17 @@ def _(mo):
 
 @app.cell
 def _(Path, config, mo, save_button):
-    mo.stop(not save_button.value, mo.md("Click 'Save Configuration' to export your settings"))
+    mo.stop(
+        not save_button.value,
+        mo.md("Click 'Save Configuration' to export your settings"),
+    )
 
     _result = None
     try:
-        config_path = Path(config.output.output_directory) / f"annotation_config_{config.name}.yaml"
+        config_path = (
+            Path(config.output.output_directory)
+            / f"annotation_config_{config.name}.yaml"
+        )
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config.save_yaml(config_path)
         _result = mo.md(f"""
@@ -446,6 +513,7 @@ def _(Path, config, mo, save_button):
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -453,6 +521,7 @@ def _():
 def _():
     from pathlib import Path
     from datetime import datetime
+
     return Path, datetime
 
 
@@ -462,6 +531,7 @@ def _():
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
         OMERO_AVAILABLE = True
     except ImportError:
         OMERO_AVAILABLE = False
@@ -477,7 +547,9 @@ def _():
 def _(OMERO_AVAILABLE, SimpleOMEROConnection):
     def establish_connection(host, username, password, group=None, secure=True):
         if not OMERO_AVAILABLE:
-            raise ImportError("OMERO functionality not available. Install with: pip install -e .[omero]")
+            raise ImportError(
+                "OMERO functionality not available. Install with: pip install -e .[omero]"
+            )
 
         connection = SimpleOMEROConnection()
         config = {
@@ -493,6 +565,7 @@ def _(OMERO_AVAILABLE, SimpleOMEROConnection):
         if conn:
             conn.c.enableKeepAlive(60)
         return conn
+
     return (establish_connection,)
 
 
@@ -514,6 +587,7 @@ def _():
             return [512, 512]
         except ValueError:
             return [512, 512]
+
     return parse_int_list, parse_patch_size
 
 
@@ -570,6 +644,7 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
         config.workflow.read_only_mode = read_only_mode
 
         return config
+
     return (build_config,)
 
 

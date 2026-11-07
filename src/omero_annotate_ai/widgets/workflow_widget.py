@@ -22,10 +22,20 @@ from ..omero.omero_functions import (
 # or gives new rows a different shape than the old ones (patch size, z-range).
 # Timepoints, z-slices and patches per image decide which planes new rows use;
 # "Annotate all images" changes how the table grows.
-RESUME_LOCKED_KEYS = ("channel", "three_d", "z_range_start", "z_range_end",
-                      "use_patches", "patch_size", "patches_per_image",
-                      "timepoint_mode", "timepoints", "z_slice_mode", "z_slices",
-                      "segment_all")
+RESUME_LOCKED_KEYS = (
+    "channel",
+    "three_d",
+    "z_range_start",
+    "z_range_end",
+    "use_patches",
+    "patch_size",
+    "patches_per_image",
+    "timepoint_mode",
+    "timepoints",
+    "z_slice_mode",
+    "z_slices",
+    "segment_all",
+)
 # Planes the rows show are only a fallback: a saved config's own timepoint and
 # z-slice settings (e.g. "random") describe the run better than the samples.
 ROW_FALLBACK_KEYS = ("timepoint_mode", "timepoints", "z_slice_mode", "z_slices")
@@ -279,8 +289,7 @@ class WorkflowWidget:
 
         # Container summary (filled when user proceeds to next step)
         self.container_summary = widgets.HTML(
-            value="",
-            layout=widgets.Layout(margin="10px 0")
+            value="", layout=widgets.Layout(margin="10px 0")
         )
 
         self.container_type_dropdown.observe(
@@ -463,9 +472,9 @@ class WorkflowWidget:
             min=1,
             max=50,
             description="Training images:",
-            style={'description_width': '150px'},
+            style={"description_width": "150px"},
             disabled=segment_all.value,
-            tooltip="Images to annotate for training the model (required, min: 1)"
+            tooltip="Images to annotate for training the model (required, min: 1)",
         )
 
         self.validate_n_slider = widgets.IntSlider(
@@ -473,9 +482,9 @@ class WorkflowWidget:
             min=0,  # Changed from 1
             max=50,
             description="Validation images:",
-            style={'description_width': '150px'},
+            style={"description_width": "150px"},
             disabled=segment_all.value,
-            tooltip="Images to annotate for model validation during training (0 to skip)"
+            tooltip="Images to annotate for model validation during training (0 to skip)",
         )
 
         self.test_n_slider = widgets.IntSlider(
@@ -483,9 +492,9 @@ class WorkflowWidget:
             min=0,
             max=50,
             description="Test images:",
-            style={'description_width': '150px'},
+            style={"description_width": "150px"},
             disabled=segment_all.value,
-            tooltip="Images to annotate for final model evaluation (0 to skip)"
+            tooltip="Images to annotate for final model evaluation (0 to skip)",
         )
 
         # Channel selection
@@ -577,7 +586,9 @@ class WorkflowWidget:
 
         # Setup observers
         segment_all.observe(
-            lambda c: self._toggle_subset_settings(c, self.train_n_slider, self.validate_n_slider, self.test_n_slider),
+            lambda c: self._toggle_subset_settings(
+                c, self.train_n_slider, self.validate_n_slider, self.test_n_slider
+            ),
             names="value",
         )
         timepoint_mode.observe(
@@ -807,7 +818,9 @@ class WorkflowWidget:
                     dir_path = Path(self.directory_text.value).expanduser()
                     dir_path.mkdir(parents=True, exist_ok=True)
                     self.working_directory = str(dir_path)
-                    self.directory_status.value = f"✅ Directory ready: {self.working_directory}"
+                    self.directory_status.value = (
+                        f"✅ Directory ready: {self.working_directory}"
+                    )
             except Exception as e:
                 # If directory cannot be created, show error and do not advance
                 self.directory_status.value = f"❌ Error creating directory: {e}"
@@ -819,7 +832,9 @@ class WorkflowWidget:
                     container_id = self.container_widgets["container"].value
                     container_type = self.container_widgets["type"].value
                     if container_id and container_type and self.connection is not None:
-                        info = get_container_info(self.connection, container_type, container_id)
+                        info = get_container_info(
+                            self.connection, container_type, container_id
+                        )
                         if info:
                             self._apply_container_info(info)
             except Exception:
@@ -951,7 +966,12 @@ class WorkflowWidget:
                     for table in self.annotation_tables:
                         # Labels must be unique: RadioButtons matches options by label,
                         # so two tables with the same name would both show as selected.
-                        options.append((f"{table.get('name', 'Unknown')} (ID: {table.get('id')})", table.get("id")))
+                        options.append(
+                            (
+                                f"{table.get('name', 'Unknown')} (ID: {table.get('id')})",
+                                table.get("id"),
+                            )
+                        )
 
                     self.tables_widgets["selection"].options = options
                     self.tables_widgets["selection"].disabled = False
@@ -1000,7 +1020,9 @@ class WorkflowWidget:
         ID); falls back to what the table rows show when there is none.
         """
         try:
-            saved = find_annotation_config_for_table(self.connection, self.selected_table_id)
+            saved = find_annotation_config_for_table(
+                self.connection, self.selected_table_id
+            )
         except Exception:
             saved = None
         try:
@@ -1022,8 +1044,11 @@ class WorkflowWidget:
         )
         source = "the saved config" if saved is not None else "the table rows"
         if overridden:
-            source += (" (it did not match the table, so the table rows were used for: "
-                       + ", ".join(overridden) + ")")
+            source += (
+                " (it did not match the table, so the table rows were used for: "
+                + ", ".join(overridden)
+                + ")"
+            )
 
         self._apply_settings_to_widgets(settings)
         self._lock_resume_fields(settings)
@@ -1090,12 +1115,20 @@ class WorkflowWidget:
     def _annotation_widget_map(self) -> dict:
         """Configure-tab widgets by setting name."""
         names = {
-            "Annotate all images": "segment_all", "Training images": "train_n",
-            "Validation images": "validate_n", "Test images": "test_n",
-            "Channel": "channel", "Timepoint list": "timepoints", "Timepoints": "timepoint_mode",
-            "Z-slice list": "z_slices", "Z-slices": "z_slice_mode", "3D processing": "three_d",
-            "Z-range start": "z_range_start", "Z-range end": "z_range_end",
-            "Use patches": "use_patches", "Patches per image": "patches_per_image",
+            "Annotate all images": "segment_all",
+            "Training images": "train_n",
+            "Validation images": "validate_n",
+            "Test images": "test_n",
+            "Channel": "channel",
+            "Timepoint list": "timepoints",
+            "Timepoints": "timepoint_mode",
+            "Z-slice list": "z_slices",
+            "Z-slices": "z_slice_mode",
+            "3D processing": "three_d",
+            "Z-range start": "z_range_start",
+            "Z-range end": "z_range_end",
+            "Use patches": "use_patches",
+            "Patches per image": "patches_per_image",
             "Patch size": "patch_size",
         }
         found = {}
@@ -1130,7 +1163,9 @@ class WorkflowWidget:
 
     def _lock_resume_fields(self, settings: dict):
         """Disable the fields that must match the table, and remember their values."""
-        self._locked_settings = {k: settings[k] for k in RESUME_LOCKED_KEYS if k in settings}
+        self._locked_settings = {
+            k: settings[k] for k in RESUME_LOCKED_KEYS if k in settings
+        }
         for key in ("channels", "label_channel"):
             if key in settings:
                 self._locked_settings[key] = settings[key]
@@ -1154,8 +1189,10 @@ class WorkflowWidget:
         widgets_by_key = self._annotation_widget_map()
         three_d = widgets_by_key.get("three_d")
         use_patches = widgets_by_key.get("use_patches")
-        modes = {"timepoints": widgets_by_key.get("timepoint_mode"),
-                 "z_slices": widgets_by_key.get("z_slice_mode")}
+        modes = {
+            "timepoints": widgets_by_key.get("timepoint_mode"),
+            "z_slices": widgets_by_key.get("z_slice_mode"),
+        }
         for key in RESUME_LOCKED_KEYS:
             widget = widgets_by_key.get(key)
             if widget is None:
@@ -1312,7 +1349,8 @@ class WorkflowWidget:
                     self._set_resume_from_table(False)
 
                 self._render_omero_status(
-                    container_type, container_id,
+                    container_type,
+                    container_id,
                     extra_lines=[
                         f"<b>Training Set:</b> {self.config.name}",
                         f"<b>Resume from table:</b> {self.config.workflow.resume_from_table}",
@@ -1435,7 +1473,9 @@ class WorkflowWidget:
                 "z_range_end"
             ].value
         if "use_patches" in annotation_widgets:
-            self.config.spatial_coverage.use_patches = annotation_widgets["use_patches"].value
+            self.config.spatial_coverage.use_patches = annotation_widgets[
+                "use_patches"
+            ].value
         if "patches_per_image" in annotation_widgets:
             self.config.spatial_coverage.patches_per_image = annotation_widgets[
                 "patches_per_image"
@@ -1504,11 +1544,14 @@ class WorkflowWidget:
             self._on_update_config(button)
 
             # Then save to file
-            config_path = Path(self.working_directory) / f"annotation_config_{self.config.name}.yaml"
-            
+            config_path = (
+                Path(self.working_directory)
+                / f"annotation_config_{self.config.name}.yaml"
+            )
+
             # This will now set config.config_file_path automatically
             self.config.save_yaml(config_path)
-            
+
             self.save_status.value = f"✅ Configuration saved to: {config_path}"
 
         except Exception as e:
@@ -1518,7 +1561,14 @@ class WorkflowWidget:
         """Show the selected container and its image summary on the Configure tab."""
         info = getattr(self, "_container_info", None) or {}
         same_container = info.get("container_id") == container_id
-        label = " ".join(p for p in (container_type, info.get("container_name") if same_container else None) if p)
+        label = " ".join(
+            p
+            for p in (
+                container_type,
+                info.get("container_name") if same_container else None,
+            )
+            if p
+        )
         lines = [f"<b>Container:</b> {label} (ID: {container_id})"]
         lines.extend(extra_lines)
         if same_container:
@@ -1535,7 +1585,9 @@ class WorkflowWidget:
             channels = self._format_channel_names(info)
             if channels:
                 lines.append(f"<b>Channels:</b> {channels}")
-        self.omero_status.value = "<h5>📡 OMERO Settings</h5>" + "".join(f"<p>{line}</p>" for line in lines)
+        self.omero_status.value = "<h5>📡 OMERO Settings</h5>" + "".join(
+            f"<p>{line}</p>" for line in lines
+        )
 
     @staticmethod
     def _format_channel_names(info: dict) -> str:
@@ -1545,7 +1597,9 @@ class WorkflowWidget:
             return ""
         text = ", ".join(f"{i}: {html.escape(name)}" for i, name in enumerate(names))
         if info.get("channel_names_vary"):
-            text += " <i>(from the first image; other images name channels differently)</i>"
+            text += (
+                " <i>(from the first image; other images name channels differently)</i>"
+            )
         return text
 
     def _apply_container_info(self, info: dict):
@@ -1582,13 +1636,17 @@ class WorkflowWidget:
                 listed = 0
                 details = []
                 for pid, pinfo in plates.items():
-                    count = pinfo.get("total_images") if isinstance(pinfo, dict) else pinfo
+                    count = (
+                        pinfo.get("total_images") if isinstance(pinfo, dict) else pinfo
+                    )
                     details.append(f"Plate {pid}: {count} images")
                     listed += 1
                     if listed >= 5:
                         break
                 if details:
-                    summary_lines.append("<b>Plates (sample):</b> " + ", ".join(details))
+                    summary_lines.append(
+                        "<b>Plates (sample):</b> " + ", ".join(details)
+                    )
 
         if dims:
             summary_lines.append(
@@ -1611,7 +1669,11 @@ class WorkflowWidget:
         self._render_omero_status(ctype, info.get("container_id", ""))
 
         # Update sliders' max to the number of available images
-        if hasattr(self, "train_n_slider") and hasattr(self, "validate_n_slider") and hasattr(self, "test_n_slider"):
+        if (
+            hasattr(self, "train_n_slider")
+            and hasattr(self, "validate_n_slider")
+            and hasattr(self, "test_n_slider")
+        ):
             max_imgs = max(1, int(total_images))
             self.train_n_slider.max = max_imgs
             self.validate_n_slider.max = max_imgs

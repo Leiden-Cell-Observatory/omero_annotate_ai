@@ -51,13 +51,17 @@ def _(mo):
 
 @app.cell
 def _(load_button, load_config_from_yaml, mo, yaml_path):
-    mo.stop(not load_button.value, mo.md("Enter a YAML path and click 'Load configuration'"))
+    mo.stop(
+        not load_button.value, mo.md("Enter a YAML path and click 'Load configuration'")
+    )
     config = load_config_from_yaml(yaml_path.value)
     # Keep the source YAML untouched; progress and the updated config go to the output directory.
     config.config_file_path = None
     mo.stop(
         config.source != "zarr",
-        mo.md("This configuration reads from OMERO; use `omero-annotate-ai-from-yaml.py`."),
+        mo.md(
+            "This configuration reads from OMERO; use `omero-annotate-ai-from-yaml.py`."
+        ),
     )
     mo.md(f"""
     | Setting | Value |
@@ -85,18 +89,31 @@ def _(mo):
 
 @app.cell
 def _(config, create_pipeline, discover_button, mo, pd):
-    mo.stop(not discover_button.value, mo.md("Click 'Discover images' to list what the config selects"))
+    mo.stop(
+        not discover_button.value,
+        mo.md("Click 'Discover images' to list what the config selects"),
+    )
     pipeline = create_pipeline(config)
     _uris = pipeline.get_image_uris()
     _rows = [
-        {"plate": r.plate, "well": r.well, "field": r.field, "uri": r.uri, **r.well_metadata}
+        {
+            "plate": r.plate,
+            "well": r.well,
+            "field": r.field,
+            "uri": r.uri,
+            **r.well_metadata,
+        }
         for r in (pipeline._zarr_refs[u] for u in _uris)
     ]
-    mo.vstack([
-        mo.md(f"**{len(_uris)} images found.** Well matching: "
-              f"`{config.output.output_directory}/well_matching.csv`"),
-        mo.ui.table(pd.DataFrame(_rows)) if _rows else mo.md("No images selected."),
-    ])
+    mo.vstack(
+        [
+            mo.md(
+                f"**{len(_uris)} images found.** Well matching: "
+                f"`{config.output.output_directory}/well_matching.csv`"
+            ),
+            mo.ui.table(pd.DataFrame(_rows)) if _rows else mo.md("No images selected."),
+        ]
+    )
     return (pipeline,)
 
 

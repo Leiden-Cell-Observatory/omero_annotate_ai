@@ -49,7 +49,9 @@ def percentile_normalize(
     if channel_axis is None:
         channels = [data]
     else:
-        channels = [np.take(data, i, axis=channel_axis) for i in range(data.shape[channel_axis])]
+        channels = [
+            np.take(data, i, axis=channel_axis) for i in range(data.shape[channel_axis])
+        ]
 
     bounds = []
     normalised = []
@@ -186,15 +188,18 @@ def microsam_raw_transform(spec: Any) -> Callable[[np.ndarray], np.ndarray]:
         spec = NormalizationConfig()
 
     if spec.apply_at_export:
+
         def transform(x):
             return np.clip(np.asarray(x, dtype=np.float32), 0.0, 1.0) * 255.0
     elif spec.method == "percentile":
+
         def transform(x):
             normalised, _ = percentile_normalize(
                 x, spec.percentile_low, spec.percentile_high, clip=True
             )
             return normalised * 255.0
     else:
+
         def transform(x):
             x = np.asarray(x, dtype=np.float32)
             if x.min() < 0 or x.max() > 255:
@@ -203,4 +208,5 @@ def microsam_raw_transform(spec: Any) -> Callable[[np.ndarray], np.ndarray]:
                     f"{x.max():g}. Use normalization.method 'percentile' (the default)."
                 )
             return x
+
     return transform

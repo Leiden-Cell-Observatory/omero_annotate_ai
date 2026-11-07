@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch, MagicMock
 try:
     from omero_annotate_ai.widgets.omero_connection_widget import OMEROConnectionWidget
     from omero_annotate_ai.widgets.workflow_widget import WorkflowWidget
+
     WIDGETS_AVAILABLE = True
 except ImportError:
     WIDGETS_AVAILABLE = False
@@ -19,9 +20,9 @@ except ImportError:
 @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
 class TestOMEROConnectionWidget:
     """Test OMERO connection widget functionality."""
-    
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.widgets')
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection')
+
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.widgets")
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection")
     def test_widget_initialization(self, mock_connection_class, mock_widgets):
         """
         Tests the initialization of the OMEROConnectionWidget.
@@ -40,7 +41,7 @@ class TestOMEROConnectionWidget:
         mock_output.__exit__ = Mock(return_value=None)
         mock_widgets.Output.return_value = mock_output
         mock_widgets.VBox.return_value = Mock()
-        
+
         # Mock connection manager
         mock_conn_manager = Mock()
         # Mock get_connection_list to return an empty list
@@ -48,15 +49,15 @@ class TestOMEROConnectionWidget:
         # Mock load_config_files to return None
         mock_conn_manager.load_config_files.return_value = None
         mock_connection_class.return_value = mock_conn_manager
-        
+
         widget = OMEROConnectionWidget()
-        
+
         assert widget is not None
-        assert hasattr(widget, 'connection')
+        assert hasattr(widget, "connection")
         assert widget.connection is None
-    
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.widgets')
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection')
+
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.widgets")
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection")
     def test_connect_button_callback(self, mock_connection_class, mock_widgets):
         """
         Tests the callback of the connect button.
@@ -73,7 +74,7 @@ class TestOMEROConnectionWidget:
         mock_password_widget.value = "testpass"
         mock_port_widget = Mock()
         mock_port_widget.value = 4064
-        
+
         mock_widgets.Text.return_value = mock_host_widget
         mock_widgets.Password.return_value = mock_password_widget
         mock_widgets.IntText.return_value = mock_port_widget
@@ -85,7 +86,7 @@ class TestOMEROConnectionWidget:
         mock_output.__exit__ = Mock(return_value=None)
         mock_widgets.Output.return_value = mock_output
         mock_widgets.VBox.return_value = Mock()
-        
+
         # Mock connection manager
         mock_conn_manager = Mock()
         mock_conn = Mock()
@@ -96,22 +97,22 @@ class TestOMEROConnectionWidget:
         # Mock load_config_files to return None
         mock_conn_manager.load_config_files.return_value = None
         mock_connection_class.return_value = mock_conn_manager
-        
+
         widget = OMEROConnectionWidget()
         widget.host_widget = mock_host_widget
         widget.user_widget = mock_user_widget
         widget.password_widget = mock_password_widget
         widget.port_widget = mock_port_widget
-        
+
         # Simulate connect button click
         widget._connect(Mock())
-        
+
         assert widget.connection == mock_conn
         # Check that create_connection_from_config was called instead of direct connect
         mock_conn_manager.create_connection_from_config.assert_called_once()
-    
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.widgets')
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection')
+
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.widgets")
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection")
     def test_connect_failure(self, mock_connection_class, mock_widgets):
         """
         Tests the handling of a connection failure.
@@ -120,44 +121,46 @@ class TestOMEROConnectionWidget:
         """
         # Mock widgets
         widget_mocks = {
-            'Text': Mock(),
-            'Password': Mock(), 
-            'IntText': Mock(),
-            'Checkbox': Mock(),
-            'Button': Mock(),
-            'Output': Mock(),
-            'VBox': Mock()
+            "Text": Mock(),
+            "Password": Mock(),
+            "IntText": Mock(),
+            "Checkbox": Mock(),
+            "Button": Mock(),
+            "Output": Mock(),
+            "VBox": Mock(),
         }
-        
+
         # Set up context manager support for Output widget
-        widget_mocks['Output'].__enter__ = Mock(return_value=widget_mocks['Output'])
-        widget_mocks['Output'].__exit__ = Mock(return_value=None)
-        
+        widget_mocks["Output"].__enter__ = Mock(return_value=widget_mocks["Output"])
+        widget_mocks["Output"].__exit__ = Mock(return_value=None)
+
         for widget_type, mock_widget in widget_mocks.items():
             setattr(mock_widgets, widget_type, Mock(return_value=mock_widget))
-        
+
         # Mock connection failure
         mock_conn_manager = Mock()
         mock_conn_manager.connect.return_value = None
-        mock_conn_manager.create_connection_from_config.return_value = None  # Simulate connection failure
+        mock_conn_manager.create_connection_from_config.return_value = (
+            None  # Simulate connection failure
+        )
         # Mock get_connection_list to return an empty list instead of Mock
         mock_conn_manager.get_connection_list.return_value = []
         # Mock load_config_files to return None
         mock_conn_manager.load_config_files.return_value = None
         mock_connection_class.return_value = mock_conn_manager
-        
+
         widget = OMEROConnectionWidget()
         widget.host_widget = Mock(value="localhost")
         widget.user_widget = Mock(value="user")
         widget.password_widget = Mock(value="pass")
         widget.port_widget = Mock(value=4064)
-        
+
         widget._connect(Mock())
-        
+
         assert widget.connection is None
-    
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.widgets')
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection')
+
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.widgets")
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection")
     def test_load_from_env(self, mock_connection_class, mock_widgets):
         """
         Tests loading connection parameters from environment variables.
@@ -166,33 +169,45 @@ class TestOMEROConnectionWidget:
         """
         # Mock widgets
         widget_mocks = {}
-        for widget_type in ['Text', 'Password', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox']:
+        for widget_type in [
+            "Text",
+            "Password",
+            "IntText",
+            "Checkbox",
+            "Button",
+            "Output",
+            "VBox",
+        ]:
             widget_mocks[widget_type] = Mock()
             # Set up context manager support for Output widget
-            if widget_type == 'Output':
-                widget_mocks[widget_type].__enter__ = Mock(return_value=widget_mocks[widget_type])
+            if widget_type == "Output":
+                widget_mocks[widget_type].__enter__ = Mock(
+                    return_value=widget_mocks[widget_type]
+                )
                 widget_mocks[widget_type].__exit__ = Mock(return_value=None)
-            setattr(mock_widgets, widget_type, Mock(return_value=widget_mocks[widget_type]))
-        
+            setattr(
+                mock_widgets, widget_type, Mock(return_value=widget_mocks[widget_type])
+            )
+
         # Mock connection manager
         mock_conn_manager = Mock()
         # Mock get_connection_list to return an empty list
         mock_conn_manager.get_connection_list.return_value = []
         # Mock load_config_files to return environment-based config
         mock_conn_manager.load_config_files.return_value = {
-            'host': 'env_host',
-            'username': 'env_user',
-            'port': '4064'
+            "host": "env_host",
+            "username": "env_user",
+            "port": "4064",
         }
         mock_connection_class.return_value = mock_conn_manager
-        
-        with patch('os.getenv') as mock_getenv:
+
+        with patch("os.getenv") as mock_getenv:
             mock_getenv.side_effect = lambda key, default=None: {
-                'OMERO_HOST': 'env_host',
-                'OMERO_USER': 'env_user',
-                'OMERO_PORT': '4064'
+                "OMERO_HOST": "env_host",
+                "OMERO_USER": "env_user",
+                "OMERO_PORT": "4064",
             }.get(key, default)
-            
+
             widget = OMEROConnectionWidget()
 
             # Check that the widget's fields were populated from config
@@ -222,7 +237,7 @@ class TestOMEROConnectionWidgetCredentials:
     @pytest.fixture
     def widget(self, conn_manager):
         with patch(
-            'omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection',
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
             return_value=conn_manager,
         ):
             yield OMEROConnectionWidget()
@@ -256,7 +271,7 @@ class TestOMEROConnectionWidgetCredentials:
         }
 
         with patch(
-            'omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection',
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
             return_value=conn_manager,
         ):
             widget = OMEROConnectionWidget()
@@ -277,7 +292,7 @@ class TestOMEROConnectionWidgetCredentials:
         }
 
         with patch(
-            'omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection',
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
             return_value=conn_manager,
         ):
             widget = OMEROConnectionWidget()
@@ -423,8 +438,9 @@ class TestOMEROConnectionWidgetCredentials:
 
         assert "may be out of date" in capsys.readouterr().out
 
-    @pytest.mark.parametrize("host", ["wss://omero.example.org/omero-ws",
-                                      "ws://omero.example.org/omero-ws"])
+    @pytest.mark.parametrize(
+        "host", ["wss://omero.example.org/omero-ws", "ws://omero.example.org/omero-ws"]
+    )
     def test_url_host_sends_no_port_and_stays_encrypted(self, widget, host):
         widget.secure_widget.value = False
         widget.host_widget.value = host
@@ -449,8 +465,8 @@ class TestOMEROConnectionWidgetCredentials:
 @pytest.mark.unit
 class TestWorkflowWidget:
     """Test workflow configuration widget functionality."""
-    
-    @patch('omero_annotate_ai.widgets.workflow_widget.widgets')
+
+    @patch("omero_annotate_ai.widgets.workflow_widget.widgets")
     def test_workflow_widget_initialization(self, mock_widgets):
         """
         Tests the initialization of the WorkflowWidget.
@@ -459,18 +475,29 @@ class TestWorkflowWidget:
         """
         # Mock ipywidgets components
         widget_mocks = {}
-        for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
+        for widget_type in [
+            "Text",
+            "Dropdown",
+            "IntText",
+            "Checkbox",
+            "Button",
+            "Output",
+            "VBox",
+            "HBox",
+        ]:
             widget_mocks[widget_type] = Mock()
-            setattr(mock_widgets, widget_type, Mock(return_value=widget_mocks[widget_type]))
-        
+            setattr(
+                mock_widgets, widget_type, Mock(return_value=widget_mocks[widget_type])
+            )
+
         mock_connection = Mock()
-        
+
         widget = WorkflowWidget(connection=mock_connection)
-        
+
         assert widget is not None
         assert widget.connection == mock_connection
-    
-    @patch('omero_annotate_ai.widgets.workflow_widget.widgets')
+
+    @patch("omero_annotate_ai.widgets.workflow_widget.widgets")
     def test_container_selection(self, mock_widgets):
         """
         Tests the OMERO container selection.
@@ -479,34 +506,45 @@ class TestWorkflowWidget:
         """
         # Mock widgets
         widget_mocks = {}
-        for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
+        for widget_type in [
+            "Text",
+            "Dropdown",
+            "IntText",
+            "Checkbox",
+            "Button",
+            "Output",
+            "VBox",
+            "HBox",
+        ]:
             widget_mocks[widget_type] = Mock()
-            setattr(mock_widgets, widget_type, Mock(return_value=widget_mocks[widget_type]))
-        
+            setattr(
+                mock_widgets, widget_type, Mock(return_value=widget_mocks[widget_type])
+            )
+
         mock_connection = Mock()
-        
+
         # Mock the connection's getObjects method instead of ezomero
         mock_projects = [
             Mock(getId=Mock(return_value=1), getName=Mock(return_value="Project 1")),
-            Mock(getId=Mock(return_value=2), getName=Mock(return_value="Project 2"))
+            Mock(getId=Mock(return_value=2), getName=Mock(return_value="Project 2")),
         ]
         mock_connection.getObjects.return_value = mock_projects
-        
+
         widget = WorkflowWidget(connection=mock_connection)
         # Need to properly mock the container_widgets dictionary structure
         widget.container_widgets = {
             "type": Mock(value="project"),
             "container": Mock(),
-            "refresh": Mock()
+            "refresh": Mock(),
         }
-        
+
         # Simulate container type change
-        widget._on_container_type_change({'new': 'project'})
-        
+        widget._on_container_type_change({"new": "project"})
+
         # Should call getObjects with "Project"
         mock_connection.getObjects.assert_called_once_with("Project")
-    
-    @patch('omero_annotate_ai.widgets.workflow_widget.widgets')
+
+    @patch("omero_annotate_ai.widgets.workflow_widget.widgets")
     def test_config_generation(self, mock_widgets):
         """
         Tests the generation of the configuration from the widget values.
@@ -516,22 +554,31 @@ class TestWorkflowWidget:
         # Mock widgets with values
         widget_mocks = {}
         widget_values = {
-            'working_dir': '/tmp/test',
-            'container_type': 'dataset',
-            'container_id': 123,
-            'pretrained_from': 'vit_b_lm',
-            'batch_size': 5,
-            'use_patches': False
+            "working_dir": "/tmp/test",
+            "container_type": "dataset",
+            "container_id": 123,
+            "pretrained_from": "vit_b_lm",
+            "batch_size": 5,
+            "use_patches": False,
         }
 
-        for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
+        for widget_type in [
+            "Text",
+            "Dropdown",
+            "IntText",
+            "Checkbox",
+            "Button",
+            "Output",
+            "VBox",
+            "HBox",
+        ]:
             mock_widget = Mock()
-            if widget_type in ['Text', 'Dropdown']:
+            if widget_type in ["Text", "Dropdown"]:
                 mock_widget.value = widget_values.get(widget_type.lower(), "")
-            elif widget_type == 'IntText':
-                mock_widget.value = widget_values.get('batch_size', 0)
-            elif widget_type == 'Checkbox':
-                mock_widget.value = widget_values.get('use_patches', False)
+            elif widget_type == "IntText":
+                mock_widget.value = widget_values.get("batch_size", 0)
+            elif widget_type == "Checkbox":
+                mock_widget.value = widget_values.get("use_patches", False)
 
             widget_mocks[widget_type] = mock_widget
             setattr(mock_widgets, widget_type, Mock(return_value=mock_widget))
@@ -541,21 +588,27 @@ class TestWorkflowWidget:
         widget = WorkflowWidget(connection=mock_connection)
 
         # Mock working directory
-        widget.working_directory = '/tmp/test'
+        widget.working_directory = "/tmp/test"
 
         # Mock container widgets
         widget.container_widgets = {
-            'container': Mock(value=123),
-            'type': Mock(value='dataset')
+            "container": Mock(value=123),
+            "type": Mock(value="dataset"),
         }
 
         # Mock technical widgets container with child widgets
         batch_size_widget = Mock(description="Batch size", value=5)
-        model_type_widget = Mock(description="SAM Model", value='vit_b_lm')
-        output_folder_widget = Mock(description="Output folder", value=Path('/tmp/test'))
+        model_type_widget = Mock(description="SAM Model", value="vit_b_lm")
+        output_folder_widget = Mock(
+            description="Output folder", value=Path("/tmp/test")
+        )
 
         widget.technical_widgets = Mock()
-        widget.technical_widgets.children = [batch_size_widget, model_type_widget, output_folder_widget]
+        widget.technical_widgets.children = [
+            batch_size_widget,
+            model_type_widget,
+            output_folder_widget,
+        ]
 
         # Mock annotation widgets container with child widgets
         use_patches_widget = Mock(description="Use patches", value=False)
@@ -573,17 +626,17 @@ class TestWorkflowWidget:
         widget.status_output.__exit__ = Mock(return_value=None)
 
         # Call update config to populate self.config from widget values
-        with patch('builtins.print'):  # Suppress print output
-            with patch('IPython.display.clear_output'):  # Suppress clear_output
+        with patch("builtins.print"):  # Suppress print output
+            with patch("IPython.display.clear_output"):  # Suppress clear_output
                 widget._on_update_config(None)
 
         config = widget.get_config()
 
         assert config is not None
-        assert config.output.output_directory == Path('/tmp/test')
-        assert config.omero.container_type == 'dataset'
+        assert config.output.output_directory == Path("/tmp/test")
+        assert config.omero.container_type == "dataset"
         assert config.omero.container_id == 123
-        assert config.ai_model.pretrained_from == 'vit_b_lm'
+        assert config.ai_model.pretrained_from == "vit_b_lm"
         assert config.workflow.batch_size == 5
         assert config.spatial_coverage.use_patches is False
 
@@ -596,6 +649,7 @@ class TestWorkflowWidgetDisplay:
     @staticmethod
     def _headings(widget):
         import re
+
         headings = []
         for tab in widget.tab_widget.children:
             for child in tab.children:
@@ -618,13 +672,15 @@ class TestWorkflowWidgetDisplay:
         with patch.object(WorkflowWidget, "_load_containers"):
             widget = WorkflowWidget(connection=Mock())
 
-        widget._apply_container_info({
-            "container_type": "project",
-            "container_id": 51,
-            "container_name": "idr0021",
-            "total_images": 414,
-            "dimensions": {"X": 256, "Y": 256, "Z": 1, "C": 3, "T": 1},
-        })
+        widget._apply_container_info(
+            {
+                "container_type": "project",
+                "container_id": 51,
+                "container_name": "idr0021",
+                "total_images": 414,
+                "dimensions": {"X": 256, "Y": 256, "Z": 1, "C": 3, "T": 1},
+            }
+        )
 
         status = widget.omero_status.value
         assert "Select container in previous steps first" not in status
@@ -636,10 +692,14 @@ class TestWorkflowWidgetDisplay:
         """Updating the config keeps the image count in the OMERO settings."""
         with patch.object(WorkflowWidget, "_load_containers"):
             widget = WorkflowWidget(connection=Mock())
-        widget._apply_container_info({
-            "container_type": "project", "container_id": 51,
-            "container_name": "idr0021", "total_images": 414,
-        })
+        widget._apply_container_info(
+            {
+                "container_type": "project",
+                "container_id": 51,
+                "container_name": "idr0021",
+                "total_images": 414,
+            }
+        )
         widget.container_widgets["type"].value = "project"
         widget.container_widgets["container"].options = [("idr0021 (ID: 51)", 51)]
         widget.container_widgets["container"].value = 51
@@ -658,11 +718,16 @@ class TestWorkflowWidgetDisplay:
         with patch.object(WorkflowWidget, "_load_containers"):
             widget = WorkflowWidget(connection=Mock())
 
-        widget._apply_container_info({
-            "container_type": "dataset", "container_id": 7,
-            "container_name": "cells", "total_images": 10,
-            "channel_names": ["DAPI", "GFP<1>"], "channel_names_vary": vary,
-        })
+        widget._apply_container_info(
+            {
+                "container_type": "dataset",
+                "container_id": 7,
+                "container_name": "cells",
+                "total_images": 10,
+                "channel_names": ["DAPI", "GFP<1>"],
+                "channel_names_vary": vary,
+            }
+        )
 
         for text in (widget.container_summary.value, widget.omero_status.value):
             assert "0: DAPI, 1: GFP&lt;1&gt;" in text
@@ -688,8 +753,13 @@ class TestWorkflowWidgetDisplay:
         widget.container_widgets["container"].value = 803
         tables = [{"id": 22162, "name": "run"}, {"id": 22159, "name": "run"}]
 
-        with patch("omero_annotate_ai.widgets.workflow_widget.list_annotation_tables",
-                   return_value=tables), patch("builtins.print"):
+        with (
+            patch(
+                "omero_annotate_ai.widgets.workflow_widget.list_annotation_tables",
+                return_value=tables,
+            ),
+            patch("builtins.print"),
+        ):
             widget._on_scan_tables(None)
 
         labels = [label for label, _ in widget.tables_widgets["selection"].options]
@@ -723,8 +793,10 @@ class TestWorkflowWidgetDisplay:
 
     def _continue_with_saved_config(self):
         widget = self._widget_with_table()
-        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
-                   return_value=self._saved_config()):
+        with patch(
+            "omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+            return_value=self._saved_config(),
+        ):
             widget._on_continue_table(None)
         return widget
 
@@ -765,19 +837,33 @@ class TestWorkflowWidgetDisplay:
         import pandas as pd
         from omero_annotate_ai.core.annotation_config import create_default_config
 
-        saved = create_default_config()           # channel 0, no patches, 3/2
+        saved = create_default_config()  # channel 0, no patches, 3/2
         saved.name = "plate_run"
-        rows = pd.DataFrame([
-            {"image_uri": f"omero:image:{i}", "category": cat, "channel": 1,
-             "is_volumetric": False, "is_patch": True,
-             "patch_width": 256, "patch_height": 256}
-            for i, cat in enumerate(["training"] * 3 + ["validation"] * 3)
-        ])
+        rows = pd.DataFrame(
+            [
+                {
+                    "image_uri": f"omero:image:{i}",
+                    "category": cat,
+                    "channel": 1,
+                    "is_volumetric": False,
+                    "is_patch": True,
+                    "patch_width": 256,
+                    "patch_height": 256,
+                }
+                for i, cat in enumerate(["training"] * 3 + ["validation"] * 3)
+            ]
+        )
         widget = self._widget_with_table()
-        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
-                   return_value=saved), \
-             patch("omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
-                   return_value=rows):
+        with (
+            patch(
+                "omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                return_value=saved,
+            ),
+            patch(
+                "omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
+                return_value=rows,
+            ),
+        ):
             widget._on_continue_table(None)
 
         fields = widget._annotation_widget_map()
@@ -794,24 +880,35 @@ class TestWorkflowWidgetDisplay:
     def test_resume_locks_planes_patches_and_read_only(self):
         widget = self._continue_with_saved_config()
         fields = widget._annotation_widget_map()
-        for key in ("timepoint_mode", "timepoints", "z_slice_mode", "z_slices",
-                    "patches_per_image", "segment_all"):
+        for key in (
+            "timepoint_mode",
+            "timepoints",
+            "z_slice_mode",
+            "z_slices",
+            "patches_per_image",
+            "segment_all",
+        ):
             assert fields[key].disabled, key
         read_only = widget.workflow_widgets["read_only_mode"]
         assert read_only.disabled and read_only.value is False
 
-        read_only.value = True               # disabled in the UI, but set anyway
+        read_only.value = True  # disabled in the UI, but set anyway
         fields["patches_per_image"].value = 7
         with patch("builtins.print"):
             widget._on_update_config(None)
         config = widget.get_config()
         assert config.workflow.read_only_mode is False
-        assert config.spatial_coverage.patches_per_image == self._saved_config().spatial_coverage.patches_per_image
+        assert (
+            config.spatial_coverage.patches_per_image
+            == self._saved_config().spatial_coverage.patches_per_image
+        )
 
     def test_name_new_table_unlocks_read_only(self):
         widget = self._continue_with_saved_config()
-        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
-                   return_value="fresh_table"):
+        with patch(
+            "omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+            return_value="fresh_table",
+        ):
             widget._on_new_table(None)
         assert not widget.workflow_widgets["read_only_mode"].disabled
         assert not widget._annotation_widget_map()["segment_all"].disabled
@@ -819,9 +916,9 @@ class TestWorkflowWidgetDisplay:
     def test_locked_values_win_over_widgets_on_update(self):
         widget = self._continue_with_saved_config()
         fields = widget._annotation_widget_map()
-        fields["channel"].value = 5          # disabled in the UI, but set anyway
+        fields["channel"].value = 5  # disabled in the UI, but set anyway
         fields["patch_size"].value = "64, 64"
-        fields["train_n"].value = 6          # editable
+        fields["train_n"].value = 6  # editable
 
         with patch("builtins.print"):
             widget._on_update_config(None)
@@ -836,8 +933,10 @@ class TestWorkflowWidgetDisplay:
     def test_name_new_table_unlocks_fields(self):
         widget = self._continue_with_saved_config()
 
-        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
-                   return_value="fresh_table"):
+        with patch(
+            "omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+            return_value="fresh_table",
+        ):
             widget._on_new_table(None)
 
         fields = widget._annotation_widget_map()
@@ -855,16 +954,34 @@ class TestWorkflowWidgetDisplay:
         import pandas as pd
 
         widget = self._widget_with_table()
-        rows = pd.DataFrame([
-            {"image_uri": "omero:image:1", "category": "training", "channel": 1,
-             "is_volumetric": False, "is_patch": False},
-            {"image_uri": "omero:image:2", "category": "training", "channel": 1,
-             "is_volumetric": False, "is_patch": False},
-        ])
-        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
-                   return_value=None), \
-             patch("omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
-                   return_value=rows) as read:
+        rows = pd.DataFrame(
+            [
+                {
+                    "image_uri": "omero:image:1",
+                    "category": "training",
+                    "channel": 1,
+                    "is_volumetric": False,
+                    "is_patch": False,
+                },
+                {
+                    "image_uri": "omero:image:2",
+                    "category": "training",
+                    "channel": 1,
+                    "is_volumetric": False,
+                    "is_patch": False,
+                },
+            ]
+        )
+        with (
+            patch(
+                "omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                return_value=None,
+            ),
+            patch(
+                "omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
+                return_value=rows,
+            ) as read,
+        ):
             widget._on_continue_table(None)
 
         read.assert_called_once_with(widget.connection, 22159)
@@ -878,8 +995,10 @@ class TestWorkflowWidgetDisplay:
         widget = self._widget_with_table()
         widget._on_continue_table(None)
 
-        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
-                   return_value="fresh_table"):
+        with patch(
+            "omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+            return_value="fresh_table",
+        ):
             widget._on_new_table(None)
         with patch("builtins.print"):
             widget._on_update_config(None)
@@ -893,7 +1012,7 @@ class TestWorkflowWidgetDisplay:
 @pytest.mark.unit
 class TestWidgetFallbacks:
     """Test widget behavior when dependencies are missing."""
-    
+
     def test_widget_import_fallback(self):
         """
         Tests that the widget imports fail gracefully when dependencies are missing.
@@ -901,14 +1020,16 @@ class TestWidgetFallbacks:
         package is not available.
         """
         # Clear the module from sys.modules if it's already imported
-        widget_module = 'omero_annotate_ai.widgets.omero_connection_widget'
+        widget_module = "omero_annotate_ai.widgets.omero_connection_widget"
         if widget_module in sys.modules:
             del sys.modules[widget_module]
-        
-        with patch.dict('sys.modules', {'ipywidgets': None}):
+
+        with patch.dict("sys.modules", {"ipywidgets": None}):
             with pytest.raises(ImportError):
-                from omero_annotate_ai.widgets.omero_connection_widget import OMEROConnectionWidget
-    
+                from omero_annotate_ai.widgets.omero_connection_widget import (
+                    OMEROConnectionWidget,
+                )
+
     def test_widget_creation_without_ipywidgets(self):
         """
         Tests the widget creation behavior without `ipywidgets`.
@@ -918,6 +1039,7 @@ class TestWidgetFallbacks:
         # This test verifies that the module structure handles missing dependencies
         try:
             import ipywidgets
+
             pytest.skip("ipywidgets is available, cannot test fallback")
         except ImportError:
             # This is expected when ipywidgets is not available
@@ -927,11 +1049,15 @@ class TestWidgetFallbacks:
 @pytest.mark.unit
 class TestWidgetIntegration:
     """Test widget integration scenarios."""
-    
-    @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
-    @patch('omero_annotate_ai.widgets.omero_connection_widget.widgets')
-    @patch('omero_annotate_ai.widgets.workflow_widget.widgets')
-    def test_connection_to_workflow_integration(self, mock_workflow_widgets, mock_conn_widgets):
+
+    @pytest.mark.skipif(
+        not WIDGETS_AVAILABLE, reason="Widget dependencies not available"
+    )
+    @patch("omero_annotate_ai.widgets.omero_connection_widget.widgets")
+    @patch("omero_annotate_ai.widgets.workflow_widget.widgets")
+    def test_connection_to_workflow_integration(
+        self, mock_workflow_widgets, mock_conn_widgets
+    ):
         """
         Tests the integration between the connection and workflow widgets.
         This test ensures that the connection object created by the `OMEROConnectionWidget`
@@ -939,15 +1065,27 @@ class TestWidgetIntegration:
         """
         # Mock all required widgets
         for mock_widgets in [mock_conn_widgets, mock_workflow_widgets]:
-            for widget_type in ['Text', 'Password', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
+            for widget_type in [
+                "Text",
+                "Password",
+                "Dropdown",
+                "IntText",
+                "Checkbox",
+                "Button",
+                "Output",
+                "VBox",
+                "HBox",
+            ]:
                 mock_widget = Mock()
-                if widget_type == 'Output':
+                if widget_type == "Output":
                     mock_widget.__enter__ = Mock(return_value=mock_widget)
                     mock_widget.__exit__ = Mock(return_value=None)
                 setattr(mock_widgets, widget_type, Mock(return_value=mock_widget))
-        
+
         # Create connection widget and establish connection
-        with patch('omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection') as mock_conn_class:
+        with patch(
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection"
+        ) as mock_conn_class:
             mock_conn = Mock()
             mock_conn_manager = Mock()
             mock_conn_manager.connect.return_value = mock_conn
@@ -957,12 +1095,12 @@ class TestWidgetIntegration:
             # Mock load_config_files to return None
             mock_conn_manager.load_config_files.return_value = None
             mock_conn_class.return_value = mock_conn_manager
-            
+
             conn_widget = OMEROConnectionWidget()
-            
+
             # Ensure connection_manager is properly set to our mock
             conn_widget.connection_manager = mock_conn_manager
-            
+
             conn_widget.host_widget = Mock(value="localhost")
             conn_widget.username_widget = Mock(value="user")
             conn_widget.password_widget = Mock(value="pass")
@@ -970,23 +1108,27 @@ class TestWidgetIntegration:
             conn_widget.secure_widget = Mock(value=True)
             conn_widget.save_password_widget = Mock(value=False)
             conn_widget.expire_widget = Mock(value=24)
-            
+
             # Mock the status output
             conn_widget.status_output = Mock()
-            conn_widget.status_output.__enter__ = Mock(return_value=conn_widget.status_output)
+            conn_widget.status_output.__enter__ = Mock(
+                return_value=conn_widget.status_output
+            )
             conn_widget.status_output.__exit__ = Mock(return_value=None)
-            
-            with patch('builtins.print'):  # Suppress print output
-                with patch('IPython.display.clear_output'):  # Suppress clear_output
+
+            with patch("builtins.print"):  # Suppress print output
+                with patch("IPython.display.clear_output"):  # Suppress clear_output
                     conn_widget._connect(Mock())
-            
+
             # Use connection in workflow widget
             workflow_widget = WorkflowWidget(connection=conn_widget.connection)
-            
+
             assert workflow_widget.connection == mock_conn
-    
-    @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
-    @patch('omero_annotate_ai.widgets.workflow_widget.widgets')
+
+    @pytest.mark.skipif(
+        not WIDGETS_AVAILABLE, reason="Widget dependencies not available"
+    )
+    @patch("omero_annotate_ai.widgets.workflow_widget.widgets")
     def test_workflow_config_validation(self, mock_widgets):
         """
         Tests the validation of the workflow configuration.
@@ -994,20 +1136,29 @@ class TestWidgetIntegration:
         gracefully and still returns a valid configuration object.
         """
         # Mock widgets
-        for widget_type in ['Text', 'Dropdown', 'IntText', 'Checkbox', 'Button', 'Output', 'VBox', 'HBox']:
+        for widget_type in [
+            "Text",
+            "Dropdown",
+            "IntText",
+            "Checkbox",
+            "Button",
+            "Output",
+            "VBox",
+            "HBox",
+        ]:
             setattr(mock_widgets, widget_type, Mock(return_value=Mock()))
-        
+
         mock_connection = Mock()
-        
+
         widget = WorkflowWidget(connection=mock_connection)
-        
+
         # Set invalid configuration
         widget.working_dir_widget = Mock(value="")  # Empty working directory
         widget.container_type_widget = Mock(value="invalid")  # Invalid container type
         widget.container_id_widget = Mock(value=0)  # Invalid container ID
-        
+
         # Should handle validation gracefully
         config = widget.get_config()
-        
+
         # Config should still be created with defaults/corrections
         assert config is not None

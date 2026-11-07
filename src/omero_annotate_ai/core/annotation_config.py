@@ -262,7 +262,9 @@ class ImageAnnotation(BaseModel):
     annotation_id: str = Field(default="", description="Unique annotation identifier")
 
     # Where the image came from (OME-Zarr)
-    level: int = Field(default=0, description="Multiscale level the pixel coordinates refer to")
+    level: int = Field(
+        default=0, description="Multiscale level the pixel coordinates refer to"
+    )
     well: str = Field(default="", description="Plate well, e.g. B2")
     field: str = Field(default="", description="Field (well sample) path, e.g. 0")
     well_metadata: Dict[str, str] = Field(
@@ -310,7 +312,8 @@ class ImageAnnotation(BaseModel):
         default="segmentation_mask", description="Type of annotation"
     )
     session: int = Field(
-        default=-1, description="Annotation session that produced this unit (-1: none yet)"
+        default=-1,
+        description="Annotation session that produced this unit (-1: none yet)",
     )
 
     # OMERO annotation IDs (None until uploaded)
@@ -388,7 +391,10 @@ class AnnotationMethodology(BaseModel):
     """MIFA-compatible annotation methodology"""
 
     annotation_type: Literal[
-        "segmentation_mask", "bounding_box", "point", "classification",
+        "segmentation_mask",
+        "bounding_box",
+        "point",
+        "classification",
         "semantic_segmentation",
     ] = "segmentation_mask"
     annotation_method: Optional[Literal["manual", "semi_automatic", "automatic"]] = (
@@ -565,13 +571,13 @@ class SpatialCoverage(BaseModel):
     def model_dump(self, **kwargs):
         """Override model_dump to exclude patch fields when use_patches is False."""
         data = super().model_dump(**kwargs)
-        
+
         if not self.use_patches:
             # Remove patch-related fields when patches are not used
-            data.pop('patch_size', None)
-            data.pop('patches_per_image', None)
-            data.pop('random_patches', None)
-        
+            data.pop("patch_size", None)
+            data.pop("patches_per_image", None)
+            data.pop("random_patches", None)
+
         return data
 
     @model_validator(mode="after")
@@ -591,7 +597,6 @@ class SpatialCoverage(BaseModel):
                 raise ValueError("z_range_start must be <= z_range_end")
 
         return self
-
 
     @model_validator(mode="after")
     def validate_channel_settings(self):
@@ -724,9 +729,7 @@ class AIModelConfig(BaseModel):
     model_url: Optional[HttpUrl] = Field(
         default=None, description="URL to model weights/repository"
     )
-    model_doi: Optional[str] = Field(
-        default=None, description="DOI for model citation"
-    )
+    model_doi: Optional[str] = Field(default=None, description="DOI for model citation")
 
     # Training configuration
     training_mode: Literal["inference", "finetuning", "from_scratch"] = Field(
@@ -857,7 +860,9 @@ class OMEROConfig(BaseModel):
     """OMERO connection and data selection configuration"""
 
     container_type: str = Field(default="dataset", description="OMERO container type")
-    container_id: int = Field(default=0, description="OMERO container ID (single container)")
+    container_id: int = Field(
+        default=0, description="OMERO container ID (single container)"
+    )
     container_ids: Optional[List[int]] = Field(
         default=None,
         description="List of OMERO container IDs of the same type. "
@@ -926,9 +931,12 @@ class ZarrConfig(BaseModel):
     fields: Literal["first", "all"] = Field(
         default="first", description="Fields per well: the first one, or all"
     )
-    wells: Optional[List[str]] = Field(default=None, description="Only these wells, e.g. ['B2']")
+    wells: Optional[List[str]] = Field(
+        default=None, description="Only these wells, e.g. ['B2']"
+    )
     well_metadata: Optional[str] = Field(
-        default=None, description="CSV with a 'well' column (optional 'plate') and metadata columns"
+        default=None,
+        description="CSV with a 'well' column (optional 'plate') and metadata columns",
     )
     well_filters: Optional[Dict[str, List[str]]] = Field(
         default=None, description="Filter wells on well_metadata values (AND logic)"
@@ -1001,7 +1009,9 @@ class AnnotationConfig(BaseModel):
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
-    source: Literal["omero", "zarr"] = Field(default="omero", description="Where images come from")
+    source: Literal["omero", "zarr"] = Field(
+        default="omero", description="Where images come from"
+    )
     zarr: ZarrConfig = Field(default_factory=ZarrConfig)
 
     # Annotation tracking
@@ -1066,7 +1076,9 @@ class AnnotationConfig(BaseModel):
             # pipeline write masks and the table locally instead.
             self.workflow.read_only_mode = True
         if self.zarr.well_filters and not self.zarr.well_metadata:
-            raise ValueError("zarr.well_filters needs zarr.well_metadata (a CSV) to filter on")
+            raise ValueError(
+                "zarr.well_filters needs zarr.well_metadata (a CSV) to filter on"
+            )
         return self
 
     def model_dump(self, **kwargs):
@@ -1179,8 +1191,10 @@ class AnnotationConfig(BaseModel):
             )
         keys = self.training.stratify_by
         if keys:
-            unit = (lambda a: a.well) if self.training.split_unit == "well" else (
-                lambda a: a.image_uri
+            unit = (
+                (lambda a: a.well)
+                if self.training.split_unit == "well"
+                else (lambda a: a.image_uri)
             )
             by_stratum: Dict[str, list] = {}
             for a in self.annotations:
@@ -1217,7 +1231,9 @@ class AnnotationConfig(BaseModel):
                     f"more than one split ({', '.join(spanning)})."
                 )
             else:
-                parts.append(f"None of {section['total']} {label} span more than one split.")
+                parts.append(
+                    f"None of {section['total']} {label} span more than one split."
+                )
         if "strata" in report:
             stratified = f"Stratified by {', '.join(report['stratify_by'])}"
             missing = report["strata_missing_splits"]
@@ -1275,7 +1291,9 @@ class AnnotationConfig(BaseModel):
                 "schema_attachment_id": _optional_int_to_str(
                     annotation.schema_attachment_id
                 ),
-                "annotation_input_id": _optional_int_to_omero(annotation.annotation_input_id),
+                "annotation_input_id": _optional_int_to_omero(
+                    annotation.annotation_input_id
+                ),
                 "session": annotation.session,
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
@@ -1421,7 +1439,9 @@ class AnnotationConfig(BaseModel):
             if schema_id is not None:
                 annotation_data["schema_attachment_id"] = schema_id
 
-            annotation_input_id = _omero_id_to_optional_int(row.get("annotation_input_id"))
+            annotation_input_id = _omero_id_to_optional_int(
+                row.get("annotation_input_id")
+            )
             if annotation_input_id is not None:
                 annotation_data["annotation_input_id"] = annotation_input_id
 
@@ -1643,9 +1663,12 @@ def _split_level(annotations, key) -> Dict[str, Any]:
     return {
         "total": len(categories),
         "per_split": {
-            c: sum(1 for cats in categories.values() if c in cats) for c in SPLIT_CATEGORIES
+            c: sum(1 for cats in categories.values() if c in cats)
+            for c in SPLIT_CATEGORIES
         },
-        "spanning_splits": sorted(unit for unit, cats in categories.items() if len(cats) > 1),
+        "spanning_splits": sorted(
+            unit for unit, cats in categories.items() if len(cats) > 1
+        ),
     }
 
 
@@ -1701,65 +1724,77 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
     # ERROR: channel mismatch
     bad_channel = [a for a in annotations if a.channel != expected_channel]
     if bad_channel:
-        errors.append(ValidationIssue(
-            field="channel",
-            message=(
-                f"{len(bad_channel)}/{len(annotations)} annotations have channel != "
-                f"{expected_channel} (current label_channel). "
-                f"Example: image_id={bad_channel[0].image_id} has channel={bad_channel[0].channel}"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="channel",
+                message=(
+                    f"{len(bad_channel)}/{len(annotations)} annotations have channel != "
+                    f"{expected_channel} (current label_channel). "
+                    f"Example: image_id={bad_channel[0].image_id} has channel={bad_channel[0].channel}"
+                ),
+            )
+        )
 
     # ERROR: is_volumetric mismatch
     bad_vol = [a for a in annotations if a.is_volumetric != expected_volumetric]
     if bad_vol:
-        errors.append(ValidationIssue(
-            field="is_volumetric",
-            message=(
-                f"{len(bad_vol)}/{len(annotations)} annotations have "
-                f"is_volumetric={not expected_volumetric} but three_d={expected_volumetric} in config"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="is_volumetric",
+                message=(
+                    f"{len(bad_vol)}/{len(annotations)} annotations have "
+                    f"is_volumetric={not expected_volumetric} but three_d={expected_volumetric} in config"
+                ),
+            )
+        )
 
     # ERROR: is_patch mismatch
     bad_patch = [a for a in annotations if a.is_patch != expected_patch]
     if bad_patch:
-        errors.append(ValidationIssue(
-            field="is_patch",
-            message=(
-                f"{len(bad_patch)}/{len(annotations)} annotations have "
-                f"is_patch={not expected_patch} but use_patches={expected_patch} in config"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="is_patch",
+                message=(
+                    f"{len(bad_patch)}/{len(annotations)} annotations have "
+                    f"is_patch={not expected_patch} but use_patches={expected_patch} in config"
+                ),
+            )
+        )
 
     # WARNING: patch dimensions mismatch (may be legitimately clipped to image boundary)
     if expected_patch and len(sc.patch_size) >= 2:
         expected_w, expected_h = sc.patch_size[0], sc.patch_size[1]
         bad_size = [
-            a for a in annotations
-            if a.is_patch and (a.patch_width != expected_w or a.patch_height != expected_h)
+            a
+            for a in annotations
+            if a.is_patch
+            and (a.patch_width != expected_w or a.patch_height != expected_h)
         ]
         if bad_size:
-            warnings.append(ValidationIssue(
-                field="patch_size",
-                message=(
-                    f"{len(bad_size)} patch annotations have dimensions that do not match "
-                    f"patch_size={sc.patch_size}. "
-                    f"May be expected if patches were clipped to image boundaries."
-                ),
-            ))
+            warnings.append(
+                ValidationIssue(
+                    field="patch_size",
+                    message=(
+                        f"{len(bad_size)} patch annotations have dimensions that do not match "
+                        f"patch_size={sc.patch_size}. "
+                        f"May be expected if patches were clipped to image boundaries."
+                    ),
+                )
+            )
 
     # ERROR: annotations of one split unit landed in different splits
     unit_level = "wells" if training.split_unit == "well" else "images"
     spanning = config.split_report().get(unit_level, {}).get("spanning_splits", [])
     if spanning:
-        errors.append(ValidationIssue(
-            field="split_unit",
-            message=(
-                f"split_unit='{training.split_unit}' but {len(spanning)} {unit_level} have "
-                f"annotations in more than one split. Example: {spanning[0]}"
-            ),
-        ))
+        errors.append(
+            ValidationIssue(
+                field="split_unit",
+                message=(
+                    f"split_unit='{training.split_unit}' but {len(spanning)} {unit_level} have "
+                    f"annotations in more than one split. Example: {spanning[0]}"
+                ),
+            )
+        )
 
     # WARNING: category distribution mismatch
     actual_train = sum(1 for a in annotations if a.category == "training")
@@ -1768,27 +1803,31 @@ def validate_annotations_against_config(config: "AnnotationConfig") -> Validatio
 
     if not training.segment_all:
         if actual_train != training.train_n or actual_val != training.validate_n:
-            warnings.append(ValidationIssue(
-                field="category_counts",
-                message=(
-                    f"Category counts (train={actual_train}, val={actual_val}) "
-                    f"do not match config (train_n={training.train_n}, "
-                    f"validate_n={training.validate_n}). "
-                    f"Config may have been changed after annotations were generated."
-                ),
-            ))
+            warnings.append(
+                ValidationIssue(
+                    field="category_counts",
+                    message=(
+                        f"Category counts (train={actual_train}, val={actual_val}) "
+                        f"do not match config (train_n={training.train_n}, "
+                        f"validate_n={training.validate_n}). "
+                        f"Config may have been changed after annotations were generated."
+                    ),
+                )
+            )
     else:
         actual_total = actual_train + actual_val + actual_test
         if actual_total > 0:
             actual_ratio = actual_train / actual_total
             if abs(actual_ratio - training.train_fraction) > 0.15:
-                warnings.append(ValidationIssue(
-                    field="category_fractions",
-                    message=(
-                        f"Actual training fraction {actual_ratio:.2f} differs from "
-                        f"configured train_fraction={training.train_fraction:.2f} by more than 0.15"
-                    ),
-                ))
+                warnings.append(
+                    ValidationIssue(
+                        field="category_fractions",
+                        message=(
+                            f"Actual training fraction {actual_ratio:.2f} differs from "
+                            f"configured train_fraction={training.train_fraction:.2f} by more than 0.15"
+                        ),
+                    )
+                )
 
     return ValidationResult(
         is_valid=len(errors) == 0,

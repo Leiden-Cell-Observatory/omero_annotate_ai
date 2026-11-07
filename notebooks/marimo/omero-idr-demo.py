@@ -58,24 +58,36 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    omero_host = mo.ui.text(value="ws://idr.openmicroscopy.org/omero-ws", label="OMERO Host")
+    omero_host = mo.ui.text(
+        value="ws://idr.openmicroscopy.org/omero-ws", label="OMERO Host"
+    )
     omero_username = mo.ui.text(value="public", label="Username")
     omero_password = mo.ui.text(value="public", label="Password", kind="password")
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to IDR")
 
-    mo.vstack([
-        omero_host,
-        omero_username,
-        omero_password,
-        omero_secure,
-        connect_button,
-    ])
+    mo.vstack(
+        [
+            omero_host,
+            omero_username,
+            omero_password,
+            omero_secure,
+            connect_button,
+        ]
+    )
     return omero_host, omero_username, omero_password, omero_secure, connect_button
 
 
 @app.cell
-def _(connect_button, omero_host, omero_username, omero_password, omero_secure, establish_connection, mo):
+def _(
+    connect_button,
+    omero_host,
+    omero_username,
+    omero_password,
+    omero_secure,
+    establish_connection,
+    mo,
+):
     conn = None
     connection_status = "Not connected"
 
@@ -91,7 +103,9 @@ def _(connect_button, omero_host, omero_username, omero_password, omero_secure, 
                 if conn and conn.isConnected():
                     user = conn.getUser().getName()
                     group_name = conn.getGroupFromContext().getName()
-                    connection_status = f"Connected as **{user}** to group **{group_name}**"
+                    connection_status = (
+                        f"Connected as **{user}** to group **{group_name}**"
+                    )
                 else:
                     connection_status = "Connection failed"
             except Exception as e:
@@ -139,7 +153,9 @@ def _(conn, container_id, container_type, mo):
     container_info = None
     if conn and conn.isConnected() and container_id.value > 0:
         try:
-            _container = conn.getObject(container_type.value.capitalize(), container_id.value)
+            _container = conn.getObject(
+                container_type.value.capitalize(), container_id.value
+            )
             if _container:
                 container_info = f"Found: **{_container.getName()}**"
             else:
@@ -168,11 +184,17 @@ def _(mo):
     validate_n = mo.ui.slider(start=0, stop=50, value=2, label="Validation images")
     test_n = mo.ui.slider(start=0, stop=50, value=0, label="Test images")
 
-    mo.vstack([
-        segment_all,
-        mo.md("**Image split** (ignored if 'Annotate all' is checked):") if not segment_all.value else mo.md(""),
-        mo.hstack([train_n, validate_n, test_n], justify="start", gap=2) if not segment_all.value else mo.md(""),
-    ])
+    mo.vstack(
+        [
+            segment_all,
+            mo.md("**Image split** (ignored if 'Annotate all' is checked):")
+            if not segment_all.value
+            else mo.md(""),
+            mo.hstack([train_n, validate_n, test_n], justify="start", gap=2)
+            if not segment_all.value
+            else mo.md(""),
+        ]
+    )
     return segment_all, test_n, train_n, validate_n
 
 
@@ -192,11 +214,13 @@ def _(mo):
     )
     z_slices = mo.ui.text(value="0", label="Z-slices (comma-separated)")
 
-    mo.vstack([
-        mo.hstack([channel], justify="start"),
-        mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
-        mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
-    ])
+    mo.vstack(
+        [
+            mo.hstack([channel], justify="start"),
+            mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
+            mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
+        ]
+    )
     return channel, timepoint_mode, timepoints, z_slice_mode, z_slices
 
 
@@ -211,30 +235,42 @@ def _(mo):
 @app.cell
 def _(mo):
     use_patches = mo.ui.checkbox(value=False, label="Use patches")
-    patches_per_image = mo.ui.slider(start=1, stop=20, value=1, label="Patches per image")
+    patches_per_image = mo.ui.slider(
+        start=1, stop=20, value=1, label="Patches per image"
+    )
     patch_size = mo.ui.text(value="512, 512", label="Patch size (width, height)")
 
-    mo.vstack([
-        use_patches,
-        mo.hstack([patches_per_image, patch_size], justify="start", gap=2) if use_patches.value else mo.md(""),
-    ])
+    mo.vstack(
+        [
+            use_patches,
+            mo.hstack([patches_per_image, patch_size], justify="start", gap=2)
+            if use_patches.value
+            else mo.md(""),
+        ]
+    )
     return patch_size, patches_per_image, use_patches
 
 
 @app.cell
 def _(mo):
-    batch_size = mo.ui.slider(start=0, stop=10, value=0, label="Batch size (0 = all at once)")
+    batch_size = mo.ui.slider(
+        start=0, stop=10, value=0, label="Batch size (0 = all at once)"
+    )
     model_type = mo.ui.dropdown(
         options=["vit_b_lm", "vit_b", "vit_l", "vit_h"],
         value="vit_b_lm",
         label="SAM Model",
     )
 
-    mo.vstack([
-        mo.hstack([batch_size, model_type], justify="start", gap=2),
-        mo.md("**Read-only mode is enabled automatically** since IDR is a public server. "
-               "Annotations will be saved locally."),
-    ])
+    mo.vstack(
+        [
+            mo.hstack([batch_size, model_type], justify="start", gap=2),
+            mo.md(
+                "**Read-only mode is enabled automatically** since IDR is a public server. "
+                "Annotations will be saved locally."
+            ),
+        ]
+    )
     return batch_size, model_type
 
 
@@ -361,7 +397,11 @@ def _(config, conn, container_id, create_pipeline, mo, run_button):
     else:
         try:
             pipeline = create_pipeline(config, conn)
-            mo.output.replace(mo.md("**Starting annotation pipeline...** Napari will open for interactive annotation."))
+            mo.output.replace(
+                mo.md(
+                    "**Starting annotation pipeline...** Napari will open for interactive annotation."
+                )
+            )
 
             table_id, updated_config = pipeline.run_full_micro_sam_workflow()
 
@@ -390,16 +430,22 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    train_epochs = mo.ui.slider(start=1, stop=200, value=10, label="Training epochs (use 50+ for real training)")
+    train_epochs = mo.ui.slider(
+        start=1, stop=200, value=10, label="Training epochs (use 50+ for real training)"
+    )
     train_batch_size = mo.ui.slider(start=1, stop=8, value=1, label="Batch size")
-    train_patch_shape = mo.ui.text(value="512, 512", label="Patch shape (width, height)")
+    train_patch_shape = mo.ui.text(
+        value="512, 512", label="Patch shape (width, height)"
+    )
     train_button = mo.ui.run_button(label="Prepare Data & Train", kind="success")
 
-    mo.vstack([
-        mo.hstack([train_epochs, train_batch_size], justify="start", gap=2),
-        train_patch_shape,
-        train_button,
-    ])
+    mo.vstack(
+        [
+            mo.hstack([train_epochs, train_batch_size], justify="start", gap=2),
+            train_patch_shape,
+            train_button,
+        ]
+    )
     return train_epochs, train_batch_size, train_patch_shape, train_button
 
 
@@ -417,10 +463,15 @@ def _(
     train_epochs,
     train_patch_shape,
 ):
-    mo.stop(not train_button.value, mo.md("Click 'Prepare Data & Train' after completing annotation"))
+    mo.stop(
+        not train_button.value,
+        mo.md("Click 'Prepare Data & Train' after completing annotation"),
+    )
 
     if not config.get_processed():
-        mo.output.replace(mo.md("**Error:** No annotations yet. Run the annotation step first."))
+        mo.output.replace(
+            mo.md("**Error:** No annotations yet. Run the annotation step first.")
+        )
     else:
         try:
             _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -445,17 +496,23 @@ def _(
                 n_objects_per_batch=25,
             )
 
-            mo.output.replace(mo.md(f"**Training started...** {train_epochs.value} epochs, {_training_config['n_iterations']} iterations"))
+            mo.output.replace(
+                mo.md(
+                    f"**Training started...** {train_epochs.value} epochs, {_training_config['n_iterations']} iterations"
+                )
+            )
 
             _results = run_training(_training_config, framework="microsam")
 
-            mo.output.replace(mo.md(f"""
+            mo.output.replace(
+                mo.md(f"""
             **Training completed!**
 
-            - Model: `{_results['model_name']}`
-            - Final model: `{_results.get('final_model_path', 'N/A')}`
-            - Output: `{_results['output_dir']}`
-            """))
+            - Model: `{_results["model_name"]}`
+            - Final model: `{_results.get("final_model_path", "N/A")}`
+            - Output: `{_results["output_dir"]}`
+            """)
+            )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error:** {str(e)}"))
     return
@@ -478,11 +535,17 @@ def _(mo):
 
 @app.cell
 def _(Path, config, mo, save_button):
-    mo.stop(not save_button.value, mo.md("Click 'Save Configuration' to export your settings"))
+    mo.stop(
+        not save_button.value,
+        mo.md("Click 'Save Configuration' to export your settings"),
+    )
 
     _result = None
     try:
-        config_path = Path(config.output.output_directory) / f"annotation_config_{config.name}.yaml"
+        config_path = (
+            Path(config.output.output_directory)
+            / f"annotation_config_{config.name}.yaml"
+        )
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config.save_yaml(config_path)
         _result = mo.md(f"""
@@ -501,6 +564,7 @@ def _(Path, config, mo, save_button):
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
@@ -508,6 +572,7 @@ def _():
 def _():
     from pathlib import Path
     from datetime import datetime
+
     return Path, datetime
 
 
@@ -523,6 +588,7 @@ def _():
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
         OMERO_AVAILABLE = True
     except ImportError:
         OMERO_AVAILABLE = False
@@ -541,7 +607,9 @@ def _():
 def _(OMERO_AVAILABLE, SimpleOMEROConnection):
     def establish_connection(host, username, password, group=None, secure=True):
         if not OMERO_AVAILABLE:
-            raise ImportError("OMERO functionality not available. Install with: pip install -e .[omero]")
+            raise ImportError(
+                "OMERO functionality not available. Install with: pip install -e .[omero]"
+            )
 
         connection = SimpleOMEROConnection()
         config = {
@@ -557,6 +625,7 @@ def _(OMERO_AVAILABLE, SimpleOMEROConnection):
         if conn:
             conn.c.enableKeepAlive(60)
         return conn
+
     return (establish_connection,)
 
 
@@ -578,6 +647,7 @@ def _():
             return [512, 512]
         except ValueError:
             return [512, 512]
+
     return parse_int_list, parse_patch_size
 
 
@@ -634,6 +704,7 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
         config.workflow.read_only_mode = read_only_mode
 
         return config
+
     return (build_config,)
 
 

@@ -74,7 +74,9 @@ class ZarrImageSource:
                 f"{uri} is not an image (keys: {sorted(location.root_attrs)})"
             )
         node = next(
-            n for n in Reader(location)() if any(isinstance(s, Multiscales) for s in n.specs)
+            n
+            for n in Reader(location)()
+            if any(isinstance(s, Multiscales) for s in n.specs)
         )
         levels = node.data
         if self.level >= len(levels):
@@ -82,12 +84,15 @@ class ZarrImageSource:
                 f"Level {self.level} requested but {uri} has {len(levels)} levels"
             )
         axes = tuple(
-            a["name"] if isinstance(a, dict) else str(a) for a in node.metadata.get("axes", [])
+            a["name"] if isinstance(a, dict) else str(a)
+            for a in node.metadata.get("axes", [])
         )
         data = levels[self.level]
         if len(axes) != data.ndim:
             raise ValueError(f"{uri} has no usable axes metadata (NGFF >= 0.4 needed)")
-        return ZarrImage(uri, _default_name(uri, node.metadata.get("name")), self.level, data, axes)
+        return ZarrImage(
+            uri, _default_name(uri, node.metadata.get("name")), self.level, data, axes
+        )
 
     def metadata(self, image: ZarrImage) -> ImageMeta:
         sizes = dict(zip(image.axes, image.data.shape))
@@ -102,11 +107,13 @@ class ZarrImageSource:
             dtype=str(image.data.dtype),
         )
 
-    def _index(self, image: ZarrImage, t: int, c: int, z: Any, region: Optional[Region]):
+    def _index(
+        self, image: ZarrImage, t: int, c: int, z: Any, region: Optional[Region]
+    ):
         sizes = dict(zip(image.axes, image.data.shape))
         _check_index("t", t, sizes.get("t", 1))
         _check_index("c", c, sizes.get("c", 1))
-        for z_value in ((z.start, z.stop - 1) if isinstance(z, slice) else (z,)):
+        for z_value in (z.start, z.stop - 1) if isinstance(z, slice) else (z,):
             _check_index("z", z_value, sizes.get("z", 1))
         if region is None:
             ys, xs = slice(None), slice(None)
@@ -117,7 +124,13 @@ class ZarrImageSource:
         return tuple(picks[axis] for axis in image.axes)
 
     def read_plane(
-        self, image: ZarrImage, *, t: int, c: int, z: int, region: Optional[Region] = None
+        self,
+        image: ZarrImage,
+        *,
+        t: int,
+        c: int,
+        z: int,
+        region: Optional[Region] = None,
     ) -> np.ndarray:
         return np.asarray(image.data[self._index(image, t, c, z, region)].compute())
 
@@ -132,6 +145,8 @@ class ZarrImageSource:
         region: Optional[Region] = None,
     ) -> np.ndarray:
         volume = np.asarray(
-            image.data[self._index(image, t, c, slice(z_start, z_end + 1), region)].compute()
+            image.data[
+                self._index(image, t, c, slice(z_start, z_end + 1), region)
+            ].compute()
         )
         return volume if "z" in image.axes else volume[np.newaxis]

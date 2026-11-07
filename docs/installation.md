@@ -62,6 +62,7 @@ In a notebook cell or Python prompt:
 
 ```python
 from importlib.metadata import version
+
 print(version("omero-annotate-ai"))
 ```
 
@@ -88,6 +89,7 @@ Check whether a GPU is visible:
 
 ```python
 import torch
+
 print(torch.cuda.is_available())
 ```
 

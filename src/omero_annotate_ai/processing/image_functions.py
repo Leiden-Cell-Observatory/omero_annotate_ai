@@ -42,7 +42,7 @@ def generate_patch_coordinates(
 
     # Image is large enough for requested patch size
     actual_patch_size = (patch_h, patch_w)
-    
+
     # Ensure patches fit within image
     max_x = max(0, width - patch_w)
     max_y = max(0, height - patch_h)
@@ -195,7 +195,11 @@ def process_label_plane(
                 contour = contour + np.array([x_offset, y_offset])
 
             # Create polygon without text parameter
-            segmentation_type = "volumetric" if isinstance(z_slice, (list, range)) or z_slice > 0 else "manual"
+            segmentation_type = (
+                "volumetric"
+                if isinstance(z_slice, (list, range)) or z_slice > 0
+                else "manual"
+            )
             poly = ezomero.rois.Polygon(
                 points=contour,  # explicitly name the points parameter
                 z=z_slice,

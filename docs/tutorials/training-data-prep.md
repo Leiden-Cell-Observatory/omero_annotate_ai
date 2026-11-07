@@ -31,7 +31,7 @@ conn_widget.display()
 conn = conn_widget.get_connection()
 
 training_widget = create_training_data_widget(connection=conn)
-training_widget.display()      # pick the container and the annotation table
+training_widget.display()  # pick the container and the annotation table
 ```
 
 ```python
@@ -68,7 +68,7 @@ from omero_annotate_ai import load_config_from_yaml, reorganize_local_data_for_t
 config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
 result = reorganize_local_data_for_training(
     config,
-    annotation_dir="annotations",   # your working directory
+    annotation_dir="annotations",  # your working directory
     include_test=True,
 )
 ```
@@ -88,9 +88,9 @@ CUDA GPU is strongly recommended.
 from omero_annotate_ai import setup_training, run_training
 
 training_config = setup_training(
-    result,                        # from prepare_training_data_from_table
+    result,  # from prepare_training_data_from_table
     model_name="hela_nuclei_v1",
-    model_type="vit_b_lm",         # start from this pretrained model
+    model_type="vit_b_lm",  # start from this pretrained model
     epochs=50,
     batch_size=2,
     patch_shape=(512, 512),

@@ -304,7 +304,9 @@ class TestWriteTrainingLayout:
         stale.parent.mkdir(parents=True)
         stale.write_bytes(b"stale")
 
-        write_training_layout([self._record(tmp_path, 1, "training")], out, clean_existing=True)
+        write_training_layout(
+            [self._record(tmp_path, 1, "training")], out, clean_existing=True
+        )
 
         assert not stale.exists()
         assert (out / "train_input" / "1.tif").exists()
@@ -320,7 +322,9 @@ class TestWriteTrainingLayout:
         assert stats["file_operations"]["symlink"] == 2  # image + label
         # Compare as Paths: file_mapping stores str(Path), whose separator is
         # backslash on Windows.
-        assert Path(stats["file_mapping"]["1"]["image"]) == out / "train_input" / "1.tif"
+        assert (
+            Path(stats["file_mapping"]["1"]["image"]) == out / "train_input" / "1.tif"
+        )
 
     def test_array_source_records_are_written(self, tmp_path):
         from tifffile import imread

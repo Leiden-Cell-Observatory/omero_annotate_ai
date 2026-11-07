@@ -42,7 +42,7 @@ annotation_methodology:
 from omero_annotate_ai import prepare_bia_data_from_table
 from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
 
-config = find_annotation_config_for_table(conn, table_id)   # the run's config
+config = find_annotation_config_for_table(conn, table_id)  # the run's config
 stats = prepare_bia_data_from_table(conn, table_id, "bia_staging", config=config)
 
 config.output.output_directory = "bia_staging"
@@ -56,7 +56,7 @@ summary = config.save_bia_package("bia_bundle", move_data=True)
 
 ```python
 config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
-config.annotations = config.get_processed()      # leave out unfinished units
+config.annotations = config.get_processed()  # leave out unfinished units
 config.save_bia_package("bia_bundle")
 ```
 

@@ -59,8 +59,13 @@ def _create_images(conn, dataset, tag: str, n_images: int) -> List[int]:
             for t in range(st)
         )
         image = conn.createImageFromNumpySeq(
-            planes, f"{tag}_img{index}", sizeZ=sz, sizeC=sc, sizeT=st,
-            dataset=dataset, channelList=list(range(sc)),
+            planes,
+            f"{tag}_img{index}",
+            sizeZ=sz,
+            sizeC=sc,
+            sizeT=st,
+            dataset=dataset,
+            channelList=list(range(sc)),
         )
         for channel, name in zip(image.getChannels(), CHANNEL_NAMES):
             logical = channel.getLogicalChannel()
@@ -83,7 +88,9 @@ def _import_plate(conn, tag: str, user: str, password: str) -> Optional[int]:
     try:
         result = subprocess.run(
             compose_cmd("exec", "-T", "omero", "sh", "-c", script),
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -134,7 +141,8 @@ def cleanup(conn, data: SeedData) -> None:
         deletions.append(("Plate", [data.plate_id]))
     for object_type, ids in deletions:
         try:
-            conn.deleteObjects(object_type, ids, deleteAnns=True,
-                               deleteChildren=True, wait=True)
+            conn.deleteObjects(
+                object_type, ids, deleteAnns=True, deleteChildren=True, wait=True
+            )
         except Exception as exc:  # cleanup must not hide test results
             print(f"Cleanup of {object_type} {ids} failed: {exc}")

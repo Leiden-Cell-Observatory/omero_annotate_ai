@@ -12,7 +12,11 @@ from omero_annotate_ai.processing.training_functions import (
     prepare_training_data_from_table,
     reorganize_local_data_for_training,
 )
-from omero_annotate_ai.core.annotation_config import AnnotationConfig, ImageAnnotation, create_default_config
+from omero_annotate_ai.core.annotation_config import (
+    AnnotationConfig,
+    ImageAnnotation,
+    create_default_config,
+)
 
 
 class TestPrepareTrainingDataFromTable:
@@ -41,6 +45,7 @@ class TestPrepareTrainingDataFromTable:
                 validation_split=1.5,
             )
 
+
 @pytest.mark.unit
 class TestExternalClassificationWorkflow:
     """Tests for the external-label workflow.
@@ -51,6 +56,7 @@ class TestExternalClassificationWorkflow:
     omero_annotate_ai then exports Ch0 as training input and the class label map as
     training ground truth.
     """
+
     def test_label_id_as_string_none_is_skipped(self):
         """label_id stored as the string 'None' (from an OMERO table) must not crash."""
         from omero_annotate_ai.processing.training_functions import _optional_int
@@ -540,10 +546,11 @@ class TestPrepareFromTableRecords:
             _imwrite(str(path), plane)
             return path
 
-        with patch.object(tf, "_fetch_plane", return_value=plane), patch.object(
-            tf, "_download_label", side_effect=fake_download
-        ), patch.object(tf, "_load_table", return_value=table), patch.object(
-            tf.ezomero, "get_table", return_value=table
+        with (
+            patch.object(tf, "_fetch_plane", return_value=plane),
+            patch.object(tf, "_download_label", side_effect=fake_download),
+            patch.object(tf, "_load_table", return_value=table),
+            patch.object(tf.ezomero, "get_table", return_value=table),
         ):
             return tf.prepare_training_data_from_table(
                 conn=Mock(),
@@ -699,14 +706,22 @@ class TestChannelParsing:
 from omero_annotate_ai.processing import training_functions as tf
 
 
-
-PLANE_X, PLANE_Y, PLANE_Z = 7, 5, 3  # deliberately non-square: a lost swapaxes changes the shape
+PLANE_X, PLANE_Y, PLANE_Z = (
+    7,
+    5,
+    3,
+)  # deliberately non-square: a lost swapaxes changes the shape
 
 
 class _FakePlaneImage:
-    def getSizeX(self): return PLANE_X
-    def getSizeY(self): return PLANE_Y
-    def getSizeZ(self): return PLANE_Z
+    def getSizeX(self):
+        return PLANE_X
+
+    def getSizeY(self):
+        return PLANE_Y
+
+    def getSizeZ(self):
+        return PLANE_Z
 
 
 class _FakeEzomero:
@@ -722,23 +737,40 @@ class _FakeEzomero:
                         self.vol[x, y, z, c, 0] = x + 10 * y + 100 * z + 1000 * c
         self.calls = []
 
-    def get_image(self, conn, image_id, no_pixels=False, start_coords=None,
-                  axis_lengths=None, xyzct=False):
+    def get_image(
+        self,
+        conn,
+        image_id,
+        no_pixels=False,
+        start_coords=None,
+        axis_lengths=None,
+        xyzct=False,
+    ):
         if no_pixels:
             return _FakePlaneImage(), None
-        self.calls.append({"start_coords": start_coords, "axis_lengths": axis_lengths,
-                           "xyzct": xyzct})
+        self.calls.append(
+            {"start_coords": start_coords, "axis_lengths": axis_lengths, "xyzct": xyzct}
+        )
         x0, y0, z0, c0, t0 = start_coords
         lx, ly, lz, lc, lt = axis_lengths
-        block = self.vol[x0:x0 + lx, y0:y0 + ly, z0:z0 + lz, c0:c0 + lc, t0:t0 + lt]
+        block = self.vol[
+            x0 : x0 + lx, y0 : y0 + ly, z0 : z0 + lz, c0 : c0 + lc, t0 : t0 + lt
+        ]
         return None, block
 
 
 def _plane_row(**overrides):
     base = {
-        "image_id": 1, "z_slice": 0, "channel": 0, "timepoint": 0,
-        "is_volumetric": False, "is_patch": False,
-        "patch_x": 0, "patch_y": 0, "patch_width": 0, "patch_height": 0,
+        "image_id": 1,
+        "z_slice": 0,
+        "channel": 0,
+        "timepoint": 0,
+        "is_volumetric": False,
+        "is_patch": False,
+        "patch_x": 0,
+        "patch_y": 0,
+        "patch_width": 0,
+        "patch_height": 0,
     }
     base.update(overrides)
     return pd.Series(base)
@@ -779,7 +811,9 @@ class TestFetchPlane2D:
     def test_patch_uses_the_patch_origin_and_size(self, fake_ezomero):
         tf._fetch_plane(
             None,
-            _plane_row(is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            _plane_row(
+                is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2
+            ),
             channel=0,
         )
         call = fake_ezomero.calls[-1]
@@ -789,7 +823,9 @@ class TestFetchPlane2D:
     def test_patch_is_returned_as_height_by_width(self, fake_ezomero):
         img = tf._fetch_plane(
             None,
-            _plane_row(is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            _plane_row(
+                is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2
+            ),
             channel=0,
         )
         assert img.shape == (2, 3)  # (height, width)
@@ -804,7 +840,9 @@ class TestFetchPlane2D:
 @pytest.mark.unit
 class TestFetchPlane3D:
     def test_volumetric_all_slices_stack_on_z(self, fake_ezomero):
-        img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
+        img = tf._fetch_plane(
+            None, _plane_row(is_volumetric=True, z_slice="all"), channel=0
+        )
         assert img.shape == (PLANE_Z, PLANE_Y, PLANE_X)
 
     def test_volumetric_fetches_every_z(self, fake_ezomero):
@@ -813,12 +851,16 @@ class TestFetchPlane3D:
         assert z_requested == [0, 1, 2]
 
     def test_volumetric_single_z_is_a_one_slice_stack(self, fake_ezomero):
-        img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice=1), channel=0)
+        img = tf._fetch_plane(
+            None, _plane_row(is_volumetric=True, z_slice=1), channel=0
+        )
         assert img.shape == (1, PLANE_Y, PLANE_X)
 
     def test_volumetric_keeps_the_z_contrast(self, fake_ezomero):
         """Values are not rescaled per slice (or at all)."""
-        img = tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
+        img = tf._fetch_plane(
+            None, _plane_row(is_volumetric=True, z_slice="all"), channel=0
+        )
         assert img.dtype == np.uint16
         assert img[0].max() < img[-1].max() == fake_ezomero.vol[..., 0, 0].max()
 
@@ -830,8 +872,15 @@ class TestFetchPlane3D:
         """
         img = tf._fetch_plane(
             None,
-            _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
-                patch_x=2, patch_y=1, patch_width=3, patch_height=2),
+            _plane_row(
+                is_volumetric=True,
+                z_slice="all",
+                is_patch=True,
+                patch_x=2,
+                patch_y=1,
+                patch_width=3,
+                patch_height=2,
+            ),
             channel=0,
         )
         assert img.shape == (PLANE_Z, 2, 3)  # (Z, height, width)
@@ -840,8 +889,15 @@ class TestFetchPlane3D:
         """Shape alone would still pass on a square patch; pin the content too."""
         img = tf._fetch_plane(
             None,
-            _plane_row(is_volumetric=True, z_slice="all", is_patch=True,
-                patch_x=2, patch_y=1, patch_width=3, patch_height=3),
+            _plane_row(
+                is_volumetric=True,
+                z_slice="all",
+                is_patch=True,
+                patch_x=2,
+                patch_y=1,
+                patch_width=3,
+                patch_height=3,
+            ),
             channel=0,
         )
         # Voxel value is x + 10y + 100z, so a step along +y outweighs a step along +x.
@@ -851,8 +907,9 @@ class TestFetchPlane3D:
 
     def test_all_branches_agree_on_orientation(self, fake_ezomero):
         """A 2D patch and the same patch fetched volumetrically must not disagree."""
-        patch_kwargs = dict(is_patch=True, patch_x=2, patch_y=1,
-                            patch_width=3, patch_height=2)
+        patch_kwargs = dict(
+            is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2
+        )
 
         flat = tf._fetch_plane(None, _plane_row(**patch_kwargs), channel=0)
         volumetric = tf._fetch_plane(
@@ -868,4 +925,6 @@ class TestFetchPlaneErrors:
     def test_missing_image_raises(self, fake_ezomero):
         with patch.object(fake_ezomero, "get_image", return_value=(None, None)):
             with pytest.raises(ValueError, match="not found in OMERO"):
-                tf._fetch_plane(None, _plane_row(is_volumetric=True, z_slice="all"), channel=0)
+                tf._fetch_plane(
+                    None, _plane_row(is_volumetric=True, z_slice="all"), channel=0
+                )

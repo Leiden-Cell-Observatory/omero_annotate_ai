@@ -60,7 +60,9 @@ LINK_COLUMNS = {
     "image_id": ("Image", "ImageColumn", "Annotated OMERO image"),
     "roi_id": ("Roi", "RoiColumn", "ROI holding the annotation"),
 }
-_LINK_COLUMNS_REVERSED = {omero_name: df_name for df_name, (omero_name, _, _) in LINK_COLUMNS.items()}
+_LINK_COLUMNS_REVERSED = {
+    omero_name: df_name for df_name, (omero_name, _, _) in LINK_COLUMNS.items()
+}
 
 KEY_COLUMN = "annotation_id"
 
@@ -106,7 +108,9 @@ def _string_width(name: str) -> int:
     return STRING_WIDTHS.get(name, DEFAULT_STRING_WIDTH)
 
 
-def check_string_lengths(df: pd.DataFrame, widths: Optional[Dict[str, int]] = None) -> None:
+def check_string_lengths(
+    df: pd.DataFrame, widths: Optional[Dict[str, int]] = None
+) -> None:
     """Raise TableValueTooLongError if any string is wider than its column."""
     for name in df.columns:
         series = df[name]
@@ -118,7 +122,11 @@ def check_string_lengths(df: pd.DataFrame, widths: Optional[Dict[str, int]] = No
         for position, value in enumerate(series):
             text = "" if value is None else str(value)
             if len(text) > width:
-                key = df[KEY_COLUMN].iloc[position] if KEY_COLUMN in df.columns else position
+                key = (
+                    df[KEY_COLUMN].iloc[position]
+                    if KEY_COLUMN in df.columns
+                    else position
+                )
                 raise TableValueTooLongError(
                     f"Column '{name}' allows {width} characters, but row {key!r} has "
                     f"{len(text)}: {text[:60]}..."
@@ -135,16 +143,22 @@ def build_columns(df: pd.DataFrame) -> List:
         if link is not None:
             omero_name, class_name, description = link
             column_class = getattr(omero_grid, class_name)
-            columns.append(column_class(omero_name, description, [int(v) for v in series]))
+            columns.append(
+                column_class(omero_name, description, [int(v) for v in series])
+            )
         elif pd.api.types.is_bool_dtype(series):
             columns.append(omero_grid.BoolColumn(name, "", [bool(v) for v in series]))
         elif pd.api.types.is_integer_dtype(series):
             columns.append(omero_grid.LongColumn(name, "", [int(v) for v in series]))
         elif pd.api.types.is_float_dtype(series):
-            columns.append(omero_grid.DoubleColumn(name, "", [float(v) for v in series]))
+            columns.append(
+                omero_grid.DoubleColumn(name, "", [float(v) for v in series])
+            )
         else:
             values = ["" if v is None else str(v) for v in series]
-            columns.append(omero_grid.StringColumn(name, "", _string_width(name), values))
+            columns.append(
+                omero_grid.StringColumn(name, "", _string_width(name), values)
+            )
     return columns
 
 
@@ -152,7 +166,9 @@ def _values_for(header, series: pd.Series) -> list:
     """Values of a DataFrame column converted to the type of a table column."""
     if isinstance(header, (omero_grid.BoolColumn,)):
         return [bool(v) for v in series]
-    if isinstance(header, (omero_grid.LongColumn, omero_grid.ImageColumn, omero_grid.RoiColumn)):
+    if isinstance(
+        header, (omero_grid.LongColumn, omero_grid.ImageColumn, omero_grid.RoiColumn)
+    ):
         return [int(v) for v in series]
     if isinstance(header, omero_grid.DoubleColumn):
         return [float(v) for v in series]
@@ -161,7 +177,8 @@ def _values_for(header, series: pd.Series) -> list:
 
 def _header_widths(headers) -> Dict[str, int]:
     return {
-        h.name: h.size for h in headers
+        h.name: h.size
+        for h in headers
         if isinstance(h, omero_grid.StringColumn) and getattr(h, "size", None)
     }
 
@@ -209,7 +226,9 @@ def _open(conn, table_id: int):
     file_ann = check_supported(conn, table_id)
     resources = conn.c.sf.sharedResources()
     file_id = file_ann.getFile().getId()
-    table = resources.openTable(omero_model.OriginalFileI(int(file_id), False), conn.SERVICE_OPTS)
+    table = resources.openTable(
+        omero_model.OriginalFileI(int(file_id), False), conn.SERVICE_OPTS
+    )
     if table is None:
         raise ValueError(f"Could not open tracking table {table_id}")
     return table

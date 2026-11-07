@@ -85,34 +85,57 @@ class _Selector:
             included = hit if self.cfg.well_filter_mode == "include" else not hit
         else:
             included = True
-        self.records.append({"plate": plate, "well": well, "well_uri": well_uri,
-                             "matched": matched, "included": included, **kv})
+        self.records.append(
+            {
+                "plate": plate,
+                "well": well,
+                "well_uri": well_uri,
+                "matched": matched,
+                "included": included,
+                **kv,
+            }
+        )
         return kv if included else None
 
     def report(self, output_dir: Optional[Path]) -> None:
         if self.wanted is not None:
-            seen_wells = {key[1] if isinstance(key, tuple) else key for key in self.seen}
+            seen_wells = {
+                key[1] if isinstance(key, tuple) else key for key in self.seen
+            }
             missing = sorted(self.wanted - seen_wells)
             if missing:
-                warnings.warn(f"{len(missing)} wells in zarr.wells are not in the plate(s): "
-                              f"{', '.join(missing)}")
+                warnings.warn(
+                    f"{len(missing)} wells in zarr.wells are not in the plate(s): "
+                    f"{', '.join(missing)}"
+                )
         if self.cfg.well_metadata:
             no_row = [r["well"] for r in self.records if not r["matched"]]
             if no_row:
-                warnings.warn(f"{len(no_row)} wells have no row in {self.cfg.well_metadata}: "
-                              f"{', '.join(no_row[:5])}")
+                warnings.warn(
+                    f"{len(no_row)} wells have no row in {self.cfg.well_metadata}: "
+                    f"{', '.join(no_row[:5])}"
+                )
             no_well = [str(k) for k in self.rows if k not in self.seen]
             if no_well:
-                warnings.warn(f"{len(no_well)} rows in {self.cfg.well_metadata} match no "
-                              f"well: {', '.join(no_well[:5])}")
+                warnings.warn(
+                    f"{len(no_well)} rows in {self.cfg.well_metadata} match no "
+                    f"well: {', '.join(no_well[:5])}"
+                )
         if output_dir is not None and self.records:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(self.records).to_csv(output_dir / "well_matching.csv", index=False)
+            pd.DataFrame(self.records).to_csv(
+                output_dir / "well_matching.csv", index=False
+            )
 
 
-def _field_refs(selector: _Selector, well_uri: str, plate: str, well: str,
-                well_attrs: Optional[dict] = None) -> List[ZarrImageRef]:
+def _field_refs(
+    selector: _Selector,
+    well_uri: str,
+    plate: str,
+    well: str,
+    well_attrs: Optional[dict] = None,
+) -> List[ZarrImageRef]:
     metadata = selector.select(plate, well, well_uri)
     if metadata is None:
         return []
@@ -121,7 +144,9 @@ def _field_refs(selector: _Selector, well_uri: str, plate: str, well: str,
     fields = [image["path"] for image in well_attrs.get("well", {}).get("images", [])]
     if selector.cfg.fields == "first":
         fields = fields[:1]
-    return [ZarrImageRef(f"{well_uri}/{f}", plate, well, f, dict(metadata)) for f in fields]
+    return [
+        ZarrImageRef(f"{well_uri}/{f}", plate, well, f, dict(metadata)) for f in fields
+    ]
 
 
 def discover_zarr_images(cfg, output_dir: Optional[Path] = None) -> List[ZarrImageRef]:
@@ -134,16 +159,24 @@ def discover_zarr_images(cfg, output_dir: Optional[Path] = None) -> List[ZarrIma
         if attrs and "plate" in attrs:
             plate = attrs["plate"]
             name = str(plate.get("name", ""))
-            wells = sorted(plate.get("wells", []),
-                           key=lambda w: (w.get("rowIndex", 0), w.get("columnIndex", 0)))
+            wells = sorted(
+                plate.get("wells", []),
+                key=lambda w: (w.get("rowIndex", 0), w.get("columnIndex", 0)),
+            )
             for well in wells:
-                refs += _field_refs(selector, f"{uri}/{well['path']}", name,
-                                    normalize_well(well["path"]))
+                refs += _field_refs(
+                    selector,
+                    f"{uri}/{well['path']}",
+                    name,
+                    normalize_well(well["path"]),
+                )
         elif attrs and "well" in attrs:
             parent, row, col = uri.rsplit("/", 2)
             parent_attrs = _attrs(parent) or {}
             name = str(parent_attrs.get("plate", {}).get("name", ""))
-            refs += _field_refs(selector, uri, name, normalize_well(f"{row}/{col}"), attrs)
+            refs += _field_refs(
+                selector, uri, name, normalize_well(f"{row}/{col}"), attrs
+            )
         elif attrs and "multiscales" in attrs:
             refs.append(ZarrImageRef(uri))
         else:

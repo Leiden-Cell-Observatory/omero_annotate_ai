@@ -3,7 +3,17 @@
 import shutil
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import ezomero
 import numpy as np
@@ -231,8 +241,16 @@ def prepare_training_data_from_table(
     # Build records. A row whose label cannot be downloaded is dropped whole: writing
     # the image without its label would leave an orphan, and consumers pair images to
     # labels by sorted filename, so one orphan shifts every subsequent pair.
-    spec = NormalizationConfig.model_validate(normalization) if normalization is not None else None
-    recorder = NormalizationRecorder(spec) if spec is not None and spec.apply_at_export else None
+    spec = (
+        NormalizationConfig.model_validate(normalization)
+        if normalization is not None
+        else None
+    )
+    recorder = (
+        NormalizationRecorder(spec)
+        if spec is not None and spec.apply_at_export
+        else None
+    )
 
     records, n_missing = _records_from_table(
         conn,
@@ -294,7 +312,9 @@ def prepare_training_data_from_table(
                     logger.warning(f"Could not upload {tif_file.name}: {e}")
 
         stats["n_annotation_input_uploaded"] = len(annotation_input_upload_ids)
-        logger.info(f"Uploaded {len(annotation_input_upload_ids)} annotation-channel images")
+        logger.info(
+            f"Uploaded {len(annotation_input_upload_ids)} annotation-channel images"
+        )
 
     # Clean up temporary directory
     if tmp_dir.exists():
@@ -364,13 +384,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
             z_slice = 0
 
     # channel is supplied by the caller, which has already resolved label vs training
-    timepoint = (
-        int(row["timepoint"]) if pd.notna(row["timepoint"]) else 0
-    )
+    timepoint = int(row["timepoint"]) if pd.notna(row["timepoint"]) else 0
     is_volumetric = (
         bool(row["is_volumetric"])
-        if "is_volumetric" in row
-        and pd.notna(row["is_volumetric"])
+        if "is_volumetric" in row and pd.notna(row["is_volumetric"])
         else False
     )
 
@@ -458,9 +475,7 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                 # Get full plane for this z-slice
                 # Get image dimensions if not already obtained
                 if size_x is None:
-                    omero_image, _ = ezomero.get_image(
-                        conn, image_id, no_pixels=True
-                    )
+                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
                     size_x = omero_image.getSizeX()
                     size_y = omero_image.getSizeY()
 
@@ -477,18 +492,14 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                         f"Full plane shape (before extraction): {img_slice.shape}"
                     )
                 else:
-                    print(
-                        f"  Full plane shape (before extraction): {img_slice.shape}"
-                    )
+                    print(f"  Full plane shape (before extraction): {img_slice.shape}")
 
                 # The result will be 5D, extract just the 2D slice
                 if len(img_slice.shape) == 5:
                     img_slice = img_slice[:, :, 0, 0, 0]
                     img_slice = np.swapaxes(img_slice, 0, 1)
                 if logger:
-                    logger.debug(
-                        f"Extracted full plane shape: {img_slice.shape}"
-                    )
+                    logger.debug(f"Extracted full plane shape: {img_slice.shape}")
                 else:
                     print(f"  Extracted full plane shape: {img_slice.shape}")
 
@@ -696,6 +707,7 @@ def _records_from_table(
         image_channel = (
             train_channel if train_channel is not None else _channel_from_row(row)
         )
+
         # Bind row/channel per iteration: a bare closure would capture the final values.
         def load_image(row=row, ch=image_channel, annotation_id=str(annotation_id)):
             image = _fetch_plane(conn, row, ch, logger)

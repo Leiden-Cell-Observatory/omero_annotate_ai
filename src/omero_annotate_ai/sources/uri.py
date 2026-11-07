@@ -23,7 +23,7 @@ def omero_uri(image_id: int) -> str:
 def parse_omero_uri(uri: Any) -> Optional[int]:
     """OMERO image id of ``uri``, or ``None`` when it is not an OMERO URI."""
     if isinstance(uri, str) and uri.startswith(_OMERO_PREFIX):
-        rest = uri[len(_OMERO_PREFIX):]
+        rest = uri[len(_OMERO_PREFIX) :]
         if rest.isdigit():
             return int(rest)
     return None

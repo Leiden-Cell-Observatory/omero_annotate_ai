@@ -21,7 +21,7 @@ from omero_annotate_ai import load_config_from_yaml, create_pipeline
 
 config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
 pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()   # or run_cp_workflow()
+table_id, config = pipeline.run_full_micro_sam_workflow()  # or run_cp_workflow()
 ```
 
 !!! warning "Upload mode: clear micro-SAM's working folder first"
@@ -47,7 +47,7 @@ from omero_annotate_ai.omero.omero_functions import (
 )
 
 config = find_annotation_config_for_table(conn, table_id)
-config.config_file_path = None          # save progress in the working directory instead
+config.config_file_path = None  # save progress in the working directory instead
 pipeline = create_pipeline(config, conn)
 sync_omero_table_to_config(conn, table_id, pipeline.config)
 pipeline.set_table_id(table_id)
@@ -64,6 +64,7 @@ generate a commented template:
 
 ```python
 from omero_annotate_ai.core.annotation_config import get_config_template
+
 print(get_config_template())
 ```
 
@@ -72,7 +73,9 @@ the `omero` container, then:
 
 ```python
 config = load_config_from_yaml("my_run.yaml")
-config.config_file_path = None   # keep my_run.yaml unchanged; progress goes to the working directory
+config.config_file_path = (
+    None  # keep my_run.yaml unchanged; progress goes to the working directory
+)
 pipeline = create_pipeline(config, conn)
 table_id, config = pipeline.run_full_micro_sam_workflow()
 ```
@@ -94,5 +97,5 @@ Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_a
 print(config.get_progress_summary())
 done = config.get_processed()
 todo = config.get_unprocessed()
-df = config.to_dataframe()     # one row per unit, as a pandas table
+df = config.to_dataframe()  # one row per unit, as a pandas table
 ```

@@ -53,23 +53,33 @@ class FakeImageSource:
 
     def metadata(self, image):
         t, c, z, y, x = self.arrays[image.image_id].shape
-        return ImageMeta(omero_uri(image.image_id), image.name, t, c, z, y, x,
-                         str(self.arrays[image.image_id].dtype))
+        return ImageMeta(
+            omero_uri(image.image_id),
+            image.name,
+            t,
+            c,
+            z,
+            y,
+            x,
+            str(self.arrays[image.image_id].dtype),
+        )
 
     def read_plane(self, image, *, t, c, z, region=None):
         self.reads.append(("plane", image.image_id, t, c, z, region))
         plane = self.arrays[image.image_id][t, c, z]
         if region is not None:
             x, y, w, h = clamp_region(region, *plane.shape)
-            plane = plane[y:y + h, x:x + w]
+            plane = plane[y : y + h, x : x + w]
         return plane
 
     def read_volume(self, image, *, t, c, z_start, z_end, region=None):
         self.reads.append(("volume", image.image_id, t, c, (z_start, z_end), region))
-        return np.stack([
-            self.read_plane(image, t=t, c=c, z=z, region=region)
-            for z in range(z_start, z_end + 1)
-        ])
+        return np.stack(
+            [
+                self.read_plane(image, t=t, c=c, z=z, region=region)
+                for z in range(z_start, z_end + 1)
+            ]
+        )
 
 
 @pytest.mark.unit
@@ -97,8 +107,10 @@ class TestImageSourceSeam:
         config.annotations.append(
             ImageAnnotation(image_id=3, image_name="a", annotation_id="k_0_0")
         )
-        pipeline = AnnotationPipeline(config, conn=None, image_source=FakeImageSource({}))
-        (key, ann_id, meta, row), = pipeline._convert_annotations_to_processing_units(
+        pipeline = AnnotationPipeline(
+            config, conn=None, image_source=FakeImageSource({})
+        )
+        ((key, ann_id, meta, row),) = pipeline._convert_annotations_to_processing_units(
             config.annotations
         )
         assert key == "omero:image:3"
@@ -113,8 +125,10 @@ class TestImageSourceSeam:
         assert pipeline.image_source.conn is conn
 
     def test_prepare_units_uses_source_metadata_without_a_connection(self, tmp_path):
-        arrays = {1: np.zeros((2, 1, 3, 32, 32), np.uint16),
-                  2: np.zeros((2, 1, 3, 32, 32), np.uint16)}
+        arrays = {
+            1: np.zeros((2, 1, 3, 32, 32), np.uint16),
+            2: np.zeros((2, 1, 3, 32, 32), np.uint16),
+        }
         source = FakeImageSource(arrays)
         config = create_default_config()
         config.output.output_directory = tmp_path
@@ -126,7 +140,9 @@ class TestImageSourceSeam:
 
         pipeline._prepare_processing_units([source.get_image(1), source.get_image(2)])
 
-        units = {(a.image_id, a.timepoint, a.z_slice) for a in pipeline.config.annotations}
+        units = {
+            (a.image_id, a.timepoint, a.z_slice) for a in pipeline.config.annotations
+        }
         assert units == {(i, t, z) for i in (1, 2) for t in range(2) for z in range(3)}
         assert {a.image_name for a in pipeline.config.annotations} == {"img1", "img2"}
 
@@ -153,7 +169,9 @@ class TestImageSourceSeam:
     def test_omero_source_with_its_own_connection_is_accepted(self):
         config = create_default_config()
         config.workflow.read_only_mode = True
-        pipeline = AnnotationPipeline(config, conn=None, image_source=OmeroImageSource(Mock()))
+        pipeline = AnnotationPipeline(
+            config, conn=None, image_source=OmeroImageSource(Mock())
+        )
         assert isinstance(pipeline.image_source, OmeroImageSource)
 
     def test_default_omero_source_without_connection_raises_in_read_only_mode(self):
@@ -173,7 +191,9 @@ class TestImageSourceSeam:
         data = np.arange(2 * 2 * 3 * 8 * 8, dtype=np.uint16).reshape(2, 2, 3, 8, 8)
         pipeline, source = self._pipeline({1: data})
         image = source.get_image(1)
-        out = pipeline._load_image_data(image, {"timepoint": 1, "z_slice": 2, "channel_override": 1})
+        out = pipeline._load_image_data(
+            image, {"timepoint": 1, "z_slice": 2, "channel_override": 1}
+        )
         np.testing.assert_array_equal(out, data[1, 1, 2])
 
     def test_load_volume_is_3d(self):
@@ -181,7 +201,13 @@ class TestImageSourceSeam:
         pipeline, source = self._pipeline({1: data})
         out = pipeline._load_image_data(
             source.get_image(1),
-            {"timepoint": 0, "is_volumetric": True, "z_start": 1, "z_end": 3, "z_length": 3},
+            {
+                "timepoint": 0,
+                "is_volumetric": True,
+                "z_start": 1,
+                "z_end": 3,
+                "z_length": 3,
+            },
         )
         assert out.shape == (3, 8, 8)
 
@@ -190,11 +216,22 @@ class TestImageSourceSeam:
         pipeline, source = self._pipeline({1: data}, use_patches=True)
         out = pipeline._load_image_data(
             source.get_image(1),
-            {"timepoint": 0, "z_slice": 0, "patch_x": 2, "patch_y": 1,
-             "patch_width": 3, "patch_height": 4},
+            {
+                "timepoint": 0,
+                "z_slice": 0,
+                "patch_x": 2,
+                "patch_y": 1,
+                "patch_width": 3,
+                "patch_height": 4,
+            },
         )
         np.testing.assert_array_equal(out, data[0, 0, 0, 1:5, 2:5])
-        assert source.reads[-1][-1] == (2, 1, 3, 4)  # region passed, not cropped afterwards
+        assert source.reads[-1][-1] == (
+            2,
+            1,
+            3,
+            4,
+        )  # region passed, not cropped afterwards
 
     def test_get_images_by_ids_uses_source_and_skips_missing(self):
         pipeline, source = self._pipeline({1: np.zeros((1, 1, 1, 4, 4), np.uint16)})
@@ -205,37 +242,37 @@ class TestImageSourceSeam:
 @pytest.mark.unit
 class TestAnnotationPipeline:
     """Test the main annotation pipeline class."""
-    
+
     def test_pipeline_initialization(self):
         """Test pipeline initialization with config."""
         config = create_default_config()
         config.omero.container_id = 123
-        
+
         # Should raise ValueError when no connection provided
         with pytest.raises(ValueError, match="OMERO connection is required"):
             pipeline = AnnotationPipeline(config, conn=None)
-    
+
     def test_pipeline_initialization_with_connection(self):
         """Test pipeline initialization with mock connection."""
         config = create_default_config()
         mock_conn = Mock()
-        
+
         pipeline = AnnotationPipeline(config, conn=mock_conn)
-        
+
         assert pipeline.config == config
         assert pipeline.conn == mock_conn
-    
+
     def test_pipeline_validation_success(self):
         """Test successful pipeline creation with valid config."""
         config = create_default_config()
         config.omero.container_id = 123
-        
+
         # Should create pipeline successfully with valid config and connection
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
+
         assert pipeline.config == config
         assert pipeline.conn is not None
-    
+
     def test_config_pydantic_validation(self):
         """Test that Pydantic validates config fields properly."""
         config = create_default_config()
@@ -248,8 +285,8 @@ class TestAnnotationPipeline:
         assert config.training.train_fraction >= 0.1
         assert config.training.train_fraction <= 0.9
         assert config.workflow.batch_size >= 0
-    
-    @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
+
+    @patch("omero_annotate_ai.core.annotation_pipeline.ezomero")
     def test_get_images_from_container_dataset(self, mock_ezomero):
         """Test getting images from dataset."""
         mock_ezomero.get_image_ids.return_value = [1, 2, 3]
@@ -264,13 +301,13 @@ class TestAnnotationPipeline:
         assert len(images) == 3
         mock_ezomero.get_image_ids.assert_called_once_with(pipeline.conn, dataset=123)
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
+    @patch("omero_annotate_ai.core.annotation_pipeline.ezomero")
     def test_get_images_from_container_project(self, mock_ezomero):
         """Test getting images from project (via datasets)."""
         mock_ezomero.get_dataset_ids.return_value = [10, 20]
         mock_ezomero.get_image_ids.side_effect = [
-            [1, 2],    # Images in dataset 10
-            [3, 4, 5]  # Images in dataset 20
+            [1, 2],  # Images in dataset 10
+            [3, 4, 5],  # Images in dataset 20
         ]
         config = create_default_config()
         config.omero.container_type = "project"
@@ -283,24 +320,24 @@ class TestAnnotationPipeline:
         assert len(images) == 5
         mock_ezomero.get_dataset_ids.assert_called_once_with(pipeline.conn, project=789)
         assert mock_ezomero.get_image_ids.call_count == 2
-    
+
     def test_get_images_from_container_single_image(self):
         """Test getting single image."""
         config = create_default_config()
         config.omero.container_type = "image"
         config.omero.container_id = 456
-        
+
         mock_image = Mock()
         mock_conn = Mock()
         mock_conn.getObject.return_value = mock_image
-        
+
         pipeline = AnnotationPipeline(config, conn=mock_conn)
         images = pipeline.get_images_from_container()
-        
+
         assert len(images) == 1
         assert images[0] == mock_image
         mock_conn.getObject.assert_called_once_with("Image", 456)
-    
+
     def test_setup_directories(self):
         """Test directory setup."""
         config = create_default_config()
@@ -313,7 +350,7 @@ class TestAnnotationPipeline:
         assert (output_path / "annotation_input").exists()
         assert (output_path / "annotation_output").exists()
         assert (output_path / "sam_embeddings").exists()
-    
+
     def test_get_table_title(self):
         """Test table title generation - should use config name directly."""
         config = create_default_config()
@@ -358,19 +395,12 @@ class TestAnnotationPipeline:
 
         # Test 1: generate_unique_table_name with custom name
         unique_name = generate_unique_table_name(
-            mock_conn,
-            "Dataset",
-            123,
-            base_name="my_custom_name"
+            mock_conn, "Dataset", 123, base_name="my_custom_name"
         )
         assert "my_custom_name" in unique_name
 
         # Test 2: generate_unique_table_name uses container name when no custom name
-        unique_name_no_custom = generate_unique_table_name(
-            mock_conn,
-            "Dataset",
-            123
-        )
+        unique_name_no_custom = generate_unique_table_name(mock_conn, "Dataset", 123)
         # Container name is lowercased by generate_unique_table_name
         assert unique_name_no_custom.startswith("testdataset_")
 
@@ -394,21 +424,23 @@ class TestAnnotationPipeline:
         for i in range(2):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getName.return_value = f"image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
 
         pipeline.define_annotation_schema(mock_images)
 
-        with patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table') as mock_create_table:
+        with patch(
+            "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table"
+        ) as mock_create_table:
             mock_create_table.return_value = 999
             pipeline.create_tracking_table()
 
             # Verify the table was created with the exact name from config
             mock_create_table.assert_called_once()
             call_args = mock_create_table.call_args
-            table_title_arg = call_args.kwargs.get('table_title')
+            table_title_arg = call_args.kwargs.get("table_title")
 
             assert table_title_arg == unique_name
             assert table_title_arg == config.name
@@ -426,7 +458,7 @@ class TestAnnotationPipeline:
         for i in range(5):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getName.return_value = f"image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -441,7 +473,7 @@ class TestAnnotationPipeline:
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2
         assert categories.count("validation") == 1
-    
+
     def test_prepare_processing_units_segment_all(self):
         """Test preparing processing units with segment_all=True."""
         config = create_default_config()
@@ -449,28 +481,28 @@ class TestAnnotationPipeline:
         config.training.train_fraction = 0.6  # 60% training
         config.training.validation_fraction = 0.4  # 40% validation
         config.training.test_fraction = 0.0  # No test for this test
-        
+
         # Mock images
         mock_images = []
         for i in range(5):  # 5 images: 3 training (60%), 2 validation (40%)
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getName.return_value = f"image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
-        
+
         pipeline = AnnotationPipeline(config, conn=Mock())
         pipeline._prepare_processing_units(mock_images)
-        
+
         # Should create annotations for all images
         assert len(pipeline.config.annotations) == 5
-        
+
         # Check categories based on train_fraction
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 3  # 60% of 5 = 3
         assert categories.count("validation") == 2  # 40% of 5 = 2
-    
+
     def test_prepare_processing_units_with_patches(self):
         """Test preparing processing units with patch processing."""
         config = create_default_config()
@@ -486,7 +518,7 @@ class TestAnnotationPipeline:
         for i in range(5):  # Provide more images than needed so selection works
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"test_image_{i+1}"
+            mock_img.getName.return_value = f"test_image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_img.getSizeY.return_value = 2000
@@ -523,7 +555,7 @@ class TestAnnotationPipeline:
         for i in range(5):  # Provide more images than needed so selection works
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"test_image_{i+1}"
+            mock_img.getName.return_value = f"test_image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_img.getSizeY.return_value = 1000
@@ -560,7 +592,7 @@ class TestAnnotationPipeline:
         for i in range(5):  # Provide more images than needed so selection works
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"test_image_{i+1}"
+            mock_img.getName.return_value = f"test_image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_img.getSizeY.return_value = 400
@@ -576,22 +608,20 @@ class TestAnnotationPipeline:
         assert all(ann.patch_height == 400 for ann in pipeline.config.annotations)
         # All should be patches
         assert all(ann.is_patch for ann in pipeline.config.annotations)
-        #TODO actually they are not patches because patch size > image size
+        # TODO actually they are not patches because patch size > image size
 
         # Check categories
         categories = [ann.category for ann in pipeline.config.annotations]
         assert categories.count("training") == 2  # 2 images × 1 patches each
         assert categories.count("validation") == 1  # 1 image × 1 patches
-    
+
     def test_load_image_data_2d(self):
         """A 2D unit loads one (y, x) plane at its z-slice."""
         source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
-        pipeline = AnnotationPipeline(_read_only_config(), conn=None, image_source=source)
-        metadata = {
-            "timepoint": 0,
-            "z_slice": 5,
-            "is_volumetric": False
-        }
+        pipeline = AnnotationPipeline(
+            _read_only_config(), conn=None, image_source=source
+        )
+        metadata = {"timepoint": 0, "z_slice": 5, "is_volumetric": False}
 
         result = pipeline._load_image_data(source.get_image(1), metadata)
 
@@ -601,42 +631,47 @@ class TestAnnotationPipeline:
     def test_load_image_data_3d(self):
         """A volumetric unit loads its whole z-range as (z, y, x)."""
         source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
-        pipeline = AnnotationPipeline(_read_only_config(), conn=None, image_source=source)
+        pipeline = AnnotationPipeline(
+            _read_only_config(), conn=None, image_source=source
+        )
         metadata = {
             "timepoint": 0,
             "z_start": 0,
             "z_end": 9,
             "z_length": 10,
-            "is_volumetric": True
+            "is_volumetric": True,
         }
 
         result = pipeline._load_image_data(source.get_image(1), metadata)
 
         assert result.shape == (10, 100, 100)
-    
+
     def test_config_annotation_management(self):
         """Test config annotation management methods."""
         config = create_default_config()
         pipeline = AnnotationPipeline(config, conn=Mock())
-        
+
         # Add test annotations
         from omero_annotate_ai.core.annotation_config import ImageAnnotation
+
         ann1 = ImageAnnotation(image_id=1, image_name="test1")
         ann2 = ImageAnnotation(image_id=2, image_name="test2", processed=True)
-        
+
         config.add_annotation(ann1)
         config.add_annotation(ann2)
-        
+
         # Test getters
         unprocessed = config.get_unprocessed()
         processed = config.get_processed()
-        
+
         assert len(unprocessed) == 1
         assert len(processed) == 1
         assert unprocessed[0].image_id == 1
         assert processed[0].image_id == 2
 
-    def test_process_annotation_results_pairs_tiff_by_name_not_glob_order(self, tmp_path):
+    def test_process_annotation_results_pairs_tiff_by_name_not_glob_order(
+        self, tmp_path
+    ):
         """seg_0000i.tif must upload to metadata[i]'s image, regardless of glob order.
 
         Regression: _process_annotation_results paired metadata[i] with the raw
@@ -659,7 +694,9 @@ class TestAnnotationPipeline:
         metadata = []
         for i in range(3):
             config.add_annotation(
-                ImageAnnotation(image_id=100 + i, image_name=f"img{i}", annotation_id=f"ann{i}")
+                ImageAnnotation(
+                    image_id=100 + i, image_name=f"img{i}", annotation_id=f"ann{i}"
+                )
             )
             (annotations_path / f"seg_{i:05d}.tif").write_bytes(b"")
             metadata.append((f"ann{i}", {"image_id": 100 + i}, i))
@@ -677,10 +714,13 @@ class TestAnnotationPipeline:
         def reversed_glob(self, pattern):
             return sorted(real_glob(self, pattern), reverse=True)
 
-        with patch(
-            'omero_annotate_ai.core.annotation_pipeline.upload_rois_and_labels',
-            side_effect=fake_upload,
-        ), patch.object(Path, 'glob', reversed_glob):
+        with (
+            patch(
+                "omero_annotate_ai.core.annotation_pipeline.upload_rois_and_labels",
+                side_effect=fake_upload,
+            ),
+            patch.object(Path, "glob", reversed_glob),
+        ):
             pipeline._process_annotation_results(
                 {"metadata": metadata, "annotations_path": annotations_path}
             )
@@ -704,7 +744,7 @@ class TestAnnotationPipeline:
         for i in range(10):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getName.return_value = f"img{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -729,7 +769,7 @@ class TestAnnotationPipeline:
         for i in range(10):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getName.return_value = f"img{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -763,7 +803,7 @@ class TestAnnotationPipeline:
         for i in range(11):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getName.return_value = f"img{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -794,7 +834,7 @@ class TestAnnotationPipeline:
         for i in range(10):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getName.return_value = f"img{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -819,7 +859,7 @@ class TestAnnotationPipeline:
         for i in range(10):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"img{i+1}"
+            mock_img.getName.return_value = f"img{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -835,6 +875,7 @@ class TestAnnotationPipeline:
     def test_fraction_validation_error(self):
         """Test that fractions > 1.0 raise validation error when segment_all=True."""
         from omero_annotate_ai.core.annotation_config import TrainingConfig
+
         with pytest.raises(ValueError, match="must sum to <= 1.0"):
             # Validation happens at construction time when segment_all=True
             TrainingConfig(
@@ -963,8 +1004,8 @@ class TestFractionSync:
 @pytest.mark.unit
 class TestPipelineIntegration:
     """Test pipeline integration scenarios."""
-    
-    @patch('omero_annotate_ai.core.annotation_pipeline.ezomero')
+
+    @patch("omero_annotate_ai.core.annotation_pipeline.ezomero")
     def test_run_full_microsam_workflow_basic(self, mock_ezomero):
         """Test running the full micro-SAM workflow with mocked dependencies."""
         mock_ezomero.get_image_ids.return_value = [1, 2]
@@ -978,28 +1019,36 @@ class TestPipelineIntegration:
         for i in range(2):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getName.return_value = f"image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
         mock_conn = Mock()
         mock_conn.getObject = Mock(side_effect=mock_images)
         pipeline = AnnotationPipeline(config, conn=mock_conn)
-        with patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
-            patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table', return_value=456), \
-            patch.object(pipeline, '_process_annotation_results'), \
-            patch.object(pipeline, '_write_omero_table'), \
-            patch.object(pipeline, '_auto_save_config'), \
-            patch.object(pipeline, '_upload_annotation_config_to_omero'):
+        with (
+            patch.object(pipeline, "_run_micro_sam_annotation") as mock_annotate,
+            patch(
+                "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table",
+                return_value=456,
+            ),
+            patch.object(pipeline, "_process_annotation_results"),
+            patch.object(pipeline, "_write_omero_table"),
+            patch.object(pipeline, "_auto_save_config"),
+            patch.object(pipeline, "_upload_annotation_config_to_omero"),
+        ):
             mock_annotate.return_value = {
-                "metadata": [("ann1", {"image_id": 1}, 0), ("ann2", {"image_id": 2}, 1)],
-                "annotations_path": Path(tempfile.mkdtemp())
+                "metadata": [
+                    ("ann1", {"image_id": 1}, 0),
+                    ("ann2", {"image_id": 2}, 1),
+                ],
+                "annotations_path": Path(tempfile.mkdtemp()),
             }
             table_id, result_config = pipeline.run_full_micro_sam_workflow(mock_images)
             assert table_id == 456
             assert result_config == config
             mock_annotate.assert_called()
-    
+
     def test_run_full_workflow_resume_mode(self):
         """Test running workflow in resume mode."""
         config = create_default_config()
@@ -1012,23 +1061,36 @@ class TestPipelineIntegration:
         for i in range(2):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getName.return_value = f"image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_img.getSizeY.return_value = 1000
             mock_img.getSizeX.return_value = 1000
             mock_images.append(mock_img)
         pipeline = AnnotationPipeline(config, conn=Mock())
-        with patch.object(pipeline, '_find_existing_table', return_value=789), \
-            patch('omero_annotate_ai.core.annotation_pipeline.sync_omero_table_to_config'), \
-            patch.object(pipeline, 'get_images_from_container', return_value=mock_images), \
-            patch.object(pipeline, '_setup_directories', return_value=Path(tempfile.mkdtemp())), \
-            patch.object(pipeline, '_cleanup_embeddings'), \
-            patch.object(pipeline, '_auto_save_config'), \
-            patch.object(pipeline, '_upload_annotation_config_to_omero', return_value=789), \
-            patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table', return_value=789):
+        with (
+            patch.object(pipeline, "_find_existing_table", return_value=789),
+            patch(
+                "omero_annotate_ai.core.annotation_pipeline.sync_omero_table_to_config"
+            ),
+            patch.object(
+                pipeline, "get_images_from_container", return_value=mock_images
+            ),
+            patch.object(
+                pipeline, "_setup_directories", return_value=Path(tempfile.mkdtemp())
+            ),
+            patch.object(pipeline, "_cleanup_embeddings"),
+            patch.object(pipeline, "_auto_save_config"),
+            patch.object(
+                pipeline, "_upload_annotation_config_to_omero", return_value=789
+            ),
+            patch(
+                "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table",
+                return_value=789,
+            ),
+        ):
             # Patch _prepare_processing_units only for the first call
-            with patch.object(pipeline, '_prepare_processing_units'):
+            with patch.object(pipeline, "_prepare_processing_units"):
                 config.annotations = []  # Start with empty annotations for resume mode
                 pipeline.initialize_workflow(mock_images)
                 # No schema to define, so run_micro_sam_annotation should raise ValueError
@@ -1044,12 +1106,15 @@ class TestPipelineIntegration:
             assert pipeline.table_id == 789
             assert result_config == config
 
-    @pytest.mark.parametrize("processed_flags,expected_unprocessed", [
-        ([False, False, False], 3),
-        ([True, True, True], 0),
-        ([True, False, True], 1),
-        ([], 0),
-    ])
+    @pytest.mark.parametrize(
+        "processed_flags,expected_unprocessed",
+        [
+            ([False, False, False], 3),
+            ([True, True, True], 0),
+            ([True, False, True], 1),
+            ([], 0),
+        ],
+    )
     def test_resume_logic_edge_cases(self, processed_flags, expected_unprocessed):
         """Test resume logic for all/none/some processed and empty schema."""
         config = create_default_config()
@@ -1061,7 +1126,7 @@ class TestPipelineIntegration:
         for i in range(len(processed_flags)):
             mock_img = Mock()
             mock_img.getId.return_value = i + 1
-            mock_img.getName.return_value = f"image_{i+1}"
+            mock_img.getName.return_value = f"image_{i + 1}"
             mock_img.getSizeT.return_value = 1
             mock_img.getSizeZ.return_value = 1
             mock_images.append(mock_img)
@@ -1072,10 +1137,21 @@ class TestPipelineIntegration:
         for ann, flag in zip(config.annotations, processed_flags):
             ann.processed = flag
         # Patch annotation runner and OMERO table creation to avoid real OMERO logic
-        with patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
-            patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table', return_value=12345), \
-            patch('omero_annotate_ai.core.annotation_pipeline.replace_table_config', return_value=12345):
-            mock_annotate.return_value = {"metadata": [], "annotations_path": Path(tempfile.mkdtemp())}
+        with (
+            patch.object(pipeline, "_run_micro_sam_annotation") as mock_annotate,
+            patch(
+                "omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table",
+                return_value=12345,
+            ),
+            patch(
+                "omero_annotate_ai.core.annotation_pipeline.replace_table_config",
+                return_value=12345,
+            ),
+        ):
+            mock_annotate.return_value = {
+                "metadata": [],
+                "annotations_path": Path(tempfile.mkdtemp()),
+            }
             if len(processed_flags) == 0:
                 # No schema defined, should raise ValueError
                 with pytest.raises(ValueError):
@@ -1096,19 +1172,19 @@ class TestPipelineIntegration:
 @pytest.mark.unit
 class TestPipelineUtils:
     """Test pipeline utility functions."""
-    
+
     def test_create_pipeline_function(self):
         """Test the create_pipeline helper function."""
         from omero_annotate_ai.core.annotation_pipeline import create_pipeline
-        
+
         config = create_default_config()
         config.omero.container_id = 123
-        
+
         pipeline = create_pipeline(config, conn=Mock())
-        
+
         assert isinstance(pipeline, AnnotationPipeline)
         assert pipeline.config == config
-    
+
     def test_pipeline_config_access(self):
         """Test accessing pipeline configuration."""
         config = create_default_config()
@@ -1119,7 +1195,7 @@ class TestPipelineUtils:
 
         assert pipeline.config.ai_model.pretrained_from == "vit_h"
         assert pipeline.config.workflow.batch_size == 5
-    
+
     def test_pipeline_with_custom_config(self):
         """Test pipeline with custom configuration."""
         config = create_default_config()
@@ -1460,6 +1536,7 @@ class TestCellposeMultiChannelSaving:
 
     def _make_pipeline(self, training_channels, label_channel=0):
         from omero_annotate_ai.core.annotation_config import create_default_config
+
         config = create_default_config()
         config.spatial_coverage.channels = list(
             set([label_channel] + training_channels)
@@ -1480,7 +1557,9 @@ class TestCellposeMultiChannelSaving:
         mock_image = Mock()
         pipeline._load_image_data = Mock(return_value=ch0)
 
-        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0])
+        stacked = pipeline._load_and_stack_channels(
+            mock_image, {"timepoint": 0, "z_slice": 0}, [0]
+        )
         assert stacked.shape == (h, w, 1)
         np.testing.assert_array_equal(stacked[..., 0], ch0)
 
@@ -1500,7 +1579,9 @@ class TestCellposeMultiChannelSaving:
         mock_image = Mock()
         pipeline._load_image_data = Mock(side_effect=load_side_effect)
 
-        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1])
+        stacked = pipeline._load_and_stack_channels(
+            mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1]
+        )
         assert stacked.shape == (h, w, 2)
         np.testing.assert_array_equal(stacked[..., 0], ch0)
         np.testing.assert_array_equal(stacked[..., 1], ch1)
@@ -1520,7 +1601,9 @@ class TestCellposeMultiChannelSaving:
         mock_image = Mock()
         pipeline._load_image_data = Mock(side_effect=load_side_effect)
 
-        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "is_volumetric": True}, [0, 1])
+        stacked = pipeline._load_and_stack_channels(
+            mock_image, {"timepoint": 0, "is_volumetric": True}, [0, 1]
+        )
         assert stacked.shape == (z, h, w, 2)
 
     def test_all_training_channels_in_output(self, tmp_path):
@@ -1536,7 +1619,9 @@ class TestCellposeMultiChannelSaving:
         mock_image = Mock()
         pipeline._load_image_data = Mock(side_effect=load_side_effect)
 
-        stacked = pipeline._load_and_stack_channels(mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1, 2])
+        stacked = pipeline._load_and_stack_channels(
+            mock_image, {"timepoint": 0, "z_slice": 0}, [0, 1, 2]
+        )
         assert stacked.shape == (h, w, 3)
         for i in range(3):
             np.testing.assert_array_equal(stacked[..., i], arrays[i])
@@ -1565,15 +1650,20 @@ class TestCellposeMultiChannelSaving:
         pipeline._save_images_for_cellpose(processing_units)
 
         import tifffile
+
         label_file = tmp_path / "annotation_input" / "img_001.tif"
         assert label_file.exists()
         saved = tifffile.imread(str(label_file))
-        assert saved.ndim == 2, f"annotation_input should be 2D, got shape {saved.shape}"
+        assert saved.ndim == 2, (
+            f"annotation_input should be 2D, got shape {saved.shape}"
+        )
 
         train_file = tmp_path / "model_input" / "img_001.tif"
         assert train_file.exists()
         saved_train = tifffile.imread(str(train_file))
-        assert saved_train.ndim == 3, f"model_input should be 3D (Y,X,C), got shape {saved_train.shape}"
+        assert saved_train.ndim == 3, (
+            f"model_input should be 3D (Y,X,C), got shape {saved_train.shape}"
+        )
         assert saved_train.shape == (h, w, 1)
 
 
@@ -1719,7 +1809,9 @@ class TestMicroSamSeparateChannelSaving:
 
 
 def _zarr_config(tmp_path, uris, **zarr):
-    config = AnnotationConfig(name="zarr_run", source="zarr", zarr={"uris": uris, **zarr})
+    config = AnnotationConfig(
+        name="zarr_run", source="zarr", zarr={"uris": uris, **zarr}
+    )
     config.output.output_directory = tmp_path / "out"
     config.training.segment_all = True
     config.spatial_coverage.use_patches = False
@@ -1731,17 +1823,24 @@ class TestZarrWorkflow:
     def test_default_source_for_zarr_config(self, tmp_path, ngff_stores):
         from omero_annotate_ai.sources import ZarrImageSource
 
-        pipeline = AnnotationPipeline(_zarr_config(tmp_path, [ngff_stores["plate"]], level=1))
+        pipeline = AnnotationPipeline(
+            _zarr_config(tmp_path, [ngff_stores["plate"]], level=1)
+        )
         assert isinstance(pipeline.image_source, ZarrImageSource)
         assert pipeline.image_source.level == 1
 
     def test_no_images_error_names_the_uris(self, tmp_path, ngff_stores):
         config = _zarr_config(tmp_path, [ngff_stores["plate"]], wells=["H12"])
-        with pytest.raises(ValueError, match="plate.zarr"), pytest.warns(UserWarning, match="H12"):
+        with (
+            pytest.raises(ValueError, match="plate.zarr"),
+            pytest.warns(UserWarning, match="H12"),
+        ):
             AnnotationPipeline(config).initialize_workflow()
 
     def test_end_to_end_custom_annotation(self, tmp_path, ngff_stores):
-        config = _zarr_config(tmp_path, [ngff_stores["plate"]], level=1, wells=["A1", "B3"])
+        config = _zarr_config(
+            tmp_path, [ngff_stores["plate"]], level=1, wells=["A1", "B3"]
+        )
         pipeline = AnnotationPipeline(config)
         seg_dir = tmp_path / "seg"
 
@@ -1750,8 +1849,10 @@ class TestZarrWorkflow:
             metadata = []
             for i, (image_obj, ann_id, meta, row_idx) in enumerate(batch):
                 plane = pipeline._load_image_data(image_obj, meta)
-                tifffile.imwrite(seg_dir / f"seg_{i:05d}.tif",
-                                 (plane > plane.mean()).astype(np.uint32))
+                tifffile.imwrite(
+                    seg_dir / f"seg_{i:05d}.tif",
+                    (plane > plane.mean()).astype(np.uint32),
+                )
                 metadata.append((ann_id, meta, row_idx))
             return {"metadata": metadata, "annotations_path": seg_dir}
 
@@ -1760,12 +1861,16 @@ class TestZarrWorkflow:
         # Split planning shuffles unit order, so compare in a fixed order.
         anns = sorted(pipeline.config.annotations, key=lambda a: a.well)
         assert [(a.well, a.field, a.level, a.image_id) for a in anns] == [
-            ("A1", "0", 1, None), ("B3", "0", 1, None)]
+            ("A1", "0", 1, None),
+            ("B3", "0", 1, None),
+        ]
         assert anns[0].image_name == "testplate_A1_0"
         assert anns[0].annotation_id == make_annotation_id(anns[0].image_uri, 0, 0)
         out = tmp_path / "out"
         for ann in anns:
-            mask = tifffile.imread(out / "annotation_output" / f"{ann.annotation_id}_mask.tif")
+            mask = tifffile.imread(
+                out / "annotation_output" / f"{ann.annotation_id}_mask.tif"
+            )
             assert mask.shape == (32, 40)  # level 1 grid
             assert (out / "annotation_input" / f"{ann.annotation_id}.tif").exists()
         table = pd.read_csv(out / "tracking_table.csv")
@@ -1820,14 +1925,34 @@ class TestExtendOnResume:
         config.training.validate_n = validate_n
         config.training.test_n = test_n
         # Existing table: images 1-2 training (1 done), image 3 validation
-        config.annotations.extend([
-            ImageAnnotation(image_id=1, image_name="img1", annotation_id="a1", channel=0,
-                            category="training", processed=True, roi_id=5, label_id=6),
-            ImageAnnotation(image_id=2, image_name="img2", annotation_id="a2", channel=0,
-                            category="training"),
-            ImageAnnotation(image_id=3, image_name="img3", annotation_id="a3", channel=0,
-                            category="validation"),
-        ])
+        config.annotations.extend(
+            [
+                ImageAnnotation(
+                    image_id=1,
+                    image_name="img1",
+                    annotation_id="a1",
+                    channel=0,
+                    category="training",
+                    processed=True,
+                    roi_id=5,
+                    label_id=6,
+                ),
+                ImageAnnotation(
+                    image_id=2,
+                    image_name="img2",
+                    annotation_id="a2",
+                    channel=0,
+                    category="training",
+                ),
+                ImageAnnotation(
+                    image_id=3,
+                    image_name="img3",
+                    annotation_id="a3",
+                    channel=0,
+                    category="validation",
+                ),
+            ]
+        )
         pipeline = AnnotationPipeline(config, conn=Mock(), image_source=source)
         pipeline.get_image_uris = lambda: [omero_uri(i) for i in range(1, n_images + 1)]
         return pipeline
@@ -1870,7 +1995,10 @@ class TestExtendOnResume:
 
         assert pipeline._extend_annotations() == 1
         assert self._images(pipeline.config, "training") == {
-            omero_uri(1), omero_uri(2), omero_uri(4)}
+            omero_uri(1),
+            omero_uri(2),
+            omero_uri(4),
+        }
         assert "Only 1 unused images left for training" in capsys.readouterr().out
 
     def test_lower_counts_never_drop_rows(self):
@@ -1879,7 +2007,11 @@ class TestExtendOnResume:
         pipeline.config.training.validate_n = 0
 
         assert pipeline._extend_annotations() == 0
-        assert [a.annotation_id for a in pipeline.config.annotations] == ["a1", "a2", "a3"]
+        assert [a.annotation_id for a in pipeline.config.annotations] == [
+            "a1",
+            "a2",
+            "a3",
+        ]
 
     def test_schema_updates_the_table_only_when_images_were_added(self):
         pipeline = self._pipeline()

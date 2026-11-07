@@ -81,8 +81,10 @@ class SimpleOMEROConnection:
             return False, name, None
 
         if "plaintext" in cls.__name__.lower():
-            return True, name, (
-                "this keyring backend stores passwords unencrypted in a file"
+            return (
+                True,
+                name,
+                ("this keyring backend stores passwords unencrypted in a file"),
             )
         return True, name, None
 
@@ -716,5 +718,3 @@ class SimpleOMEROConnection:
                 conn["last_used_display"] = "Unknown"
 
         return connections
-
-

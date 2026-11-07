@@ -13,12 +13,14 @@ from unittest.mock import Mock
 try:
     import ezomero
     from omero.gateway import BlitzGateway
+
     OMERO_AVAILABLE = True
 except ImportError:
     OMERO_AVAILABLE = False
 
 try:
     from omero_annotate_ai.core.annotation_config import create_default_config
+
     CONFIG_AVAILABLE = True
 except ImportError:
     CONFIG_AVAILABLE = False
@@ -27,6 +29,7 @@ except ImportError:
 # =============================================================================
 # Simple Shared Fixtures
 # =============================================================================
+
 
 @pytest.fixture(autouse=True)
 def isolated_cwd(tmp_path, monkeypatch):
@@ -70,6 +73,7 @@ def temp_work_dir():
 # Simple Test Helper Functions
 # =============================================================================
 
+
 def create_mock_image(image_id=123, name="test_image.tiff"):
     """Helper to create a fake OMERO image."""
     mock_image = Mock()
@@ -103,10 +107,10 @@ def create_mock_project(project_id=789, name="test_project"):
 
 def assert_config_has_required_fields(config):
     """Check that config has all required fields."""
-    assert hasattr(config, 'omero')
-    assert hasattr(config, 'micro_sam')
-    assert hasattr(config, 'batch_processing')
-    assert hasattr(config, 'training')
+    assert hasattr(config, "omero")
+    assert hasattr(config, "micro_sam")
+    assert hasattr(config, "batch_processing")
+    assert hasattr(config, "training")
 
 
 # =============================================================================
@@ -133,9 +137,13 @@ def omero_params() -> Dict[str, Any]:
 
 
 def _connect(params):
-    conn = BlitzGateway(params["user"], params["password"],
-                        host=params["host"], port=params["port"],
-                        secure=params["secure"])
+    conn = BlitzGateway(
+        params["user"],
+        params["password"],
+        host=params["host"],
+        port=params["port"],
+        secure=params["secure"],
+    )
     try:
         if conn.connect():
             return conn
@@ -155,8 +163,12 @@ def _server_ready(params) -> bool:
 
 def _docker_available() -> bool:
     try:
-        subprocess.run(["docker", "compose", "version"], check=True,
-                       capture_output=True, timeout=30)
+        subprocess.run(
+            ["docker", "compose", "version"],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
         return True
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
@@ -180,7 +192,9 @@ def docker_omero_server(omero_params):
         deadline = time.monotonic() + OMERO_READY_TIMEOUT
         while not _server_ready(omero_params):
             if time.monotonic() > deadline:
-                pytest.fail(f"OMERO did not accept logins within {OMERO_READY_TIMEOUT}s")
+                pytest.fail(
+                    f"OMERO did not accept logins within {OMERO_READY_TIMEOUT}s"
+                )
             time.sleep(10)
         yield omero_params
     finally:
@@ -211,8 +225,9 @@ def omero_seed(docker_omero_server):
     if conn is None:
         pytest.fail("Could not log in to the test OMERO server")
     try:
-        data = seed_module.seed(conn, docker_omero_server["user"],
-                                docker_omero_server["password"])
+        data = seed_module.seed(
+            conn, docker_omero_server["user"], docker_omero_server["password"]
+        )
     except Exception:
         conn.close()
         raise
@@ -228,20 +243,15 @@ def omero_seed(docker_omero_server):
 # Pytest Configuration
 # =============================================================================
 
+
 def pytest_configure(config):
     """Configure pytest markers."""
     config.addinivalue_line(
         "markers", "unit: mark test as unit test (fast, with mocks)"
     )
-    config.addinivalue_line(
-        "markers", "omero: mark test as requiring OMERO server"
-    )
-    config.addinivalue_line(
-        "markers", "integration: mark test as integration test"
-    )
-    config.addinivalue_line(
-        "markers", "slow: mark test as slow (takes >5 seconds)"
-    )
+    config.addinivalue_line("markers", "omero: mark test as requiring OMERO server")
+    config.addinivalue_line("markers", "integration: mark test as integration test")
+    config.addinivalue_line("markers", "slow: mark test as slow (takes >5 seconds)")
     config.addinivalue_line(
         "markers", "docker: mark test as needing the Docker OMERO test server"
     )
@@ -254,6 +264,7 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "omero" in item.keywords:
                 item.add_marker(skip_omero)
+
 
 @pytest.fixture(scope="session")
 def ngff_stores(tmp_path_factory):
@@ -278,15 +289,26 @@ def ngff_stores(tmp_path_factory):
 
     plate = zarr.open_group(str(root / "plate.zarr"), mode="w", zarr_format=2)
     well_paths = ["A/1", "A/2", "B/3"]
-    write_plate_metadata(plate, ["A", "B"], ["1", "2", "3"], well_paths,
-                         name="testplate", fmt=FormatV04())
+    write_plate_metadata(
+        plate,
+        ["A", "B"],
+        ["1", "2", "3"],
+        well_paths,
+        name="testplate",
+        fmt=FormatV04(),
+    )
     for well_path in well_paths:
         row, col = well_path.split("/")
         well = plate.require_group(row).require_group(col)
         write_well_metadata(well, ["0", "1"], fmt=FormatV04())
         for field_path in ("0", "1"):
-            write_image(arr04, well.require_group(field_path), axes="cyx",
-                        fmt=FormatV04(), scale_factors=(2,))
+            write_image(
+                arr04,
+                well.require_group(field_path),
+                axes="cyx",
+                fmt=FormatV04(),
+                scale_factors=(2,),
+            )
 
     return {
         "img04": (root / "img04.zarr").as_posix(),
