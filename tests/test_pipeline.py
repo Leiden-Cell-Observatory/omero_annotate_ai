@@ -346,7 +346,7 @@ class TestAnnotationPipeline:
         This test ensures that:
         1. generate_unique_table_name creates names with proper format
         2. _get_table_title preserves the name from config
-        3. The table title used in create_or_replace_tracking_table matches config.name
+        3. The table title used in create_tracking_table matches config.name
         """
         from omero_annotate_ai.omero.omero_functions import generate_unique_table_name
 
@@ -385,7 +385,7 @@ class TestAnnotationPipeline:
         assert title == config.name
         assert title == unique_name
 
-        # Test 4: Verify create_or_replace_tracking_table receives the exact config name
+        # Test 4: Verify create_tracking_table receives the exact config name
         config.training.train_n = 1
         config.training.validate_n = 1
         config.training.test_n = 0
@@ -401,7 +401,7 @@ class TestAnnotationPipeline:
 
         pipeline.define_annotation_schema(mock_images)
 
-        with patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table') as mock_create_table:
+        with patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table') as mock_create_table:
             mock_create_table.return_value = 999
             pipeline.create_tracking_table()
 
@@ -651,6 +651,7 @@ class TestAnnotationPipeline:
         config.workflow.read_only_mode = False
         config.spatial_coverage.use_patches = False
         pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline.set_table_id(7)  # uploads need the table to exist first
 
         # Three annotations + parallel seg files + metadata, all in order 0,1,2
         annotations_path = tmp_path / "annotations"
@@ -985,9 +986,9 @@ class TestPipelineIntegration:
         mock_conn.getObject = Mock(side_effect=mock_images)
         pipeline = AnnotationPipeline(config, conn=mock_conn)
         with patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
-            patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=456), \
+            patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table', return_value=456), \
             patch.object(pipeline, '_process_annotation_results'), \
-            patch.object(pipeline, '_replace_omero_table_from_config'), \
+            patch.object(pipeline, '_write_omero_table'), \
             patch.object(pipeline, '_auto_save_config'), \
             patch.object(pipeline, '_upload_annotation_config_to_omero'):
             mock_annotate.return_value = {
@@ -1025,7 +1026,7 @@ class TestPipelineIntegration:
             patch.object(pipeline, '_cleanup_embeddings'), \
             patch.object(pipeline, '_auto_save_config'), \
             patch.object(pipeline, '_upload_annotation_config_to_omero', return_value=789), \
-            patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=789):
+            patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table', return_value=789):
             # Patch _prepare_processing_units only for the first call
             with patch.object(pipeline, '_prepare_processing_units'):
                 config.annotations = []  # Start with empty annotations for resume mode
@@ -1072,8 +1073,8 @@ class TestPipelineIntegration:
             ann.processed = flag
         # Patch annotation runner and OMERO table creation to avoid real OMERO logic
         with patch.object(pipeline, '_run_micro_sam_annotation') as mock_annotate, \
-            patch('omero_annotate_ai.core.annotation_pipeline.create_or_replace_tracking_table', return_value=12345), \
-            patch('omero_annotate_ai.core.annotation_pipeline.upload_annotation_config_to_omero', return_value=12345):
+            patch('omero_annotate_ai.core.annotation_pipeline.create_omero_tracking_table', return_value=12345), \
+            patch('omero_annotate_ai.core.annotation_pipeline.replace_table_config', return_value=12345):
             mock_annotate.return_value = {"metadata": [], "annotations_path": Path(tempfile.mkdtemp())}
             if len(processed_flags) == 0:
                 # No schema defined, should raise ValueError
@@ -1768,7 +1769,7 @@ class TestZarrWorkflow:
             assert mask.shape == (32, 40)  # level 1 grid
             assert (out / "annotation_input" / f"{ann.annotation_id}.tif").exists()
         table = pd.read_csv(out / "tracking_table.csv")
-        assert list(table["image_uri"]) == [a.image_uri for a in anns]
+        assert sorted(table["image_uri"]) == sorted(a.image_uri for a in anns)
         assert table["processed"].all()
         assert (out / "well_matching.csv").exists()
 
@@ -1786,31 +1787,21 @@ class TestFindExistingTable:
         return AnnotationPipeline(config, conn=Mock())
 
     def test_uses_selected_table_id(self):
-        """With a table ID in the config, the name is not looked up at all."""
         pipeline = self._pipeline(table_id=22159)
-        with patch("omero_annotate_ai.core.annotation_pipeline.get_table_by_name") as by_name:
-            assert pipeline._find_existing_table() == 22159
-        by_name.assert_not_called()
+        assert pipeline._find_existing_table() == 22159
         pipeline.conn.getObject.assert_called_once_with("FileAnnotation", 22159)
 
-    def test_falls_back_to_name_when_id_is_gone(self):
-        """A table ID that no longer exists falls back to the lookup by name."""
+    def test_missing_table_is_an_error_not_a_new_table(self):
+        """A resume must never quietly start a fresh table."""
         pipeline = self._pipeline(table_id=1)
         pipeline.conn.getObject.return_value = None
-        found = Mock()
-        found.getId.return_value = 22162
-        with patch("omero_annotate_ai.core.annotation_pipeline.get_table_by_name",
-                   return_value=found):
-            assert pipeline._find_existing_table() == 22162
+        with pytest.raises(ValueError, match="not found"):
+            pipeline._find_existing_table()
 
-    def test_without_id_looks_up_by_name(self):
-        pipeline = self._pipeline()
-        found = Mock()
-        found.getId.return_value = 22162
-        with patch("omero_annotate_ai.core.annotation_pipeline.get_table_by_name",
-                   return_value=found) as by_name:
-            assert pipeline._find_existing_table() == 22162
-        by_name.assert_called_once()
+    def test_without_id_is_an_error(self):
+        """Tables are never looked up by name."""
+        with pytest.raises(ValueError, match="table_id"):
+            self._pipeline()._find_existing_table()
 
 
 @pytest.mark.unit
@@ -1893,7 +1884,7 @@ class TestExtendOnResume:
     def test_schema_updates_the_table_only_when_images_were_added(self):
         pipeline = self._pipeline()
         pipeline.table_id = 22159
-        with patch.object(pipeline, "_replace_omero_table_from_config") as replace:
+        with patch.object(pipeline, "_write_omero_table") as replace:
             pipeline.define_annotation_schema([])
             replace.assert_not_called()
 

@@ -177,6 +177,156 @@ class TestTablesInPlace:
             table.close()
 
 
+def _training_set_config(image_ids, categories):
+    from omero_annotate_ai.core.annotation_config import ImageAnnotation, create_default_config
+
+    config = create_default_config()
+    config.name = "oai_table_layer"
+    for image_id, category in zip(image_ids, categories):
+        config.add_annotation(ImageAnnotation(
+            image_id=image_id, image_name=f"img{image_id}",
+            annotation_id=f"{image_id}_0_0", category=category,
+            timepoint=0, z_slice=0, channel=0,
+        ))
+    return config
+
+
+@pytest.fixture
+def training_set(omero_conn, omero_seed):
+    """A schema-v2 tracking table on the seeded dataset; everything removed afterwards."""
+    from omero_annotate_ai.omero.omero_functions import create_tracking_table, delete_training_set
+
+    image_ids = omero_seed.image_ids[:3]
+    config = _training_set_config(image_ids, ["training", "validation", "test"])
+    with patch("builtins.print"):
+        table_id = create_tracking_table(
+            omero_conn, config, "oai_table_layer", "dataset", [omero_seed.dataset_id])
+    config.omero.table_id = table_id
+    yield config, table_id
+    with patch("builtins.print"):
+        delete_training_set(omero_conn, table_id, dry_run=False)
+
+
+@pytest.mark.docker
+@pytest.mark.integration
+class TestTrackingTableOnOmero:
+    """The table layer against a real server: in place, tagged, one config."""
+
+    def test_round_trip_keeps_test_split(self, omero_conn, training_set):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+        from omero_annotate_ai.omero.omero_functions import sync_omero_table_to_config
+
+        _, table_id = training_set
+        loaded = create_default_config()
+        with patch("builtins.print"):
+            sync_omero_table_to_config(omero_conn, table_id, loaded)
+        assert [a.category for a in loaded.annotations] == ["training", "validation", "test"]
+
+    def test_update_and_append_keep_the_table_id(self, omero_conn, omero_seed, training_set):
+        from omero_annotate_ai.core.annotation_config import ImageAnnotation
+        from omero_annotate_ai.omero import tracking_table
+        from omero_annotate_ai.omero.omero_functions import write_config_to_table
+
+        config, table_id = training_set
+        file_id = omero_conn.getObject("FileAnnotation", table_id).getFile().getId()
+        config.annotations[1].mark_processed(roi_id=None, label_id=None)
+        config.annotations[1].session = 1
+        extra = omero_seed.image_ids[3]
+        config.add_annotation(ImageAnnotation(
+            image_id=extra, image_name="extra", annotation_id=f"{extra}_0_0",
+            category="training"))
+
+        result = write_config_to_table(omero_conn, table_id, config)
+
+        assert result == {"updated": 3, "added": 1}
+        file_ann = omero_conn.getObject("FileAnnotation", table_id)
+        assert file_ann.getFile().getId() == file_id
+        df = tracking_table.read_table(omero_conn, table_id)
+        assert list(df["processed"]) == [False, True, False, False]
+        assert list(df["session"]) == [-1, 1, -1, -1]
+        assert list(df["image_id"])[-1] == extra
+
+    def test_over_long_string_is_refused_with_a_clear_error(self, omero_conn, training_set):
+        from omero_annotate_ai.omero import tracking_table
+        from omero_annotate_ai.omero.omero_functions import write_config_to_table
+
+        config, table_id = training_set
+        config.annotations[0].image_name = "x" * 600
+        with pytest.raises(tracking_table.TableValueTooLongError, match="image_name"):
+            write_config_to_table(omero_conn, table_id, config)
+
+    def test_uploads_are_tagged_and_deleted_with_the_set(self, omero_conn, omero_seed, tmp_path):
+        import imageio.v3 as imageio
+        from omero_annotate_ai.omero.omero_functions import (
+            create_tracking_table, delete_training_set, upload_rois_and_labels,
+        )
+        from omero_annotate_ai.omero.tracking_table import tag_for
+
+        image_id = omero_seed.image_ids[4]
+        config = _training_set_config([image_id], ["training"])
+        with patch("builtins.print"):
+            table_id = create_tracking_table(
+                omero_conn, config, "oai_tagged", "dataset", [omero_seed.dataset_id])
+        mask = np.zeros((IMAGE_SHAPE["size_y"], IMAGE_SHAPE["size_x"]), np.uint16)
+        mask[10:20, 10:30] = 1
+        mask_file = tmp_path / "mask.tif"
+        imageio.imwrite(mask_file, mask)
+        tag = tag_for(table_id, f"{image_id}_0_0")
+
+        with patch("builtins.print"):
+            # Uploaded, but (as after a crash) never written to the table.
+            label_id, roi_id = upload_rois_and_labels(
+                omero_conn, image_id, str(mask_file), 
+                z_slice=0, channel=0, timepoint=0, tag=tag)
+
+        roi = omero_conn.getObject("Roi", roi_id)
+        assert roi.getDescription().startswith(tag)
+        assert omero_conn.getObject("FileAnnotation", label_id).getDescription().startswith(tag)
+
+        with patch("builtins.print"):
+            report = delete_training_set(omero_conn, table_id)
+            assert report["rois"] == [roi_id] and report["labels"] == [label_id]
+            delete_training_set(omero_conn, table_id, dry_run=False)
+        assert omero_conn.getObject("Roi", roi_id) is None
+        assert omero_conn.getObject("FileAnnotation", label_id) is None
+        assert omero_conn.getObject("FileAnnotation", table_id) is None
+
+    def test_one_config_per_table(self, omero_conn, omero_seed, training_set, tmp_path):
+        from omero_annotate_ai.omero.omero_functions import (
+            CONFIG_NS, find_annotation_config_for_table, replace_table_config,
+        )
+        from omero_annotate_ai.omero.omero_utils import list_annotations_by_namespace
+
+        config, table_id = training_set
+        local = tmp_path / "annotation_config_oai.yaml"
+        for model in ("vit_b", "vit_l"):
+            config.ai_model.pretrained_from = model
+            config.save_yaml(local)
+            replace_table_config(omero_conn, table_id, str(local), "dataset",
+                                 omero_seed.dataset_id)
+
+        with patch("builtins.print"):
+            configs = [a for a in list_annotations_by_namespace(
+                omero_conn, "Dataset", omero_seed.dataset_id, CONFIG_NS)
+                if a["file_name"] == f"annotation_config_table_{table_id}.yaml"]
+        assert len(configs) == 1
+        assert find_annotation_config_for_table(omero_conn, table_id).ai_model.pretrained_from == "vit_l"
+
+    def test_tables_from_older_versions_are_refused(self, omero_conn, omero_seed):
+        import ezomero
+        import pandas as pd
+        from omero_annotate_ai.omero import tracking_table
+
+        old_id = ezomero.post_table(
+            omero_conn, pd.DataFrame({"image_id": [1], "train": [True]}),
+            object_type="Dataset", object_id=omero_seed.dataset_id, title="oai_old_table")
+        try:
+            with pytest.raises(tracking_table.UnsupportedTableError):
+                tracking_table.read_table(omero_conn, old_id)
+        finally:
+            omero_conn.deleteObjects("Annotation", [old_id], wait=True)
+
+
 @pytest.mark.unit
 class TestOMEROConnectionManagerUnit:
     """Unit tests that don't require OMERO server."""
