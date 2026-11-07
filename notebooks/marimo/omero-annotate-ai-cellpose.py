@@ -300,7 +300,7 @@ def _(
     | Channel | {config.spatial_coverage.channels} |
     | Segment All | {config.training.segment_all} |
     | Train/Val/Test | {config.training.train_n}/{config.training.validate_n}/{config.training.test_n} |
-    | Use Patches | {config.processing.use_patches} |
+    | Use Patches | {config.spatial_coverage.use_patches} |
     | Read-only Mode | {config.workflow.read_only_mode} |
     """)
     return (config,)
@@ -339,7 +339,7 @@ def _(config, conn, container_id, create_pipeline, export_button, mo):
             pipeline = create_pipeline(config, conn)
             mo.output.replace(mo.md("**Exporting images for CellPose annotation...**"))
 
-            table_id, updated_config = pipeline.run_cp_workflow()
+            table_id, _updated_config = pipeline.run_cp_workflow()
 
             mo.output.replace(mo.md(f"""
             **Images exported successfully!**
@@ -348,9 +348,11 @@ def _(config, conn, container_id, create_pipeline, export_button, mo):
             - Output directory: {config.output.output_directory}
 
             **Next steps:**
-            1. Open CellPose GUI: `pixi run cellpose` or `python -m cellpose`
-            2. Open the exported images and annotate them
-            3. Save masks to the output folders
+            1. Open the Cellpose GUI (`cellpose`; install it with `pixi add cellpose` or `pip install cellpose`)
+            2. Open the images in `annotation_input/` and annotate them
+            3. Save each mask in `annotation_output/` as `<image name>_mask.tif`
+               (e.g. `annotation_input/12345_0_0.tif` → `annotation_output/12345_0_0_mask.tif`;
+               Cellpose's own `_seg.npy` / `_cp_masks.png` files are not picked up)
             4. Return here and click 'Collect Annotations'
             """))
         except Exception as e:
@@ -385,8 +387,8 @@ def _(collect_button, mo, pipeline):
         try:
             status = pipeline.get_annotation_status_from_disk()
             if status['available_masks']:
-                uploaded_count, updated_config = pipeline.collect_annotations_from_disk()
-                progress = updated_config.get_progress_summary()
+                uploaded_count, _updated_config = pipeline.collect_annotations_from_disk()
+                progress = _updated_config.get_progress_summary()
                 mo.output.replace(mo.md(f"""
                 **Annotations collected!**
 

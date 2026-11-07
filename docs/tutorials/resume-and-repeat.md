@@ -37,17 +37,16 @@ table_id, config = pipeline.run_full_micro_sam_workflow()   # or run_cp_workflow
 
 ### Resume on another computer
 
-The YAML is also attached to the OMERO container at the end of each run. To continue
-elsewhere, download it from OMERO.web (or with the helper below) and sync the progress
-from the tracking table:
+The YAML is also attached to the OMERO container, one per tracking table. To continue
+elsewhere, fetch it by the table's ID and sync the progress from the tracking table:
 
 ```python
 from omero_annotate_ai.omero.omero_functions import (
-    download_annotation_config_from_omero,
+    find_annotation_config_for_table,
     sync_omero_table_to_config,
 )
 
-config = download_annotation_config_from_omero(conn, "Dataset", 123)
+config = find_annotation_config_for_table(conn, table_id)
 config.config_file_path = None          # save progress in the working directory instead
 pipeline = create_pipeline(config, conn)
 sync_omero_table_to_config(conn, table_id, pipeline.config)

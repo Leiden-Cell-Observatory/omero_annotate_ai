@@ -304,11 +304,11 @@ def _(
     | Workflow Name | {config.name} |
     | Container | {config.omero.container_type} (ID: {config.omero.container_id}) |
     | Output Directory | {config.output.output_directory} |
-    | Model | {config.ai_model.model_type} |
+    | Model | {config.ai_model.pretrained_from} |
     | Channel | {config.spatial_coverage.channels} |
     | Segment All | {config.training.segment_all} |
     | Train/Val/Test | {config.training.train_n}/{config.training.validate_n}/{config.training.test_n} |
-    | Use Patches | {config.processing.use_patches} |
+    | Use Patches | {config.spatial_coverage.use_patches} |
     | Read-only Mode | {config.workflow.read_only_mode} |
     """)
     return (config,)
