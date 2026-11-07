@@ -366,9 +366,83 @@ class TestOMEROConnectionWidgetCredentials:
         widget._connect(Mock())
         assert widget.connection is first
 
+        widget.password_widget.value = "s3cret"  # cleared after each attempt
         widget._connect(Mock())
         first.close.assert_called_once()
         assert widget.connection is second
+
+    @pytest.mark.parametrize("result", ["ok", "none", "raises"])
+    def test_password_field_cleared_after_connect(self, widget, conn_manager, result):
+        """The typed password never stays in the widget model after Connect."""
+        if result == "raises":
+            conn_manager.create_connection_from_config.side_effect = RuntimeError("x")
+        else:
+            conn_manager.create_connection_from_config.return_value = (
+                Mock() if result == "ok" else None
+            )
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+
+        widget._connect(Mock())
+
+        assert widget.password_widget.value == ""
+
+    def test_keychain_password_stays_out_of_the_field(self, widget, conn_manager):
+        """A keychain password is used for connecting but never put in the field."""
+        conn_manager.load_password.return_value = "from-keychain"
+        conn_manager.create_connection_from_config.return_value = Mock()
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+
+        widget._load_from_keychain(Mock())
+        assert widget.password_widget.value == ""
+
+        widget._connect(Mock())
+        sent = conn_manager.create_connection_from_config.call_args[0][0]
+        assert sent["password"] == "from-keychain"
+
+    def test_keychain_password_not_sent_to_another_server(self, widget, conn_manager):
+        conn_manager.load_password.return_value = "from-keychain"
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget._load_from_keychain(Mock())
+
+        widget.host_widget.value = "other.example.org"
+
+        assert widget._get_widget_config()["password"] == ""
+
+    def test_stale_keychain_password_hint(self, widget, conn_manager, capsys):
+        conn_manager.load_password.return_value = "old"
+        conn_manager.create_connection_from_config.return_value = None
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget._load_from_keychain(Mock())
+
+        widget._connect(Mock())
+
+        assert "may be out of date" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("host", ["wss://omero.example.org/omero-ws",
+                                      "ws://omero.example.org/omero-ws"])
+    def test_url_host_sends_no_port_and_stays_encrypted(self, widget, host):
+        widget.secure_widget.value = False
+        widget.host_widget.value = host
+
+        config = widget._get_widget_config()
+        assert config["port"] is None
+        assert config["secure"] is True
+        assert widget.port_widget.disabled and widget.secure_widget.disabled
+
+    def test_plain_host_keeps_port_and_secure_choice(self, widget):
+        widget.host_widget.value = "wss://omero.example.org/omero-ws"
+        widget.host_widget.value = "omero.example.org"
+        widget.secure_widget.value = False
+
+        config = widget._get_widget_config()
+        assert config["port"] == widget.DEFAULT_PORT
+        assert config["secure"] is False
+        assert not widget.port_widget.disabled
 
 
 @pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
@@ -577,6 +651,243 @@ class TestWorkflowWidgetDisplay:
         status = widget.omero_status.value
         assert "idr0021_microsam" in status
         assert "414" in status
+
+    @pytest.mark.parametrize("vary", [False, True])
+    def test_channel_names_shown_in_both_summaries(self, vary):
+        """Channel names appear with their index, and a note when images differ."""
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+
+        widget._apply_container_info({
+            "container_type": "dataset", "container_id": 7,
+            "container_name": "cells", "total_images": 10,
+            "channel_names": ["DAPI", "GFP<1>"], "channel_names_vary": vary,
+        })
+
+        for text in (widget.container_summary.value, widget.omero_status.value):
+            assert "0: DAPI, 1: GFP&lt;1&gt;" in text
+            assert ("name channels differently" in text) is vary
+
+    def _widget_with_table(self):
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+        widget.container_widgets["type"].value = "plate"
+        widget.container_widgets["container"].options = [("plate (ID: 803)", 803)]
+        widget.container_widgets["container"].value = 803
+        widget.annotation_tables = [{"id": 22159, "name": "plate_run"}]
+        widget.tables_widgets["selection"].options = [("plate_run", 22159)]
+        widget.tables_widgets["selection"].value = 22159
+        return widget
+
+    def test_tables_with_the_same_name_get_distinct_labels(self):
+        """Two tables sharing a name must not both show as selected."""
+        with patch.object(WorkflowWidget, "_load_containers"):
+            widget = WorkflowWidget(connection=Mock())
+        widget.container_widgets["type"].value = "plate"
+        widget.container_widgets["container"].options = [("plate (ID: 803)", 803)]
+        widget.container_widgets["container"].value = 803
+        tables = [{"id": 22162, "name": "run"}, {"id": 22159, "name": "run"}]
+
+        with patch("omero_annotate_ai.widgets.workflow_widget.list_annotation_tables",
+                   return_value=tables), patch("builtins.print"):
+            widget._on_scan_tables(None)
+
+        labels = [label for label, _ in widget.tables_widgets["selection"].options]
+        assert labels == ["run (ID: 22162)", "run (ID: 22159)"]
+
+    def test_continue_existing_survives_update_config(self):
+        """Update Configuration must not reset resume after Continue Existing."""
+        widget = self._widget_with_table()
+
+        widget._on_continue_table(None)
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        assert widget.get_config().workflow.resume_from_table is True
+        assert widget.get_config().name == "plate_run"
+        assert widget.get_config().omero.table_id == 22159
+        assert widget.workflow_widgets["resume_from_table"].value is True
+
+    @staticmethod
+    def _saved_config():
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        saved = create_default_config()
+        saved.name = "plate_run"
+        saved.spatial_coverage.channels = [2]
+        saved.spatial_coverage.use_patches = True
+        saved.spatial_coverage.patch_size = [256, 128]
+        saved.training.train_n = 4
+        saved.ai_model.pretrained_from = "vit_l"
+        return saved
+
+    def _continue_with_saved_config(self):
+        widget = self._widget_with_table()
+        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                   return_value=self._saved_config()):
+            widget._on_continue_table(None)
+        return widget
+
+    def test_continue_existing_loads_saved_config_and_locks_fields(self):
+        widget = self._continue_with_saved_config()
+        fields = widget._annotation_widget_map()
+
+        assert fields["channel"].value == 2
+        assert fields["use_patches"].value is True
+        assert fields["patch_size"].value == "256, 128"
+        assert fields["train_n"].value == 4
+        assert fields["model_type"].value == "vit_l"
+        for key in ("channel", "three_d", "use_patches", "patch_size"):
+            assert fields[key].disabled, key
+        for key in ("train_n", "validate_n", "test_n", "batch_size", "model_type"):
+            assert not fields[key].disabled, key
+        assert "saved config" in widget.resume_note.value
+
+    def test_continue_existing_updates_config_without_update_click(self):
+        """Running right after Continue Existing must use the table's settings."""
+        widget = self._continue_with_saved_config()
+
+        config = widget.get_config()
+        assert config.spatial_coverage.get_label_channel() == 2
+        assert config.spatial_coverage.use_patches is True
+        assert config.spatial_coverage.patch_size == [256, 128]
+        assert config.training.train_n == 4
+        assert config.workflow.resume_from_table is True
+
+    def test_get_config_keeps_locked_values(self):
+        widget = self._continue_with_saved_config()
+        widget.config.spatial_coverage.use_patches = False
+
+        assert widget.get_config().spatial_coverage.use_patches is True
+
+    def test_table_rows_win_over_a_mismatched_saved_config(self):
+        """A saved config from another same-name run must not set locked fields."""
+        import pandas as pd
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        saved = create_default_config()           # channel 0, no patches, 3/2
+        saved.name = "plate_run"
+        rows = pd.DataFrame([
+            {"image_uri": f"omero:image:{i}", "category": cat, "channel": 1,
+             "is_volumetric": False, "is_patch": True,
+             "patch_width": 256, "patch_height": 256}
+            for i, cat in enumerate(["training"] * 3 + ["validation"] * 3)
+        ])
+        widget = self._widget_with_table()
+        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                   return_value=saved), \
+             patch("omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
+                   return_value=rows):
+            widget._on_continue_table(None)
+
+        fields = widget._annotation_widget_map()
+        assert fields["channel"].value == 1 and fields["channel"].disabled
+        assert fields["use_patches"].value is True
+        assert fields["validate_n"].value == 3
+        config = widget.get_config()
+        assert config.spatial_coverage.get_label_channel() == 1
+        assert config.spatial_coverage.use_patches is True
+        assert config.spatial_coverage.patch_size == [256, 256]
+        assert config.training.validate_n == 3
+        assert "did not match the table" in widget.resume_note.value
+
+    def test_resume_locks_planes_patches_and_read_only(self):
+        widget = self._continue_with_saved_config()
+        fields = widget._annotation_widget_map()
+        for key in ("timepoint_mode", "timepoints", "z_slice_mode", "z_slices",
+                    "patches_per_image", "segment_all"):
+            assert fields[key].disabled, key
+        read_only = widget.workflow_widgets["read_only_mode"]
+        assert read_only.disabled and read_only.value is False
+
+        read_only.value = True               # disabled in the UI, but set anyway
+        fields["patches_per_image"].value = 7
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+        config = widget.get_config()
+        assert config.workflow.read_only_mode is False
+        assert config.spatial_coverage.patches_per_image == self._saved_config().spatial_coverage.patches_per_image
+
+    def test_name_new_table_unlocks_read_only(self):
+        widget = self._continue_with_saved_config()
+        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+                   return_value="fresh_table"):
+            widget._on_new_table(None)
+        assert not widget.workflow_widgets["read_only_mode"].disabled
+        assert not widget._annotation_widget_map()["segment_all"].disabled
+
+    def test_locked_values_win_over_widgets_on_update(self):
+        widget = self._continue_with_saved_config()
+        fields = widget._annotation_widget_map()
+        fields["channel"].value = 5          # disabled in the UI, but set anyway
+        fields["patch_size"].value = "64, 64"
+        fields["train_n"].value = 6          # editable
+
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        config = widget.get_config()
+        assert config.spatial_coverage.get_label_channel() == 2
+        assert config.spatial_coverage.patch_size == [256, 128]
+        assert config.spatial_coverage.use_patches is True
+        assert config.training.train_n == 6
+        assert config.workflow.resume_from_table is True
+
+    def test_name_new_table_unlocks_fields(self):
+        widget = self._continue_with_saved_config()
+
+        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+                   return_value="fresh_table"):
+            widget._on_new_table(None)
+
+        fields = widget._annotation_widget_map()
+        assert not fields["channel"].disabled
+        assert not fields["use_patches"].disabled
+        assert not fields["three_d"].disabled
+        assert fields["patch_size"].disabled is (not fields["use_patches"].value)
+        assert widget.resume_note.value == ""
+        fields["channel"].value = 3
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+        assert widget.get_config().spatial_coverage.channels[0] == 3
+
+    def test_continue_infers_settings_from_rows_without_saved_config(self):
+        import pandas as pd
+
+        widget = self._widget_with_table()
+        rows = pd.DataFrame([
+            {"image_uri": "omero:image:1", "category": "training", "channel": 1,
+             "is_volumetric": False, "is_patch": False},
+            {"image_uri": "omero:image:2", "category": "training", "channel": 1,
+             "is_volumetric": False, "is_patch": False},
+        ])
+        with patch("omero_annotate_ai.widgets.workflow_widget.find_annotation_config_for_table",
+                   return_value=None), \
+             patch("omero_annotate_ai.widgets.workflow_widget.read_tracking_table",
+                   return_value=rows) as read:
+            widget._on_continue_table(None)
+
+        read.assert_called_once_with(widget.connection, 22159)
+        fields = widget._annotation_widget_map()
+        assert fields["channel"].value == 1 and fields["channel"].disabled
+        assert fields["train_n"].value == 2
+        assert "table rows" in widget.resume_note.value
+
+    def test_new_table_after_continue_turns_resume_off(self):
+        """Switching to a new table clears the earlier Continue Existing choice."""
+        widget = self._widget_with_table()
+        widget._on_continue_table(None)
+
+        with patch("omero_annotate_ai.widgets.workflow_widget.generate_unique_table_name",
+                   return_value="fresh_table"):
+            widget._on_new_table(None)
+        with patch("builtins.print"):
+            widget._on_update_config(None)
+
+        assert widget.get_config().workflow.resume_from_table is False
+        assert widget.get_config().name == "fresh_table"
+        assert widget.get_config().omero.table_id is None
+        assert widget.workflow_widgets["resume_from_table"].value is False
 
 
 @pytest.mark.unit

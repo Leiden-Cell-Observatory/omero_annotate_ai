@@ -3,6 +3,7 @@
 import configparser
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +18,13 @@ except ImportError:
 
 from dotenv import dotenv_values
 from omero.gateway import BlitzGateway
+
+_URL_HOST = re.compile(r"^wss?://", re.IGNORECASE)
+
+
+def is_url_host(host: Optional[str]) -> bool:
+    """True for websocket URL hosts such as ``wss://server/omero-ws``."""
+    return bool(host) and bool(_URL_HOST.match(host.strip()))
 
 
 class SimpleOMEROConnection:
@@ -38,6 +46,46 @@ class SimpleOMEROConnection:
         """Initialize the connection manager."""
         self.last_connection = None
 
+    @staticmethod
+    def keyring_backend() -> Tuple[bool, str, Optional[str]]:
+        """Inspect the active keyring backend.
+
+        Returns:
+            ``(usable, backend_name, warning)``. ``usable`` is False when there is
+            no keyring, or the backend stores nothing (fail/null backends, or a
+            priority below 1). ``warning`` is set for backends that keep the
+            password unencrypted on disk.
+        """
+        if not KEYRING_AVAILABLE:
+            return False, "none (keyring is not installed)", None
+
+        get_keyring = getattr(keyring, "get_keyring", None)
+        if get_keyring is None:
+            return True, "unknown", None
+
+        try:
+            backend = get_keyring()
+        except Exception as e:  # pragma: no cover - backend discovery failed
+            return False, f"unavailable ({e})", None
+
+        cls = type(backend)
+        name = f"{cls.__module__}.{cls.__name__}"
+        module = cls.__module__.lower()
+        if module.endswith((".fail", ".null")):
+            return False, name, None
+        try:
+            priority = float(getattr(backend, "priority", 1))
+        except Exception:
+            priority = 0.0
+        if priority < 1:
+            return False, name, None
+
+        if "plaintext" in cls.__name__.lower():
+            return True, name, (
+                "this keyring backend stores passwords unencrypted in a file"
+            )
+        return True, name, None
+
     def save_password(
         self,
         host: str,
@@ -56,9 +104,15 @@ class SimpleOMEROConnection:
         Returns:
             True if saved successfully, False otherwise
         """
-        if not KEYRING_AVAILABLE:
-            print("Warning: Keyring not available - password not saved")
+        usable, backend_name, warning = self.keyring_backend()
+        if not usable:
+            print(
+                f"Password not saved: no usable keyring backend ({backend_name}). "
+                "Enter the password each time, or configure a system keyring."
+            )
             return False
+        if warning:
+            print(f"Warning: {warning} ({backend_name})")
 
         try:
             key = f"{host}:{username}"
@@ -69,15 +123,24 @@ class SimpleOMEROConnection:
                 expires_at = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
                 password_data["expires_at"] = expires_at.isoformat()
 
-            # Store in keychain
-            keyring.set_password(self.SERVICE_NAME, key, json.dumps(password_data))
+            # Store in keychain, then read it back: some backends accept the
+            # write and silently keep nothing.
+            payload = json.dumps(password_data)
+            keyring.set_password(self.SERVICE_NAME, key, payload)
+            if keyring.get_password(self.SERVICE_NAME, key) != payload:
+                print(
+                    f"Password not saved: the keyring backend ({backend_name}) "
+                    "did not keep it"
+                )
+                return False
 
             if expire_hours is not None:
                 print(
-                    f"Password saved to keychain (expires in {expire_hours} hours)"
+                    f"Password saved to keychain via {backend_name} "
+                    f"(expires in {expire_hours} hours)"
                 )
             else:
-                print("Password saved to keychain (never expires)")
+                print(f"Password saved to keychain via {backend_name} (never expires)")
             return True
 
         except Exception as e:
@@ -229,9 +292,9 @@ class SimpleOMEROConnection:
                 return {}
 
             recent = connections[0]
-            print(
-                f"Loaded configuration from connection history: {recent['display_name']}"
-            )
+            # Only the source is printed: notebook outputs get committed, and
+            # user@host would end up in the repository.
+            print("Loaded configuration from connection history")
             config: Dict[str, Any] = {
                 "host": recent["host"],
                 "username": recent["username"],
@@ -307,16 +370,24 @@ class SimpleOMEROConnection:
         """Create OMERO connection.
 
         Args:
-            host: OMERO server host
+            host: OMERO server host, or a websocket URL (``wss://server/omero-ws``)
             username: OMERO username
             password: OMERO password
             group: OMERO group (optional)
-            secure: Use secure connection (default True)
+            secure: Keep data transfer encrypted after login (default True).
+                ``False`` switches to plain TCP after an encrypted login, which
+                cannot work over a websocket, so it is ignored for URL hosts.
             verbose: Print connection messages (default True)
+            port: OMERO server port. Ignored for URL hosts, which carry their own.
 
         Returns:
             BlitzGateway connection object if successful, None otherwise
         """
+        if is_url_host(host):
+            secure = True
+            port = None
+
+        conn = None
         try:
             if verbose:
                 host_display = f"{host}:{port}" if port else host
@@ -349,11 +420,23 @@ class SimpleOMEROConnection:
                 return conn
             else:
                 print("Connection to OMERO Server Failed")
+                self._close_quietly(conn)
                 return None
 
         except Exception as e:
             print(f"Error connecting to OMERO: {e}")
+            self._close_quietly(conn)
             return None
+
+    @staticmethod
+    def _close_quietly(conn: Optional[Any]) -> None:
+        """Close a gateway after a failed connect, so no session is left open."""
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     def test_connection(
         self,
@@ -570,8 +653,14 @@ class SimpleOMEROConnection:
         try:
             connections_file = self._get_connections_file()
 
+            # The keychain entry goes regardless of the history: a password
+            # can be stored for a connection that was never saved to history.
+            password_deleted = self._delete_password(host, username)
+
             if not connections_file.exists():
-                return False
+                if password_deleted:
+                    print("Password deleted from keychain")
+                return password_deleted
 
             # Load existing connections
             with open(connections_file, "r") as f:
@@ -591,14 +680,13 @@ class SimpleOMEROConnection:
                 with open(connections_file, "w") as f:
                     json.dump(connections, f, indent=2)
 
-                # Also delete password from keychain
-                self._delete_password(host, username)
-
-                print(f"Connection deleted from history and keychain")
+                print("Connection deleted from history and keychain")
                 return True
-            else:
-                print(f"Connection not found in history")
-                return False
+            if password_deleted:
+                print("Connection not in history; password deleted from keychain")
+                return True
+            print("Connection not found in history or keychain")
+            return False
 
         except Exception as e:
             print(f"Error deleting connection: {e}")

@@ -811,3 +811,302 @@ class TestPrepareDataframeForOmero:
 
         assert out["roi_id"].tolist() == [0]
         assert out["label_id"].tolist() == [0]
+
+
+@pytest.mark.unit
+class TestGetContainerInfoChannels:
+    """Channel names reported by get_container_info."""
+
+    @staticmethod
+    def _conn(labels_by_image):
+        conn = Mock()
+        conn.isConnected.return_value = True
+        container = Mock()
+        container.getName.return_value = "cells"
+
+        def get_object(kind, obj_id):
+            if kind != "Image":
+                return container
+            image = Mock()
+            image.getName.return_value = f"img{obj_id}"
+            image.getChannelLabels.return_value = labels_by_image[obj_id]
+            return image
+
+        conn.getObject.side_effect = get_object
+        return conn
+
+    @pytest.mark.parametrize("other, vary", [(["DAPI", "GFP"], False), (["DAPI", "RFP"], True)])
+    def test_channel_names_and_variation(self, other, vary):
+        from omero_annotate_ai.omero.omero_utils import get_container_info
+
+        labels = {1: ["DAPI", "GFP"], 2: ["DAPI", "GFP"], 3: other}
+        with patch("omero_annotate_ai.omero.omero_utils.ezomero.get_image_ids",
+                   return_value=[1, 2, 3]):
+            info = get_container_info(self._conn(labels), "dataset", 5)
+
+        assert info["channel_names"] == ["DAPI", "GFP"]
+        assert info["channel_names_vary"] is vary
+
+    def test_spread_sample_includes_last(self):
+        from omero_annotate_ai.omero.omero_utils import _spread_sample
+
+        assert _spread_sample(list(range(100)), 4) == [24, 49, 74, 99]
+        assert _spread_sample([1, 2], 4) == [1, 2]
+
+
+@pytest.mark.unit
+class TestFindAnnotationConfigForTable:
+    """Matching a saved config YAML to a tracking table."""
+
+    def _setup(self, tmp_path, entries):
+        """entries: [(annotation_id, file_name, config_name)]"""
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        paths, listing = {}, []
+        for ann_id, file_name, config_name in entries:
+            config = create_default_config()
+            config.name = config_name
+            config.spatial_coverage.channels = [ann_id % 5]
+            path = tmp_path / f"{ann_id}_{file_name}"
+            config.save_yaml(path)
+            paths[ann_id] = str(path)
+            listing.append({"id": ann_id, "file_name": file_name})
+        return paths, listing
+
+    def _find(self, tmp_path, entries, table_name, table_id=None, saved_ids=None):
+        from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
+
+        paths, listing = self._setup(tmp_path, entries)
+        for ann_id, saved_id in (saved_ids or {}).items():
+            config = AnnotationConfig.from_yaml(paths[ann_id])
+            config.omero.table_id = saved_id
+            config.save_yaml(paths[ann_id])
+        with patch("omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
+                   return_value=listing), \
+             patch("omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
+                   side_effect=lambda conn, ann_id, folder: paths[ann_id]):
+            return find_annotation_config_for_table(Mock(), "plate", 803, table_name,
+                                                    table_id=table_id)
+
+    def test_prefers_config_of_the_same_table_id(self, tmp_path):
+        """Same-name tables: the config saved by another table is skipped."""
+        config = self._find(tmp_path, [
+            (51, "annotation_config_run.yaml", "run"),
+            (52, "annotation_config_run.yaml", "run"),
+        ], "run", table_id=100, saved_ids={51: 100, 52: 200})
+        assert config.spatial_coverage.channels == [51 % 5]
+
+    def test_skips_configs_of_other_tables(self, tmp_path):
+        config = self._find(tmp_path, [(61, "annotation_config_run.yaml", "run")],
+                            "run", table_id=100, saved_ids={61: 200})
+        assert config is None
+
+    def test_matches_by_config_name(self, tmp_path):
+        config = self._find(tmp_path, [
+            (11, "annotation_config_other.yaml", "other"),
+            (12, "annotation_config_run.yaml", "run"),
+            (13, "annotation_config_third.yaml", "third"),
+        ], "run")
+        assert config.name == "run"
+        assert config.spatial_coverage.channels == [12 % 5]
+
+    def test_picks_newest_matching_config(self, tmp_path):
+        config = self._find(tmp_path, [
+            (21, "annotation_config_run.yaml", "run"),
+            (24, "annotation_config_run.yaml", "run"),
+            (22, "annotation_config_run.yaml", "run"),
+        ], "run")
+        assert config.spatial_coverage.channels == [24 % 5]
+
+    def test_matches_on_name_even_with_another_file_name(self, tmp_path):
+        config = self._find(tmp_path, [(31, "renamed.yaml", "run")], "run")
+        assert config is not None and config.name == "run"
+
+    def test_none_when_nothing_matches(self, tmp_path):
+        assert self._find(tmp_path, [(41, "annotation_config_x.yaml", "x")], "run") is None
+
+
+@pytest.mark.unit
+class TestInferSettingsFromTable:
+    """Settings recovered from tracking-table rows when no config was saved."""
+
+    def test_patch_table(self):
+        from omero_annotate_ai.omero.omero_functions import infer_settings_from_table
+
+        rows = []
+        for img, category in [(1, "training"), (2, "training"), (3, "validation")]:
+            for patch in range(2):
+                rows.append({"image_uri": f"omero:image:{img}", "category": category,
+                             "channel": 1, "is_volumetric": False, "is_patch": True,
+                             "patch_width": 256, "patch_height": 128,
+                             "timepoint": 0, "z_slice": 0, "annotation_id": f"{img}_{patch}"})
+        settings = infer_settings_from_table(pd.DataFrame(rows))
+
+        assert settings == {
+            "channel": 1, "three_d": False, "use_patches": True,
+            "patch_size": [256, 128], "patches_per_image": 2,
+            "timepoint_mode": "specific", "timepoints": [0],
+            "z_slice_mode": "specific", "z_slices": [0],
+            "train_n": 2, "validate_n": 1, "test_n": 0,
+        }
+
+    def test_string_booleans_and_empty_table(self):
+        from omero_annotate_ai.omero.omero_functions import infer_settings_from_table
+
+        df = pd.DataFrame([{"image_uri": "omero:image:1", "category": "test", "channel": 0,
+                            "is_volumetric": "True", "is_patch": "False"}])
+        settings = infer_settings_from_table(df)
+        assert settings["three_d"] is True and settings["use_patches"] is False
+        assert "patch_size" not in settings and settings["test_n"] == 1
+        assert infer_settings_from_table(pd.DataFrame()) == {}
+
+
+@pytest.mark.unit
+class TestDeleteTrainingSet:
+    """delete_training_set removes a table and everything tied to it by ID."""
+
+    TABLE_ID = 100
+
+    def _conn(self, missing=()):
+        conn = Mock()
+
+        def get_object(omero_type, object_id):
+            if (omero_type, object_id) in missing:
+                return None
+            obj = Mock()
+            if omero_type == "FileAnnotation" and object_id == self.TABLE_ID:
+                obj.getFile.return_value.getName.return_value = "run"
+            return obj
+
+        conn.getObject.side_effect = get_object
+        return conn
+
+    @staticmethod
+    def _rows(input_column="annotation_input_id"):
+        return pd.DataFrame({
+            "annotation_id": ["a", "b", "c"],
+            "roi_id": [11, 12, np.nan],
+            "label_id": [21, 22, -1],
+            input_column: [31, 0, None],
+        })
+
+    def _run(self, tmp_path, conn, rows, configs=(), maps=None, tables=None,
+             dry_run=True):
+        """configs: (ann_id, name, table_id); maps: {ns: {map_id: kv}}."""
+        from omero_annotate_ai.omero.omero_functions import (
+            CONFIG_NS, delete_training_set,
+        )
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        paths, listing = {}, []
+        for ann_id, name, saved_table_id in configs:
+            config = create_default_config()
+            config.name = name
+            config.omero.table_id = saved_table_id
+            path = tmp_path / f"{ann_id}.yaml"
+            config.save_yaml(path)
+            paths[ann_id] = str(path)
+            listing.append({"id": ann_id, "file_name": path.name})
+        maps = maps or {}
+        tables = tables if tables is not None else [{"id": self.TABLE_ID, "name": "run"}]
+
+        def list_ns(conn_, obj_type, obj_id, ns):
+            return listing if ns == CONFIG_NS else []
+
+        mod = "omero_annotate_ai.omero.omero_functions"
+        with patch(f"{mod}.read_tracking_table", return_value=rows), \
+             patch(f"{mod}.list_annotations_by_namespace", side_effect=list_ns), \
+             patch(f"{mod}.list_annotation_tables", return_value=tables), \
+             patch(f"{mod}.ezomero.get_file_annotation",
+                   side_effect=lambda c, ann_id, folder: paths[ann_id]), \
+             patch(f"{mod}.ezomero.get_map_annotation_ids",
+                   side_effect=lambda c, t, i, ns=None: list(maps.get(ns, {}))), \
+             patch(f"{mod}.ezomero.get_map_annotation",
+                   side_effect=lambda c, map_id: {k: v for d in maps.values()
+                                                   for mid, v in d.items()
+                                                   if mid == map_id for k, v in v.items()}), \
+             patch("builtins.print"):
+            return delete_training_set(conn, self.TABLE_ID, "plate", 803, dry_run=dry_run)
+
+    def test_dry_run_deletes_nothing(self, tmp_path):
+        conn = self._conn()
+        report = self._run(tmp_path, conn, self._rows())
+
+        conn.deleteObjects.assert_not_called()
+        assert report["deleted"] is False
+        assert report["rois"] == [11, 12]
+        assert report["labels"] == [21, 22]
+        assert report["annotation_inputs"] == [31]
+        assert report["table"] == [self.TABLE_ID]
+
+    def test_real_run_deletes_children_then_table(self, tmp_path):
+        from omero_annotate_ai.omero.omero_functions import WORKFLOW_STATUS_NS
+
+        conn = self._conn()
+        report = self._run(
+            tmp_path, conn, self._rows(),
+            configs=[(41, "run", self.TABLE_ID)],
+            maps={WORKFLOW_STATUS_NS: {51: {"table_id": str(self.TABLE_ID)},
+                                       52: {"table_id": "999"}}},
+            dry_run=False,
+        )
+
+        calls = conn.deleteObjects.call_args_list
+        assert calls[0].args == ("Roi", [11, 12])
+        assert calls[1].args == ("Annotation", [21, 22, 31, 41, 51])
+        assert calls[-1].args == ("Annotation", [self.TABLE_ID])
+        assert report["deleted"] is True
+        assert report["map_annotations"] == [51]
+
+    def test_other_tables_configs_untouched(self, tmp_path):
+        conn = self._conn()
+        report = self._run(
+            tmp_path, conn, self._rows(),
+            configs=[(41, "run", self.TABLE_ID), (42, "run", 200), (43, "other", None)],
+        )
+        assert report["configs"] == [41]
+
+    def test_unlinked_config_only_when_name_is_unique(self, tmp_path):
+        conn = self._conn()
+        unique = self._run(tmp_path, conn, self._rows(), configs=[(44, "run", None)])
+        assert unique["configs"] == [44]
+
+        shared = self._run(
+            tmp_path, conn, self._rows(), configs=[(44, "run", None)],
+            tables=[{"id": self.TABLE_ID, "name": "run"}, {"id": 200, "name": "run"}],
+        )
+        assert shared["configs"] == []
+
+    def test_missing_objects_are_reported_not_deleted(self, tmp_path):
+        conn = self._conn(missing={("Roi", 12), ("FileAnnotation", 22)})
+        report = self._run(tmp_path, conn, self._rows(), dry_run=False)
+
+        assert report["rois"] == [11]
+        assert report["missing"]["rois"] == [12]
+        assert report["missing"]["labels"] == [22]
+        assert conn.deleteObjects.call_args_list[0].args == ("Roi", [11])
+
+    def test_legacy_label_input_id_column(self, tmp_path):
+        conn = self._conn()
+        report = self._run(tmp_path, conn, self._rows("label_input_id"))
+        assert report["annotation_inputs"] == [31]
+
+    def test_missing_table_deletes_nothing(self, tmp_path):
+        conn = self._conn(missing={("FileAnnotation", self.TABLE_ID)})
+        report = self._run(tmp_path, conn, self._rows(), dry_run=False)
+        conn.deleteObjects.assert_not_called()
+        assert report["missing"]["table"] == [self.TABLE_ID]
+
+    def test_finds_containers_from_table_links(self):
+        from omero_annotate_ai.omero.omero_functions import _table_containers
+
+        conn = Mock()
+
+        def links(container_type, ann_ids):
+            if container_type == "Plate":
+                return [Mock(**{"getParent.return_value.getId.return_value": pid})
+                        for pid in (803, 804)]
+            return []
+
+        conn.getAnnotationLinks.side_effect = links
+        assert _table_containers(conn, self.TABLE_ID) == [("plate", 803), ("plate", 804)]

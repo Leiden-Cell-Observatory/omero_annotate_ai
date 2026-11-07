@@ -1,5 +1,6 @@
 """Sequential workflow widget for OMERO annotation setup."""
 
+import html
 import tempfile
 from pathlib import Path
 
@@ -9,9 +10,25 @@ from IPython.display import clear_output, display
 from ..core.annotation_config import AnnotationConfig, create_default_config
 from ..omero.omero_utils import get_container_info
 from ..omero.omero_functions import (
+    find_annotation_config_for_table,
     generate_unique_table_name,
+    infer_settings_from_table,
     list_annotation_tables,
+    read_tracking_table,
 )
+
+# Settings that must match the rows already in a tracking table: changing them
+# on resume makes validate_annotations_against_config fail (channel, 3D, patch)
+# or gives new rows a different shape than the old ones (patch size, z-range).
+# Timepoints, z-slices and patches per image decide which planes new rows use;
+# "Annotate all images" changes how the table grows.
+RESUME_LOCKED_KEYS = ("channel", "three_d", "z_range_start", "z_range_end",
+                      "use_patches", "patch_size", "patches_per_image",
+                      "timepoint_mode", "timepoints", "z_slice_mode", "z_slices",
+                      "segment_all")
+# Planes the rows show are only a fallback: a saved config's own timepoint and
+# z-slice settings (e.g. "random") describe the run better than the samples.
+ROW_FALLBACK_KEYS = ("timepoint_mode", "timepoints", "z_slice_mode", "z_slices")
 
 
 class WorkflowWidget:
@@ -31,6 +48,7 @@ class WorkflowWidget:
         ]
         self.annotation_tables = []
         self.selected_table_id = None
+        self._locked_settings = {}
         self.working_directory = None
         self._create_widgets()
 
@@ -300,7 +318,11 @@ class WorkflowWidget:
 
         # Table selection
         self.table_selection = widgets.RadioButtons(
-            options=[], description="Select:", disabled=True
+            options=[],
+            description="Select:",
+            disabled=True,
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="auto", max_width="100%"),
         )
 
         # Action buttons
@@ -573,9 +595,12 @@ class WorkflowWidget:
             names="value",
         )
 
+        self.resume_note = widgets.HTML(value="")
+
         return widgets.VBox(
             [
                 widgets.HTML("<h5>🎯 Annotation Settings</h5>"),
+                self.resume_note,
                 training_help,  # New: Add help text
                 segment_all,
                 self.train_n_slider,
@@ -642,7 +667,7 @@ class WorkflowWidget:
             style={"description_width": "initial"},
         )
 
-        # Resume from table (will be auto-set based on table selection)
+        # Display only: set by Continue Existing / Name New Table in step 3
         resume_from_table = widgets.Checkbox(
             value=self.config.workflow.resume_from_table,
             description="Resume from existing table",
@@ -924,7 +949,9 @@ class WorkflowWidget:
                     # Update selection options
                     options = []
                     for table in self.annotation_tables:
-                        options.append((table.get("name", "Unknown"), table.get("id")))
+                        # Labels must be unique: RadioButtons matches options by label,
+                        # so two tables with the same name would both show as selected.
+                        options.append((f"{table.get('name', 'Unknown')} (ID: {table.get('id')})", table.get("id")))
 
                     self.tables_widgets["selection"].options = options
                     self.tables_widgets["selection"].disabled = False
@@ -949,8 +976,241 @@ class WorkflowWidget:
                     self.config.name = table.get("name", "unknown")
                     break
 
-            self.config.workflow.resume_from_table = True
+            self._set_resume_from_table(True)
+            self._load_resume_settings()
             self._update_progress()
+
+    def _set_resume_from_table(self, resume: bool):
+        """Resume is decided by the table choice; keep config and checkbox in step.
+
+        The selected table's ID goes into the config, so the pipeline resumes
+        that exact table even when several tables share its name.
+        """
+        self.config.workflow.resume_from_table = resume
+        self.config.omero.table_id = self.selected_table_id if resume else None
+        if not resume:
+            self._unlock_resume_fields()
+        if hasattr(self, "workflow_widgets"):
+            self.workflow_widgets["resume_from_table"].value = resume
+
+    def _load_resume_settings(self):
+        """Fill the Configure tab from the selected table and lock what must match.
+
+        Prefers the config YAML the earlier run attached to the container; falls
+        back to what the table rows show when no saved config matches.
+        """
+        container_type = self.container_widgets["type"].value
+        container_id = self.container_widgets["container"].value
+        try:
+            saved = find_annotation_config_for_table(
+                self.connection, container_type, container_id, self.config.name,
+                table_id=self.selected_table_id,
+            )
+        except Exception:
+            saved = None
+        try:
+            rows = infer_settings_from_table(
+                read_tracking_table(self.connection, self.selected_table_id)
+            )
+        except Exception as e:
+            rows, row_error = {}, e
+        else:
+            row_error = None
+        if saved is None and not rows:
+            self.resume_note.value = (
+                f"<small>⚠️ Could not load settings from the table: {row_error}</small>"
+            )
+            return
+
+        settings, overridden = self._merge_resume_settings(
+            self._settings_from_config(saved) if saved is not None else {}, rows
+        )
+        source = "the saved config" if saved is not None else "the table rows"
+        if overridden:
+            source += (" (it did not match the table, so the table rows were used for: "
+                       + ", ".join(overridden) + ")")
+
+        self._apply_settings_to_widgets(settings)
+        self._lock_resume_fields(settings)
+        # Write the loaded settings into the config now, so a run started
+        # without clicking Update Configuration still matches the table.
+        self._update_annotation_settings()
+        self._apply_locked_settings_to_config()
+        self._update_technical_settings()
+        self.resume_note.value = (
+            f"<small><i>Resuming: settings loaded from {source}. Channel, timepoint, "
+            "z-slice, 3D and patch settings are locked to match the existing rows, and "
+            "read-only mode is off so the table on OMERO stays up to date. Raise the "
+            "image counts to add new images to this table.</i></small>"
+        )
+
+    @staticmethod
+    def _merge_resume_settings(saved: dict, rows: dict):
+        """The table rows decide the locked settings and the counts.
+
+        A saved config may belong to another run of the same name, so it only
+        fills in what the rows cannot show (model, batch size, ...). Returns
+        the merged settings and the keys where the saved config disagreed.
+        """
+        merged = dict(saved)
+        overridden = []
+        for key, value in rows.items():
+            if key in ROW_FALLBACK_KEYS and key in saved:
+                continue
+            if key in saved and saved[key] != value and key in RESUME_LOCKED_KEYS:
+                overridden.append(key)
+            merged[key] = value
+        if "channel" in overridden:
+            # The saved channel list describes the wrong channel.
+            merged.pop("channels", None)
+            merged.pop("label_channel", None)
+        return merged, overridden
+
+    @staticmethod
+    def _settings_from_config(config: AnnotationConfig) -> dict:
+        """Widget-level settings from a saved AnnotationConfig."""
+        sc, training = config.spatial_coverage, config.training
+        return {
+            "channel": sc.get_label_channel(),
+            "channels": list(sc.channels),
+            "label_channel": sc.label_channel,
+            "three_d": sc.three_d,
+            "z_range_start": sc.z_range_start or 0,
+            "z_range_end": sc.z_range_end or 0,
+            "use_patches": sc.use_patches,
+            "patch_size": list(sc.patch_size),
+            "patches_per_image": sc.patches_per_image,
+            "timepoint_mode": sc.timepoint_mode,
+            "timepoints": list(sc.timepoints),
+            "z_slice_mode": sc.z_slice_mode,
+            "z_slices": list(sc.z_slices),
+            "segment_all": training.segment_all,
+            "train_n": training.train_n,
+            "validate_n": training.validate_n,
+            "test_n": training.test_n,
+            "batch_size": config.workflow.batch_size,
+            "model_type": config.ai_model.pretrained_from,
+        }
+
+    def _annotation_widget_map(self) -> dict:
+        """Configure-tab widgets by setting name."""
+        names = {
+            "Annotate all images": "segment_all", "Training images": "train_n",
+            "Validation images": "validate_n", "Test images": "test_n",
+            "Channel": "channel", "Timepoint list": "timepoints", "Timepoints": "timepoint_mode",
+            "Z-slice list": "z_slices", "Z-slices": "z_slice_mode", "3D processing": "three_d",
+            "Z-range start": "z_range_start", "Z-range end": "z_range_end",
+            "Use patches": "use_patches", "Patches per image": "patches_per_image",
+            "Patch size": "patch_size",
+        }
+        found = {}
+        for child in self.annotation_widgets.children:
+            description = getattr(child, "description", "") or ""
+            for prefix, key in names.items():
+                if description.startswith(prefix):
+                    found.setdefault(key, child)
+                    break
+        for child in self.technical_widgets.children:
+            description = getattr(child, "description", "") or ""
+            if description.startswith("Batch size"):
+                found["batch_size"] = child
+            elif description.startswith("SAM Model"):
+                found["model_type"] = child
+        return found
+
+    def _apply_settings_to_widgets(self, settings: dict):
+        """Set Configure-tab widgets from a settings dict (unknown keys are skipped)."""
+        widgets_by_key = self._annotation_widget_map()
+        for key, value in settings.items():
+            widget = widgets_by_key.get(key)
+            if widget is None or value is None:
+                continue
+            if key in ("patch_size", "timepoints", "z_slices"):
+                value = ", ".join(str(v) for v in value)
+            if key == "model_type" and value not in [v for _, v in widget.options]:
+                continue
+            if hasattr(widget, "max") and isinstance(value, int) and value > widget.max:
+                widget.max = value
+            widget.value = value
+
+    def _lock_resume_fields(self, settings: dict):
+        """Disable the fields that must match the table, and remember their values."""
+        self._locked_settings = {k: settings[k] for k in RESUME_LOCKED_KEYS if k in settings}
+        for key in ("channels", "label_channel"):
+            if key in settings:
+                self._locked_settings[key] = settings[key]
+        widgets_by_key = self._annotation_widget_map()
+        for key in RESUME_LOCKED_KEYS:
+            if key in settings and key in widgets_by_key:
+                widgets_by_key[key].disabled = True
+        # A resumed table lives on OMERO; read-only runs would not update it,
+        # so the next resume would miss their rows.
+        self._locked_settings["read_only_mode"] = False
+        read_only = getattr(self, "workflow_widgets", {}).get("read_only_mode")
+        if read_only is not None:
+            read_only.value = False
+            read_only.disabled = True
+
+    def _unlock_resume_fields(self):
+        """Re-enable locked fields, keeping the usual dependent disabled states."""
+        if not getattr(self, "_locked_settings", None):
+            return
+        self._locked_settings = {}
+        widgets_by_key = self._annotation_widget_map()
+        three_d = widgets_by_key.get("three_d")
+        use_patches = widgets_by_key.get("use_patches")
+        modes = {"timepoints": widgets_by_key.get("timepoint_mode"),
+                 "z_slices": widgets_by_key.get("z_slice_mode")}
+        for key in RESUME_LOCKED_KEYS:
+            widget = widgets_by_key.get(key)
+            if widget is None:
+                continue
+            if key in ("z_range_start", "z_range_end"):
+                widget.disabled = not (three_d.value if three_d else False)
+            elif key in ("patch_size", "patches_per_image"):
+                widget.disabled = not (use_patches.value if use_patches else False)
+            elif key in modes:
+                widget.disabled = not (modes[key] and modes[key].value == "specific")
+            else:
+                widget.disabled = False
+        read_only = getattr(self, "workflow_widgets", {}).get("read_only_mode")
+        if read_only is not None:
+            read_only.disabled = False
+        if hasattr(self, "resume_note"):
+            self.resume_note.value = ""
+
+    def _apply_locked_settings_to_config(self):
+        """Locked values come from the table's config, never from the widgets."""
+        locked = getattr(self, "_locked_settings", None) or {}
+        sc = self.config.spatial_coverage
+        if "channels" in locked:
+            sc.channels = list(locked["channels"])
+            sc.label_channel = locked.get("label_channel")
+        elif "channel" in locked:
+            sc.channels[0] = locked["channel"]
+            sc.label_channel = None
+        if "three_d" in locked:
+            sc.three_d = locked["three_d"]
+        if "z_range_start" in locked:
+            sc.z_range_start = locked["z_range_start"]
+        if "z_range_end" in locked:
+            sc.z_range_end = locked["z_range_end"]
+        if "use_patches" in locked:
+            sc.use_patches = locked["use_patches"]
+        if "patch_size" in locked:
+            sc.patch_size = list(locked["patch_size"])
+        if "patches_per_image" in locked:
+            sc.patches_per_image = locked["patches_per_image"]
+        for key in ("timepoint_mode", "z_slice_mode"):
+            if key in locked:
+                setattr(sc, key, locked[key])
+        for key in ("timepoints", "z_slices"):
+            if key in locked:
+                setattr(sc, key, list(locked[key]))
+        if "segment_all" in locked:
+            self.config.training.segment_all = locked["segment_all"]
+        if "read_only_mode" in locked:
+            self.config.workflow.read_only_mode = locked["read_only_mode"]
 
     def _on_new_table(self, button):
         """Pick a name for a new table. The table itself is created at pipeline run."""
@@ -972,7 +1232,8 @@ class WorkflowWidget:
                 )
             self.new_table_name.value = unique_name
             self.config.name = unique_name
-            self.config.workflow.resume_from_table = False
+            self.selected_table_id = None
+            self._set_resume_from_table(False)
 
             with self.status_output:
                 clear_output()
@@ -1048,12 +1309,12 @@ class WorkflowWidget:
                     for table in self.annotation_tables:
                         if table.get("id") == self.selected_table_id:
                             self.config.name = table.get("name", "unknown")
-                            self.config.workflow.resume_from_table = True
+                            self._set_resume_from_table(True)
                             break
                 elif self.new_table_name.value.strip():
                     # Creating new table
                     self.config.name = self.new_table_name.value.strip()
-                    self.config.workflow.resume_from_table = False
+                    self._set_resume_from_table(False)
 
                 self._render_omero_status(
                     container_type, container_id,
@@ -1065,6 +1326,7 @@ class WorkflowWidget:
 
             # Update annotation settings from widgets
             self._update_annotation_settings()
+            self._apply_locked_settings_to_config()
 
             # Update technical settings from widgets
             self._update_technical_settings()
@@ -1223,18 +1485,14 @@ class WorkflowWidget:
             if hasattr(child, "description") and hasattr(child, "value"):
                 if "Read-only mode" in child.description:
                     workflow_widgets["read_only_mode"] = child
-                elif "Resume from existing table" in child.description:
-                    workflow_widgets["resume_from_table"] = child
 
         # Update configuration from widgets
         if "read_only_mode" in workflow_widgets:
             self.config.workflow.read_only_mode = workflow_widgets[
                 "read_only_mode"
             ].value
-        if "resume_from_table" in workflow_widgets:
-            self.config.workflow.resume_from_table = workflow_widgets[
-                "resume_from_table"
-            ].value
+        # resume_from_table is not read back: the checkbox only mirrors the
+        # table choice (Continue Existing / Name New Table) made in step 3.
 
     def _update_config_preview(self):
         """Update configuration preview."""
@@ -1279,7 +1537,21 @@ class WorkflowWidget:
                     f"Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
                 )
             lines.append(summary)
+            channels = self._format_channel_names(info)
+            if channels:
+                lines.append(f"<b>Channels:</b> {channels}")
         self.omero_status.value = "<h5>📡 OMERO Settings</h5>" + "".join(f"<p>{line}</p>" for line in lines)
+
+    @staticmethod
+    def _format_channel_names(info: dict) -> str:
+        """Channel index and name of the sample image, e.g. '0: DAPI, 1: GFP'."""
+        names = info.get("channel_names")
+        if not names:
+            return ""
+        text = ", ".join(f"{i}: {html.escape(name)}" for i, name in enumerate(names))
+        if info.get("channel_names_vary"):
+            text += " <i>(from the first image; other images name channels differently)</i>"
+        return text
 
     def _apply_container_info(self, info: dict):
         """Apply container info to UI and config-dependent widgets.
@@ -1327,6 +1599,9 @@ class WorkflowWidget:
             summary_lines.append(
                 f"<b>Sample image dims:</b> X={dims.get('X')}, Y={dims.get('Y')}, Z={dims.get('Z')}, C={dims.get('C')}, T={dims.get('T')}"
             )
+        channels = self._format_channel_names(info)
+        if channels:
+            summary_lines.append(f"<b>Channels:</b> {channels}")
         if px:
             parts = []
             for axis in ("X", "Y", "Z"):
@@ -1386,7 +1661,8 @@ class WorkflowWidget:
         display(self.main_widget)
 
     def get_config(self) -> AnnotationConfig:
-        """Get current configuration."""
+        """Get current configuration; locked resume settings always win."""
+        self._apply_locked_settings_to_config()
         return self.config
 
 

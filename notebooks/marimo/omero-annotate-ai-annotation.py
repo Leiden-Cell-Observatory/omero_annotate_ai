@@ -43,7 +43,7 @@ def _(mo):
     omero_username = mo.ui.text(value="", label="Username", placeholder="your_username")
     omero_password = mo.ui.text(value="", label="Password", placeholder="password", kind="password")
     omero_group = mo.ui.text(value="", label="Group (optional)", placeholder="Leave empty for default")
-    omero_secure = mo.ui.checkbox(value=True, label="Secure connection")
+    omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to OMERO")
 
     mo.vstack([
