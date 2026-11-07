@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +125,7 @@ class SimpleOMEROConnection:
             # Create password data with optional expiration
             password_data = {"password": password}
             if expire_hours is not None:
-                expires_at = datetime.now(timezone.utc) + timedelta(hours=expire_hours)
+                expires_at = datetime.now(UTC) + timedelta(hours=expire_hours)
                 password_data["expires_at"] = expires_at.isoformat()
 
             # Store in keychain, then read it back: some backends accept the
@@ -182,7 +182,7 @@ class SimpleOMEROConnection:
             # Check expiration
             if expires_at:
                 expiry_time = datetime.fromisoformat(expires_at)
-                if datetime.now(timezone.utc) > expiry_time:
+                if datetime.now(UTC) > expiry_time:
                     # Password expired, remove it
                     self._delete_password(host, username)
                     logger.info("Stored password has expired and was removed")
@@ -585,8 +585,8 @@ class SimpleOMEROConnection:
                 "username": username,
                 "group": group,
                 "port": port,
-                "last_used": datetime.now(timezone.utc).isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "last_used": datetime.now(UTC).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             }
 
             # Check if connection already exists

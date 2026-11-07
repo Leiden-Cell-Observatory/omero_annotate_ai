@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ezomero
@@ -819,7 +819,7 @@ def generate_unique_table_name(
 
     # Create base name if not provided
     if not base_name:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         base_name = f"{container_name}_{timestamp}"
 
     # Check if name already exists and make it unique

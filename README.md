@@ -58,12 +58,15 @@ flowchart LR
 ```bash
 # Recommended: pixi
 pixi init myproject && cd myproject
-pixi add micro_sam
-pixi add --pypi omero-annotate-ai
+pixi add micro_sam jupyterlab
+pixi add --pypi "omero-annotate-ai[notebooks]"
 
 # Or: conda + pip
-conda install -c conda-forge micro_sam
-pip install omero-annotate-ai
+conda install -c conda-forge micro_sam jupyterlab
+pip install "omero-annotate-ai[notebooks]"
+
+# Or: pip only (micro-SAM and napari from PyPI)
+pip install "omero-annotate-ai[microsam,notebooks]" jupyterlab
 ```
 
 See the [installation guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation/) for details and troubleshooting.
@@ -125,8 +128,9 @@ Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_a
 ```bash
 git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
 cd omero_annotate_ai
-pixi install
-pixi run -e dev pytest tests/
+pixi install                         # default env: everything to run the notebooks
+pixi run -e dev install-hooks        # once per clone: ruff + notebook-output hooks
+pixi run -e dev pytest tests/        # dev env adds test, lint and type-check tools
 ```
 
 Issues and pull requests are welcome on [GitHub](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues).
