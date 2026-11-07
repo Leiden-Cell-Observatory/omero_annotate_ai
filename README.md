@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+    <img src="docs/images/logo.svg" alt="OMERO Annotate.AI logo" width="140">
+  </picture>
+</p>
+
 # OMERO Annotate.AI
 
 [![PyPI version](https://img.shields.io/pypi/v/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
