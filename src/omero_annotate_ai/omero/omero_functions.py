@@ -794,6 +794,186 @@ def find_annotation_config_for_table(
     return fallback
 
 
+# Map annotations a run attaches to its container(s).
+WORKFLOW_STATUS_NS = "openmicroscopy.org/omero/annotate/workflow_status"
+CONFIG_MAP_NS = "openmicroscopy.org/omero/annotation"
+
+_CONTAINER_TYPES = ("Dataset", "Plate", "Project", "Screen")
+
+
+def _valid_omero_ids(values) -> List[int]:
+    """Positive integer IDs from a column, skipping NaN/None/0/-1, deduplicated."""
+    ids = []
+    for value in values:
+        try:
+            if value is None or pd.isna(value):
+                continue
+            number = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in ids:
+            ids.append(number)
+    return ids
+
+
+def _table_containers(conn, table_id: int) -> List[Tuple[str, int]]:
+    """Every container the table FileAnnotation is linked to."""
+    containers = []
+    for container_type in _CONTAINER_TYPES:
+        try:
+            links = conn.getAnnotationLinks(container_type, ann_ids=[table_id])
+        except Exception:
+            continue
+        for link in links or []:
+            try:
+                key = (container_type.lower(), int(link.getParent().getId()))
+            except Exception:
+                continue
+            if key not in containers:
+                containers.append(key)
+    return containers
+
+
+def delete_training_set(
+    conn,
+    table_id: int,
+    container_type: Optional[str] = None,
+    container_id: Optional[int] = None,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Delete a tracking table and everything a run created for it.
+
+    Everything is found by ID, never by name alone, so another training set's
+    objects are never touched:
+
+    - ``rois``: the ``roi_id`` of each table row.
+    - ``labels``: the label FileAnnotations (``label_id``) on the images.
+    - ``annotation_inputs``: the annotation-channel FileAnnotations
+      (``annotation_input_id``, or ``label_input_id`` in older tables).
+    - ``configs``: config YAMLs (CONFIG_NS) on the table's container(s) that
+      record this ``table_id``. A config without a table ID is included only
+      when it carries the table's name and no other table on that container
+      has the same name.
+    - ``map_annotations``: workflow-status and flattened-config map
+      annotations on the container(s), matched the same way.
+    - ``table``: the tracking table FileAnnotation, deleted last.
+
+    Args:
+        conn: OMERO connection
+        table_id: Tracking table (FileAnnotation) ID
+        container_type: Container to search for configs; defaults to every
+            container the table is linked to
+        container_id: Container ID that goes with ``container_type``
+        dry_run: When True (default) nothing is deleted; the report says what
+            would be.
+
+    Returns:
+        Report dict with the IDs per kind, ``missing`` (IDs in the table that
+        no longer exist on the server), ``containers`` searched, and
+        ``deleted`` (False on a dry run).
+    """
+    kinds = ("rois", "labels", "annotation_inputs", "configs", "map_annotations", "table")
+    report: Dict[str, Any] = {kind: [] for kind in kinds}
+    report["missing"] = {kind: [] for kind in kinds}
+    report["containers"] = []
+    report["deleted"] = False
+
+    table = conn.getObject("FileAnnotation", table_id)
+    if table is None:
+        report["missing"]["table"].append(table_id)
+        print(f"Table {table_id} not found; nothing to delete")
+        return report
+    report["table"].append(table_id)
+    table_name = table.getFile().getName() if table.getFile() else None
+
+    # Per-row objects
+    df = read_tracking_table(conn, table_id)
+    row_kinds = [
+        ("rois", "Roi", ["roi_id"]),
+        ("labels", "FileAnnotation", ["label_id"]),
+        ("annotation_inputs", "FileAnnotation", ["annotation_input_id", "label_input_id"]),
+    ]
+    for kind, omero_type, columns in row_kinds:
+        ids = []
+        for column in columns:
+            if df is not None and column in df.columns:
+                ids.extend(i for i in _valid_omero_ids(df[column]) if i not in ids)
+        for object_id in ids:
+            if conn.getObject(omero_type, object_id) is None:
+                report["missing"][kind].append(object_id)
+            else:
+                report[kind].append(object_id)
+
+    # Container-level objects
+    if container_type and container_id:
+        containers = [(str(container_type).lower(), int(container_id))]
+    else:
+        containers = _table_containers(conn, table_id)
+    report["containers"] = containers
+
+    for ctype, cid in containers:
+        other_same_name = any(
+            t.get("name") == table_name and t.get("id") != table_id
+            for t in list_annotation_tables(conn, ctype, cid)
+        )
+
+        def belongs(saved_table_id, saved_name):
+            if saved_table_id not in (None, "", "None"):
+                try:
+                    return int(float(saved_table_id)) == int(table_id)
+                except (TypeError, ValueError):
+                    return False
+            return bool(table_name) and saved_name == table_name and not other_same_name
+
+        for ann in list_annotations_by_namespace(conn, ctype.capitalize(), cid, CONFIG_NS):
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                try:
+                    path = ezomero.get_file_annotation(conn, ann["id"], tmp_dir)
+                    saved = AnnotationConfig.from_yaml(path) if path else None
+                except Exception:
+                    saved = None
+            if saved is not None and belongs(saved.omero.table_id, saved.name):
+                if ann["id"] not in report["configs"]:
+                    report["configs"].append(ann["id"])
+
+        for ns, id_key, name_key in (
+            (WORKFLOW_STATUS_NS, "table_id", None),
+            (CONFIG_MAP_NS, "omero.table_id", "name"),
+        ):
+            try:
+                map_ids = ezomero.get_map_annotation_ids(conn, ctype.capitalize(), cid, ns=ns)
+            except Exception:
+                map_ids = []
+            for map_id in map_ids:
+                try:
+                    kv = ezomero.get_map_annotation(conn, map_id) or {}
+                except Exception:
+                    continue
+                if belongs(kv.get(id_key), kv.get(name_key) if name_key else None):
+                    if map_id not in report["map_annotations"]:
+                        report["map_annotations"].append(map_id)
+
+    summary = ", ".join(f"{len(report[k])} {k}" for k in kinds)
+    missing = sum(len(v) for v in report["missing"].values())
+    if dry_run:
+        print(f"Dry run, nothing deleted. Would delete: {summary}"
+              + (f" ({missing} IDs in the table no longer exist)" if missing else "")
+              + ". Pass dry_run=False to delete.")
+        return report
+
+    # Children first, the table last.
+    if report["rois"]:
+        conn.deleteObjects("Roi", report["rois"], wait=True)
+    annotations = (report["labels"] + report["annotation_inputs"]
+                   + report["configs"] + report["map_annotations"])
+    if annotations:
+        conn.deleteObjects("Annotation", annotations, wait=True)
+    conn.deleteObjects("Annotation", [table_id], wait=True)
+    report["deleted"] = True
+    print(f"Deleted: {summary}")
+    return report
+
+
 def infer_settings_from_table(df: pd.DataFrame) -> Dict[str, Any]:
     """Infer the run settings that a tracking table's rows pin down.
 
