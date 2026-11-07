@@ -12,6 +12,7 @@ from omero_annotate_ai.core.annotation_config import (
     ImageAnnotation,
     create_default_config,
     load_config,
+    load_config_from_yaml,
     get_config_template,
     validate_annotations_against_config,
     ValidationResult,
@@ -91,6 +92,8 @@ class TestAnnotationConfig:
             'workflow',
             'output',
             'omero',
+            'source',
+            'zarr',
             'annotations',
             'documentation',
             'repository',
@@ -1758,3 +1761,100 @@ class TestOmeroIdSerialization:
         assert config.annotations[0].label_id == 77
         assert config.annotations[1].roi_id is None
         assert config.annotations[1].label_id is None
+
+
+@pytest.mark.unit
+class TestImageUriIdentity:
+    def test_uri_is_derived_from_omero_id(self):
+        ann = ImageAnnotation(image_id=7, image_name="a")
+        assert ann.image_uri == "omero:image:7"
+
+    def test_zarr_annotation_has_no_omero_id(self):
+        ann = ImageAnnotation(image_uri="https://h/p.zarr/B/2/0", image_name="p_B2_0")
+        assert ann.image_id is None
+
+    def test_new_columns_round_trip(self):
+        config = create_default_config()
+        config.annotations.append(
+            ImageAnnotation(
+                image_uri="https://h/p.zarr/B/2/0", image_name="p_B2_0",
+                annotation_id="abc_0_0", level=1, well="B2", field="0",
+                well_metadata={"compound": "DMSO"},
+            )
+        )
+        df = config.to_dataframe()
+        assert df.loc[0, "image_uri"] == "https://h/p.zarr/B/2/0"
+        assert df.loc[0, "image_id"] == 0
+        assert df.loc[0, "level"] == 1
+        assert df.loc[0, "well_metadata"] == '{"compound": "DMSO"}'
+
+        restored = create_default_config()
+        restored.from_dataframe(df)
+        ann = restored.annotations[0]
+        assert (ann.image_uri, ann.image_id, ann.level, ann.well, ann.field) == (
+            "https://h/p.zarr/B/2/0", None, 1, "B2", "0"
+        )
+        assert ann.well_metadata == {"compound": "DMSO"}
+
+    def test_csv_round_trip_has_no_nan_strings(self, tmp_path):
+        config = create_default_config()
+        config.annotations.append(
+            ImageAnnotation(image_id=5, image_name="a", annotation_id="x_0_0")
+        )
+        path = tmp_path / "t.csv"
+        config.to_dataframe().to_csv(path, index=False)
+        restored = create_default_config()
+        restored.from_dataframe(pd.read_csv(path))
+        ann = restored.annotations[0]
+        assert ann.image_uri == "omero:image:5"
+        assert (ann.well, ann.field, ann.well_metadata) == ("", "", {})
+
+    def test_legacy_table_without_uri_column(self):
+        df = pd.DataFrame([{"image_id": 101, "image_name": "img",
+                            "annotation_id": "101_0_0", "timepoint": 0, "z_slice": 0}])
+        config = create_default_config()
+        config.from_dataframe(df)
+        ann = config.annotations[0]
+        assert ann.image_uri == "omero:image:101"
+        assert ann.annotation_id == "101_0_0"
+
+
+@pytest.mark.unit
+class TestZarrConfig:
+    def test_default_source_is_omero(self):
+        config = create_default_config()
+        assert config.source == "omero"
+        assert config.zarr.uris == []
+
+    def test_zarr_requires_uris(self):
+        with pytest.raises(ValueError, match="zarr.uris"):
+            AnnotationConfig(name="z", source="zarr")
+
+    def test_filters_require_well_metadata(self):
+        with pytest.raises(ValueError, match="well_metadata"):
+            AnnotationConfig(name="z", source="zarr",
+                             zarr={"uris": ["a.zarr"], "well_filters": {"c": ["x"]}})
+
+    def test_zarr_forces_read_only(self):
+        config = AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
+        assert config.workflow.read_only_mode is True
+
+    def test_yaml_round_trip(self):
+        config = AnnotationConfig(name="z", source="zarr",
+                                  zarr={"uris": ["a.zarr"], "level": 1, "fields": "all",
+                                        "wells": ["B2"]})
+        again = AnnotationConfig.from_yaml(config.to_yaml())
+        assert again.source == "zarr"
+        assert (again.zarr.level, again.zarr.fields, again.zarr.wells) == (1, "all", ["B2"])
+
+    def test_bad_fields_value_rejected(self):
+        with pytest.raises(ValueError):
+            AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a"], "fields": 3})
+
+    def test_example_yaml_loads(self):
+        root = Path(__file__).resolve().parents[1]
+        config = load_config_from_yaml(
+            str(root / "notebooks/marimo/configs/zarr-s-biad855-example.yaml"))
+        assert config.source == "zarr"
+        assert config.zarr.level == 1
+        assert config.workflow.read_only_mode is True

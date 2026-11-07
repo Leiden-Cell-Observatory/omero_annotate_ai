@@ -43,8 +43,23 @@ from ..omero.omero_functions import (
     upload_annotation_config_to_omero,
     upload_rois_and_labels
 )
-from ..omero.omero_utils import get_dask_image_single, get_table_by_name
+from ..omero.omero_utils import get_table_by_name
 from ..processing.image_functions import generate_patch_coordinates
+from ..sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
+from ..sources.uri import annotation_id as make_annotation_id, omero_uri, parse_omero_uri
+from ..sources.zarr_discovery import ZarrImageRef, discover_zarr_images
+from ..sources.wells import match_well_filter
+
+
+
+def _well_name(row: int, column: int) -> str:
+    """Well name from 0-based plate indices: (1, 1) -> B2, (27, 11) -> AB12."""
+    letters = ""
+    row += 1
+    while row:
+        row, rest = divmod(row - 1, 26)
+        letters = chr(ord("A") + rest) + letters
+    return f"{letters}{column + 1}"
 
 
 class AnnotationPipeline:
@@ -53,16 +68,30 @@ class AnnotationPipeline:
     # DEBUG FLAG - Set to False to disable all debug output
     DEBUG_MODE = True
 
-    def __init__(self, config: AnnotationConfig, conn=None, config_file_path: Optional[Union[str, Path]] = None):
+    def __init__(
+        self,
+        config: AnnotationConfig,
+        conn=None,
+        config_file_path: Optional[Union[str, Path]] = None,
+        image_source: Optional[ImageSource] = None,
+    ):
         """Initialize the pipeline with configuration and OMERO connection.
 
         Args:
             config: AnnotationConfig object containing all parameters
             conn: OMERO connection object (BlitzGateway)
             config_file_path: Optional path to the source YAML configuration file for persistence
+            image_source: Where pixels and image sizes are read from. Defaults to
+                the source the config asks for (``make_image_source``).
         """
         self.config = config
         self.conn = conn
+        self.image_source = (
+            image_source if image_source is not None else make_image_source(config, conn)
+        )
+        self._zarr_refs: Dict[str, ZarrImageRef] = {}
+        # OMERO plate images: URI -> well, field and well key-value pairs
+        self._omero_wells: Dict[str, dict] = {}
         # Initialize table_id from config if available, otherwise None
         self.table_id = config.omero.table_id
         self.config_file_path = Path(config_file_path) if config_file_path else None
@@ -113,8 +142,12 @@ class AnnotationPipeline:
 
     def _validate_setup(self):
         """Validate the pipeline setup."""
-        if self.conn is None:
-            raise ValueError("OMERO connection is required")
+        # Without a connection nothing can be written back; fail now, not after annotating.
+        if self.conn is None and not self.config.workflow.read_only_mode:
+            raise ValueError("OMERO connection is required unless read_only_mode is set")
+        # An OMERO source needs its own connection to read images.
+        if isinstance(self.image_source, OmeroImageSource) and self.image_source.conn is None:
+            raise ValueError("OMERO connection is required to read images")
 
     def _get_input_folders(self, output_path: Path) -> dict:
         """Return input folder paths for the current workflow configuration.
@@ -238,6 +271,28 @@ class AnnotationPipeline:
         self.table_id = table_id
         return table_id
 
+    def _identity_fields(self, image_meta: ImageMeta) -> dict:
+        """ImageAnnotation fields that say which image a unit belongs to."""
+        uri = image_meta.image_uri
+        fields = {
+            "image_uri": uri,
+            "image_id": parse_omero_uri(uri),
+            "image_name": image_meta.name,
+            "level": self.config.zarr.level if self.config.source == "zarr" else 0,
+        }
+        ref = self._zarr_refs.get(uri)
+        if ref is not None:
+            fields.update(
+                image_name=ref.name or image_meta.name,
+                well=ref.well,
+                field=ref.field,
+                well_metadata=dict(ref.well_metadata),
+            )
+        well = self._omero_wells.get(uri)
+        if well is not None:
+            fields.update(well, well_metadata=dict(well["well_metadata"]))
+        return fields
+
     def _prepare_processing_units(self, images_list: List[Any]) -> None:
         """Prepare processing units by populating config.annotations."""
 
@@ -299,109 +354,113 @@ class AnnotationPipeline:
 
         # Create ImageAnnotation objects for each processing unit
         for image, category in zip(selected_images, image_categories):
-            image_id = image.getId()
-            image_name = image.getName()
+            for annotation in self._units_for_image(image, category):
+                self.config.add_annotation(annotation)
 
-            # Handle timepoints
-            timepoints = self._get_timepoints_for_image(image)
+    def _units_for_image(self, image: Any, category: str) -> List[ImageAnnotation]:
+        """Processing units (timepoints, z-slices, patches) for one image."""
+        units: List[ImageAnnotation] = []
+        image_meta = self.image_source.metadata(image)
+        identity = self._identity_fields(image_meta)
+        image_uri = identity["image_uri"]
 
-            # Handle z-slices based on processing mode
-            z_slices = self._get_z_slices_for_image(image)
-            
-            # Check if we're doing volumetric 3D processing
-            is_volumetric = self.config.spatial_coverage.three_d
+        # Handle timepoints
+        timepoints = self._get_timepoints_for_image(image)
 
-            # Create annotations based on processing mode
-            for t in timepoints:
-                if is_volumetric:
-                    # 3D volumetric mode: one annotation per timepoint (includes all z-slices)
-                    z_start = min(z_slices) if z_slices else 0
-                    z_end = max(z_slices) if z_slices else 0 
-                    z_length = len(z_slices) if z_slices else 1
-                    
-                    if self.config.spatial_coverage.use_patches:
-                        # Create multiple annotations for 3D patches
-                        patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
-                        patch_h, patch_w = actual_patch_size
-                        for i, (x, y) in enumerate(patch_coords):
-                            annotation = ImageAnnotation(
-                                image_id=image_id,
-                                image_name=image_name,
-                                annotation_id=f"{image_id}_{t}_3d_{i}",
-                                timepoint=t,
-                                z_slice=z_start,  # Start slice for compatibility
-                                z_start=z_start,
-                                z_end=z_end,
-                                z_length=z_length,
-                                is_patch=True,
-                                patch_x=x,
-                                patch_y=y,
-                                patch_width=patch_w,
-                                patch_height=patch_h,
-                                category=category,
-                                channel=self.config.spatial_coverage.get_label_channel(),
-                                is_volumetric=True,
-                            )
-                            self.config.add_annotation(annotation)
-                    else:
-                        # Single annotation for full 3D volume
+        # Handle z-slices based on processing mode
+        z_slices = self._get_z_slices_for_image(image)
+
+        # Check if we're doing volumetric 3D processing
+        is_volumetric = self.config.spatial_coverage.three_d
+
+        # Create annotations based on processing mode
+        for t in timepoints:
+            if is_volumetric:
+                # 3D volumetric mode: one annotation per timepoint (includes all z-slices)
+                z_start = min(z_slices) if z_slices else 0
+                z_end = max(z_slices) if z_slices else 0 
+                z_length = len(z_slices) if z_slices else 1
+
+                if self.config.spatial_coverage.use_patches:
+                    # Create multiple annotations for 3D patches
+                    patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                    patch_h, patch_w = actual_patch_size
+                    for i, (x, y) in enumerate(patch_coords):
                         annotation = ImageAnnotation(
-                            image_id=image_id,
-                            image_name=image_name,
-                            annotation_id=f"{image_id}_{t}_3d",
+                            **identity,
+                            annotation_id=make_annotation_id(image_uri, t, z_start, volumetric=True, patch=i),
                             timepoint=t,
                             z_slice=z_start,  # Start slice for compatibility
                             z_start=z_start,
                             z_end=z_end,
                             z_length=z_length,
+                            is_patch=True,
+                            patch_x=x,
+                            patch_y=y,
+                            patch_width=patch_w,
+                            patch_height=patch_h,
                             category=category,
                             channel=self.config.spatial_coverage.get_label_channel(),
                             is_volumetric=True,
                         )
-                        self.config.add_annotation(annotation)
+                        units.append(annotation)
                 else:
-                    # 2D mode: create annotations per z-slice (existing behavior)
-                    for z in z_slices:
-                        if self.config.spatial_coverage.use_patches:
-                            # Create multiple annotations for 2D patches
-                            patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
-                            patch_h, patch_w = actual_patch_size
-                            for i, (x, y) in enumerate(patch_coords):
-                                annotation = ImageAnnotation(
-                                    image_id=image_id,
-                                    image_name=image_name,
-                                    annotation_id=f"{image_id}_{t}_{z}_{i}",
-                                    timepoint=t,
-                                    z_slice=z,
-                                    z_start=z,
-                                    z_end=z,
-                                    z_length=1,
-                                    patch_x=x,
-                                    patch_y=y,
-                                    is_patch=True,
-                                    patch_width=patch_w,
-                                    patch_height=patch_h,
-                                    category=category,
-                                    channel=self.config.spatial_coverage.get_label_channel(),
-                                    is_volumetric=False,
-                                )
-                                self.config.add_annotation(annotation)
-                        else:
-                            # Single annotation for 2D slice
+                    # Single annotation for full 3D volume
+                    annotation = ImageAnnotation(
+                        **identity,
+                        annotation_id=make_annotation_id(image_uri, t, z_start, volumetric=True),
+                        timepoint=t,
+                        z_slice=z_start,  # Start slice for compatibility
+                        z_start=z_start,
+                        z_end=z_end,
+                        z_length=z_length,
+                        category=category,
+                        channel=self.config.spatial_coverage.get_label_channel(),
+                        is_volumetric=True,
+                    )
+                    units.append(annotation)
+            else:
+                # 2D mode: create annotations per z-slice (existing behavior)
+                for z in z_slices:
+                    if self.config.spatial_coverage.use_patches:
+                        # Create multiple annotations for 2D patches
+                        patch_coords, actual_patch_size = self._generate_patch_coordinates(image)
+                        patch_h, patch_w = actual_patch_size
+                        for i, (x, y) in enumerate(patch_coords):
                             annotation = ImageAnnotation(
-                                image_id=image_id,
-                                image_name=image_name,
-                                annotation_id=f"{image_id}_{t}_{z}",
+                                **identity,
+                                annotation_id=make_annotation_id(image_uri, t, z, patch=i),
                                 timepoint=t,
                                 z_slice=z,
                                 z_start=z,
                                 z_end=z,
                                 z_length=1,
+                                patch_x=x,
+                                patch_y=y,
+                                is_patch=True,
+                                patch_width=patch_w,
+                                patch_height=patch_h,
                                 category=category,
                                 channel=self.config.spatial_coverage.get_label_channel(),
                                 is_volumetric=False,
                             )
-                            self.config.add_annotation(annotation)
+                            units.append(annotation)
+                    else:
+                        # Single annotation for 2D slice
+                        annotation = ImageAnnotation(
+                            **identity,
+                            annotation_id=make_annotation_id(image_uri, t, z),
+                            timepoint=t,
+                            z_slice=z,
+                            z_start=z,
+                            z_end=z,
+                            z_length=1,
+                            category=category,
+                            channel=self.config.spatial_coverage.get_label_channel(),
+                            is_volumetric=False,
+                        )
+                        units.append(annotation)
+        return units
 
     def _upload_annotation_config_to_omero(self) -> int: 
         container_type_str = str(self.config.omero.container_type).capitalize()
@@ -416,7 +475,7 @@ class AnnotationPipeline:
 
     def _get_timepoints_for_image(self, image) -> List[int]:
         """Get timepoints to process for an image based on configuration."""
-        max_t = image.getSizeT()
+        max_t = self.image_source.metadata(image).size_t
 
         if self.config.spatial_coverage.timepoint_mode == "all":
             return list(range(max_t))
@@ -432,7 +491,7 @@ class AnnotationPipeline:
 
     def _get_z_slices_for_image(self, image) -> List[int]:
         """Get z-slices to process for an image based on configuration."""
-        max_z = image.getSizeZ()
+        max_z = self.image_source.metadata(image).size_z
 
         if self.config.spatial_coverage.z_slice_mode == "all":
             return list(range(max_z))
@@ -452,7 +511,8 @@ class AnnotationPipeline:
         patches_per_image = self.config.spatial_coverage.patches_per_image
         random_patches = self.config.spatial_coverage.random_patches
 
-        image_shape = (image.getSizeY(), image.getSizeX())
+        meta = self.image_source.metadata(image)
+        image_shape = (meta.size_y, meta.size_x)
 
         coordinates, actual_patch_size = generate_patch_coordinates(
             image_shape=image_shape,
@@ -490,10 +550,7 @@ class AnnotationPipeline:
                 # Load image data from OMERO
                 image_data = self._load_image_data(image_obj, meta)
                 images.append(image_data)
-                # Include image_id in metadata for later ROI upload
-                meta_with_image_id = meta.copy()
-                meta_with_image_id["image_id"] = image_obj.getId()
-                metadata.append((annotation_id, meta_with_image_id, row_idx))
+                metadata.append((annotation_id, meta.copy(), row_idx))
 
             # Build context images parallel list (empty dicts when no context channels)
             context_images = self._build_context_images(batch_data)
@@ -536,90 +593,37 @@ class AnnotationPipeline:
         }
 
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
-        """Load image data from OMERO based on metadata."""
-
+        """Load the plane or volume an annotation unit refers to, cropped to its patch."""
         timepoint = metadata["timepoint"]
         channel = metadata.get("channel_override", self.config.spatial_coverage.get_label_channel())
-        is_volumetric = metadata.get("is_volumetric", False)
 
-        if is_volumetric:
-            # Load 3D volume: all z-slices at once
-            z_start = metadata.get("z_start", 0)
-            z_end = metadata.get("z_end", 0)
-            z_length = metadata.get("z_length", 1)
-
-            # Generate z-slice list
-            z_slices = list(range(z_start, z_end + 1))
-
-            print(f"Loading 3D volume: z_slices {z_start}-{z_end} (length: {z_length})")
-
-            # Use get_dask_image_single for single image loading
-            image_data = get_dask_image_single(
-                conn=self.conn,
-                image=image_obj,
-                timepoints=[timepoint],
-                channels=[channel],
-                z_slices=z_slices,  # All z-slices for 3D volume
-            )
-
-            # Ensure we have proper data
-            if image_data is None:
-                raise ValueError(f"Failed to load 3D image data for image {image_obj.getId()}")
-            
-            print(f"Loaded 3D data shape: {image_data.shape}")
-
-        else:
-            # Load single z-slice for 2D processing
-            z_slice = metadata["z_slice"]
-            
-            # Use get_dask_image_single for single image loading
-            image_data = get_dask_image_single(
-                conn=self.conn,
-                image=image_obj,
-                timepoints=[timepoint],
-                channels=[channel],
-                z_slices=[z_slice],
-            )
-
-            # Ensure we have proper data
-            if image_data is None:
-                raise ValueError(f"Failed to load 2D image data for image {image_obj.getId()}")
-            
-            print(f"Loaded 2D data shape: {image_data.shape}")
-            
-        # Ensure image data is properly converted to numpy array and has correct dtype
-        if hasattr(image_data, 'compute'):
-            image_data = image_data.compute()
-        
-        # Convert to numpy array and ensure proper dtype
-        image_data = np.asarray(image_data)
-        
-        # Ensure we have valid pixel values (not all zeros)
-        if np.all(image_data == 0):
-            print(f"Warning: Image data appears to be all zeros for image {image_obj.getId()}")
-            print(f"Image info: {image_obj.getSizeX()}x{image_obj.getSizeY()}, {image_obj.getSizeC()} channels, {image_obj.getSizeZ()} z-slices, {image_obj.getSizeT()} timepoints")
-        else:
-            print(f"Image data range: {np.min(image_data)} - {np.max(image_data)}, dtype: {image_data.dtype}")
-
-        # Handle patches if needed (works for both 2D and 3D)
+        region = None
         if self.config.spatial_coverage.use_patches and "patch_x" in metadata:
-            patch_x = metadata["patch_x"]
-            patch_y = metadata["patch_y"]
             # Use the actual patch dimensions from metadata instead of config
-            patch_h = metadata.get("patch_height", self.config.spatial_coverage.patch_size[0])
-            patch_w = metadata.get("patch_width", self.config.spatial_coverage.patch_size[1])
+            region = (
+                metadata["patch_x"],
+                metadata["patch_y"],
+                metadata.get("patch_width", self.config.spatial_coverage.patch_size[1]),
+                metadata.get("patch_height", self.config.spatial_coverage.patch_size[0]),
+            )
 
-            if is_volumetric:
-                # Extract 3D patch: (z, y, x)
-                image_data = image_data[
-                    :, patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
-                ]
-            else:
-                # Extract 2D patch: (y, x)
-                image_data = image_data[
-                    patch_y : patch_y + patch_h, patch_x : patch_x + patch_w
-                ]
+        if metadata.get("is_volumetric", False):
+            image_data = self.image_source.read_volume(
+                image_obj,
+                t=timepoint,
+                c=channel,
+                z_start=metadata.get("z_start", 0),
+                z_end=metadata.get("z_end", 0),
+                region=region,
+            )
+        else:
+            image_data = self.image_source.read_plane(
+                image_obj, t=timepoint, c=channel, z=metadata["z_slice"], region=region
+            )
 
+        if not image_data.any():
+            image_uri = self.image_source.metadata(image_obj).image_uri
+            print(f"Warning: Image data appears to be all zeros for image {image_uri}")
         return image_data
 
     def _load_and_stack_channels(self, image_obj, meta: dict, channel_indices: List[int]) -> np.ndarray:
@@ -855,12 +859,12 @@ class AnnotationPipeline:
             meta: Metadata dictionary containing image information
             annotation_id: Unique annotation identifier
         """
-        image_id = meta.get("image_id")
-        if not image_id:
-            self._debug_print(f"No image_id found for annotation {annotation_id}")
+        image_key = meta.get("image_uri") or meta.get("image_id")
+        if not image_key:
+            self._debug_print(f"No image found for annotation {annotation_id}")
             return
 
-        image_obj = self.conn.getObject("Image", image_id)
+        image_obj = self.image_source.get_image(image_key)
         output_path = Path(self.config.output.output_directory)
         folders = self._get_input_folders(output_path)
 
@@ -997,8 +1001,11 @@ class AnnotationPipeline:
         well_obj = self.conn.getObject("Well", well_id)
         if not well_obj:
             return {}
+        return self._well_kv(well_obj)
 
-        # Collect all map annotations into a single dict
+    @staticmethod
+    def _well_kv(well_obj) -> dict:
+        """Key-value pairs of all map annotations on an OMERO well."""
         kv_pairs = {}
         for ann in well_obj.listAnnotations():
             if hasattr(ann, 'OMERO_TYPE') and ann.OMERO_TYPE.__name__ == 'MapAnnotationI':
@@ -1020,18 +1027,7 @@ class AnnotationPipeline:
         Returns:
             True if ALL filter conditions are met
         """
-        for filter_key, filter_values in filters.items():
-            # Check if the key exists in well metadata
-            if filter_key not in well_kv_pairs:
-                return False
-
-            # Check if the well's value matches any of the acceptable values
-            well_value = well_kv_pairs[filter_key]
-            if well_value not in filter_values:
-                return False
-
-        # All conditions met
-        return True
+        return match_well_filter(well_kv_pairs, filters)
 
     def _get_image_ids_from_plate(self, container_id: int) -> List[int]:
         """Get image IDs from a single plate, applying well filters if configured.
@@ -1042,44 +1038,41 @@ class AnnotationPipeline:
         Returns:
             List of image IDs from the plate (filtered if well_filters configured).
         """
-        if self.config.omero.well_filters:
-            print(f"Applying well filters: {self.config.omero.well_filters}")
+        filters = self.config.omero.well_filters
+        if filters:
+            print(f"Applying well filters: {filters}")
             print(f"Filter mode: {self.config.omero.well_filter_mode}")
 
-            # Get all wells in the plate
-            well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
-            print(f"Found {len(well_ids)} wells in plate {container_id}")
+        well_ids = ezomero.get_well_ids(self.conn, plate=container_id)
+        print(f"Found {len(well_ids)} wells in plate {container_id}")
 
-            filtered_image_ids = []
-            matched_wells = 0
-
-            for well_id in well_ids:
-                # Get map annotations from the well
-                well_kv_pairs = self._get_well_map_annotations(well_id)
-
-                # Check if well matches filter criteria
-                matches_filter = self._check_well_filter(well_kv_pairs, self.config.omero.well_filters)
-
-                # Apply include/exclude logic
-                should_include = (
-                    (self.config.omero.well_filter_mode == "include" and matches_filter) or
-                    (self.config.omero.well_filter_mode == "exclude" and not matches_filter)
-                )
-
-                if should_include:
-                    matched_wells += 1
-                    # Get all images from this well
-                    well_image_ids = ezomero.get_image_ids(self.conn, well=well_id)
-                    filtered_image_ids.extend(well_image_ids)
-                    self._debug_print(f"  Well {well_id}: matched filter, adding {len(well_image_ids)} images")
-                else:
+        image_ids = []
+        matched_wells = 0
+        for well_id in well_ids:
+            well_obj = self.conn.getObject("Well", well_id)
+            if well_obj is None:
+                continue
+            well_kv_pairs = self._well_kv(well_obj)
+            if filters:
+                matches_filter = self._check_well_filter(well_kv_pairs, filters)
+                if matches_filter != (self.config.omero.well_filter_mode == "include"):
                     self._debug_print(f"  Well {well_id}: filtered out")
+                    continue
+            matched_wells += 1
+            well_name = _well_name(well_obj.row, well_obj.column)
+            # The field is the WellSample index, as BlitzGateway's Well.getImage(index) uses it.
+            for field, sample in enumerate(well_obj.listChildren()):
+                image_id = sample.getImage().getId()
+                image_ids.append(image_id)
+                self._omero_wells[omero_uri(image_id)] = {
+                    "well": well_name,
+                    "field": str(field),
+                    "well_metadata": dict(well_kv_pairs),
+                }
 
-            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(filtered_image_ids)} images selected")
-            return filtered_image_ids
-        else:
-            # No filters - get all images from plate
-            return list(ezomero.get_image_ids(self.conn, plate=container_id))
+        if filters:
+            print(f"After well filtering: {matched_wells}/{len(well_ids)} wells matched, {len(image_ids)} images selected")
+        return image_ids
 
     def _get_image_ids_from_single_container(self, container_type: str, container_id: int) -> List[int]:
         """Get image IDs from a single OMERO container.
@@ -1111,6 +1104,17 @@ class AnnotationPipeline:
             return [container_id]
         else:
             raise ValueError(f"Unsupported container type: {container_type}")
+
+    def get_image_uris(self) -> List[str]:
+        """URIs of the images the config selects (OMERO container or OME-Zarr URIs)."""
+        if self.config.source == "zarr":
+            refs = discover_zarr_images(
+                self.config.zarr, output_dir=Path(self.config.output.output_directory)
+            )
+            self._zarr_refs = {ref.uri: ref for ref in refs}
+            print(f"Found {len(refs)} OME-Zarr images")
+            return list(self._zarr_refs)
+        return [omero_uri(i) for i in self.get_image_ids_from_container()]
 
     def get_image_ids_from_container(self) -> List[int]:
         """Get image IDs from the configured OMERO container(s).
@@ -1146,11 +1150,13 @@ class AnnotationPipeline:
         return unique_image_ids
 
     def get_images_by_ids(self, image_ids: List[int]) -> List[Any]:
-        """Get OMERO image objects for the given image IDs."""
-        if self.conn is None:
-            raise ValueError("OMERO connection is not set.")
-        images = [self.conn.getObject("Image", img_id) for img_id in image_ids]
-        images = [img for img in images if img is not None]
+        """Get image handles for the given image IDs, skipping ones that do not exist."""
+        images = []
+        for img_id in image_ids:
+            try:
+                images.append(self.image_source.get_image(img_id))
+            except LookupError:
+                self._debug_print(f"Image {img_id} not found; skipped")
         print(f"Loaded {len(images)} images (by ID)")
         return images
 
@@ -1179,6 +1185,7 @@ class AnnotationPipeline:
                     {
                         "row_index": row_idx,
                         "image_id": image_id,
+                        "image_uri": meta.get("image_uri", ""),
                         "annotation_id": annotation_id,
                         "timepoint": meta.get("timepoint", -1),
                         "z_slice": meta.get("z_slice", -1),
@@ -1294,12 +1301,15 @@ class AnnotationPipeline:
 
         # If images_list is not provided, select only required images
         if images_list is None:
-            image_ids = self.get_image_ids_from_container()
+            image_ids = self.get_image_uris()
             n_total = len(image_ids)
             if n_total == 0:
-                raise ValueError(
-                    f"No images found in {self.config.omero.container_type} {self.config.omero.container_id}"
+                where = (
+                    f"OME-Zarr URIs {self.config.zarr.uris}"
+                    if self.config.source == "zarr"
+                    else f"{self.config.omero.container_type} {self.config.omero.container_id}"
                 )
+                raise ValueError(f"No images found in {where}")
 
             # Determine which images to process (mimic _prepare_processing_units logic)
             if self.config.training.segment_all:
@@ -1359,6 +1369,10 @@ class AnnotationPipeline:
                     f"Errors: {error_summary}. "
                     f"Fix the config or clear config.annotations to regenerate."
                 )
+            if self.config.workflow.resume_from_table:
+                added = self._extend_annotations()
+                if added and self.table_id not in (None, -1) and not self.config.workflow.read_only_mode:
+                    self._replace_omero_table_from_config()
             return self.config
 
         # Generate new annotation schema
@@ -1366,6 +1380,55 @@ class AnnotationPipeline:
         self._prepare_processing_units(images_list)
         print(f"Schema defined: {len(self.config.annotations)} annotations")
         return self.config
+
+    def _extend_annotations(self) -> int:
+        """Add images when a resumed run asks for more than the table holds.
+
+        Compares train_n / validate_n / test_n with the number of distinct
+        images per category already in config.annotations, and adds units for
+        images not yet in the table. Existing rows are never removed, so a
+        lower count leaves the table as it is.
+
+        Returns:
+            Number of images added.
+        """
+        training = self.config.training
+        if training.segment_all:
+            return 0
+
+        categories = ("training", "validation", "test")
+        wanted = {"training": training.train_n, "validation": training.validate_n,
+                  "test": training.test_n}
+        existing = self.config.annotations
+        have = {c: len({a.image_uri for a in existing if a.category == c}) for c in categories}
+        missing = {c: max(0, wanted[c] - have[c]) for c in categories}
+        if not any(missing.values()):
+            return 0
+
+        used = {a.image_uri for a in existing}
+        unused = [uri for uri in self.get_image_uris() if uri not in used]
+        random.shuffle(unused)
+
+        added = 0
+        cursor = 0
+        for category in categories:
+            n = missing[category]
+            if n == 0:
+                continue
+            picked = unused[cursor:cursor + n]
+            cursor += len(picked)
+            if len(picked) < n:
+                print(f"Only {len(picked)} unused images left for {category} "
+                      f"(asked for {n} more)")
+            for image in self.get_images_by_ids(picked):
+                for annotation in self._units_for_image(image, category):
+                    self.config.add_annotation(annotation)
+                added += 1
+
+        if added:
+            print(f"Added {added} new images to the table "
+                  f"(now {len({a.image_uri for a in self.config.annotations})} images)")
+        return added
 
     def create_tracking_table(self) -> int:
         """Create OMERO tracking table from the annotation schema.
@@ -1412,6 +1475,7 @@ class AnnotationPipeline:
         for i, annotation in enumerate(annotations):
             metadata = {
                 "image_id": annotation.image_id,
+                "image_uri": annotation.image_uri,
                 "timepoint": annotation.timepoint,
                 "z_slice": annotation.z_slice,
                 "z_start": annotation.z_start,
@@ -1423,7 +1487,7 @@ class AnnotationPipeline:
                 "channel": annotation.channel,
                 "is_volumetric": annotation.is_volumetric,
             }
-            processing_units.append((annotation.image_id, annotation.annotation_id, metadata, i))
+            processing_units.append((annotation.image_uri, annotation.annotation_id, metadata, i))
         return processing_units
 
     def _run_annotation_batches(self, processing_units: List[Tuple], annotation_func) -> int:
@@ -1453,11 +1517,9 @@ class AnnotationPipeline:
             
             try:
                 # Load image objects for batch
-                if self.conn is None:
-                    raise ValueError("OMERO connection is not set.")
                 batch_with_images = []
                 for img_id, seq_val, meta, row_idx in batch:
-                    image_obj = self.conn.getObject("Image", img_id)
+                    image_obj = self.image_source.get_image(img_id)
                     batch_with_images.append((image_obj, seq_val, meta, row_idx))
                 
                 # Run the specific annotation function
@@ -1478,6 +1540,8 @@ class AnnotationPipeline:
                     self._debug_print("   Updating OMERO table...")
                     self._replace_omero_table_from_config()
                     self._debug_print(f"   OMERO table updated (ID: {self.table_id})")
+                else:
+                    self._save_local_progress_from_annotations(self.config.get_processed())
                 
                 self._debug_print("   Auto-saving config...")
                 self._auto_save_config()
@@ -1573,7 +1637,9 @@ class AnnotationPipeline:
         # Update tracking
         if not self.config.workflow.read_only_mode:
             self._replace_omero_table_from_config()
-        
+        else:
+            self._save_local_progress_from_annotations(self.config.get_processed())
+
         self._auto_save_config()
         print(f"Cellpose preparation completed: {len(unprocessed_annotations)} images saved")
         
@@ -1588,16 +1654,13 @@ class AnnotationPipeline:
                           and the model channel to model_input/{annotation_id}.tif
         Category metadata is tracked in config.yaml, not in folder structure.
         """
-        if self.conn is None:
-            raise ValueError("OMERO connection is not set.")
-
         output_path = Path(self.config.output.output_directory)
         folders = self._get_input_folders(output_path)
 
         for img_id, annotation_id, meta, row_idx in processing_units:
             print(f"Processing image {annotation_id} (ID: {img_id})")
 
-            image_obj = self.conn.getObject("Image", img_id)
+            image_obj = self.image_source.get_image(img_id)
 
             if "model_input" in folders:
                 # Separate-channel: the channel you annotate → annotation_input/ (single-channel)

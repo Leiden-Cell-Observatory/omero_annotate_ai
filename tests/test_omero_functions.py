@@ -852,3 +852,110 @@ class TestGetContainerInfoChannels:
 
         assert _spread_sample(list(range(100)), 4) == [24, 49, 74, 99]
         assert _spread_sample([1, 2], 4) == [1, 2]
+
+
+@pytest.mark.unit
+class TestFindAnnotationConfigForTable:
+    """Matching a saved config YAML to a tracking table."""
+
+    def _setup(self, tmp_path, entries):
+        """entries: [(annotation_id, file_name, config_name)]"""
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        paths, listing = {}, []
+        for ann_id, file_name, config_name in entries:
+            config = create_default_config()
+            config.name = config_name
+            config.spatial_coverage.channels = [ann_id % 5]
+            path = tmp_path / f"{ann_id}_{file_name}"
+            config.save_yaml(path)
+            paths[ann_id] = str(path)
+            listing.append({"id": ann_id, "file_name": file_name})
+        return paths, listing
+
+    def _find(self, tmp_path, entries, table_name, table_id=None, saved_ids=None):
+        from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
+
+        paths, listing = self._setup(tmp_path, entries)
+        for ann_id, saved_id in (saved_ids or {}).items():
+            config = AnnotationConfig.from_yaml(paths[ann_id])
+            config.omero.table_id = saved_id
+            config.save_yaml(paths[ann_id])
+        with patch("omero_annotate_ai.omero.omero_functions.list_annotations_by_namespace",
+                   return_value=listing), \
+             patch("omero_annotate_ai.omero.omero_functions.ezomero.get_file_annotation",
+                   side_effect=lambda conn, ann_id, folder: paths[ann_id]):
+            return find_annotation_config_for_table(Mock(), "plate", 803, table_name,
+                                                    table_id=table_id)
+
+    def test_prefers_config_of_the_same_table_id(self, tmp_path):
+        """Same-name tables: the config saved by another table is skipped."""
+        config = self._find(tmp_path, [
+            (51, "annotation_config_run.yaml", "run"),
+            (52, "annotation_config_run.yaml", "run"),
+        ], "run", table_id=100, saved_ids={51: 100, 52: 200})
+        assert config.spatial_coverage.channels == [51 % 5]
+
+    def test_skips_configs_of_other_tables(self, tmp_path):
+        config = self._find(tmp_path, [(61, "annotation_config_run.yaml", "run")],
+                            "run", table_id=100, saved_ids={61: 200})
+        assert config is None
+
+    def test_matches_by_config_name(self, tmp_path):
+        config = self._find(tmp_path, [
+            (11, "annotation_config_other.yaml", "other"),
+            (12, "annotation_config_run.yaml", "run"),
+            (13, "annotation_config_third.yaml", "third"),
+        ], "run")
+        assert config.name == "run"
+        assert config.spatial_coverage.channels == [12 % 5]
+
+    def test_picks_newest_matching_config(self, tmp_path):
+        config = self._find(tmp_path, [
+            (21, "annotation_config_run.yaml", "run"),
+            (24, "annotation_config_run.yaml", "run"),
+            (22, "annotation_config_run.yaml", "run"),
+        ], "run")
+        assert config.spatial_coverage.channels == [24 % 5]
+
+    def test_matches_on_name_even_with_another_file_name(self, tmp_path):
+        config = self._find(tmp_path, [(31, "renamed.yaml", "run")], "run")
+        assert config is not None and config.name == "run"
+
+    def test_none_when_nothing_matches(self, tmp_path):
+        assert self._find(tmp_path, [(41, "annotation_config_x.yaml", "x")], "run") is None
+
+
+@pytest.mark.unit
+class TestInferSettingsFromTable:
+    """Settings recovered from tracking-table rows when no config was saved."""
+
+    def test_patch_table(self):
+        from omero_annotate_ai.omero.omero_functions import infer_settings_from_table
+
+        rows = []
+        for img, category in [(1, "training"), (2, "training"), (3, "validation")]:
+            for patch in range(2):
+                rows.append({"image_uri": f"omero:image:{img}", "category": category,
+                             "channel": 1, "is_volumetric": False, "is_patch": True,
+                             "patch_width": 256, "patch_height": 128,
+                             "timepoint": 0, "z_slice": 0, "annotation_id": f"{img}_{patch}"})
+        settings = infer_settings_from_table(pd.DataFrame(rows))
+
+        assert settings == {
+            "channel": 1, "three_d": False, "use_patches": True,
+            "patch_size": [256, 128], "patches_per_image": 2,
+            "timepoint_mode": "specific", "timepoints": [0],
+            "z_slice_mode": "specific", "z_slices": [0],
+            "train_n": 2, "validate_n": 1, "test_n": 0,
+        }
+
+    def test_string_booleans_and_empty_table(self):
+        from omero_annotate_ai.omero.omero_functions import infer_settings_from_table
+
+        df = pd.DataFrame([{"image_uri": "omero:image:1", "category": "test", "channel": 0,
+                            "is_volumetric": "True", "is_patch": "False"}])
+        settings = infer_settings_from_table(df)
+        assert settings["three_d"] is True and settings["use_patches"] is False
+        assert "patch_size" not in settings and settings["test_n"] == 1
+        assert infer_settings_from_table(pd.DataFrame()) == {}

@@ -12,6 +12,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from typing_extensions import Literal
 
+from ..sources.uri import omero_uri
+
 
 # Helper functions for OMERO table serialization
 
@@ -157,6 +159,17 @@ def _resolve_annotation_ids(df: pd.DataFrame) -> List[str]:
 
 
 # OMERO table columns are non-nullable, so an id that is not set yet has to be
+def _row_str(row, key: str, default: str = "") -> str:
+    """Read a string field from a table row; NaN/blank (e.g. from CSV) gives ``default``."""
+    value = row.get(key, default)
+    try:
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
 # written as a real integer. 0 is the sentinel: no OMERO object has id 0.
 OMERO_ID_UNSET = 0
 
@@ -210,9 +223,28 @@ class ImageAnnotation(BaseModel):
     """Individual image annotation record for tracking processing state"""
 
     # Image identification
-    image_id: int = Field(description="OMERO image ID")
-    image_name: str = Field(description="OMERO image name")
+    image_uri: str = Field(
+        default="", description="Image URI: omero:image:<id> or the OME-Zarr image URL"
+    )
+    image_id: Optional[int] = Field(
+        default=None, description="OMERO image ID (OMERO images only)"
+    )
+    image_name: str = Field(description="Image name")
     annotation_id: str = Field(default="", description="Unique annotation identifier")
+
+    # Where the image came from (OME-Zarr)
+    level: int = Field(default=0, description="Multiscale level the pixel coordinates refer to")
+    well: str = Field(default="", description="Plate well, e.g. B2")
+    field: str = Field(default="", description="Field (well sample) path, e.g. 0")
+    well_metadata: Dict[str, str] = Field(
+        default_factory=dict, description="Well metadata the image was selected with"
+    )
+
+    @model_validator(mode="after")
+    def _fill_image_uri(self):
+        if not self.image_uri and self.image_id is not None:
+            self.image_uri = omero_uri(self.image_id)
+        return self
 
     # Processing parameters
     category: Literal["training", "validation", "test"] = Field(
@@ -819,6 +851,27 @@ class OMEROConfig(BaseModel):
         return len(self.get_all_container_ids()) > 1
 
 
+class ZarrConfig(BaseModel):
+    """OME-Zarr image selection (used when ``source == "zarr"``)."""
+
+    uris: List[str] = Field(
+        default_factory=list,
+        description="OME-Zarr plates, wells or images (http(s) URL or local path)",
+    )
+    level: int = Field(default=0, ge=0, description="Multiscale level to read")
+    fields: Literal["first", "all"] = Field(
+        default="first", description="Fields per well: the first one, or all"
+    )
+    wells: Optional[List[str]] = Field(default=None, description="Only these wells, e.g. ['B2']")
+    well_metadata: Optional[str] = Field(
+        default=None, description="CSV with a 'well' column (optional 'plate') and metadata columns"
+    )
+    well_filters: Optional[Dict[str, List[str]]] = Field(
+        default=None, description="Filter wells on well_metadata values (AND logic)"
+    )
+    well_filter_mode: Literal["include", "exclude"] = Field(default="include")
+
+
 class OutputConfig(BaseModel):
     """Output configuration"""
 
@@ -883,6 +936,8 @@ class AnnotationConfig(BaseModel):
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
+    source: Literal["omero", "zarr"] = Field(default="omero", description="Where images come from")
+    zarr: ZarrConfig = Field(default_factory=ZarrConfig)
 
     # Annotation tracking
     annotations: List[ImageAnnotation] = Field(
@@ -902,6 +957,18 @@ class AnnotationConfig(BaseModel):
         default_factory=list,
         description="Annotation classes (e.g. cell, nucleus) with display colors",
     )
+
+    @model_validator(mode="after")
+    def _check_zarr_source(self):
+        if self.source == "zarr":
+            if not self.zarr.uris:
+                raise ValueError("source 'zarr' needs at least one entry in zarr.uris")
+            # A Zarr run never writes to OMERO; read_only_mode is what makes the
+            # pipeline write masks and the table locally instead.
+            self.workflow.read_only_mode = True
+        if self.zarr.well_filters and not self.zarr.well_metadata:
+            raise ValueError("zarr.well_filters needs zarr.well_metadata (a CSV) to filter on")
+        return self
 
     def model_dump(self, **kwargs):
         """Override model_dump to handle Path serialization"""
@@ -1009,7 +1076,8 @@ class AnnotationConfig(BaseModel):
         for annotation in self.annotations:
             # Map ImageAnnotation fields to OMERO table columns
             row = {
-                "image_id": annotation.image_id,
+                "image_id": _optional_int_to_omero(annotation.image_id),
+                "image_uri": annotation.image_uri,
                 "image_name": annotation.image_name,
                 "annotation_id": annotation.annotation_id,
                 "train": annotation.category == "training",
@@ -1036,12 +1104,17 @@ class AnnotationConfig(BaseModel):
                 "z_start": annotation.z_start,
                 "z_end": annotation.z_end,
                 "z_length": annotation.z_length,
+                "level": annotation.level,
+                "well": annotation.well,
+                "field": annotation.field,
+                "well_metadata": json.dumps(annotation.well_metadata, sort_keys=True),
             }
             rows.append(row)
 
         # Create DataFrame with proper column order
         columns = [
             "image_id",
+            "image_uri",
             "image_name",
             "annotation_id",
             "train",
@@ -1066,6 +1139,10 @@ class AnnotationConfig(BaseModel):
             "z_start",
             "z_end",
             "z_length",
+            "level",
+            "well",
+            "field",
+            "well_metadata",
         ]
 
         df = pd.DataFrame(rows, columns=columns)
@@ -1082,6 +1159,7 @@ class AnnotationConfig(BaseModel):
             "z_start",
             "z_end",
             "z_length",
+            "level",
         ]
         for col in numeric_columns:
             if col in df.columns:
@@ -1122,7 +1200,12 @@ class AnnotationConfig(BaseModel):
         for position, (_, row) in enumerate(df.iterrows()):
             # Map OMERO table columns back to ImageAnnotation fields
             annotation_data = {
-                "image_id": int(row.get("image_id", -1)),
+                "image_id": _omero_id_to_optional_int(row.get("image_id")),
+                "image_uri": _row_str(row, "image_uri"),
+                "level": _row_int(row, "level", 0),
+                "well": _row_str(row, "well"),
+                "field": _row_str(row, "field"),
+                "well_metadata": json.loads(_row_str(row, "well_metadata") or "{}"),
                 "image_name": str(row.get("image_name", "")),
                 "annotation_id": annotation_ids[position],
                 "category": "training" if row.get("train", True) else "validation",
@@ -1330,7 +1413,8 @@ class AnnotationConfig(BaseModel):
         """Create configuration from YAML string or file path."""
         yaml_path = Path(yaml_source)
 
-        if yaml_path.exists():
+        # A multi-line string is YAML text; Path.exists() raises on long ones.
+        if "\n" not in str(yaml_source) and yaml_path.exists():
             with open(yaml_path, "r", encoding="utf-8") as f:
                 config_dict = yaml.safe_load(f)
             config = cls.from_dict(config_dict)

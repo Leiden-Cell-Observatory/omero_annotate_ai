@@ -5,9 +5,201 @@ from unittest.mock import patch, Mock, MagicMock
 import tempfile
 from pathlib import Path
 import numpy as np
+import pandas as pd
+import tifffile
 
 from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-from omero_annotate_ai.core.annotation_config import create_default_config
+from omero_annotate_ai.core.annotation_config import (
+    AnnotationConfig,
+    ImageAnnotation,
+    create_default_config,
+)
+from omero_annotate_ai.sources import ImageMeta, OmeroImageSource, clamp_region
+from omero_annotate_ai.sources.uri import (
+    annotation_id as make_annotation_id,
+    omero_uri,
+    parse_omero_uri,
+)
+
+
+def _read_only_config():
+    """Default config that needs no OMERO connection (nothing is written back)."""
+    config = create_default_config()
+    config.workflow.read_only_mode = True
+    return config
+
+
+class FakeImage:
+    """Handle with no OMERO methods: proves the pipeline only talks to the source."""
+
+    def __init__(self, image_id, name):
+        self.image_id = image_id
+        self.name = name
+
+
+class FakeImageSource:
+    """In-memory ImageSource over (t, c, z, y, x) arrays; records read calls."""
+
+    def __init__(self, arrays):
+        self.arrays = arrays  # {image_id: ndarray (t, c, z, y, x)}
+        self.reads = []
+
+    def get_image(self, image_id):
+        if isinstance(image_id, str):
+            image_id = parse_omero_uri(image_id)
+        if image_id not in self.arrays:
+            raise LookupError(image_id)
+        return FakeImage(image_id, f"img{image_id}")
+
+    def metadata(self, image):
+        t, c, z, y, x = self.arrays[image.image_id].shape
+        return ImageMeta(omero_uri(image.image_id), image.name, t, c, z, y, x,
+                         str(self.arrays[image.image_id].dtype))
+
+    def read_plane(self, image, *, t, c, z, region=None):
+        self.reads.append(("plane", image.image_id, t, c, z, region))
+        plane = self.arrays[image.image_id][t, c, z]
+        if region is not None:
+            x, y, w, h = clamp_region(region, *plane.shape)
+            plane = plane[y:y + h, x:x + w]
+        return plane
+
+    def read_volume(self, image, *, t, c, z_start, z_end, region=None):
+        self.reads.append(("volume", image.image_id, t, c, (z_start, z_end), region))
+        return np.stack([
+            self.read_plane(image, t=t, c=c, z=z, region=region)
+            for z in range(z_start, z_end + 1)
+        ])
+
+
+@pytest.mark.unit
+class TestImageSourceSeam:
+    def test_annotations_carry_uri_and_hash_ids(self, tmp_path):
+        source = FakeImageSource({1: np.zeros((1, 1, 2, 16, 16), np.uint16)})
+        config = _read_only_config()
+        config.output.output_directory = tmp_path
+        config.spatial_coverage.z_slice_mode = "all"
+        config.training.segment_all = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+
+        pipeline._prepare_processing_units([source.get_image(1)])
+
+        anns = pipeline.config.annotations
+        assert {a.image_uri for a in anns} == {"omero:image:1"}
+        assert {a.image_id for a in anns} == {1}
+        assert sorted(a.annotation_id for a in anns) == sorted(
+            make_annotation_id("omero:image:1", 0, z) for z in (0, 1)
+        )
+
+    def test_processing_units_are_keyed_by_uri(self, tmp_path):
+        config = _read_only_config()
+        config.output.output_directory = tmp_path
+        config.annotations.append(
+            ImageAnnotation(image_id=3, image_name="a", annotation_id="k_0_0")
+        )
+        pipeline = AnnotationPipeline(config, conn=None, image_source=FakeImageSource({}))
+        (key, ann_id, meta, row), = pipeline._convert_annotations_to_processing_units(
+            config.annotations
+        )
+        assert key == "omero:image:3"
+        assert (meta["image_uri"], meta["image_id"]) == ("omero:image:3", 3)
+
+    """The pipeline reads image sizes and pixels only through its ImageSource."""
+
+    def test_default_source_is_omero_on_the_same_connection(self):
+        conn = Mock()
+        pipeline = AnnotationPipeline(create_default_config(), conn=conn)
+        assert isinstance(pipeline.image_source, OmeroImageSource)
+        assert pipeline.image_source.conn is conn
+
+    def test_prepare_units_uses_source_metadata_without_a_connection(self, tmp_path):
+        arrays = {1: np.zeros((2, 1, 3, 32, 32), np.uint16),
+                  2: np.zeros((2, 1, 3, 32, 32), np.uint16)}
+        source = FakeImageSource(arrays)
+        config = create_default_config()
+        config.output.output_directory = tmp_path
+        config.spatial_coverage.timepoint_mode = "all"
+        config.spatial_coverage.z_slice_mode = "all"
+        config.training.segment_all = True
+        config.workflow.read_only_mode = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+
+        pipeline._prepare_processing_units([source.get_image(1), source.get_image(2)])
+
+        units = {(a.image_id, a.timepoint, a.z_slice) for a in pipeline.config.annotations}
+        assert units == {(i, t, z) for i in (1, 2) for t in range(2) for z in range(3)}
+        assert {a.image_name for a in pipeline.config.annotations} == {"img1", "img2"}
+
+    def test_patch_coordinates_use_source_size(self):
+        source = FakeImageSource({1: np.zeros((1, 1, 1, 50, 80), np.uint16)})
+        config = create_default_config()
+        config.spatial_coverage.patch_size = [20, 30]
+        config.spatial_coverage.patches_per_image = 3
+        config.spatial_coverage.random_patches = False  # random placement may fit fewer
+        config.workflow.read_only_mode = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+
+        coords, _ = pipeline._generate_patch_coordinates(source.get_image(1))
+
+        assert len(coords) == 3
+        assert all(0 <= x <= 80 - 30 and 0 <= y <= 50 - 20 for x, y in coords)
+
+    def test_no_connection_requires_read_only_mode(self):
+        """Without a connection nothing can be written back, so fail before annotating."""
+        source = FakeImageSource({1: np.zeros((1, 1, 1, 4, 4), np.uint16)})
+        with pytest.raises(ValueError, match="OMERO connection is required"):
+            AnnotationPipeline(create_default_config(), conn=None, image_source=source)
+
+    def test_omero_source_with_its_own_connection_is_accepted(self):
+        config = create_default_config()
+        config.workflow.read_only_mode = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=OmeroImageSource(Mock()))
+        assert isinstance(pipeline.image_source, OmeroImageSource)
+
+    def test_default_omero_source_without_connection_raises_in_read_only_mode(self):
+        config = create_default_config()
+        config.workflow.read_only_mode = True
+        with pytest.raises(ValueError, match="OMERO connection is required"):
+            AnnotationPipeline(config, conn=None)
+
+    def _pipeline(self, arrays, use_patches=False):
+        config = create_default_config()
+        config.spatial_coverage.use_patches = use_patches
+        source = FakeImageSource(arrays)
+        config.workflow.read_only_mode = True
+        return AnnotationPipeline(config, conn=None, image_source=source), source
+
+    def test_load_plane(self):
+        data = np.arange(2 * 2 * 3 * 8 * 8, dtype=np.uint16).reshape(2, 2, 3, 8, 8)
+        pipeline, source = self._pipeline({1: data})
+        image = source.get_image(1)
+        out = pipeline._load_image_data(image, {"timepoint": 1, "z_slice": 2, "channel_override": 1})
+        np.testing.assert_array_equal(out, data[1, 1, 2])
+
+    def test_load_volume_is_3d(self):
+        data = np.ones((1, 1, 5, 8, 8), dtype=np.uint16)
+        pipeline, source = self._pipeline({1: data})
+        out = pipeline._load_image_data(
+            source.get_image(1),
+            {"timepoint": 0, "is_volumetric": True, "z_start": 1, "z_end": 3, "z_length": 3},
+        )
+        assert out.shape == (3, 8, 8)
+
+    def test_patch_is_read_as_region(self):
+        data = np.arange(64, dtype=np.uint16).reshape(1, 1, 1, 8, 8)
+        pipeline, source = self._pipeline({1: data}, use_patches=True)
+        out = pipeline._load_image_data(
+            source.get_image(1),
+            {"timepoint": 0, "z_slice": 0, "patch_x": 2, "patch_y": 1,
+             "patch_width": 3, "patch_height": 4},
+        )
+        np.testing.assert_array_equal(out, data[0, 0, 0, 1:5, 2:5])
+        assert source.reads[-1][-1] == (2, 1, 3, 4)  # region passed, not cropped afterwards
+
+    def test_get_images_by_ids_uses_source_and_skips_missing(self):
+        pipeline, source = self._pipeline({1: np.zeros((1, 1, 1, 4, 4), np.uint16)})
+        images = pipeline.get_images_by_ids([1, 99])
+        assert [i.image_id for i in images] == [1]
 
 
 @pytest.mark.unit
@@ -391,41 +583,25 @@ class TestAnnotationPipeline:
         assert categories.count("training") == 2  # 2 images × 1 patches each
         assert categories.count("validation") == 1  # 1 image × 1 patches
     
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_load_image_data_2d_with_single_function(self, mock_get_dask_single):
-        """Test loading 2D image data using get_dask_image_single."""
-        import numpy as np
-
-        mock_image_data = np.random.rand(100, 100)
-        mock_get_dask_single.return_value = mock_image_data
-
-        config = create_default_config()
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
+    def test_load_image_data_2d(self):
+        """A 2D unit loads one (y, x) plane at its z-slice."""
+        source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
+        pipeline = AnnotationPipeline(_read_only_config(), conn=None, image_source=source)
         metadata = {
             "timepoint": 0,
             "z_slice": 5,
             "is_volumetric": False
         }
 
-        result = pipeline._load_image_data(mock_image, metadata)
+        result = pipeline._load_image_data(source.get_image(1), metadata)
 
         assert result.shape == (100, 100)
-        mock_get_dask_single.assert_called_once()
+        assert len(source.reads) == 1
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_load_image_data_3d_with_single_function(self, mock_get_dask_single):
-        """Test loading 3D volumetric image data using get_dask_image_single."""
-        import numpy as np
-
-        mock_image_data = np.random.rand(10, 100, 100)  # z, y, x
-        mock_get_dask_single.return_value = mock_image_data
-
-        config = create_default_config()
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
+    def test_load_image_data_3d(self):
+        """A volumetric unit loads its whole z-range as (z, y, x)."""
+        source = FakeImageSource({1: np.random.rand(1, 1, 10, 100, 100)})
+        pipeline = AnnotationPipeline(_read_only_config(), conn=None, image_source=source)
         metadata = {
             "timepoint": 0,
             "z_start": 0,
@@ -434,14 +610,9 @@ class TestAnnotationPipeline:
             "is_volumetric": True
         }
 
-        result = pipeline._load_image_data(mock_image, metadata)
+        result = pipeline._load_image_data(source.get_image(1), metadata)
 
         assert result.shape == (10, 100, 100)
-        mock_get_dask_single.assert_called_once()
-
-    # Keep the old test names for backward compatibility but mark them as aliases
-    test_load_image_data_2d = test_load_image_data_2d_with_single_function
-    test_load_image_data_3d = test_load_image_data_3d_with_single_function
     
     def test_config_annotation_management(self):
         """Test config annotation management methods."""
@@ -986,6 +1157,7 @@ class TestSpatialSampling:
 
         # Mock image with 10 z-slices
         mock_image = Mock()
+        mock_image.getId.return_value = 1
         mock_image.getSizeZ.return_value = 10
 
         z_slices = pipeline._get_z_slices_for_image(mock_image)
@@ -1006,6 +1178,7 @@ class TestSpatialSampling:
         pipeline = AnnotationPipeline(config, conn=mock_conn)
 
         mock_image = Mock()
+        mock_image.getId.return_value = 1
         mock_image.getSizeZ.return_value = 10
 
         z_slices = pipeline._get_z_slices_for_image(mock_image)
@@ -1024,6 +1197,7 @@ class TestSpatialSampling:
         pipeline = AnnotationPipeline(config, conn=mock_conn)
 
         mock_image = Mock()
+        mock_image.getId.return_value = 1
         mock_image.getSizeT.return_value = 12
 
         timepoints = pipeline._get_timepoints_for_image(mock_image)
@@ -1115,37 +1289,27 @@ class TestAnnotationTimestamps:
 class TestContextChannelHook:
     """Tests for context channel hook in _run_micro_sam_annotation."""
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_build_context_images_empty_when_no_context_channels(self, mock_dask):
+    def test_build_context_images_empty_when_no_context_channels(self):
         """With no context_channels, context_images should be list of empty dicts."""
         import numpy as np
         from omero_annotate_ai.core.annotation_config import create_default_config
         from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
-        label_arr = np.zeros((64, 64), dtype=np.uint16)
-        mock_dask.return_value = label_arr
+        source = FakeImageSource({1: np.zeros((1, 1, 1, 64, 64), dtype=np.uint16)})
 
         config = create_default_config()
         config.spatial_coverage.channels = [0]
         # No context_channels set
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
-        mock_image.getId.return_value = 1
-        mock_image.getSizeX.return_value = 64
-        mock_image.getSizeY.return_value = 64
-        mock_image.getSizeC.return_value = 1
-        mock_image.getSizeZ.return_value = 1
-        mock_image.getSizeT.return_value = 1
+        config.workflow.read_only_mode = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
-        batch_data = [(mock_image, "ann1", meta, 0)]
+        batch_data = [(source.get_image(1), "ann1", meta, 0)]
 
         context_images = pipeline._build_context_images(batch_data)
         assert context_images == [{}]
 
-    @patch('omero_annotate_ai.core.annotation_pipeline.get_dask_image_single')
-    def test_build_context_images_loads_correct_channel(self, mock_dask):
+    def test_build_context_images_loads_correct_channel(self):
         """With context_channels=[1], loads channel 1 for each batch item."""
         import numpy as np
         from omero_annotate_ai.core.annotation_config import create_default_config
@@ -1153,29 +1317,19 @@ class TestContextChannelHook:
 
         label_arr = np.zeros((64, 64), dtype=np.uint16)
         ctx_arr = np.ones((64, 64), dtype=np.uint16) * 100
-        # Return label_arr for channel 0, ctx_arr for channel 1
-        def side_effect(**kwargs):
-            if kwargs.get("channels") == [1]:
-                return ctx_arr
-            return label_arr
-        mock_dask.side_effect = side_effect
+        # Channel 0 is the label channel, channel 1 the context channel
+        data = np.stack([label_arr, ctx_arr])[None, :, None]  # (t, c, z, y, x)
+        source = FakeImageSource({1: data})
 
         config = create_default_config()
         config.spatial_coverage.channels = [0, 1]
         config.spatial_coverage.context_channels = [1]
         config.spatial_coverage.context_channel_names = ["DAPI"]
-        pipeline = AnnotationPipeline(config, conn=Mock())
-
-        mock_image = Mock()
-        mock_image.getId.return_value = 1
-        mock_image.getSizeX.return_value = 64
-        mock_image.getSizeY.return_value = 64
-        mock_image.getSizeC.return_value = 2
-        mock_image.getSizeZ.return_value = 1
-        mock_image.getSizeT.return_value = 1
+        config.workflow.read_only_mode = True
+        pipeline = AnnotationPipeline(config, conn=None, image_source=source)
 
         meta = {"timepoint": 0, "z_slice": 0, "is_volumetric": False}
-        batch_data = [(mock_image, "ann1", meta, 0)]
+        batch_data = [(source.get_image(1), "ann1", meta, 0)]
 
         context_images = pipeline._build_context_images(batch_data)
         assert len(context_images) == 1
@@ -1563,6 +1717,61 @@ class TestMicroSamSeparateChannelSaving:
         assert (result["train_annotation_input"] / "img_001.tif").exists()
 
 
+def _zarr_config(tmp_path, uris, **zarr):
+    config = AnnotationConfig(name="zarr_run", source="zarr", zarr={"uris": uris, **zarr})
+    config.output.output_directory = tmp_path / "out"
+    config.training.segment_all = True
+    config.spatial_coverage.use_patches = False
+    return config
+
+
+@pytest.mark.integration
+class TestZarrWorkflow:
+    def test_default_source_for_zarr_config(self, tmp_path, ngff_stores):
+        from omero_annotate_ai.sources import ZarrImageSource
+
+        pipeline = AnnotationPipeline(_zarr_config(tmp_path, [ngff_stores["plate"]], level=1))
+        assert isinstance(pipeline.image_source, ZarrImageSource)
+        assert pipeline.image_source.level == 1
+
+    def test_no_images_error_names_the_uris(self, tmp_path, ngff_stores):
+        config = _zarr_config(tmp_path, [ngff_stores["plate"]], wells=["H12"])
+        with pytest.raises(ValueError, match="plate.zarr"), pytest.warns(UserWarning, match="H12"):
+            AnnotationPipeline(config).initialize_workflow()
+
+    def test_end_to_end_custom_annotation(self, tmp_path, ngff_stores):
+        config = _zarr_config(tmp_path, [ngff_stores["plate"]], level=1, wells=["A1", "B3"])
+        pipeline = AnnotationPipeline(config)
+        seg_dir = tmp_path / "seg"
+
+        def fake_annotate(batch):
+            seg_dir.mkdir(exist_ok=True)
+            metadata = []
+            for i, (image_obj, ann_id, meta, row_idx) in enumerate(batch):
+                plane = pipeline._load_image_data(image_obj, meta)
+                tifffile.imwrite(seg_dir / f"seg_{i:05d}.tif",
+                                 (plane > plane.mean()).astype(np.uint32))
+                metadata.append((ann_id, meta, row_idx))
+            return {"metadata": metadata, "annotations_path": seg_dir}
+
+        pipeline.run_custom_annotation(fake_annotate)
+
+        anns = pipeline.config.annotations
+        assert [(a.well, a.field, a.level, a.image_id) for a in anns] == [
+            ("A1", "0", 1, None), ("B3", "0", 1, None)]
+        assert anns[0].image_name == "testplate_A1_0"
+        assert anns[0].annotation_id == make_annotation_id(anns[0].image_uri, 0, 0)
+        out = tmp_path / "out"
+        for ann in anns:
+            mask = tifffile.imread(out / "annotation_output" / f"{ann.annotation_id}_mask.tif")
+            assert mask.shape == (32, 40)  # level 1 grid
+            assert (out / "annotation_input" / f"{ann.annotation_id}.tif").exists()
+        table = pd.read_csv(out / "tracking_table.csv")
+        assert list(table["image_uri"]) == [a.image_uri for a in anns]
+        assert table["processed"].all()
+        assert (out / "well_matching.csv").exists()
+
+
 @pytest.mark.unit
 class TestFindExistingTable:
     """Which tracking table a resumed run picks up."""
@@ -1601,3 +1810,93 @@ class TestFindExistingTable:
                    return_value=found) as by_name:
             assert pipeline._find_existing_table() == 22162
         by_name.assert_called_once()
+
+
+@pytest.mark.unit
+class TestExtendOnResume:
+    """A resumed run with higher image counts adds unused images to the table."""
+
+    N_IMAGES = 10
+
+    def _pipeline(self, n_images=N_IMAGES, train_n=2, validate_n=1, test_n=0):
+        source = FakeImageSource(
+            {i: np.zeros((1, 1, 1, 8, 8), np.uint16) for i in range(1, n_images + 1)}
+        )
+        config = create_default_config()
+        config.workflow.resume_from_table = True
+        config.training.train_n = train_n
+        config.training.validate_n = validate_n
+        config.training.test_n = test_n
+        # Existing table: images 1-2 training (1 done), image 3 validation
+        config.annotations.extend([
+            ImageAnnotation(image_id=1, image_name="img1", annotation_id="a1", channel=0,
+                            category="training", processed=True, roi_id=5, label_id=6),
+            ImageAnnotation(image_id=2, image_name="img2", annotation_id="a2", channel=0,
+                            category="training"),
+            ImageAnnotation(image_id=3, image_name="img3", annotation_id="a3", channel=0,
+                            category="validation"),
+        ])
+        pipeline = AnnotationPipeline(config, conn=Mock(), image_source=source)
+        pipeline.get_image_uris = lambda: [omero_uri(i) for i in range(1, n_images + 1)]
+        return pipeline
+
+    @staticmethod
+    def _images(config, category):
+        return {a.image_uri for a in config.annotations if a.category == category}
+
+    def test_adds_only_unused_images_per_category(self):
+        pipeline = self._pipeline()
+        pipeline.config.training.train_n = 4
+        pipeline.config.training.validate_n = 2
+        pipeline.config.training.test_n = 1
+
+        assert pipeline._extend_annotations() == 4
+
+        config = pipeline.config
+        assert len(self._images(config, "training")) == 4
+        assert len(self._images(config, "validation")) == 2
+        assert len(self._images(config, "test")) == 1
+        new = {a.image_uri for a in config.annotations[3:]}
+        assert not new & {omero_uri(1), omero_uri(2), omero_uri(3)}
+        assert len(new) == 4
+
+    def test_keeps_existing_rows_and_ids(self):
+        pipeline = self._pipeline()
+        pipeline.config.training.train_n = 5
+        before = [a.model_dump() for a in pipeline.config.annotations]
+
+        pipeline._extend_annotations()
+
+        assert [a.model_dump() for a in pipeline.config.annotations[:3]] == before
+        done = pipeline.config.annotations[0]
+        assert (done.processed, done.roi_id, done.label_id) == (True, 5, 6)
+        assert not any(a.processed for a in pipeline.config.annotations[3:])
+
+    def test_adds_what_is_left_when_too_few_images(self, capsys):
+        pipeline = self._pipeline(n_images=4)
+        pipeline.config.training.train_n = 5
+
+        assert pipeline._extend_annotations() == 1
+        assert self._images(pipeline.config, "training") == {
+            omero_uri(1), omero_uri(2), omero_uri(4)}
+        assert "Only 1 unused images left for training" in capsys.readouterr().out
+
+    def test_lower_counts_never_drop_rows(self):
+        pipeline = self._pipeline()
+        pipeline.config.training.train_n = 1
+        pipeline.config.training.validate_n = 0
+
+        assert pipeline._extend_annotations() == 0
+        assert [a.annotation_id for a in pipeline.config.annotations] == ["a1", "a2", "a3"]
+
+    def test_schema_updates_the_table_only_when_images_were_added(self):
+        pipeline = self._pipeline()
+        pipeline.table_id = 22159
+        with patch.object(pipeline, "_replace_omero_table_from_config") as replace:
+            pipeline.define_annotation_schema([])
+            replace.assert_not_called()
+
+            pipeline.config.training.train_n = 3
+            pipeline.define_annotation_schema([])
+            replace.assert_called_once()
+        assert len(self._images(pipeline.config, "training")) == 3
