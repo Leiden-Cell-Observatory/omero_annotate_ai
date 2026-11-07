@@ -7,11 +7,6 @@ repo_name = "Leiden-Cell-Observatory/omero_annotate_ai"
 edit_uri = "edit/main/docs/"
 copyright = "Leiden Cell Observatory · NL-BioImaging"
 
-# Design notes and implementation plans live next to the docs but are not published.
-exclude_docs = """
-superpowers/
-"""
-
 extra_css = ["stylesheets/extra.css"]
 
 nav = [
