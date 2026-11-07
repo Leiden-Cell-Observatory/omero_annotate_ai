@@ -40,6 +40,8 @@ STRING_WIDTHS: dict[str, int] = {
     "well": 32,
     "field": 64,
     "well_metadata": 4096,
+    "input_digest": 64,
+    "mask_digest": 64,
 }
 DEFAULT_STRING_WIDTH = 256
 

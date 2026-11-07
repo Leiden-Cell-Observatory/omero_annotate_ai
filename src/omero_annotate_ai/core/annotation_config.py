@@ -327,6 +327,18 @@ class ImageAnnotation(BaseModel):
         default=None, description="OMERO schema attachment ID"
     )
 
+    # Integrity: SHA-256 of the pixels (dtype, shape, values; see bundle.pixel_digest)
+    input_digest: str | None = Field(
+        default=None, description="Digest of the annotated image's pixels"
+    )
+    mask_digest: str | None = Field(
+        default=None, description="Digest of the mask's pixels"
+    )
+    error: str | None = Field(
+        default=None,
+        description="Last upload error (kept in the local tracking_table.csv only)",
+    )
+
     # Channel presentation (how the image was displayed during annotation)
     channel_presentation: list[ChannelPresentation] | None = Field(
         default=None,
@@ -1304,6 +1316,8 @@ class AnnotationConfig(BaseModel):
                 "well": annotation.well,
                 "field": annotation.field,
                 "well_metadata": json.dumps(annotation.well_metadata, sort_keys=True),
+                "input_digest": annotation.input_digest or "",
+                "mask_digest": annotation.mask_digest or "",
             }
             rows.append(row)
 
@@ -1341,6 +1355,8 @@ class AnnotationConfig(BaseModel):
             "well",
             "field",
             "well_metadata",
+            "input_digest",
+            "mask_digest",
         ]
 
         df = pd.DataFrame(rows, columns=columns)
@@ -1423,6 +1439,9 @@ class AnnotationConfig(BaseModel):
                 "processed": bool(row.get("processed", False)),
                 "annotation_type": str(row.get("annotation_type", "segmentation_mask")),
                 "session": _row_int(row, "session", -1),
+                "input_digest": _row_str(row, "input_digest") or None,
+                "mask_digest": _row_str(row, "mask_digest") or None,
+                "error": _row_str(row, "error") or None,
             }
 
             # Handle optional ID fields. These reach OMERO as typed link columns
