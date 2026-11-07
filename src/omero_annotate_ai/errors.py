@@ -23,3 +23,23 @@ class TableValueTooLongError(OmeroAnnotateAIError, ValueError):
 
 class AnnotatorUnavailable(OmeroAnnotateAIError, ImportError):
     """The annotation tool (e.g. micro-SAM with napari) is not installed."""
+
+
+class RemoteError(OmeroAnnotateAIError):
+    """Reading from or writing to OMERO failed; the original error is chained."""
+
+
+class TableReadError(RemoteError):
+    """The tracking table could not be read. A resume stops rather than start fresh."""
+
+
+class TableWriteError(RemoteError):
+    """The tracking table could not be updated. Uploads stay tagged; resume repairs."""
+
+
+class IntegrityError(OmeroAnnotateAIError):
+    """Pixels on disk or on OMERO no longer match the digest recorded for them."""
+
+
+class Cancelled(OmeroAnnotateAIError):
+    """The caller's ``cancel`` callback asked a long operation to stop."""

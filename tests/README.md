@@ -46,8 +46,14 @@ removed.
 ## Where tests live
 
 Unit tests mirror the source modules, e.g. `planning.py` → `tests/test_planning.py`,
-`annotators.py` → `tests/test_annotators.py`, `core/annotation_pipeline.py` →
+`annotators.py` → `tests/test_annotators.py`, `session.py` → `tests/test_session.py`,
+`reconcile.py` → `tests/test_reconcile.py`, `core/annotation_pipeline.py` →
 `tests/test_pipeline.py`. Add tests to the file of the module you change.
+
+`tests/fakes.py` holds an in-memory OMERO (`FakeOmero`: tracking table, label files,
+ROIs and their tags) and image source. `FakeOmero(fail={...}, crash={...})` makes a call
+fail with `ConnectionError` or "kill the process" with `Crash`, which the crash-matrix
+tests in `tests/test_reconcile.py` use to check that resuming repairs every state.
 
 ## Markers
 

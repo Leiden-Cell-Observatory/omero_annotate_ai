@@ -16,12 +16,16 @@ OME-Zarr sets. Files are written atomically, so a crash never leaves half a file
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
+
+import numpy as np
+import tifffile
 
 HOME_ENV = "OMERO_ANNOTATE_AI_HOME"
 
@@ -102,6 +106,29 @@ def collect_masks(mask_dir: Path, annotation_ids: Sequence[str]) -> dict[str, Pa
     return masks
 
 
+def input_path(bundle: Path, annotation_id: str) -> Path:
+    """Where a unit's annotated image is kept: ``annotation_input/{id}.tif``."""
+    return bundle / "annotation_input" / f"{annotation_id}.tif"
+
+
 def mask_path(bundle: Path, annotation_id: str) -> Path:
     """Where the mask of ``annotation_id`` is kept."""
     return bundle / "annotation_output" / f"{annotation_id}_mask.tif"
+
+
+def pixel_digest(pixels: np.ndarray) -> str:
+    """SHA-256 of an image's pixels: data type, shape and values, not the file.
+
+    A mask saved locally and the same mask uploaded zlib-compressed to OMERO have
+    different bytes on disk but the same digest.
+    """
+    array = np.ascontiguousarray(pixels)
+    array = array.astype(array.dtype.newbyteorder("<"), copy=False)
+    digest = hashlib.sha256(f"{array.dtype.str}|{array.shape}|".encode())
+    digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def file_digest(path: Path) -> str:
+    """:func:`pixel_digest` of a TIFF file."""
+    return pixel_digest(np.asarray(tifffile.imread(path)))

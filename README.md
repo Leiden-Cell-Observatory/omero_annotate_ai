@@ -30,7 +30,7 @@ flowchart LR
 ```
 
 - **Jupyter widgets** for connecting to OMERO and configuring a run step by step, no code needed.
-- **Resumable:** the tracking table records which images and patches are done, so an interrupted run continues where it stopped.
+- **Resumable and crash-safe:** each mask is saved locally, uploaded with a tag and then recorded in the tracking table, so an interrupted run continues where it stopped without duplicate uploads; pixel digests flag files that changed afterwards.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
 - **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).

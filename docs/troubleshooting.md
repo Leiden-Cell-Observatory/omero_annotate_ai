@@ -43,6 +43,15 @@ It waits until you close the last napari window of the batch. That is normal.
 Each image needs an embedding before you can click. Without a GPU this takes tens of
 seconds per image. Use `vit_b_lm`, switch on patches, and keep batches small.
 
+**An upload failed.**
+The run carries on with the next unit; the failed one stays unannotated and its error is
+in the `error` column of the set's `tracking_table.csv`. Resume the set to try again.
+
+**Resuming says a unit "needs review".**
+Its mask in your folder and its label file on OMERO differ. Delete the one that is wrong
+and resume again; see
+[Pixel checks](tutorials/resume-and-repeat.md#pixel-checks).
+
 **"Not enough images" when starting.**
 `train_n + validate_n + test_n` is larger than the number of images in the container
 (after well filtering). Lower the counts or use `segment_all: true`.

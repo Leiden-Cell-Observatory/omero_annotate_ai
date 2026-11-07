@@ -1157,3 +1157,41 @@ class TestLabelUpload:
         assert np.array_equal(uploaded["data"], mask)
         assert uploaded["description"].startswith("omero-annotate-ai:7:1_0_2 | ")
         assert "t=0" in uploaded["description"] and "z=2" in uploaded["description"]
+
+
+@pytest.mark.unit
+class TestFindTagged:
+    """Uploads are found by their exact tag: unit ann1 never adopts ann10's upload."""
+
+    def _conn(self, roi_descriptions, label_descriptions):
+        conn = Mock()
+        rois = []
+        for roi_id, description in roi_descriptions.items():
+            roi = Mock()
+            roi.getId.return_value.getValue.return_value = roi_id
+            roi.getDescription.return_value.getValue.return_value = description
+            rois.append(roi)
+        conn.getRoiService.return_value.findByImage.return_value.rois = rois
+        labels = [
+            {"id": label_id, "description": description}
+            for label_id, description in label_descriptions.items()
+        ]
+        return conn, labels
+
+    def test_exact_tag_only(self):
+        from omero_annotate_ai.omero import omero_functions
+
+        conn, labels = self._conn(
+            {
+                1: "omero-annotate-ai:7:ann1 | Training set: x | t=0",
+                2: "omero-annotate-ai:7:ann10 | x",
+            },
+            {3: "omero-annotate-ai:7:ann1 | x", 4: "omero-annotate-ai:8:ann1 | x"},
+        )
+        with patch.object(
+            omero_functions, "list_annotations_by_namespace", return_value=labels
+        ):
+            assert omero_functions.find_tagged(conn, 5, "omero-annotate-ai:7:ann1") == (
+                [3],
+                [1],
+            )
