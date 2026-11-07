@@ -118,6 +118,13 @@ def setup_training(
         'training_result': training_result,
     }
     
+    # The normalisation micro-SAM must apply when loading (exports keep native bit
+    # depth); recorded next to the exported data by prepare_training_data_*.
+    sidecar = output_dir / "normalization.json"
+    if sidecar.exists():
+        import json
+        training_config['normalization'] = json.loads(sidecar.read_text())
+
     # Add any additional framework-specific parameters
     training_config.update(kwargs)
     
@@ -209,6 +216,10 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
     
     print(f"Training device: {device}")
     
+    # micro-SAM requires inputs in [0, 255]; exports keep native bit depth.
+    from omero_annotate_ai.processing.normalization import microsam_raw_transform
+    raw_transform = microsam_raw_transform(config.get('normalization'))
+
     # Create data loaders with correct API
     train_loader = sam_training.default_sam_loader(
         raw_paths=str(config["train_input"]),
@@ -219,7 +230,7 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
         patch_shape=patch_shape_3d,
         batch_size=config["batch_size"],
         shuffle=True,
-        raw_transform=sam_training.identity,
+        raw_transform=raw_transform,
         sampler=sampler,
     )
 
@@ -232,7 +243,7 @@ def _run_microsam_training(config: Dict[str, Any]) -> Dict[str, Any]:
         patch_shape=patch_shape_3d,
         batch_size=config["batch_size"],
         shuffle=True,
-        raw_transform=sam_training.identity,
+        raw_transform=raw_transform,
         sampler=sampler,
     )
     

@@ -465,26 +465,6 @@ class SpatialCoverage(BaseModel):
         "Defaults to cycle ['blue', 'magenta', 'green', 'yellow', 'cyan'].",
     )
 
-    # Image normalization settings (applied per-image, not per-patch)
-    normalization_method: Literal["percentile", "none"] = Field(
-        default="percentile",
-        description="How to normalize image intensities. "
-        "'percentile' computes per-image percentile bounds. "
-        "'none' uses the full intensity range without normalization.",
-    )
-    percentile_low: float = Field(
-        default=0.5,
-        ge=0,
-        le=100,
-        description="Lower percentile for intensity normalization (used when normalization_method='percentile')",
-    )
-    percentile_high: float = Field(
-        default=99.5,
-        ge=0,
-        le=100,
-        description="Upper percentile for intensity normalization (used when normalization_method='percentile')",
-    )
-
     # Patch processing settings (moved from ProcessingConfig)
     use_patches: bool = Field(
         default=False, description="Extract patches vs full images"
@@ -660,6 +640,39 @@ class SpatialCoverage(BaseModel):
                         f"must match context_channels length ({len(self.context_channels)})"
                     )
 
+        return self
+
+
+class NormalizationConfig(BaseModel):
+    """Intensity normalisation of model input images.
+
+    Defined once and applied either when exporting training data
+    (``apply_at_export``) or by the trainer, which is configured from the same values
+    (see :mod:`omero_annotate_ai.processing.normalization`).
+    """
+
+    method: Literal["percentile", "none"] = Field(
+        default="percentile",
+        description="'percentile': per-image percentile bounds mapped to [0, 1]. "
+        "'none': raw intensities.",
+    )
+    percentile_low: float = Field(
+        default=1.0, ge=0, le=100, description="Lower percentile, mapped to 0"
+    )
+    percentile_high: float = Field(
+        default=99.8, ge=0, le=100, description="Upper percentile, mapped to 1"
+    )
+    clip: bool = Field(default=True, description="Clip normalised values to [0, 1]")
+    apply_at_export: bool = Field(
+        default=False,
+        description="Write float32 normalised images (bounds recorded in normalization.json) "
+        "instead of native bit depth",
+    )
+
+    @model_validator(mode="after")
+    def validate_percentiles(self):
+        if self.percentile_low >= self.percentile_high:
+            raise ValueError("percentile_low must be below percentile_high")
         return self
 
 
@@ -983,6 +996,7 @@ class AnnotationConfig(BaseModel):
         )
     )
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
 
     # Technical configuration
     ai_model: AIModelConfig = Field(default_factory=AIModelConfig)
@@ -1010,6 +1024,40 @@ class AnnotationConfig(BaseModel):
         default_factory=list,
         description="Annotation classes (e.g. cell, nucleus) with display colors",
     )
+
+    # Open fields for anything the structured schema does not cover
+    notes: Optional[str] = Field(
+        default=None,
+        description="Free-text notes about the annotation set (context, caveats, known issues)",
+    )
+    custom_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional key-value metadata not covered by the schema",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_normalization(cls, data: Any) -> Any:
+        """Move normalisation settings that used to live in spatial_coverage."""
+        if not isinstance(data, dict):
+            return data
+        spatial = data.get("spatial_coverage")
+        if not isinstance(spatial, dict):
+            return data
+        legacy = {
+            "normalization_method": "method",
+            "percentile_low": "percentile_low",
+            "percentile_high": "percentile_high",
+        }
+        if not any(key in spatial for key in legacy):
+            return data
+        data = dict(data)
+        spatial = dict(spatial)
+        moved = {new: spatial.pop(old) for old, new in legacy.items() if old in spatial}
+        data["spatial_coverage"] = spatial
+        if "normalization" not in data:
+            data["normalization"] = moved
+        return data
 
     @model_validator(mode="after")
     def _check_zarr_source(self):
@@ -1859,6 +1907,13 @@ training:
   validate_n: 3
   segment_all: false
   split_unit: "image"
+
+normalization:
+  method: "percentile"         # "percentile" or "none" (raw intensities)
+  percentile_low: 1.0          # mapped to 0
+  percentile_high: 99.8        # mapped to 1
+  clip: true
+  apply_at_export: false       # true: write float32 normalised images + normalization.json
 
 workflow:
   resume_from_table: false

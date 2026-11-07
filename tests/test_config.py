@@ -88,6 +88,7 @@ class TestAnnotationConfig:
             'annotation_methodology',
             'spatial_coverage',
             'training',
+            'normalization',
             'ai_model',
             'workflow',
             'output',
@@ -1093,6 +1094,22 @@ class TestMIFAExportHelpers:
         assert isinstance(method, str) and method.strip()
         assert "micro_sam" in method
 
+    def test_compose_overview_includes_notes(self):
+        from omero_annotate_ai.core.mifa_export import compose_overview
+        config = create_default_config()
+        config.notes = "Wells A1-B2 use the key 'celline'."
+        assert "Notes: Wells A1-B2 use the key 'celline'." in compose_overview(config)
+
+    def test_compose_method_describes_normalisation(self):
+        from omero_annotate_ai.core.mifa_export import compose_method
+        config = create_default_config()
+        config.normalization.apply_at_export = True
+        method = compose_method(config)
+        assert "per-image percentiles 1.0-99.8" in method
+        assert "applied at export (float32)" in method
+        config.normalization.method = "none"
+        assert "raw intensities" in compose_method(config)
+
     @pytest.mark.parametrize(
         "version,expected",
         [("1.0.0", 1.0), ("v1.1.0", 1.1), ("2", 2.0), ("3.4.5", 3.4)],
@@ -1864,3 +1881,23 @@ class TestZarrConfig:
         assert config.source == "zarr"
         assert config.zarr.level == 1
         assert config.workflow.read_only_mode is True
+
+
+@pytest.mark.unit
+class TestOpenFields:
+    """Free-text notes and custom key-value metadata on AnnotationConfig."""
+
+    def test_defaults_are_empty(self):
+        config = create_default_config()
+        assert config.notes is None
+        assert config.custom_metadata == {}
+
+    def test_yaml_round_trip(self, tmp_path):
+        config = create_default_config()
+        config.notes = "Some wells are out of focus."
+        config.custom_metadata = {"instrument": "Incucyte SX5", "objective": "10x"}
+        path = tmp_path / "config.yaml"
+        config.save_yaml(path)
+        loaded = AnnotationConfig.from_yaml(path)
+        assert loaded.notes == "Some wells are out of focus."
+        assert loaded.custom_metadata == {"instrument": "Incucyte SX5", "objective": "10x"}

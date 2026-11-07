@@ -319,6 +319,32 @@ training:
   # Fractions must sum to <= 1.0
 ```
 
+### Normalisation of Model Input
+
+How raw intensities become model input is defined once, in the config, and travels with
+the annotation set (OMERO, YAML, MIFA export):
+
+```yaml
+normalization:
+  method: "percentile"      # "percentile" or "none"
+  percentile_low: 1.0       # per-image percentile mapped to 0
+  percentile_high: 99.8     # per-image percentile mapped to 1
+  clip: true
+  apply_at_export: false    # true: write float32 normalised images
+```
+
+Training data is exported at native bit depth unless `apply_at_export` is set. With
+`apply_at_export: true` the model input images are written as float32 and the exact
+bounds used for each image are recorded in `normalization.json` next to the data;
+labels are never changed. Without it, `normalization.json` records what the trainer
+must apply. Configs that still carry `normalization_method` / `percentile_low` /
+`percentile_high` under `spatial_coverage` are migrated on load.
+
+`omero_annotate_ai.processing.normalization.biapy_normalization(config.normalization)`
+returns the matching BiaPy `DATA.NORMALIZATION` block. BiaPy's `div` and `scale_range`
+types guess the bit depth from the image maximum, so exporting with
+`apply_at_export: true` (BiaPy then applies the identity) is the most reliable route.
+
 ### Workflow Control
 
 ```yaml
@@ -350,6 +376,18 @@ tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 
 # Annotation tracking (auto-populated during processing)
 annotations: []  # List of ImageAnnotation records
+```
+
+### Notes and Custom Metadata
+
+Anything the structured schema does not cover can be recorded in two open fields. Both
+are stored with the configuration; `notes` is also added to the MIFA annotation overview.
+
+```yaml
+notes: "Wells A1-B2 use the key 'celline' instead of 'cellline' in OMERO."
+custom_metadata:
+  instrument: "Incucyte SX5"
+  objective: "10x"
 ```
 
 ## Working with Configuration Files
