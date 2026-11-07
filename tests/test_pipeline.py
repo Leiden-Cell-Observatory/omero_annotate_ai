@@ -1756,7 +1756,8 @@ class TestZarrWorkflow:
 
         pipeline.run_custom_annotation(fake_annotate)
 
-        anns = pipeline.config.annotations
+        # Split planning shuffles unit order, so compare in a fixed order.
+        anns = sorted(pipeline.config.annotations, key=lambda a: a.well)
         assert [(a.well, a.field, a.level, a.image_id) for a in anns] == [
             ("A1", "0", 1, None), ("B3", "0", 1, None)]
         assert anns[0].image_name == "testplate_A1_0"
