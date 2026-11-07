@@ -1,12 +1,5 @@
 """Main pipeline for OMERO annotation workflows."""
 
-# ========================================
-# DEBUG CONFIGURATION
-# ========================================
-# To disable all debug output, change DEBUG_MODE to False in the AnnotationPipeline class
-# or set AnnotationPipeline.DEBUG_MODE = False after import
-# ========================================
-
 # Standard library imports
 import logging
 import secrets
@@ -228,9 +221,6 @@ def _unit_from_annotation(annotation: ImageAnnotation) -> Unit:
 class AnnotationPipeline:
     """Main pipeline for running micro-SAM annotation workflows with OMERO."""
 
-    # DEBUG FLAG - Set to False to disable all debug output
-    DEBUG_MODE = True
-
     def __init__(
         self,
         config: AnnotationConfig,
@@ -364,9 +354,8 @@ class AnnotationPipeline:
             self.save_config_to_yaml()
 
     def _debug_print(self, message: str) -> None:
-        """Print debug message if debug mode is enabled."""
-        if self.DEBUG_MODE:
-            print(message)
+        """Diagnostics go to the module logger (DEBUG)."""
+        logger.debug(message)
 
     def _validate_setup(self):
         """Validate the pipeline setup."""
@@ -1448,7 +1437,7 @@ class AnnotationPipeline:
         if processed_count > 0 and not self.config.workflow.read_only_mode:
             self.write_table()
         self.save_config()
-        print(f"Saved {processed_count} annotations")
+        logger.info("Saved %d annotations", processed_count)
         return processed_count, self.config
 
     def get_annotation_status_from_disk(
