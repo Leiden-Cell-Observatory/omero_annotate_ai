@@ -192,3 +192,6 @@ dev_notes/*
 .envrc
 PLAN.md
 .envrc
+
+# Built documentation
+site/
