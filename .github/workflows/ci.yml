@@ -16,6 +16,26 @@ jobs:
     - name: Notebooks have no outputs
       run: python3 .github/scripts/check_notebook_outputs.py
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install pixi
+      uses: prefix-dev/setup-pixi@v0.11.2
+      with:
+        pixi-version: v0.72.2
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        locked: true
+        environments: dev
+
+    - name: Ruff (lint + format)
+      run: pixi run -e dev lint
+
+    - name: Pyright
+      run: pixi run -e dev typecheck
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -36,9 +56,6 @@ jobs:
         
     - name: Run unit tests
       run: pixi run -e dev test-unit
-      
-    # - name: Check code quality
-    #   run: pixi run -e dev lint
       
     - name: Start test OMERO (Linux only)
       if: matrix.os == 'ubuntu-latest'

@@ -56,14 +56,13 @@ notebooks = [
 ]
 microsam = [
     "napari>=0.4.15",
-    # Note: micro-sam is conda-only, install with: conda install -c conda-forge micro-sam
+    # micro-sam itself: pip install micro-sam (on PyPI, Python 3.11+) or conda-forge
 ]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
-    "black>=22.0",
-    "isort>=5.0",
-    "flake8>=4.0",
+    "ruff>=0.17",
+    "pyright>=1.1.414",
 ]
 docs = [
     "zensical>=0.0.73",
@@ -87,13 +86,37 @@ Changelog = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releas
 where = ["src"]
 include = ["omero_annotate_ai*"]
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py310']
+target-version = "py310"
 
-[tool.isort]
-profile = "black"
-line_length = 88
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "T20", "BLE", "PTH", "RET"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and notebooks may print and use broad patterns.
+"tests/**" = ["T20", "BLE", "PTH"]
+"notebooks/**" = ["T20", "BLE", "PTH", "E501", "B018"]
+# legacy, rewritten in 0.5.0 core PRs
+"src/omero_annotate_ai/core/annotation_pipeline.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
+"src/omero_annotate_ai/core/annotation_config.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
+"src/omero_annotate_ai/widgets/workflow_widget.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
+"src/omero_annotate_ai/omero/omero_functions.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
+
+[tool.pyright]
+include = ["src/omero_annotate_ai"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportMissingModuleSource = "none"
+# New core packages (0.5.0 core PRs) are checked strictly from their first commit.
+strict = [
+    "src/omero_annotate_ai/trainingset",
+    "src/omero_annotate_ai/annotators",
+    "src/omero_annotate_ai/config",
+    "src/omero_annotate_ai/errors.py",
+    "src/omero_annotate_ai/events.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -141,10 +164,9 @@ hf-xet = "<1.1.9"
 pytest = ">=8.4.1,<9"
 pytest-cov = ">=6.2.1,<7"
 pytest-mock = ">=3.14.1,<4"
-flake8 = ">=7.3.0,<8"
-black = ">=25.1.0,<26"
-isort = ">=6.0.1,<7"
 pre-commit = ">=4.7.0,<5"
+ruff = ">=0.17.4,<0.18"
+pyright = ">=1.1.414,<2"
 
 # Documentation feature
 [tool.pixi.feature.docs.dependencies]
@@ -189,8 +211,9 @@ test-cov = { cmd = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml" }
 install-hooks = { cmd = "pre-commit install" }
 
 # Code quality
-lint = { cmd = "flake8 src/omero_annotate_ai && black --check src/omero_annotate_ai && isort --check-only src/omero_annotate_ai" }
-format = { cmd = "black src/omero_annotate_ai && isort src/omero_annotate_ai" }
+lint = { cmd = "ruff check . && ruff format --check ." }
+format = { cmd = "ruff check --fix . && ruff format ." }
+typecheck = { cmd = "pyright" }
 
 # Documentation
 docs-serve = {cmd = "zensical serve"}
