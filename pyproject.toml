@@ -7,7 +7,7 @@ name = "omero-annotate-ai"
 version = "0.4.0"
 description = "OMERO integration for AI-powered image annotation and segmentation workflows"
 readme = "README.md"
-license = "Apache-2.0"
+license = "GPL-2.0-or-later"
 license-files = ["LICENSE"]
 authors = [
     {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
@@ -66,14 +66,9 @@ dev = [
     "flake8>=4.0",
 ]
 docs = [
-    "mkdocs>=1.5.3",
-    "mkdocs-material>=9.5.9",
-    "mkdocstrings>=0.24.0",
-    "mkdocstrings-python>=1.7.0",
-    "mkdocs-gen-files>=0.5.0",
-    "mkdocs-literate-nav>=0.6.1",
-    "mkdocs-section-index>=0.3.8",
-    "mkdocs-autorefs>=0.5.0",
+    "zensical>=0.0.73",
+    "mkdocstrings>=1.0.8",
+    "mkdocstrings-python>=1.18",
     "griffe-pydantic>=1.1.7",
 ]
 zarr = ["ome-zarr>=0.16"]
@@ -85,7 +80,7 @@ all = [
 Homepage = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai"
 Repository = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git"
 Issues = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues"
-Documentation = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai#readme"
+Documentation = "https://leiden-cell-observatory.github.io/omero_annotate_ai/"
 Changelog = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases"
 
 [tool.setuptools.packages.find]
@@ -141,14 +136,9 @@ isort = ">=6.0.1,<7"
 
 # Documentation feature
 [tool.pixi.feature.docs.dependencies]
-mkdocs = ">=1.5.3"
-mkdocs-material = ">=9.5.9"
-mkdocstrings = ">=0.24.0"
-mkdocstrings-python = ">=1.7.0"
-mkdocs-gen-files = ">=0.5.0"
-mkdocs-literate-nav = ">=0.6.1"
-mkdocs-section-index = ">=0.3.8"
-mkdocs-autorefs = ">=0.5.0"
+zensical = ">=0.0.73"
+mkdocstrings = ">=1.0.8"
+mkdocstrings-python = ">=1.18"
 griffe-pydantic = ">=1.1.7"
 
 [tool.pixi.feature.dev.pypi-dependencies]
@@ -188,8 +178,8 @@ lint = { cmd = "flake8 src/omero_annotate_ai && black --check src/omero_annotate
 format = { cmd = "black src/omero_annotate_ai && isort src/omero_annotate_ai" }
 
 # Documentation
-docs-serve = {cmd = "mkdocs serve"}
-docs-build = {cmd = "mkdocs build"}
+docs-serve = {cmd = "zensical serve"}
+docs-build = {cmd = "zensical build --clean"}
 
 # Development
 start-omero = {cmd = "cd tests && docker-compose up -d"}

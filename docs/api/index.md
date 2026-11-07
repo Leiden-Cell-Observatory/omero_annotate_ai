@@ -1,50 +1,26 @@
-# API Reference
+# API reference
 
-The OMERO Annotate AI API documentation is automatically generated from source code docstrings.
-
-## Core Modules
-
-### Configuration and Pipeline Management
-- **annotation_config** - YAML configuration management and validation
-- **annotation_pipeline** - Main pipeline execution and workflow management
-
-### OMERO Integration  
-- **omero_functions** - Core OMERO server interaction functions
-- **omero_utils** - Utility functions for OMERO data handling
-- **simple_connection** - Simplified OMERO connection management
-
-### Processing Modules
-- **image_functions** - Image processing and ROI conversion utilities
-- **training_functions** - Training data preparation and validation
-- **file_io_functions** - File input/output operations
-
-### Jupyter Widgets
-- **connection_widget** - OMERO connection interface
-- **workflow_widget** - Annotation pipeline configuration interface
-
-## Usage Examples
-
-Most API functions are designed to work together in pipelines:
+Most people only need the functions below, all importable from the top-level package:
 
 ```python
-from omero_annotate_ai.core.annotation_config import load_config
-from omero_annotate_ai.core.annotation_pipeline import create_pipeline
-from omero_annotate_ai.omero.simple_connection import create_connection
-
-# Load configuration
-config = load_config("config.yaml")
-
-# Connect to OMERO
-conn = create_connection(host="omero.server.com", user="username")
-
-# Create and run pipeline
-pipeline = create_pipeline(config, conn)
-results = pipeline.run_full_workflow()
+from omero_annotate_ai import (
+    load_config_from_yaml, create_default_config,       # configuration
+    create_pipeline,                                    # run annotation
+    create_omero_connection_widget,                     # Jupyter widgets
+    create_workflow_widget, create_training_data_widget,
+    prepare_training_data_from_table,                   # training data
+    reorganize_local_data_for_training,
+    setup_training, run_training,                       # micro-SAM training
+    prepare_bia_data_from_table,                        # BioImage Archive export
+)
 ```
 
-## Getting Started
+| Page | Contents |
+|---|---|
+| [Configuration](config.md) | `AnnotationConfig` and its sections, loading and saving YAML |
+| [Pipeline](pipeline.md) | `create_pipeline`, `AnnotationPipeline` and its workflow methods |
+| [Widgets](widgets.md) | Jupyter widgets for connecting, configuring and selecting tables |
+| [Training data](training.md) | Preparing training folders, micro-SAM training, BioImage Archive export |
+| [OMERO helpers](omero.md) | Connections, tracking tables, downloading configs |
 
-For practical usage examples, see:
-- [micro-SAM Tutorial](../tutorials/microsam-annotation-pipeline.md) - Complete workflow walkthrough
-- [Configuration Guide](../configuration.md) - Parameter reference
-- [Example Notebooks](../../notebooks/) - Working code examples
+This reference is generated from the docstrings in the source code.
