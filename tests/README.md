@@ -45,6 +45,25 @@ Environment variables:
 After the pinned image versions change, recreate the stack (`stop-omero`, then
 `start-omero`): the database volume of an older PostgreSQL cannot be reused.
 
+### Functional workflow tests
+
+`tests/test_functional_workflow.py` is the acceptance suite: it runs the real
+workflow (`create_pipeline` -> `run_full_micro_sam_workflow` / `run_cp_workflow` +
+`collect_annotations_from_disk` -> `prepare_training_data_from_table` ->
+`setup_training`/`run_training` -> `delete_training_set`) against the Docker OMERO.
+Only napari is replaced, by a scripted annotator that writes `seg_{i:05}.tif`
+like micro-SAM. Masks encode the image they were drawn on, so a label or ROI on
+the wrong image fails the test.
+
+```bash
+pixi run -e dev pytest tests/test_functional_workflow.py -m "docker and not slow"
+pixi run -e dev pytest tests/test_functional_workflow.py -m "docker and slow"   # micro-SAM training (CPU)
+```
+
+Known-wrong behaviour is marked `xfail(strict=True)` with the PR that fixes it;
+such a test turning green fails the run until the marker is removed. The training
+test skips when the `vit_b_lm` weights are not in the micro-SAM cache.
+
 ## Test Markers
 
 The test suite uses `pytest` markers to categorize tests:
