@@ -7,7 +7,7 @@ name = "omero-annotate-ai"
 version = "0.4.0"
 description = "OMERO integration for AI-powered image annotation and segmentation workflows"
 readme = "README.md"
-license = "Apache-2.0"
+license = "GPL-2.0-or-later"
 license-files = ["LICENSE"]
 authors = [
     {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
