@@ -33,6 +33,7 @@ from ..events import (
     UploadFailed,
 )
 from ..omero.omero_utils import get_container_info
+from ..planning import Mode
 from ..trainingset import TrainingSet, TrainingSetSummary, list_training_sets, summarize
 
 CONTAINER_TYPES = ("dataset", "project", "plate", "screen")
@@ -115,6 +116,68 @@ def open_or_create(
             }
         )
     return ts
+
+
+def parse_indices(text: str, what: str) -> list[int]:
+    """``"0, 3, 5-7"`` as ``[0, 3, 5, 6, 7]``; a clear ``ValueError`` otherwise."""
+    indices: list[int] = []
+    for part in filter(None, (p.strip() for p in text.split(","))):
+        low, dash, high = part.partition("-")
+        try:
+            start = int(low)
+            stop = int(high) if dash else start
+        except ValueError:
+            raise ValueError(
+                f"{what}: '{part}' is not a number or range (use e.g. 0, 3, 5-7)"
+            ) from None
+        if start < 0 or stop < start:
+            raise ValueError(f"{what}: '{part}' is not a valid range")
+        indices.extend(range(start, stop + 1))
+    if not indices:
+        raise ValueError(f"{what}: list at least one index (e.g. 0)")
+    return sorted(set(indices))
+
+
+class _AxisPicker:
+    """Which timepoints or z-slices to use: listed ones, all, or a random draw."""
+
+    def __init__(self, what: str) -> None:
+        self.what = what
+        self.mode = widgets.Dropdown(
+            options=[("Specific", "specific"), ("All", "all"), ("Random", "random")],
+            value="specific",
+            description=what,
+            style=_LABEL,
+            layout=_narrow(),
+        )
+        self.listed = widgets.Text(
+            value="0",
+            placeholder="0, 3, 5-7",
+            layout=widgets.Layout(width="130px"),
+        )
+        self.n_random = widgets.BoundedIntText(
+            value=1,
+            min=1,
+            max=100_000,
+            description="n",
+            style={"description_width": "20px"},
+            layout=widgets.Layout(width="110px"),
+        )
+        self.mode.observe(lambda _: self._sync(), names="value")
+        self.box = widgets.HBox([self.mode, self.listed, self.n_random])
+        self._sync()
+
+    def _sync(self) -> None:
+        self.listed.disabled = self.mode.value != "specific"
+        self.n_random.disabled = self.mode.value != "random"
+
+    def values(self) -> tuple[Mode, list[int], int | None]:
+        """``(mode, listed indices, n to draw)`` for :class:`SpatialCoverage`."""
+        mode: Mode = self.mode.value
+        listed = (
+            parse_indices(self.listed.value, self.what) if mode == "specific" else [0]
+        )
+        return mode, listed, int(self.n_random.value) if mode == "random" else None
 
 
 def _card(title: str, *children: widgets.Widget) -> widgets.VBox:
@@ -201,11 +264,21 @@ class WorkflowWidget:
         # New
         self.name = widgets.Text(description="Name", style=_LABEL, layout=_wide())
         self.channel = number("Channel", 0, 0, 99)
-        self.timepoint = number("Timepoint", 0, 0, 100_000)
-        self.z_slice = number("Z-slice", 0, 0, 100_000)
-        self.three_d = widgets.Checkbox(description="3D (all z-slices)", indent=False)
+        self.timepoints = _AxisPicker("Timepoints")
+        self.z_slices = _AxisPicker("Z-slices")
+        self.three_d = widgets.Checkbox(
+            description="3D: one volume over the chosen z-slices", indent=False
+        )
         self.use_patches = widgets.Checkbox(description="Patches", indent=False)
         self.patch_size = number("Patch size", 512, 32, 8192)
+        self.patches_per_image = number("Per image", 1, 1, 1000)
+
+        def sync_patches(_: object = None) -> None:
+            off = not self.use_patches.value
+            self.patch_size.disabled = self.patches_per_image.disabled = off
+
+        self.use_patches.observe(sync_patches, names="value")
+        sync_patches()
         self.counts = {
             category: number(category.capitalize(), value, 0, 100_000)
             for (category, _), value in zip(SPLITS, (5, 2, 0), strict=True)
@@ -225,8 +298,11 @@ class WorkflowWidget:
         self.new_card = _card(
             "New training set",
             self.name,
-            widgets.HBox([self.channel, self.timepoint, self.z_slice]),
-            widgets.HBox([self.three_d, self.use_patches, self.patch_size]),
+            self.channel,
+            self.timepoints.box,
+            self.z_slices.box,
+            self.three_d,
+            widgets.HBox([self.use_patches, self.patch_size, self.patches_per_image]),
             widgets.HBox(list(self.counts.values())),
             widgets.HBox([self.seed, self.storage]),
         )
@@ -266,7 +342,10 @@ class WorkflowWidget:
             placeholder="How did it go? e.g. 'nuclei only, skipped small objects'",
             layout=widgets.Layout(width="420px", height="60px"),
         )
-        self.save_note = widgets.Button(description="Save note to last session")
+        self.save_note = widgets.Button(
+            description="Save session note",
+            tooltip="One note per session: saving replaces the last session's note",
+        )
         self.save_note.on_click(lambda _: self._save_note())
 
         self.main = widgets.VBox(
@@ -388,6 +467,9 @@ class WorkflowWidget:
 
     def _on_set(self) -> None:
         self._training_set = None
+        self._refresh_summary()
+
+    def _refresh_summary(self) -> None:
         if self.sets.value is None:
             self.summary.value = ""
             return
@@ -411,11 +493,16 @@ class WorkflowWidget:
             config.omero.container_id = int(self.container.value)
         coverage = config.spatial_coverage
         coverage.channels = [int(self.channel.value)]
-        coverage.timepoints = [int(self.timepoint.value)]
-        coverage.z_slices = [int(self.z_slice.value)]
+        mode, listed, n_random = self.timepoints.values()
+        coverage.timepoint_mode, coverage.timepoints = mode, listed
+        coverage.n_timepoints = n_random
+        mode, listed, n_random = self.z_slices.values()
+        coverage.z_slice_mode, coverage.z_slices = mode, listed
+        coverage.n_slices = n_random
         coverage.three_d = bool(self.three_d.value)
         coverage.use_patches = bool(self.use_patches.value)
         coverage.patch_size = [int(self.patch_size.value)] * 2
+        coverage.patches_per_image = int(self.patches_per_image.value)
         for category, key in SPLITS:
             setattr(config.training, key, int(self.counts[category].value))
         seed = self.seed.value.strip()
@@ -502,6 +589,7 @@ class WorkflowWidget:
             case SessionFinished(session=session, annotated=annotated):
                 self._last_session = session
                 self._add_log(f"Session {session} finished: {annotated} saved")
+                self.note.value = self._session_note(session)
             case _:
                 pass
 
@@ -517,7 +605,15 @@ class WorkflowWidget:
             return
         self._training_set.set_session_note(self._last_session, note)
         self._add_log(f"Note saved to session {self._last_session}")
-        self.note.value = ""
+        if self.mode.value == "open":
+            self._refresh_summary()
+
+    def _session_note(self, session: int) -> str:
+        """The session's current note (empty if none), to edit and save again."""
+        if self._training_set is None:
+            return ""
+        notes = (s.note for s in self._training_set.config.sessions if s.id == session)
+        return next(notes, None) or ""
 
     def _error(self, text: str) -> None:
         self.status.value = f"<span class='oai-error'>{html.escape(text)}</span>"

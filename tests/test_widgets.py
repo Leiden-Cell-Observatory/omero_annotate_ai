@@ -513,6 +513,38 @@ class TestWorkflowWidget:
         assert config.storage == "local"
         assert widget.get_config() is not config  # a copy every time
 
+    def test_plane_modes_and_patches_reach_the_config(self, tmp_path):
+        widget = WorkflowWidget(self._conn(), home=tmp_path)
+        assert widget.timepoints.n_random.disabled  # specific: list only
+        widget.timepoints.mode.value = "random"
+        widget.timepoints.n_random.value = 3
+        assert widget.timepoints.listed.disabled
+        widget.z_slices.listed.value = "2, 5-7"
+        widget.three_d.value = True
+        assert widget.patches_per_image.disabled
+        widget.use_patches.value = True
+        widget.patches_per_image.value = 4
+
+        coverage = widget.get_config().spatial_coverage
+
+        assert (coverage.timepoint_mode, coverage.n_timepoints) == ("random", 3)
+        assert coverage.z_slice_mode == "specific"
+        assert coverage.z_slices == [2, 5, 6, 7]
+        assert coverage.n_slices is None
+        assert coverage.three_d
+        assert (coverage.use_patches, coverage.patches_per_image) == (True, 4)
+
+        widget.z_slices.mode.value = "all"
+        assert widget.get_config().spatial_coverage.z_slice_mode == "all"
+
+    @pytest.mark.parametrize("text", ["", "a", "3-1", "-2"])
+    def test_bad_plane_list_shows_an_inline_error(self, tmp_path, text):
+        widget = WorkflowWidget(self._conn(), home=tmp_path)
+        widget.timepoints.listed.value = text
+        widget._resolve()
+        assert "Timepoints" in widget.status.value
+        assert "oai-error" in widget.status.value
+
     def test_containers_are_listed_and_a_change_resets_the_selection(self, tmp_path):
         conn = self._conn(
             [self._container(7, "plate A"), self._container(8, "plate B")]
@@ -642,10 +674,13 @@ class TestWorkflowWidget:
             images=[source.get_image(i) for i in (1, 2)],
         )
         saved = widget.annotate(ScriptedAnnotator(image_mask), note="first pass")
+        assert widget.note.value == "first pass"  # prefilled to edit
         widget.note.value = "second look: fine"
         widget._save_note()
 
         assert saved == 2
+        sessions = ts.config.sessions
+        assert [s.note for s in sessions] == ["second look: fine"]  # replaced
         assert widget.progress.value == 2
         assert widget.training_set() is ts  # resolved once
         assert "second look: fine" in omero.config_text[ts.table_id]
