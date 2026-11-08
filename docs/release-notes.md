@@ -23,6 +23,9 @@ Newest first. The full list of pull requests per version is on
   (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.
   This fixes the training export of 3D units, which wrote one plane instead of the
   annotated z range.
+- **napari plugin: Exclude** leaves an image out for good (out of focus, empty well,
+  artefact): it counts as done, is not shown again and is not exported. Prev back to
+  it and Accept saves it after all. Skip still means "later".
 - **Exclude:** `AnnotationSession.exclude(batch, ids)` marks units as excluded (bad,
   out of focus). An excluded unit is done: it is recorded as `annotation_type:
   excluded` with `processed` true and no mask, label file or ROI, is never handed out
@@ -31,7 +34,7 @@ Newest first. The full list of pull requests per version is on
   `progress_summary(...)["excluded_units"]`); a session's `n_annotated` does not count
   it. Committing a mask for it later in the same session makes it a normal annotation.
   Excluding a unit whose earlier upload failed halfway deletes that upload. Tables and
-  configs stay readable by 0.5.0-0.5.2: no column or config key is added (those
+  configs stay readable by 0.5.0 and 0.5.1: no column or config key is added (those
   versions see an excluded unit as annotated without a mask). Resuming now compares
   against the local copy as the last run left it (it was rewritten when leftover
   claims were released first).

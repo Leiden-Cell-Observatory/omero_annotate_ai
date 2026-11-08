@@ -42,6 +42,9 @@ message naming the one it needs.
       image without objects asks for a second press, so empty images are saved on
       purpose only.
     - **Skip** (`Shift-N`) leaves the image for a later session.
+    - **Exclude** leaves the image out of the training set for good (out of focus,
+      artefact): it counts as done, is never shown again and is not exported. Prev
+      back to it and Accept to save it after all.
     - **Prev** goes back one image, through every image of this session: a saved
       image opens with its objects, and Accept saves your corrections (replacing the
       upload; an unchanged mask keeps it). Skip leaves it as it is.

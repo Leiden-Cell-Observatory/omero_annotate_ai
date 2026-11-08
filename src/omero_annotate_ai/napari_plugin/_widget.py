@@ -74,8 +74,11 @@ CONTAINER_TYPES = ("dataset", "plate", "project", "screen")
 Ref = int | Path
 """A training set as the core opens it: a tracking-table ID or a set folder."""
 
-Opened = tuple[AnnotationSession, Batch | None, dict[str, list[int]], int]
-"""The session, its first batch, ``(done, total)`` per split, units needing review."""
+Opened = tuple[
+    AnnotationSession, Batch | None, dict[str, list[int]], int, dict[str, int]
+]
+"""The session, its first batch, ``(done, total)`` per split, units needing review,
+excluded units per split."""
 
 
 def _summary_text(summary: TrainingSetSummary) -> str:
@@ -84,7 +87,11 @@ def _summary_text(summary: TrainingSetSummary) -> str:
     for category in CATEGORIES:
         done, total = summary.progress.get(category, (0, 0))
         if total:
-            lines.append(f"{category.capitalize()}: {done}/{total}")
+            excluded = summary.excluded.get(category, 0)
+            lines.append(
+                f"{category.capitalize()}: {done}/{total}"
+                + (f" ({excluded} excluded)" if excluded else "")
+            )
     for record in summary.sessions[-3:]:
         note = f" — {record.note}" if record.note else ""
         lines.append(
@@ -200,6 +207,8 @@ class OMEROAnnotateDock(QWidget):
         self._unsaved: set[str] = set()  # accepted, but the save failed or conflicted
         self._counted: set[str] = set()  # images counted in the progress line
         self._loading = False  # the next batch is being loaded
+        self._excluded: set[str] = set()  # excluded in this session
+        self._n_excluded: dict[str, int] = {}  # per split, for the progress line
         self._skipped: set[str] = set()
         self._done: dict[str, list[int]] = {}
         self._confirm_empty = False
@@ -329,10 +338,21 @@ class OMEROAnnotateDock(QWidget):
         self.prev_button = QPushButton("◀ Prev")
         self.accept_button = QPushButton("Accept [N]")
         self.skip_button = QPushButton("Skip [Shift-N]")
+        self.exclude_button = QPushButton("Exclude")
+        self.exclude_button.setToolTip(
+            "Leave this image out of the training set for good (e.g. out of focus): "
+            "it counts as done and is not exported. Prev and Accept undo it."
+        )
         self.prev_button.clicked.connect(self._prev)
         self.accept_button.clicked.connect(self._accept)
         self.skip_button.clicked.connect(self._skip)
-        for button in (self.prev_button, self.accept_button, self.skip_button):
+        self.exclude_button.clicked.connect(self._exclude)
+        for button in (
+            self.prev_button,
+            self.accept_button,
+            self.skip_button,
+            self.exclude_button,
+        ):
             button.setEnabled(False)
             buttons.addWidget(button)
         self.note = QLineEdit()
@@ -459,10 +479,12 @@ class OMEROAnnotateDock(QWidget):
                 **options,
             )
             done = {c: [0, 0] for c in CATEGORIES}
+            excluded: dict[str, int] = dict.fromkeys(CATEGORIES, 0)
             flagged = 0
             for row in ts.units():
                 done[row.category][1] += 1
                 done[row.category][0] += int(row.processed)
+                excluded[row.category] += int(row.excluded)
                 flagged += (row.error or "").startswith(NEEDS_REVIEW)
             session = ts.start_session(review=review)
             try:
@@ -470,16 +492,16 @@ class OMEROAnnotateDock(QWidget):
             except BaseException:  # incl. Cancelled: record it, release its claims
                 session.finish(status="interrupted")
                 raise
-            return session, batch, done, flagged
+            return session, batch, done, flagged, excluded
 
         def opened(result: Opened) -> None:
-            self._session, batch, self._done, flagged = result
+            self._session, batch, self._done, flagged, self._n_excluded = result
             self._revised = 0
             self._set_start_controls(True)
             self.cancel_button.setVisible(False)
             self._skipped.clear()
             self._history, self._revisit = [], None
-            self._unsaved, self._counted = set(), set()
+            self._unsaved, self._counted, self._excluded = set(), set(), set()
             self._bind_keys(True)
             self._pages.setCurrentIndex(1)
             self._start_batch(batch)
@@ -558,6 +580,11 @@ class OMEROAnnotateDock(QWidget):
         self.current_label.setText(
             f"Image {index + 1}/{len(batch.items)}: {_describe(item)}"
             + (" (saved)" if saved else "")
+            + (
+                " (excluded: Accept saves it after all)"
+                if item.annotation_id in self._excluded
+                else ""
+            )
         )
         path = self._embedding_path(batch, index)
 
@@ -678,6 +705,7 @@ class OMEROAnnotateDock(QWidget):
             for i in range(after + 1, len(batch.items))
             if i not in self._committed
             and batch.items[i].annotation_id not in self._skipped
+            and batch.items[i].annotation_id not in self._excluded
         ]
 
     def _accept(self) -> None:
@@ -704,7 +732,11 @@ class OMEROAnnotateDock(QWidget):
             self._revise(session, item.annotation_id, mask)
             self._advance()
             return
+        if item.annotation_id in self._excluded:  # saved after all
+            self._excluded.discard(item.annotation_id)
+            self._count_excluded(item, -1)
         path = batch.mask_dir / f"seg_{index:05}.tif"
+        path.parent.mkdir(parents=True, exist_ok=True)  # gone once the batch is done
         initial = item.initial_mask
         if initial is not None and np.array_equal(mask, initial):
             mask = initial  # unchanged: same dtype too, so the review keeps the upload
@@ -757,6 +789,49 @@ class OMEROAnnotateDock(QWidget):
         if self._cursor not in self._committed:
             self._skipped.add(self._batch.items[self._cursor].annotation_id)
         self._advance()
+
+    def _exclude(self) -> None:
+        """Leave the current image out for good: done, not shown again, not
+        exported. Works also when the image could not be shown."""
+        batch, session = self._batch, self._session
+        if (
+            batch is None
+            or session is None
+            or self._finishing
+            or self._loading
+            or not self._can_exclude()
+        ):
+            return
+        item = batch.items[self._cursor]
+        annotation_id = item.annotation_id
+        self._excluded.add(annotation_id)
+        self._skipped.discard(annotation_id)
+        self._count_excluded(item, +1)
+
+        def excluded(ids: tuple[str, ...]) -> None:
+            if annotation_id not in ids and annotation_id in self._excluded:
+                self._excluded.discard(annotation_id)
+                self._count_excluded(item, -1, done=False)
+                self._notify(
+                    f"{annotation_id} was saved on another computer meanwhile; "
+                    "it is not excluded."
+                )
+
+        self._io.run(
+            lambda: session.exclude(batch, [annotation_id], publish_config=False),
+            excluded,
+            self._on_error,
+        )
+        self._advance()
+
+    def _count_excluded(self, item: BatchItem, step: int, *, done: bool = True) -> None:
+        """Keep the progress line right: an excluded image counts as done."""
+        category = item.unit.category if item.unit is not None else None
+        if category in self._done:
+            self._n_excluded[category] = self._n_excluded.get(category, 0) + step
+            if done:
+                self._done[category][0] += step
+            self._update_progress()
 
     def _prev(self) -> None:
         """Back one image: within the batch (saved or skipped), then through the
@@ -963,7 +1038,12 @@ class OMEROAnnotateDock(QWidget):
         return None
 
     def _update_progress(self) -> None:
-        parts = [f"{c.capitalize()} {d}/{t}" for c, (d, t) in self._done.items() if t]
+        parts = [
+            f"{c.capitalize()} {d}/{t}"
+            + (f" ({x} excluded)" if (x := self._n_excluded.get(c, 0)) else "")
+            for c, (d, t) in self._done.items()
+            if t
+        ]
         if self._reviewing:
             parts.append(f"revised {self._revised}")
         self.progress_label.setText(" · ".join(parts))
@@ -971,7 +1051,19 @@ class OMEROAnnotateDock(QWidget):
     def _set_buttons(self, enabled: bool) -> None:
         for button in (self.accept_button, self.skip_button, self.prev_button):
             button.setEnabled(enabled)
+        self.exclude_button.setEnabled(enabled and self._can_exclude())
         self.finish_button.setEnabled(self._session is not None)
+
+    def _can_exclude(self) -> bool:
+        """An image of the current batch not saved yet (saved ones keep their mask);
+        also one that could not be shown."""
+        return (
+            self._batch is not None
+            and not self._reviewing
+            and self._revisit is None
+            and self._cursor not in self._committed
+            and self._batch.items[self._cursor].annotation_id not in self._excluded
+        )
 
     def _bind_keys(self, on: bool) -> None:
         self._viewer.bind_key(
@@ -995,6 +1087,7 @@ class OMEROAnnotateDock(QWidget):
         if self._session is not None and not self._finishing and not self._loading:
             self.skip_button.setEnabled(True)
             self.prev_button.setEnabled(True)
+            self.exclude_button.setEnabled(self._can_exclude())
 
     def _set_start_controls(self, enabled: bool) -> None:
         self.open_button.setEnabled(enabled and bool(self._sets))
