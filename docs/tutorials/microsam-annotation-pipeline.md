@@ -48,43 +48,30 @@ workflow_widget = create_workflow_widget(connection=conn)
 workflow_widget.display()
 ```
 
-The widget walks you through a few tabs. Use **Next** to move on.
+The widget has one screen, in cards:
 
-**Working directory.** Where local files go. Pick a folder with some free space; every
-run gets its own subfolder.
+**Data.** Choose the container type (project, dataset, plate, screen) and the container.
+A line below shows the number of images, a sample image's dimensions and its channel names.
 
-**Container.** Choose the type (project, dataset, plate, screen) and the container
-itself from the list.
-
-![Choosing an OMERO container](../images/widget_container.png)
-
-**Tables.** If annotations already exist for this container, they are listed here. For a
-first run, choose **Name New Table** and give the run a short, descriptive name such as
-`hela_nuclei_v1`. This name is used for the OMERO table and the files.
-
-**Configuration.** The scientific choices:
+**New training set** or **Open training set.** For a first run choose *New*:
 
 | Setting | What to choose |
 |---|---|
-| Training / validation / test images | How many images to annotate for each set. Start small, e.g. 5 training and 2 validation. |
+| Name | A short, descriptive name such as `hela_nuclei_v1`; used for the OMERO table and the local folder. |
 | Channel | The channel you will draw on, e.g. the DAPI channel for nuclei. Channel numbers start at 0. |
-| Timepoints, Z-slices | Which planes to annotate. For 2D images leave them at 0. |
-| 3D processing | Annotate whole z-stacks as volumes instead of single planes. |
-| Use patches | Annotate crops instead of whole images. Recommended for large images or a CPU-only computer. |
-| SAM model | `vit_b_lm` is a good default for light microscopy; `vit_b_em_organelles` for electron microscopy. |
-| Batch size | Units per napari session; progress is saved after each batch. 0 = all at once. |
-| Read-only mode | Save results only on your computer and write nothing to OMERO. |
+| Timepoint, Z-slice | Which plane to annotate. For 2D images leave them at 0. |
+| 3D | Annotate whole z-stacks as volumes instead of single planes. |
+| Patches | Annotate crops instead of whole images. Recommended for large images or a CPU-only computer. |
+| Training / Validation / Test | How many images to annotate for each split. Start small, e.g. 5 and 2. |
+| Seed | Empty picks one at random and stores it, so the selection can be repeated. |
+| Storage | *OMERO* uploads masks and keeps a tracking table; *Local folder only* writes nothing to OMERO. |
 
-**Save.** Shows the YAML configuration that will be used. Click **Save Configuration**
-to keep a copy.
+*Open* lists the training sets on the container (and local ones). Selecting one shows its
+progress per split and the notes of earlier sessions; you can add images per split.
 
-![Reviewing the generated YAML](../images/widget_config.png)
-
-Then collect the configuration:
-
-```python
-config = workflow_widget.get_config()
-```
+**Annotation.** The SAM model (`vit_b_lm` for light microscopy, `vit_b_em_organelles` for
+electron microscopy) and the batch size (images per napari session; progress is saved
+after each image; 0 = all). Click **Create** or **Open**.
 
 !!! tip "Not sure what a setting means?"
     [How it works](../concepts.md) explains annotation units, patches and the two modes.
@@ -93,11 +80,15 @@ config = workflow_widget.get_config()
 ## 3. Annotate in napari
 
 ```python
-ts = TrainingSet.create(config, conn)
-ts.annotate(note="nuclei only")  # the note is stored with this session
+ts = workflow_widget.training_set()
+workflow_widget.annotate(note="nuclei only")  # the note is stored with this session
 ```
 
-`TrainingSet.create`:
+Progress appears in the widget's **Progress** card, and **Save note to last session**
+adds or changes the note afterwards. Without the widget, `TrainingSet.create(config, conn)`
+and `ts.annotate(...)` do the same.
+
+Creating the set:
 
 1. picks images (reproducibly, from the stored seed) and assigns them to training and
    validation,

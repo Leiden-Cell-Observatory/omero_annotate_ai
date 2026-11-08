@@ -28,7 +28,7 @@ Follow the [micro-SAM tutorial](microsam-annotation-pipeline.md) with these valu
 | Username / password | `public` / `public` |
 | Container | screen `1203` (idr0019, NF-κB signalling) or dataset `369` (idr0015, endosomes) |
 | Training / validation images | 3 / 2 |
-| Read-only mode | **on** |
+| Storage | **Local folder only** (nothing is written to the public server) |
 
 The IDR server is connected through a websocket (`ws://…/omero-ws`), which works through
 most institutional firewalls.
