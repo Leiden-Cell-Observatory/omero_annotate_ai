@@ -34,7 +34,7 @@ flowchart LR
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
 - **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).
-- **Read-only mode** for public servers such as the [IDR](https://idr.openmicroscopy.org).
+- **Local-only storage** (`storage: local`) for public servers such as the [IDR](https://idr.openmicroscopy.org).
 
 ## Jupyter widgets
 
@@ -46,10 +46,6 @@ flowchart LR
   <tr>
     <td><sub>Connect to any OMERO server, here the public IDR.</sub></td>
     <td><sub>Choose a project, dataset, plate or screen.</sub></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="docs/images/widget_config.png" alt="Reviewing the generated YAML configuration" width="65%"><br>
-    <sub>Set the parameters and review the YAML config the run will use.</sub></td>
   </tr>
 </table>
 
@@ -76,22 +72,17 @@ See the [installation guide](https://leiden-cell-observatory.github.io/omero_ann
 **With widgets** (in Jupyter):
 
 ```python
-from omero_annotate_ai import (
-    TrainingSet,
-    create_omero_connection_widget,
-    create_workflow_widget,
-)
+from omero_annotate_ai import create_omero_connection_widget, create_workflow_widget
 
 conn_widget = create_omero_connection_widget()
 conn_widget.display()
 conn = conn_widget.get_connection()
 
 workflow_widget = create_workflow_widget(connection=conn)
-workflow_widget.display()
+workflow_widget.display()  # New training set, or Open one to continue
 
-config = workflow_widget.get_config()
-ts = TrainingSet.create(config, conn)  # or TrainingSet.open(table_id, conn)
-ts.annotate(note="nuclei only, small debris skipped")
+ts = workflow_widget.training_set()
+workflow_widget.annotate(note="nuclei only, small debris skipped")
 ```
 
 **From a YAML config** (scripts, batch runs, or repeating a run):

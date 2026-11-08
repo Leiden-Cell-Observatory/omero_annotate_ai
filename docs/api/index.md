@@ -22,7 +22,7 @@ from omero_annotate_ai import (
 |---|---|
 | [Configuration](config.md) | `AnnotationConfig` and its sections, loading and saving YAML |
 | [Training sets](pipeline.md) | `TrainingSet`, sessions, rows, and the deprecated `create_pipeline` |
-| [Widgets](widgets.md) | Jupyter widgets for connecting, configuring and selecting tables |
+| [Widgets](widgets.md) | Jupyter widgets for connecting, creating or opening a training set, and selecting tables |
 | [Training data](training.md) | Preparing training folders, micro-SAM training, BioImage Archive export |
 | [OMERO helpers](omero.md) | Connections, tracking tables, downloading configs |
 

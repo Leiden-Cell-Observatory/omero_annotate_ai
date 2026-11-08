@@ -43,7 +43,8 @@ flowchart LR
 
 - `planning.py`, `annotators.py`, `bundle.py`, `errors.py`, `events.py`, `session.py` and
   `reconcile.py` are type-checked strictly (pyright); nothing in the core prints. The
-  widgets are older code, rewritten next.
+  workflow widget only holds form state: it builds a request that `open_or_create`
+  turns into a `TrainingSet`, and shows progress from the events.
 - A protocol needs two real implementations before it is introduced.
 - Tests: unit tests mirror the modules (`tests/test_planning.py`, `tests/test_rows.py`,
   `tests/test_trainingset.py`, `tests/test_session.py`, `tests/test_reconcile.py`, ...) and use the in-memory OMERO in
