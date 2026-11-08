@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import tifffile
 
 napari = pytest.importorskip("napari")
 pytest.importorskip("pytestqt")
@@ -259,6 +260,53 @@ class TestDock:
         widget.skip_button.click()  # unchanged: back to the image still to do
         qtbot.waitUntil(lambda: widget._ready and widget._revisit is None, timeout=5000)
         assert widget._batch.index == first_batch + 1 and widget._cursor == 0
+
+    def test_a_correction_from_an_earlier_batch_is_saved_and_counted_once(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, _, home = _make_set(tmp_path, "local")  # batches of 2
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        for value in (1, 2):
+            controller.mask[2:6, 2:6] = value
+            widget.accept_button.click()
+            qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+        assert len(widget._history) == 2
+
+        widget.prev_button.click()
+        qtbot.waitUntil(
+            lambda: widget._ready and widget._revisit is not None, timeout=5000
+        )
+        corrected = widget._revisit
+        controller.mask[:] = 0
+        controller.mask[8:12, 8:12] = 9
+        widget.accept_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._revisit is None, timeout=5000)
+
+        def saved() -> np.ndarray:
+            from omero_annotate_ai.bundle import mask_path
+
+            return tifffile.imread(mask_path(ts.bundle_dir, corrected))
+
+        qtbot.waitUntil(lambda: saved().max() == 9, timeout=5000)
+        assert "Training 2/3" in widget.progress_label.text()  # not counted twice
+        assert not list((ts.bundle_dir / ".scratch").glob("*/*_mask.tif"))
+
+    def test_skip_does_nothing_while_the_next_batch_loads(
+        self, tmp_path, make_dock, qtbot
+    ):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        for value in (1, 2):
+            qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+            controller.mask[2:6, 2:6] = value
+            widget.accept_button.click()
+        widget._skip()  # the next batch is still loading
+        widget._prev()
+        qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+        assert len(widget._history) == 2  # added once
+        assert widget._cursor == 0 and widget._revisit is None
 
     def test_keys_are_bound_only_while_annotating(self, tmp_path, make_dock, qtbot):
         _, source, _, home = _make_set(tmp_path, "local")

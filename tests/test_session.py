@@ -190,7 +190,7 @@ class TestRevise:
     def test_a_changed_mask_replaces_the_upload(self, tmp_path):
         pipeline, omero, session, _, unit = self._saved(tmp_path)
         old_label = next(r.label_id for r in pipeline.rows if r.annotation_id == unit)
-        saved = session.saved_mask(unit)
+        saved = session.saved_unit(unit)[1]
         changed = tmp_path / "changed.tif"
         tifffile.imwrite(changed, np.where(saved > 0, 2, 0).astype(np.uint32))
 
@@ -198,7 +198,7 @@ class TestRevise:
 
         row = next(r for r in pipeline.rows if r.annotation_id == unit)
         assert row.label_id != old_label and old_label not in omero.labels
-        assert session.saved_mask(unit).max() == 2
+        assert session.saved_unit(unit)[1].max() == 2
         table = omero.tables[pipeline.table_id].set_index("annotation_id")
         assert table.loc[unit, "label_id"] == row.label_id
         assert session.annotated == 1  # still one unit annotated
@@ -207,10 +207,61 @@ class TestRevise:
         pipeline, omero, session, _, unit = self._saved(tmp_path)
         before = dict(omero.labels)
         same = tmp_path / "same.tif"
-        tifffile.imwrite(same, session.saved_mask(unit).astype(np.uint32))
+        tifffile.imwrite(same, session.saved_unit(unit)[1].astype(np.uint32))
 
         assert session.revise(unit, same) == "unchanged"
         assert omero.labels.keys() == before.keys()
+
+    def test_a_unit_changed_elsewhere_since_is_not_overwritten(self, tmp_path):
+        pipeline, omero, session, _, unit = self._saved(tmp_path)
+        table = omero.tables[pipeline.table_id]
+        theirs = 999_999
+        table.loc[table["annotation_id"] == unit, "label_id"] = theirs
+        mask = tmp_path / "mine.tif"
+        tifffile.imwrite(mask, np.full((4, 4), 5, np.uint32))
+
+        assert session.revise(unit, mask) == "conflict"
+        row = next(r for r in pipeline.rows if r.annotation_id == unit)
+        assert row.label_id == theirs  # theirs kept, ours aside as a conflict file
+        assert not mask.exists()
+
+    def test_a_mask_from_another_filesystem_is_moved_into_place(
+        self, tmp_path, monkeypatch
+    ):
+        import errno
+        import os
+
+        pipeline, _, session, _, unit = self._saved(tmp_path)
+        saved = session.saved_unit(unit)[1]
+        changed = tmp_path / "changed.tif"
+        tifffile.imwrite(changed, np.where(saved > 0, 2, 0).astype(np.uint32))
+        for name in ("rename", "replace"):  # a rename cannot cross filesystems
+            original = getattr(os, name)
+
+            def no_cross_device(src, dst, *args, _original=original, **kwargs):
+                if str(src) == str(changed):
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                return _original(src, dst, *args, **kwargs)
+
+            monkeypatch.setattr(os, name, no_cross_device)
+        assert session.revise(unit, changed) == "revised"
+        assert session.saved_unit(unit)[1].max() == 2
+
+    def test_local_set_and_counts(self, tmp_path):
+        ts, _, _ = annotated_set(tmp_path, n_images=1, storage="local")
+        session = ts.start_session(review=True)
+        batch = session.next_batch()
+        unit = batch.items[0].annotation_id
+        same = batch.mask_dir / "same.tif"
+        tifffile.imwrite(same, batch.items[0].initial_mask)
+        session.commit(batch, {unit: same})  # reviewed: unchanged
+        assert session.annotated == 0
+        changed = tmp_path / "changed.tif"
+        tifffile.imwrite(changed, np.zeros_like(batch.items[0].initial_mask))
+
+        assert session.revise(unit, changed) == "revised"  # corrected with Prev
+        assert session.annotated == 1
+        assert not session.saved_unit(unit)[1].any()
 
     def test_only_units_saved_by_this_session(self, tmp_path):
         _, _, session, batch, _ = self._saved(tmp_path)
