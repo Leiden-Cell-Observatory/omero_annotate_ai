@@ -447,6 +447,28 @@ class TestDock:
         assert widget.connect_button.isEnabled()
         assert not widget.list_button.isEnabled()
 
+    def test_the_password_is_never_stored(
+        self, tmp_path, make_dock, qtbot, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget = make_dock(home, source)[0]
+
+        def stored(self, *args, **kwargs):
+            raise AssertionError("the plugin stored a password")
+
+        monkeypatch.setattr(SimpleOMEROConnection, "connect", lambda *a, **k: Mock())
+        monkeypatch.setattr(SimpleOMEROConnection, "save_password", stored)
+        widget.host.setText("omero.example.org")
+        widget.user.setText("someone")
+        widget.password.setText("secret")
+        widget.connect_button.click()
+        qtbot.waitUntil(lambda: widget.list_button.isEnabled(), timeout=5000)
+        assert widget.password.text() == ""
+
 
 @pytest.mark.docker
 @pytest.mark.skipif(
