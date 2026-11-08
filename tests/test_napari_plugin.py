@@ -51,11 +51,15 @@ def _make_set(tmp_path, storage: str, n_images: int = 3):
 
 
 @pytest.fixture
-def make_dock(make_napari_viewer, qtbot):
+def make_dock(qtbot):
+    from napari.components import ViewerModel
+
     from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
 
     def make(home, source, omero=None, conn=None):
-        viewer = make_napari_viewer()
+        # A viewer model without a canvas: the widget only binds keys, micro-SAM is
+        # faked, and an OpenGL canvas crashes on headless CI runners (macOS).
+        viewer = ViewerModel()
         controller = FakeController()
         options = {"image_source": source}
         if omero is not None:
