@@ -75,6 +75,21 @@ class TestCodes:
             _mask(), mask=True
         )
 
+    def test_uniform_empty_or_damaged_inputs_defer_to_the_digest(self):
+        code = provenance.image_code(_mask(), mask=True)
+        blank = provenance.image_code(np.zeros((64, 64), np.uint16))
+        assert blank is not None
+        assert provenance.describe_change(code, np.zeros((64, 64)), mask=True) == ""
+        assert provenance.describe_change(blank, _image(), mask=False) == ""
+        assert provenance.describe_change("not-an-iscc", _mask(), mask=True) == ""
+        assert provenance.image_code(np.zeros((0, 5))) is None
+
+    def test_large_planes_are_reduced_before_conversion(self):
+        big = np.zeros((4096, 4096), np.uint16)
+        big[:2048] = 60000
+        small = big[::128, ::128]
+        assert provenance.image_code(big) == provenance.image_code(small)
+
     def test_distance_is_symmetric_and_zero_for_equal_codes(self):
         a, b = provenance.image_code(_image(0)), provenance.image_code(_image(1))
         assert a is not None and b is not None

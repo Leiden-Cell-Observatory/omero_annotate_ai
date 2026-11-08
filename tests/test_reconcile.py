@@ -145,8 +145,9 @@ class TestRepairs:
         divergent = [e for e in events if getattr(e, "action", "") == "divergent"]
         assert [e.annotation_id for e in divergent] == [unit.annotation_id]
         assert len(omero.labels) == 2
-        if provenance.available():  # the ISCC codes tell how much it changed
-            assert "ISCC" in divergent[0].detail
+        # The fakes' masks are uniform planes, which all share one ISCC code: the
+        # message then rests on the digest alone (no near-duplicate claim).
+        assert "ISCC" not in divergent[0].detail
 
     def test_upload_that_differs_from_the_local_mask_is_not_adopted(self, tmp_path):
         first, source, omero = run_first(tmp_path, crash={"table": 1})
@@ -225,6 +226,28 @@ class TestRepairs:
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(not provenance.available(), reason="needs the provenance extra")
+class TestTableWithoutIsccColumns:
+    """A table made by 0.5.0 has no ISCC columns; the codes live in the local CSV."""
+
+    def test_opening_and_refreshing_keep_the_local_codes(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        omero.missing_columns = ("input_iscc", "mask_iscc")
+        ts = create_set(config, source, omero, tmp_path / "home")
+        annotate(ts)
+        codes = {r.annotation_id: (r.input_iscc, r.mask_iscc) for r in ts.rows}
+        assert all(a and b for a, b in codes.values())
+        assert "mask_iscc" not in omero.tables[ts.table_id].columns
+
+        reopened = reopen(ts, source, omero)
+        reopened.refresh()
+
+        again = reopened.read_local_table() or {}
+        for annotation_id, (input_iscc, mask_iscc) in codes.items():
+            assert again[annotation_id].input_iscc == input_iscc
+            assert again[annotation_id].mask_iscc == mask_iscc
+
+
 class TestReviewCrashes:
     """Kill the process at each step of replacing a reviewed mask, then resume."""
 

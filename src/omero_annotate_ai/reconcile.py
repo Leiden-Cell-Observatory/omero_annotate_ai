@@ -38,6 +38,7 @@ from .bundle import atomic_write, file_digest, input_path, mask_path, pixel_dige
 from .claims import is_live
 from .events import Progress, ReconcileAction, RepairKind
 from .provenance import describe_change, file_code, image_code
+from .rows import keep_local_codes
 from .session import NEEDS_REVIEW, check_cancel, upload_unit
 
 if TYPE_CHECKING:
@@ -296,6 +297,7 @@ def reconcile(
         if not unit.processed and is_live(unit.claimed_by, unit.claimed_at, hours):
             continue  # another session is annotating it right now
         local = local_rows.get(unit.annotation_id)
+        keep_local_codes(unit, local)
         mask = mask_path(training_set.bundle_dir, unit.annotation_id)
         step = decide(
             remote_flags[unit.annotation_id], _record(local), mask.exists(), local_known
