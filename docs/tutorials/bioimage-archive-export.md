@@ -61,7 +61,9 @@ from omero_annotate_ai import TrainingSet
 from omero_annotate_ai.core.mifa_export import save_bia_package
 
 ts = TrainingSet.open("~/omero_annotate_ai/local/<id>_hela_nuclei_v1")
-save_bia_package(ts.config, ts.units(), ts.bundle_dir, "bia_bundle")  # annotated units only
+save_bia_package(
+    ts.config, ts.units(), ts.bundle_dir, "bia_bundle"
+)  # annotated units only
 ```
 
 ## What is in the bundle

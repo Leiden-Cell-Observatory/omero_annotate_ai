@@ -26,7 +26,7 @@ folder for a local set (offline).
 from omero_annotate_ai import export_training_set
 
 result = export_training_set(table_id, "my_training_data", conn)  # OMERO set
-result = export_training_set(ts.bundle_dir, "my_training_data")    # local set
+result = export_training_set(ts.bundle_dir, "my_training_data")  # local set
 print(result["stats"])
 ```
 
@@ -42,7 +42,10 @@ normalised float32 images instead of the native bit depth.
 ### In Jupyter: the training-data widget
 
 ```python
-from omero_annotate_ai import create_omero_connection_widget, create_training_data_widget
+from omero_annotate_ai import (
+    create_omero_connection_widget,
+    create_training_data_widget,
+)
 
 conn_widget = create_omero_connection_widget()
 conn_widget.display()
