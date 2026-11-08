@@ -536,8 +536,8 @@ def _():
 @app.cell
 def _():
     from omero_annotate_ai import (
-        create_default_config,
         TrainingSet,
+        create_default_config,
         reorganize_local_data_for_training,
         run_training,
         setup_training,

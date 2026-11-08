@@ -841,8 +841,8 @@ class TestDeleteTrainingSet:
                 return None
             obj = Mock()
             obj.getDetails.return_value.getOwner.return_value.getId.return_value = (
-                (owners or {}).get((omero_type, object_id), self.ME)
-            )
+                owners or {}
+            ).get((omero_type, object_id), self.ME)
             obj.getDetails.return_value.getGroup.return_value.getId.return_value = 3
             return obj
 

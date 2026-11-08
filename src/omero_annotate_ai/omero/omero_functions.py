@@ -478,9 +478,9 @@ def delete_training_set(
         summary = ", ".join(f"{len(report[k])} {k}" for k in kinds)
         missing = sum(len(v) for v in report["missing"].values())
         others = sum(len(v) for v in report["others"].values())
-        notes = (f" ({missing} IDs in the table no longer exist)" if missing else "") + (
-            f" ({others} owned by another user)" if others else ""
-        )
+        notes = (
+            f" ({missing} IDs in the table no longer exist)" if missing else ""
+        ) + (f" ({others} owned by another user)" if others else "")
         if dry_run:
             print(
                 f"Dry run, nothing deleted. Would delete: {summary}{notes}. "
@@ -497,9 +497,7 @@ def delete_training_set(
         # Children first, the table last.
         if report["rois"]:
             _delete_and_wait(conn, "Roi", report["rois"])
-        annotations = (
-            report["labels"] + report["annotation_inputs"] + report["configs"]
-        )
+        annotations = report["labels"] + report["annotation_inputs"] + report["configs"]
         if annotations:
             _delete_and_wait(conn, "Annotation", annotations)
         _delete_and_wait(conn, "Annotation", [table_id])

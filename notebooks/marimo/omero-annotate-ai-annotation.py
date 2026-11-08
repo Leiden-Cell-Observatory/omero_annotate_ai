@@ -89,7 +89,9 @@ def _(
     omero_secure,
     omero_username,
 ):
-    mo.stop(not connect_button.value, mo.md("Fill in the fields and click **Connect**."))
+    mo.stop(
+        not connect_button.value, mo.md("Fill in the fields and click **Connect**.")
+    )
     _settings = {
         "host": omero_host.value,
         "username": omero_username.value,
@@ -145,7 +147,9 @@ def _(conn, container_id, container_type, list_training_sets, mo, mode):
         options={f"{s.name} (table {s.table_id})": s.table_id for s in existing_sets},
         label="Training set",
     )
-    _view = set_choice if existing_sets else mo.md("No training sets on this container.")
+    _view = (
+        set_choice if existing_sets else mo.md("No training sets on this container.")
+    )
     _view if mode.value == "Open training set" else mo.md("")
     return (set_choice,)
 
@@ -247,7 +251,9 @@ def _(
                 set_name,
                 mo.hstack([train_n, validate_n, test_n, seed], justify="start"),
                 mo.hstack([channel, timepoints, z_slices, three_d], justify="start"),
-                mo.hstack([use_patches, patch_size, patches_per_image], justify="start"),
+                mo.hstack(
+                    [use_patches, patch_size, patches_per_image], justify="start"
+                ),
                 storage,
             ]
         )

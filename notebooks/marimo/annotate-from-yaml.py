@@ -59,8 +59,10 @@ def _(Path, load_button, load_config_from_yaml, mo, yaml_path):
     _path = Path(yaml_path.value).expanduser()
     set_folder = _path if _path.is_dir() else None
     config = load_config_from_yaml(_path / "config.yaml" if set_folder else _path)
-    _what = config.zarr.uris if config.source == "zarr" else (
-        f"{config.omero.container_type} {config.omero.container_id}"
+    _what = (
+        config.zarr.uris
+        if config.source == "zarr"
+        else (f"{config.omero.container_type} {config.omero.container_id}")
     )
     mo.md(f"""
     | {"Open" if set_folder else "New"} training set | **{config.name}** |

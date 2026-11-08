@@ -474,7 +474,9 @@ def _(
 
     _images = sorted(Path(training_result["val_input"]).glob("*.tif"))
     _labels = sorted(Path(training_result["val_label"]).glob("*.tif"))
-    _checkpoint = training_results["best_checkpoint"] or training_results["latest_checkpoint"]
+    _checkpoint = (
+        training_results["best_checkpoint"] or training_results["latest_checkpoint"]
+    )
     mo.stop(not (_images and _labels), mo.md("**No validation data to use as test.**"))
     mo.stop(_checkpoint is None, mo.md("**No checkpoint found from training.**"))
     _name, _, _affiliation = bioimageio_authors.value.partition(";")
