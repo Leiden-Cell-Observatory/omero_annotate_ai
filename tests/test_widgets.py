@@ -603,7 +603,7 @@ class TestWorkflowWidget:
                 return_value={},
             ),
             patch(
-                "omero_annotate_ai.widgets.workflow_widget.list_training_sets",
+                "omero_annotate_ai.trainingset.list_training_sets",
                 return_value=[info],
             ),
             patch(
@@ -769,3 +769,144 @@ class TestWidgetFallbacks:
         # This test verifies that the module structure handles missing dependencies
         if importlib.util.find_spec("ipywidgets") is not None:
             pytest.skip("ipywidgets is available, cannot test fallback")
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
+class TestTrainingDataWidget:
+    """Pick a set (OMERO or local), see its progress, export it."""
+
+    @staticmethod
+    def _local_set(tmp_path):
+        from tests.fakes import annotate, create_set
+
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        config.storage = "local"
+        ts = create_set(config, source, omero, tmp_path / "home")
+        assert annotate(ts) == 2
+        return ts
+
+    def test_local_set_is_listed_summarized_and_exported(self, tmp_path):
+        from omero_annotate_ai.widgets.training_data_widget import TrainingDataWidget
+
+        ts = self._local_set(tmp_path)
+        widget = TrainingDataWidget(None, home=tmp_path / "home")
+        assert [value for _, value in widget.sets.options] == [ts.bundle_dir]
+
+        widget.sets.value = ts.bundle_dir
+        assert "2 / 2 annotated" in widget.summary.value
+        assert widget.training_channels.disabled  # a local set keeps its channels
+        assert widget.get_selected_table_id() is None
+        assert widget.selected_config().name == ts.name
+        out = tmp_path / "out"
+        widget.output_dir.value = str(out)
+        widget.export_button.click()
+
+        assert "Exported to" in widget.status.value, widget.status.value
+        assert len(list((out / "train_input").glob("*.tif"))) == 2
+        assert (out / "normalization.json").exists()
+
+    def test_omero_set_exports_with_the_form_options(self, tmp_path):
+        from omero_annotate_ai.trainingset import TrainingSetInfo
+        from omero_annotate_ai.widgets.training_data_widget import TrainingDataWidget
+
+        config, _, _ = omero_set(tmp_path)
+        config.spatial_coverage.channels = [1]
+        summary = TrainingSetSummary(
+            name="nuclei", table_id=42, storage="omero", progress={}, sessions=()
+        )
+        conn = TestWorkflowWidget._conn([TestWorkflowWidget._container(7, "ds")])
+        module = "omero_annotate_ai.widgets.training_data_widget"
+        with (
+            patch(
+                "omero_annotate_ai.trainingset.list_training_sets",
+                return_value=[TrainingSetInfo(42, "nuclei", "")],
+            ),
+            patch(f"{module}.summarize", return_value=summary),
+            patch(f"{module}.read_set_config", return_value=config),
+            patch(f"{module}.export_training_set") as export,
+        ):
+            export.return_value = {"base_dir": tmp_path, "stats": {"n_x": 1}}
+            widget = TrainingDataWidget(conn, home=tmp_path)
+            widget.container.value = 7
+            widget.sets.value = 42
+            assert widget.label_channel.value == 1
+            assert widget.training_channels.value == "1"
+            assert widget.output_dir.value.endswith("fake_set_42")
+            widget.training_channels.value = "2"
+            widget.normalization.value = True
+            widget.export_button.click()
+
+        assert export.call_args.args[0] == 42
+        assert export.call_args.kwargs == {
+            "training_channels": [2],
+            "label_channel": 1,
+            "apply_normalization": True,
+            "home": tmp_path,
+        }
+        assert "Exported to" in widget.status.value
+
+    def test_missing_output_folder_is_an_inline_error(self, tmp_path):
+        from omero_annotate_ai.widgets.training_data_widget import TrainingDataWidget
+
+        ts = self._local_set(tmp_path)
+        widget = TrainingDataWidget(None, home=tmp_path / "home")
+        widget.sets.value = ts.bundle_dir
+        widget.output_dir.value = ""
+        widget.export_button.click()
+        assert "Choose an output folder" in widget.status.value
+        assert widget.result is None
+
+    def _omero_widget(self, tmp_path, config, summary=None):
+        """A widget with OMERO set 42 picked (listing, summary and config patched)."""
+        from omero_annotate_ai.trainingset import TrainingSetInfo
+        from omero_annotate_ai.widgets.training_data_widget import TrainingDataWidget
+
+        summary = summary or TrainingSetSummary(
+            name="nuclei", table_id=42, storage="omero", progress={}, sessions=()
+        )
+        conn = TestWorkflowWidget._conn([TestWorkflowWidget._container(7, "ds")])
+        module = "omero_annotate_ai.widgets.training_data_widget"
+        with (
+            patch(
+                "omero_annotate_ai.trainingset.list_training_sets",
+                return_value=[TrainingSetInfo(42, "nuclei", "")],
+            ),
+            patch(f"{module}.summarize", return_value=summary),
+            patch(f"{module}.read_set_config", return_value=config),
+        ):
+            widget = TrainingDataWidget(conn, home=tmp_path)
+            widget.container.value = 7
+            widget.sets.value = 42
+        return widget
+
+    def test_more_than_one_training_channel_is_refused_inline(self, tmp_path):
+        config, _, _ = omero_set(tmp_path)
+        widget = self._omero_widget(tmp_path, config)
+        widget.training_channels.value = "0, 1"
+        with patch(
+            "omero_annotate_ai.trainingset.read_set_config", return_value=config
+        ):
+            widget.export_button.click()
+        assert "trains on one channel" in widget.status.value
+        assert widget.result is None
+
+    def test_unexpected_errors_never_leave_the_widget_stuck(self, tmp_path):
+        config, _, _ = omero_set(tmp_path)
+        widget = self._omero_widget(tmp_path, config)
+        with patch(
+            "omero_annotate_ai.widgets.training_data_widget.export_training_set",
+            side_effect=RuntimeError("connection lost"),
+        ):
+            widget.export_button.click()
+        assert "Export failed: connection lost" in widget.status.value
+        assert not widget.export_button.disabled
+
+        with patch(
+            "omero_annotate_ai.widgets.training_data_widget.summarize",
+            side_effect=RuntimeError("session expired"),
+        ):
+            widget.sets.value = None
+            widget.sets.value = 42
+        assert "session expired" in widget.status.value
+        assert widget.selected_config() is None

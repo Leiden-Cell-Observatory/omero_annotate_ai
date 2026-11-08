@@ -87,7 +87,13 @@ def plane():
 @pytest.fixture
 def mock_ezomero(plane):
     """Patched ezomero module inside bia_data."""
-    with patch("omero_annotate_ai.processing.bia_data.ezomero") as ez:
+    with (
+        patch("omero_annotate_ai.processing.bia_data.ezomero") as ez,
+        patch(
+            "omero_annotate_ai.processing.bia_data._read_table",
+            side_effect=lambda conn, table_id: ez.get_table(conn, table_id),
+        ),
+    ):
         ez.get_image.side_effect = fake_get_image_factory(plane)
         ez.get_file_annotation.side_effect = fake_get_file_annotation
         yield ez
@@ -447,3 +453,44 @@ def test_file_lists_carry_pixel_digests_and_iscc_codes_when_recorded():
     plain = [Row(image_id=101, image_name="a", annotation_id="a_0", label_id=5)]
     images_df, annotations_df = build_bia_file_lists(plain)
     assert "iscc" not in annotations_df.columns and "iscc" not in images_df.columns
+
+
+# --------------------------------------------------------------------------- #
+# A local training set straight into a bundle
+# --------------------------------------------------------------------------- #
+
+
+def test_local_set_bundle_holds_only_annotated_units(tmp_path):
+    pytest.importorskip("bia_mifa_models")
+    from tests.fakes import annotate, create_set, omero_set
+
+    config, source, omero = omero_set(tmp_path, n_images=3)
+    config.storage = "local"
+    ts = create_set(config, source, omero, tmp_path / "home")
+    assert annotate(ts, limit=2) == 2
+
+    result = save_bia_package(ts.config, ts.units(), ts.bundle_dir, tmp_path / "bia")
+
+    assert result["n_annotations"] == 2
+    assert result["missing"] == 0
+    assert len(list((tmp_path / "bia" / "annotations").glob("*_mask.tif"))) == 2
+    assert len(list(ts.bundle_dir.glob("annotation_output/*_mask.tif"))) == 2  # copied
+
+
+def test_mask_changed_on_omero_since_annotation_is_refused(
+    mock_conn, mock_ezomero, tmp_path
+):
+    from omero_annotate_ai.bundle import file_digest
+    from omero_annotate_ai.errors import IntegrityError
+
+    # What the fake OMERO serves for label 555, and its digest as recorded at annotation.
+    served = tmp_path / "served"
+    recorded = file_digest(Path(fake_get_file_annotation(None, 555, served)))
+    mock_ezomero.get_table.return_value = build_table(
+        [
+            annotation(image_id=101, mask_digest=recorded),
+            annotation(image_id=102, label_id=556, mask_digest=recorded),  # differs
+        ]
+    )
+    with pytest.raises(IntegrityError, match="102_0_0"):
+        prepare_bia_data_from_table(mock_conn, 1, tmp_path / "out")

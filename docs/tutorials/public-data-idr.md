@@ -108,4 +108,4 @@ tracking_table.csv    which units were done, and their split
 config.yaml           the set's config, sessions and notes
 ```
 
-These go straight into [training](training-data-prep.md#from-a-local-training-set).
+These go straight into [training](training-data-prep.md#export-a-training-set).
