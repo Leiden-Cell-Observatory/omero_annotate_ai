@@ -60,8 +60,8 @@ flowchart LR
 
 Annotate in your own napari window: **Plugins → OMERO Annotate AI → Annotate training
 set** (install with `pip install "omero-annotate-ai[napari]"`). It opens existing
-training sets on OMERO or in a local folder and saves each accepted image straight
-away. See the
+training sets on OMERO or in a local folder, saves each accepted image straight away,
+and can review annotated images starting from their saved masks. See the
 [napari plugin guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/napari-plugin/).
 
 ## Installation

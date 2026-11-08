@@ -13,7 +13,7 @@ pytest.importorskip("pytestqt")
 
 from omero_annotate_ai.napari_plugin._workers import Embedding  # noqa: E402
 from omero_annotate_ai.trainingset import summarize  # noqa: E402
-from tests.fakes import create_set, omero_set  # noqa: E402
+from tests.fakes import annotate, create_set, omero_set  # noqa: E402
 
 pytestmark = pytest.mark.napari
 
@@ -23,11 +23,15 @@ class FakeController:
 
     def __init__(self) -> None:
         self.shown: list[np.ndarray] = []
+        self.initial: list[np.ndarray | None] = []
         self.mask = np.zeros((16, 16), np.uint32)
         self.torn_down = False
 
-    def show(self, pixels, embedding, model_type) -> None:
+    def show(self, pixels, embedding, model_type, mask=None) -> None:
         self.shown.append(pixels)
+        self.initial.append(mask)
+        if mask is not None:  # micro-SAM shows the saved objects to correct
+            self.mask = mask.copy()
 
     def current_mask(self) -> np.ndarray:
         return self.mask.copy()
@@ -179,6 +183,79 @@ class TestDock:
         widget._interrupt()
         assert summarize(ts.bundle_dir).sessions[-1].status == "interrupted"
 
+    def test_review_starts_from_saved_masks_and_saves_only_changes(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        annotate(ts)
+        before = omero.uploads_per_tag()
+        widget, controller, _ = make_dock(home, source, omero, conn=omero.conn())
+        widget.review.setChecked(True)
+        _start(widget, qtbot)
+
+        first = controller.initial[-1]
+        assert first is not None and first.any()  # the saved mask, to correct
+        controller.mask[:2, :2] = 0  # a correction
+        widget.accept_button.click()
+        qtbot.waitUntil(
+            lambda: "revised 1" in widget.progress_label.text(), timeout=5000
+        )
+        qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+        assert controller.initial[-1] is not None
+        widget.accept_button.click()  # second image accepted unchanged
+        qtbot.waitUntil(lambda: not widget._ready, timeout=5000)
+        widget.finish_button.click()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
+
+        record = summarize(ts.bundle_dir).sessions[-1]
+        assert (record.kind, record.n_annotated) == ("review", 1)
+        assert "1 image(s) revised" in widget.status.text()
+        after = omero.uploads_per_tag()
+        assert list(after.values()) == [(1, 1), (1, 1)]  # replaced, not duplicated
+        assert set(after) == set(before)
+        revised = [u for u in omero.labels.values() if not u.pixels[:2, :2].any()]
+        assert len(revised) == 1
+
+    def test_units_needing_review_and_claims_elsewhere_are_announced(
+        self, tmp_path, make_dock, qtbot
+    ):
+        from datetime import UTC, datetime
+
+        from omero_annotate_ai.session import NEEDS_REVIEW
+
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=3)
+        table = omero.tables[ts.table_id]
+        table.loc[0, "claimed_by"] = "1@someone/elsewhere"
+        table.loc[0, "claimed_at"] = datetime.now(UTC).isoformat()
+        ts.rows[1].error = NEEDS_REVIEW + "the local mask differs"
+        ts.save_local_table()
+        widget, _, _ = make_dock(home, source, omero, conn=omero.conn())
+        _start(widget, qtbot)
+
+        assert "1 image(s) need review" in widget.notice.text()
+        assert "another computer" in widget.notice.text()
+        assert widget._batch is not None
+        shown = {item.annotation_id for item in widget._batch.items}
+        assert shown == {ts.rows[2].annotation_id}
+
+    def test_closing_the_viewer_window_releases_claims(
+        self, tmp_path, make_dock, qtbot
+    ):
+        from qtpy.QtWidgets import QMainWindow
+
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        widget, _, _ = make_dock(home, source, omero, conn=omero.conn())
+        window = QMainWindow()  # stands in for napari's window, which hosts the dock
+        window.setCentralWidget(widget)
+        window.show()
+        _start(widget, qtbot)
+        table = omero.tables[ts.table_id]
+        assert (table["claimed_by"].astype(str) != "").all()  # both shown are claimed
+
+        window.close()  # napari keeps running (e.g. Jupyter); the session must end
+        assert summarize(ts.bundle_dir).sessions[-1].status == "interrupted"
+        assert (omero.tables[ts.table_id]["claimed_by"].fillna("") == "").all()
+
     def test_failed_connection_is_reported(
         self, tmp_path, make_dock, qtbot, monkeypatch
     ):
@@ -199,6 +276,83 @@ class TestDock:
         qtbot.waitUntil(lambda: "login failed" in widget.status.text(), timeout=5000)
         assert widget.connect_button.isEnabled()
         assert not widget.list_button.isEnabled()
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(
+    sys.platform == "darwin" and bool(os.environ.get("CI")),
+    reason="see TestDock",
+)
+class TestDockOnOmero:
+    """The dock against the Docker test OMERO: annotate, then review, same set."""
+
+    def test_annotate_then_review_on_omero(
+        self, omero_conn, omero_seed, qtbot, tmp_path
+    ):
+        from napari.components import ViewerModel
+
+        from omero_annotate_ai import TrainingSet, create_default_config
+        from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
+
+        config = create_default_config()
+        config.name = f"{omero_seed.tag}_napari"
+        config.omero.container_type = "dataset"
+        config.omero.container_id = omero_seed.dataset_id
+        config.training.train_n, config.training.validate_n = 2, 0
+        config.training.test_n = 0
+        config.training.seed = 7
+        home = tmp_path / "home"
+        ts = TrainingSet.create(config, omero_conn, home=home)
+
+        controller = FakeController()
+        widget = OMEROAnnotateDock(
+            ViewerModel(),
+            home=home,
+            controller=controller,  # type: ignore[arg-type]
+            embedder=InstantEmbedder(),  # type: ignore[arg-type]
+        )
+        widget._conn = omero_conn
+        qtbot.addWidget(widget)
+        qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=20000)
+
+        def session(review: bool, draw) -> None:
+            qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=60000)
+            widget.review.setChecked(review)
+            widget.open_button.click()
+            for _ in range(2):
+                qtbot.waitUntil(lambda: widget._ready, timeout=60000)
+                controller.mask = draw(controller)
+                widget.accept_button.click()
+            qtbot.waitUntil(lambda: not widget._ready, timeout=60000)
+            widget.note.setText("review pass" if review else "first pass")
+            widget.finish_button.click()
+            qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=60000)
+
+        def first(c):
+            mask = np.zeros(c.shown[-1].shape, np.uint32)
+            mask[4:12, 4:12] = 1
+            return mask
+
+        def corrected(c):
+            mask = c.initial[-1].astype(np.uint32)  # the saved mask came back
+            mask[20:28, 20:28] = 2
+            return mask
+
+        session(False, first)
+        annotated = TrainingSet.open(ts.table_id, omero_conn, home=home)
+        rows = {r.annotation_id: r for r in annotated.units()}
+        assert all(r.processed and r.label_id and r.roi_id for r in rows.values())
+
+        session(True, corrected)
+        reviewed = TrainingSet.open(ts.table_id, omero_conn, home=home)
+        for row in reviewed.units():
+            old = rows[row.annotation_id]
+            assert row.label_id != old.label_id and row.roi_id != old.roi_id
+            assert omero_conn.getObject("FileAnnotation", old.label_id) is None
+            assert omero_conn.getObject("Roi", old.roi_id) is None
+        kinds = [(s.kind, s.n_annotated, s.note) for s in reviewed.config.sessions]
+        assert kinds == [("annotate", 2, "first pass"), ("review", 2, "review pass")]
+        assert all(not r.claimed_by for r in reviewed.units())
 
 
 def _synthetic_image(seed: int, shape: tuple[int, int] = (256, 256)) -> np.ndarray:
@@ -263,6 +417,7 @@ class TestMicroSamContract:
             embedder.compute(image, path, "vit_b_lm", results.append, pytest.fail)
         qtbot.waitUntil(lambda: len(results) == 2, timeout=600_000)
 
+        viewer.add_image(images[1], name="mine")  # the user's own layer
         controller = MicroSamController(viewer)
         controller.show(images[0], results[0], "vit_b_lm")
         assert MASK_LAYER in viewer.layers
@@ -270,7 +425,73 @@ class TestMicroSamContract:
         assert controller.current_mask().max() == 3
         controller.show(images[1], results[1], "vit_b_lm")  # fresh empty mask
         assert not controller.current_mask().any()
+        saved = np.zeros(images[0].shape, np.uint16)
+        saved[30:60, 30:60] = 4
+        controller.show(images[0], results[0], "vit_b_lm", saved)  # a review
+        np.testing.assert_array_equal(controller.current_mask(), saved)
         controller.teardown()
+        assert [layer.name for layer in viewer.layers] == ["mine"]
+        controller.show(images[1], results[1], "vit_b_lm")  # a next session starts
+        controller.teardown()
+
+
+@pytest.mark.slow
+def test_dock_with_real_micro_sam_annotates_and_reviews(
+    make_napari_viewer, qtbot, tmp_path
+):
+    """The whole plugin with real micro-SAM in a real viewer (no human: the test
+    writes the committed objects a user would draw)."""
+    from micro_sam import util
+
+    if not (Path(util.get_cache_directory()) / "models" / "vit_b_lm").exists():
+        pytest.skip("vit_b_lm weights not cached; this test does not download them")
+    from omero_annotate_ai.napari_plugin._controller import MASK_LAYER
+    from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
+    from tests.fakes import FakeImageSource
+
+    source = FakeImageSource({i: _synthetic_image(i)[None, None, None] for i in (1, 2)})
+    config, _, omero = omero_set(tmp_path, n_images=2)
+    config.storage = "local"
+    home = tmp_path / "home"
+    ts = create_set(config, source, omero, home)
+    viewer = make_napari_viewer()
+    widget = OMEROAnnotateDock(viewer, home=home, core_options={"image_source": source})
+    viewer.window.add_dock_widget(widget)
+
+    def wait(condition, timeout: int) -> None:
+        try:
+            qtbot.waitUntil(condition, timeout=timeout)
+        except qtbot.TimeoutError:
+            pytest.fail(f"timed out; dock status: {widget.status.text()!r}")
+
+    wait(lambda: widget.open_button.isEnabled(), 20000)
+
+    def run(review: bool) -> None:
+        wait(lambda: widget.open_button.isEnabled(), 60000)  # the list is refreshed
+        widget.review.setChecked(review)
+        widget.open_button.click()
+        for label in (1, 2):
+            wait(lambda: widget._ready, 180_000)
+            layer = viewer.layers[MASK_LAYER]
+            if review:
+                assert layer.data.max() == label  # the saved mask is shown
+            data = np.zeros(layer.data.shape, layer.data.dtype)
+            data[10:40, 10:40] = label
+            if review and label == 1:
+                data[100:120, 100:120] = 9  # one correction
+            layer.data = data
+            widget.accept_button.click()
+        wait(lambda: not widget._ready, 60000)
+        widget.finish_button.click()
+        wait(lambda: widget._pages.currentIndex() == 0, 60000)
+
+    run(review=False)
+    run(review=True)
+    sessions = summarize(ts.bundle_dir).sessions
+    assert [(s.kind, s.n_annotated) for s in sessions] == [
+        ("annotate", 2),
+        ("review", 1),  # the unchanged second image kept its mask
+    ]
 
 
 def test_manifest_is_valid_and_points_at_the_widget():

@@ -9,6 +9,7 @@ No ``from __future__ import annotations`` here: npe2 reads the ``napari.Viewer``
 annotation of ``__init__`` at runtime to inject the viewer.
 """
 
+import html
 import logging
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 import napari
 import numpy as np
 import tifffile
+from qtpy.QtCore import QEvent, QObject
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -39,9 +41,17 @@ from qtpy.QtWidgets import (
 
 from ..annotators import Batch, BatchItem
 from ..bundle import home_dir
-from ..events import Event, ReconcileAction, UnitCommitted, UploadFailed
+from ..events import (
+    ClaimsHeld,
+    ClaimsReleased,
+    Event,
+    ReconcileAction,
+    UnitCommitted,
+    UnitConflict,
+    UploadFailed,
+)
 from ..omero.simple_connection import SimpleOMEROConnection
-from ..session import AnnotationSession
+from ..session import NEEDS_REVIEW, AnnotationSession
 from ..trainingset import (
     TrainingSet,
     TrainingSetSummary,
@@ -61,7 +71,8 @@ CONTAINER_TYPES = ("dataset", "plate", "project", "screen")
 Ref = int | Path
 """A training set as the core opens it: a tracking-table ID or a set folder."""
 
-Opened = tuple[AnnotationSession, Batch | None, dict[str, list[int]]]
+Opened = tuple[AnnotationSession, Batch | None, dict[str, list[int]], int]
+"""The session, its first batch, ``(done, total)`` per split, units needing review."""
 
 
 def _summary_text(summary: TrainingSetSummary) -> str:
@@ -140,6 +151,8 @@ class OMEROAnnotateDock(QWidget):
         self._done: dict[str, list[int]] = {}
         self._confirm_empty = False
         self._ready = False
+        self._revised = 0
+        self._window: QWidget | None = None  # napari's window, watched for closing
 
         self._pages = QStackedWidget()
         self._pages.addWidget(self._build_start_page())
@@ -215,8 +228,10 @@ class OMEROAnnotateDock(QWidget):
         self.cancel_button.clicked.connect(self._request_cancel)
         for button in (self.folder_button, self.open_button, self.cancel_button):
             buttons.addWidget(button)
+        self.review = QCheckBox("Review annotated images (correct their saved masks)")
         sets_layout.addWidget(self.set_list)
         sets_layout.addWidget(self.summary)
+        sets_layout.addWidget(self.review)
         sets_layout.addLayout(buttons)
         layout.addWidget(sets)
         layout.addStretch()
@@ -228,6 +243,9 @@ class OMEROAnnotateDock(QWidget):
         self.progress_label = QLabel()
         self.current_label = QLabel()
         self.current_label.setWordWrap(True)
+        self.notice = QLabel()  # lasting warnings: needs review, claims, conflicts
+        self.notice.setWordWrap(True)
+        self.notice.setStyleSheet("color: #d9534f;")
         self.busy = QProgressBar()
         self.busy.setRange(0, 0)
         self.busy.setVisible(False)
@@ -247,7 +265,7 @@ class OMEROAnnotateDock(QWidget):
         )
         self.finish_button = QPushButton("Finish session")
         self.finish_button.clicked.connect(self._finish)
-        for widget in (self.progress_label, self.current_label, self.busy):
+        for widget in (self.progress_label, self.current_label, self.notice, self.busy):
             layout.addWidget(widget)
         layout.addLayout(buttons)
         layout.addWidget(self.note)
@@ -332,7 +350,9 @@ class OMEROAnnotateDock(QWidget):
 
     def _open(self, ref: Ref, name: str) -> None:
         conn, home, options = self._conn, self._home, self._core_options
+        review = self.review.isChecked()
         self._cancel_requested = False
+        self.notice.clear()  # events from opening (claims held elsewhere) add to it
 
         def open_set() -> Opened:
             ts = TrainingSet.open(
@@ -344,19 +364,27 @@ class OMEROAnnotateDock(QWidget):
                 **options,
             )
             done = {c: [0, 0] for c in CATEGORIES}
+            flagged = 0
             for row in ts.units():
                 done[row.category][1] += 1
                 done[row.category][0] += int(row.processed)
-            session = ts.start_session()
-            return session, session.next_batch(), done
+                flagged += (row.error or "").startswith(NEEDS_REVIEW)
+            session = ts.start_session(review=review)
+            return session, session.next_batch(), done, flagged
 
         def opened(result: Opened) -> None:
-            self._session, batch, self._done = result
+            self._session, batch, self._done, flagged = result
+            self._revised = 0
             self.cancel_button.setVisible(False)
             self._skipped.clear()
             self._bind_keys(True)
             self._pages.setCurrentIndex(1)
             self._start_batch(batch)
+            if flagged:
+                self._notify(
+                    f"{flagged} image(s) need review: the local mask differs from the "
+                    "one on OMERO, so they are skipped (see Troubleshooting)."
+                )
 
         self.open_button.setEnabled(False)
         self.cancel_button.setVisible(True)
@@ -429,13 +457,19 @@ class OMEROAnnotateDock(QWidget):
                 return  # the user moved on meanwhile
             self.busy.setVisible(False)
             try:
-                self._controller.show(item.pixels, embedding, batch.model_type)
+                self._controller.show(
+                    item.pixels, embedding, batch.model_type, item.initial_mask
+                )
             except Exception as exc:  # noqa: BLE001 - shown to the user, logged
                 self._on_error(exc)
                 return
             self._ready = True
             self._set_buttons(True)
-            self._say("Segment with micro-SAM, commit objects, then Accept.")
+            self._say(
+                "Correct the saved objects, then Accept (unchanged masks stay as they are)."
+                if self._reviewing
+                else "Segment with micro-SAM, commit objects, then Accept."
+            )
 
         self._embedder.compute(
             item.pixels, path, batch.model_type, ready, self._on_error
@@ -455,7 +489,12 @@ class OMEROAnnotateDock(QWidget):
         index = self._cursor
         item = batch.items[index]
         path = batch.mask_dir / f"seg_{index:05}.tif"
-        tifffile.imwrite(path, mask.astype(np.uint32), compression="zlib")
+        initial = item.initial_mask
+        if initial is not None and np.array_equal(mask, initial):
+            mask = initial  # unchanged: same dtype too, so the review keeps the upload
+        else:
+            mask = mask.astype(np.uint32)
+        tifffile.imwrite(path, mask, compression="zlib")
         self._committed.add(index)
         self._skipped.discard(item.annotation_id)
         result = {item.annotation_id: path}
@@ -515,20 +554,41 @@ class OMEROAnnotateDock(QWidget):
             return session.finish(note)
 
         def finished(annotated: int) -> None:
+            reviewed = self._reviewing
             self._session = self._batch = None
             self._bind_keys(False)
             self._controller.teardown()
             self.note.clear()
             self._pages.setCurrentIndex(0)
-            self._say(f"Session finished: {annotated} image(s) annotated.")
+            done = "revised" if reviewed else "annotated"
+            self._say(f"Session finished: {annotated} image(s) {done}.")
             self._refresh()
 
         self._set_buttons(False)
         self.finish_button.setEnabled(False)
         self._io.run(finish, finished, self._on_error)
 
+    def showEvent(self, event: Any) -> None:  # noqa: N802 - Qt's name
+        """Once docked, watch napari's window: closing it interrupts the session."""
+        window = self.window()
+        if window is not self and window is not self._window:
+            window.installEventFilter(self)
+            self._window = window
+        super().showEvent(event)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        """Closing the viewer window (napari keeps running, e.g. from Jupyter) or
+        quitting records the session as interrupted and releases its claims."""
+        if watched is self._window and event.type() == QEvent.Type.Close:
+            self._interrupt()
+        return super().eventFilter(watched, event)
+
     def _interrupt(self) -> None:
-        """Record a session still open when napari quits as interrupted."""
+        """Record a session still open when napari closes as interrupted.
+
+        Finishing releases the claims of its open batches, so other computers (and
+        this one) can take those images at once.
+        """
         session = self._session
         if session is None:
             return
@@ -552,12 +612,31 @@ class OMEROAnnotateDock(QWidget):
 
     # --- helpers ------------------------------------------------------------------
 
+    @property
+    def _reviewing(self) -> bool:
+        return self._session is not None and self._session.review
+
     def _on_event(self, event: Event) -> None:
         if isinstance(event, UnitCommitted):
-            category = self._category_of(event.annotation_id)
-            if category:
-                self._done[category][0] += 1
+            if self._reviewing:
+                self._revised += 1
+            else:
+                category = self._category_of(event.annotation_id)
+                if category:
+                    self._done[category][0] += 1
             self._update_progress()
+        elif isinstance(event, UnitConflict):
+            self._notify(
+                f"{event.annotation_id} was saved on another computer first; yours is "
+                f"kept as {event.mask_file}"
+            )
+        elif isinstance(event, ClaimsHeld):
+            self._notify(
+                f"{event.units} image(s) are being annotated on another computer "
+                "and are skipped."
+            )
+        elif isinstance(event, ClaimsReleased):
+            self._say(f"Released {event.units} image(s) an earlier run left claimed.")
         elif isinstance(event, UploadFailed):
             self._say(
                 f"Upload failed for {event.annotation_id}: {event.error}", error=True
@@ -575,6 +654,8 @@ class OMEROAnnotateDock(QWidget):
 
     def _update_progress(self) -> None:
         parts = [f"{c.capitalize()} {d}/{t}" for c, (d, t) in self._done.items() if t]
+        if self._reviewing:
+            parts.append(f"revised {self._revised}")
         self.progress_label.setText(" · ".join(parts))
 
     def _set_buttons(self, enabled: bool) -> None:
@@ -597,6 +678,11 @@ class OMEROAnnotateDock(QWidget):
         self.open_button.setEnabled(bool(self._sets))
         self._set_buttons(self._ready)
         self._say(f"{type(exc).__name__}: {exc}", error=True)
+
+    def _notify(self, text: str) -> None:
+        """Add a lasting warning to the annotate page (status messages get replaced)."""
+        lines = [line for line in self.notice.text().split("<br>") if line]
+        self.notice.setText("<br>".join([*lines, html.escape(text)]))
 
     def _say(self, text: str, *, error: bool = False) -> None:
         self.status.setStyleSheet("color: #d9534f;" if error else "")
