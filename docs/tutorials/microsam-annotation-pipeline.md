@@ -110,8 +110,8 @@ To check or fix masks you already saved, open the set, choose **Review annotated
 run the same cell, or call `ts.review()`:
 
 ```python
-ts.review(note="tightened the outlines")       # every annotated unit
-ts.review(ids=["4ba674d4_0_0"])                # or only some (annotation IDs)
+ts.review(note="tightened the outlines")  # every annotated unit
+ts.review(ids=["4ba674d4_0_0"])  # or only some (annotation IDs)
 ```
 
 Each unit opens in napari with its saved mask (downloaded from OMERO if your folder lacks
