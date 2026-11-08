@@ -369,6 +369,25 @@ def rows_from_frame(frame: pd.DataFrame | None) -> list[Row]:
     return rows
 
 
+def keep_local_codes(row: Row, local: Row | None) -> None:
+    """Keep the ISCC codes of ``local`` that ``row`` (from the table) lacks.
+
+    A table made before the ISCC columns existed (0.5.0) returns rows without
+    codes; the local CSV still has them. A code is kept only while the pixel
+    digest it belongs to is unchanged.
+    """
+    if local is None:
+        return
+    if (
+        not row.input_iscc
+        and local.input_iscc
+        and row.input_digest == local.input_digest
+    ):
+        row.input_iscc = local.input_iscc
+    if not row.mask_iscc and local.mask_iscc and row.mask_digest == local.mask_digest:
+        row.mask_iscc = local.mask_iscc
+
+
 # --- Reports --------------------------------------------------------------------
 
 

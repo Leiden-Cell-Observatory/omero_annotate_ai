@@ -175,6 +175,9 @@ class FakeOmero(OmeroWrites):
     config_text: dict[int, str] = field(default_factory=dict)
     calls: dict[str, int] = field(default_factory=dict)
     hooks: dict[str, Callable[[], None]] = field(default_factory=dict)
+    # Columns new tables lack, like a table made by an older version (e.g. 0.5.0
+    # tables have no ISCC columns). Writes follow the table's columns, as on OMERO.
+    missing_columns: tuple[str, ...] = ()
     _next_id: int = 100
 
     def conn(self) -> Mock:
@@ -207,7 +210,9 @@ class FakeOmero(OmeroWrites):
     # tables -------------------------------------------------------------------
     def create_table(self, conn, rows, title, container_type, container_ids):
         table_id = self._new_id()
-        self.tables[table_id] = rows_to_frame(rows)
+        self.tables[table_id] = rows_to_frame(rows).drop(
+            columns=list(self.missing_columns)
+        )
         return table_id
 
     def read_table(self, conn, table_id):
@@ -226,10 +231,10 @@ class FakeOmero(OmeroWrites):
             if at is None:
                 continue
             for name in new.columns:
-                if name not in table.columns:
-                    table[name] = None
-                table.iat[at, table.columns.get_loc(name)] = row[name]
+                if name in table.columns:  # OMERO cannot add columns to a table
+                    table.iat[at, table.columns.get_loc(name)] = row[name]
         if len(fresh):
+            fresh = fresh[[c for c in table.columns if c in fresh.columns]]
             self.tables[table_id] = pd.concat([table, fresh], ignore_index=True)
         return {"updated": len(new) - len(fresh), "added": len(fresh)}
 
