@@ -17,6 +17,15 @@ Newest first. The full list of pull requests per version is on
   (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.
   This fixes the training export of 3D units, which wrote one plane instead of the
   annotated z range.
+- **Exclude:** `AnnotationSession.exclude(batch, ids)` marks units as excluded (bad,
+  out of focus). An excluded unit is done: it is recorded as `annotation_type:
+  excluded` with `processed` true and no mask, label file or ROI, is never handed out
+  or reviewed again, and is left out of the training and BioImage Archive exports.
+  Progress counts it as done and reports it separately (`summarize(...).excluded`,
+  `progress_summary(...)["excluded_units"]`, `SessionRecord.n_excluded`). Committing a
+  mask for it later in the same session makes it a normal annotation. Tables made by
+  0.5.x need no new column. Resuming now compares against the local copy as the last
+  run left it (it was rewritten when leftover claims were released first).
 
 ## 0.5.1
 

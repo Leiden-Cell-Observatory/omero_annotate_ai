@@ -115,8 +115,8 @@ def prepare_bia_data_from_table(
     Images are written at their **native dtype** - no 8-bit rescaling.
 
     Rows that are unprocessed, or processed but carry no mask, are counted and skipped
-    with a warning. Individual fetch failures are warned about and skipped too; only a
-    missing/empty table is fatal.
+    with a warning; excluded rows are skipped silently. Individual fetch failures are
+    warned about and skipped too; only a missing/empty table is fatal.
 
     The returned ``rows`` hold **only the exported records** - the ones whose image and
     mask both reached the disk - so the BIA file lists never name a file that was not
@@ -170,6 +170,8 @@ def prepare_bia_data_from_table(
 
     try:
         for annotation in rows:
+            if annotation.excluded:
+                continue
             if not annotation.processed:
                 skipped_unprocessed += 1
                 continue

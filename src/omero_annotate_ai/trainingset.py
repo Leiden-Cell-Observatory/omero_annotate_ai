@@ -14,6 +14,7 @@ import secrets
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -1121,8 +1122,9 @@ class TrainingSet:
             if ts.table_id is None:
                 raise ConfigError("This OMERO training set's config has no table ID")
             ts.rows = ts._read_table_rows(ts.table_id)
+            local_rows = ts.read_local_table()  # before releasing claims rewrites it
             ts._release_own_claims()
-            reconcile(ts, prune_duplicates=prune_duplicates, cancel=cancel)
+            reconcile(ts, local_rows, prune_duplicates=prune_duplicates, cancel=cancel)
             ts._report_claims()
         ts._close_open_sessions()
         return ts
@@ -1402,12 +1404,15 @@ class TrainingSet:
         annotated: int,
         note: str | None,
         status: Literal["finished", "interrupted"] = "finished",
+        *,
+        excluded: int = 0,
     ) -> None:
         """Close a session's record and publish the config."""
         record = self._session(session_id)
         record.ended = datetime.now()
         record.status = status
         record.n_annotated = annotated
+        record.n_excluded = excluded
         if note is not None:
             record.note = note
         self.save_config()
@@ -1445,9 +1450,9 @@ class TrainingSet:
         for record in self._config.sessions:
             if record.status == "open" and record.host in (None, host):
                 record.status = "interrupted"
-                record.n_annotated = sum(
-                    r.processed and r.session == record.id for r in self.rows
-                )
+                ours = [r for r in self.rows if r.processed and r.session == record.id]
+                record.n_excluded = sum(r.excluded for r in ours)
+                record.n_annotated = len(ours) - record.n_excluded
                 changed = True
         if changed:
             self.save_config()
@@ -1491,7 +1496,12 @@ class TrainingSet:
         """Repair what an interrupted session left (see :mod:`..reconcile`)."""
         if self.is_local:
             return False
-        return reconcile(self, prune_duplicates=prune_duplicates, cancel=self.cancel)
+        return reconcile(
+            self,
+            self.read_local_table(),
+            prune_duplicates=prune_duplicates,
+            cancel=self.cancel,
+        )
 
     def write_ro_crate(self) -> Path:
         """Describe the set's folder as an RO-Crate; returns the metadata file.
@@ -1648,13 +1658,18 @@ class TrainingSetInfo:
 
 @dataclass(frozen=True, slots=True)
 class TrainingSetSummary:
-    """What a set holds: per split ``(annotated, total)`` units, and its sessions."""
+    """What a set holds: per split ``(done, total)`` units, and its sessions.
+
+    Done counts annotated and excluded units; ``excluded`` holds, per split, how
+    many of them were excluded.
+    """
 
     name: str
     table_id: int | None
     storage: str
     progress: dict[str, tuple[int, int]]
     sessions: tuple[SessionRecord, ...]
+    excluded: dict[str, int] = dataclass_field(default_factory=dict[str, int])
 
 
 def list_training_sets(
@@ -1743,10 +1758,15 @@ def summarize(
         )
         for category in ("training", "validation", "test")
     }
+    excluded = {
+        category: sum(r.excluded for r in rows if r.category == category)
+        for category in progress
+    }
     return TrainingSetSummary(
         name=config.name,
         table_id=config.identity.table_id,
         storage=config.storage,
         progress=progress,
         sessions=tuple(config.sessions),
+        excluded=excluded,
     )

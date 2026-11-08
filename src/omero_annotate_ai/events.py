@@ -16,7 +16,9 @@ from typing import Literal
 logger = logging.getLogger(__name__)
 
 Stage = Literal["load", "annotate", "upload", "reconcile"]
-RepairKind = Literal["adopted", "uploaded", "reset", "divergent", "duplicate", "pruned"]
+RepairKind = Literal[
+    "adopted", "uploaded", "reset", "divergent", "duplicate", "pruned", "excluded"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,13 @@ class UnitCommitted:
     annotation_id: str
     label_id: int | None = None
     roi_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UnitExcluded:
+    """The annotator excluded a unit: it is done, without a mask or uploads."""
+
+    annotation_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +129,7 @@ Event = (
     SessionStarted
     | BatchPrepared
     | UnitCommitted
+    | UnitExcluded
     | UploadFailed
     | TableWritten
     | ReconcileAction
@@ -149,6 +159,7 @@ def log_events(event: Event) -> None:
             "divergent",
             "duplicate",
             "reset",
+            "excluded",
         ):
             logger.warning("%s: %s %s", annotation_id, action, detail)
         case Progress():

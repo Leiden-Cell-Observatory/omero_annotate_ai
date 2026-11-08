@@ -5,6 +5,13 @@ a few known states. On resume each unit is compared across the OMERO table row, 
 local ``tracking_table.csv`` row and the mask file, and :func:`decide` picks a step:
 
 =================  =========================================================
+``excluded``       OMERO has the unit excluded: nothing to repair. Uploads or a
+                   mask found for it are reported, never adopted - unless the
+                   local copy shows the same session annotated it afterwards
+                   (a commit after excluding, interrupted before the table
+                   write): then the steps below repair it like any annotation.
+``exclude``        Only the local copy has the unit excluded (the table write
+                   failed): the exclusion is written to the table.
 ``mirror``         OMERO already has the unit: keep its row; report a local
                    mask whose pixels differ from the digest OMERO recorded -
                    unless a newer tagged upload holds exactly that mask (a
@@ -23,6 +30,8 @@ local ``tracking_table.csv`` row and the mask file, and :func:`decide` picks a s
 
 Repairing never overwrites silently: a mask whose pixels differ from the upload is
 reported (``divergent``) and left for the user. Running it twice changes nothing.
+An excluded unit (``annotation_type: excluded``) has no mask, uploads or tag by
+design, so it is never "needs review".
 """
 
 from __future__ import annotations
@@ -38,7 +47,7 @@ from .bundle import atomic_write, file_digest, input_path, mask_path, pixel_dige
 from .claims import is_live
 from .events import Progress, ReconcileAction, RepairKind
 from .provenance import describe_change, file_code, image_code
-from .rows import keep_local_codes
+from .rows import EXCLUDED, keep_local_codes
 from .session import NEEDS_REVIEW, check_cancel, upload_unit
 
 if TYPE_CHECKING:
@@ -47,7 +56,9 @@ if TYPE_CHECKING:
     from .rows import Row
     from .trainingset import TrainingSet
 
-Step = Literal["mirror", "verify", "find_tagged", "reset", "nothing"]
+Step = Literal[
+    "excluded", "exclude", "mirror", "verify", "find_tagged", "reset", "nothing"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +68,8 @@ class Record:
     processed: bool
     label_id: int | None
     roi_id: int | None
+    excluded: bool = False
+    session: int = -1
 
 
 def decide(
@@ -70,8 +83,23 @@ def decide(
         mask_present: Whether ``annotation_output/{id}_mask.tif`` exists.
         local_known: Whether the bundle has a local CSV at all.
     """
+    if remote is not None and remote.excluded:
+        annotated_after = (
+            local is not None
+            and local.session == remote.session
+            and (local.label_id is not None or mask_present)
+        )
+        if not annotated_after:
+            return "excluded"
     if remote is not None and remote.processed and remote.label_id is not None:
         return "mirror"
+    if (
+        local is not None
+        and local.excluded
+        and (remote is None or not remote.processed)
+        and not mask_present
+    ):
+        return "exclude"
     if local is not None and local.label_id is not None:
         return "verify"
     if mask_present or not local_known:
@@ -84,7 +112,13 @@ def decide(
 def _record(annotation: Row | None) -> Record | None:
     if annotation is None:
         return None
-    return Record(annotation.processed, annotation.label_id, annotation.roi_id)
+    return Record(
+        annotation.processed,
+        annotation.label_id,
+        annotation.roi_id,
+        annotation.excluded,
+        annotation.session,
+    )
 
 
 DIVERGENT = NEEDS_REVIEW + "the local mask differs from the uploaded label file"
@@ -180,6 +214,29 @@ class _Reconciler:
                 self.event(unit.annotation_id, "pruned", f"replaced {kind} {object_id}")
         self._accept(unit, mask, "adopted", f"reviewed label {label_id}")
 
+    def excluded(self, unit: Row, local: Row | None, mask: Path, scan: bool) -> None:
+        """Leave an excluded unit excluded; report uploads or a mask found for it.
+
+        ``scan``: look for tagged uploads (the local copy is gone).
+        """
+        found: list[str] = []
+        if local is not None and local.label_id is not None:
+            found.append(f"label {local.label_id} (session {local.session})")
+        if mask.exists():
+            found.append(f"mask {mask.name}")
+        if scan and unit.image_id is not None:
+            tag = self.training_set.upload_tag(unit.annotation_id)
+            labels, rois = self.training_set.omero_writes.find_tagged(
+                self.training_set.conn, unit.image_id, tag
+            )
+            found += [f"label {i}" for i in labels] + [f"ROI {i}" for i in rois]
+        if found:
+            self.event(
+                unit.annotation_id,
+                "excluded",
+                f"excluded in session {unit.session}; not adopted: {', '.join(found)}",
+            )
+
     def verify(self, unit: Row, local: Row, mask: Path) -> None:
         """The local copy has upload IDs the table lacks: check them, then adopt."""
         writes, conn = self.training_set.omero_writes, self.training_set.conn
@@ -255,6 +312,8 @@ class _Reconciler:
     ) -> None:
         """Mark the unit done and upload whatever is still missing."""
         unit.processed = True
+        if unit.annotation_type == EXCLUDED:  # annotated after it was excluded
+            unit.annotation_type = self.training_set.annotation_type
         unit.mask_digest = file_digest(mask)
         unit.mask_iscc = file_code(mask, mask=True)
         self.training_set.save_local_table()
@@ -266,20 +325,22 @@ class _Reconciler:
 
 def reconcile(
     training_set: TrainingSet,
+    local_rows: dict[str, Row] | None,
     *,
     prune_duplicates: bool = False,
     cancel: Callable[[], bool] | None = None,
 ) -> bool:
     """Repair an opened set's ``rows`` (loaded from the OMERO table).
 
-    Rows only the local CSV has (e.g. images added when the table update failed)
-    are added back. Changed rows are written to the table and the local CSV.
+    ``local_rows`` is the local CSV as the last run left it (None: there is none),
+    read before opening writes it. Rows only the local CSV has (e.g. images added
+    when the table update failed) are added back. Changed rows are written to the
+    table and the local CSV.
 
     Returns:
         Whether anything was repaired.
     """
     rows = training_set.rows
-    local_rows = training_set.read_local_table()
     local_known = local_rows is not None
     local_rows = local_rows or {}
     remote_ids = {a.annotation_id for a in rows}
@@ -302,7 +363,15 @@ def reconcile(
         step = decide(
             remote_flags[unit.annotation_id], _record(local), mask.exists(), local_known
         )
-        if step == "mirror":
+        if step == "excluded":
+            fixer.excluded(unit, local, mask, scan=not local_known)
+        elif step == "exclude":
+            assert local is not None
+            rows[done - 1] = local.model_copy()
+            fixer.changed = True
+            fixer.repaired.add(unit.annotation_id)
+            fixer.event(unit.annotation_id, "adopted", "exclusion from the local copy")
+        elif step == "mirror":
             fixer.mirror(unit, local, mask)
         elif step == "verify":
             assert local is not None

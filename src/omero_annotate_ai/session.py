@@ -21,6 +21,11 @@ its IDs saved, then the old label file and ROI are deleted and the table row
 updated. A crash in between leaves both, and resuming keeps the newer one (see
 :mod:`omero_annotate_ai.reconcile`). An unchanged mask changes nothing.
 
+An annotator can also exclude a unit (:meth:`AnnotationSession.exclude`): it is
+done, without a mask, uploads or claim (``annotation_type: excluded``), and is
+never handed out, reviewed or exported. Committing a mask for it later in the
+same session makes it a normal annotation.
+
 A crash between any two steps loses at most one upload, and the tag finds that one
 again when the set is resumed (see :mod:`omero_annotate_ai.reconcile`). A failed
 upload leaves the unit unannotated, with the error in the local CSV, and the session
@@ -54,6 +59,7 @@ from .events import (
     Stage,
     UnitCommitted,
     UnitConflict,
+    UnitExcluded,
     UploadFailed,
 )
 from .provenance import file_code
@@ -308,6 +314,7 @@ class AnnotationSession:
         self._open: dict[int, set[str]] = {}
         self._scratch: dict[int, Path] = {}
         self._handed_out: set[str] = set()  # each unit at most once per session
+        self._excluded: set[str] = set()  # excluded by this session, not committed
         self._finished = False
         self.session = training_set.begin_session(
             model, batch_size, kind="review" if review else "annotate"
@@ -321,7 +328,7 @@ class AnnotationSession:
         return [
             a
             for a in self._set.rows
-            if a.processed == self.review
+            if ((a.processed and not a.excluded) if self.review else not a.processed)
             and (self._ids is None or a.annotation_id in self._ids)
             and a.annotation_id not in self._handed_out
             and not (a.error or "").startswith(NEEDS_REVIEW)
@@ -386,8 +393,9 @@ class AnnotationSession:
         """Save the masks in ``result`` (``{annotation_id: file}``), then update the table.
 
         ``result`` may cover part of the batch, and a unit already committed is
-        skipped, so calling this again is safe. With ``publish_config=False`` the
-        config on OMERO is only replaced at :meth:`finish`.
+        skipped, so calling this again is safe. A unit this session excluded is
+        saved as a normal annotation. With ``publish_config=False`` the config on
+        OMERO is only replaced at :meth:`finish`.
 
         Raises:
             TableWriteError: The tracking table could not be updated (the uploads
@@ -396,7 +404,7 @@ class AnnotationSession:
         waiting = self._open.get(batch.index, set())
         by_id = {a.annotation_id: a for a in self._set.rows}
         todo = [i.annotation_id for i in batch.items if i.annotation_id in result]
-        todo = [annotation_id for annotation_id in todo if annotation_id in waiting]
+        todo = [i for i in todo if i in waiting or i in self._excluded]
         outcome: dict[str, list[str]] = {
             "revised": [],
             "failed": [],
@@ -419,6 +427,7 @@ class AnnotationSession:
             self._set.events(Progress("upload", done, len(todo)))
         committed = outcome["revised"]
         self.annotated += len(committed)
+        self._excluded.difference_update(committed)
         self._unclaim({*outcome["unchanged"], *outcome["failed"], *outcome["conflict"]})
 
         if committed and not self._set.is_local:
@@ -446,6 +455,8 @@ class AnnotationSession:
         theirs = self._set.current_rows([annotation_id]).get(annotation_id)
         if theirs is None or not theirs.processed:
             return False
+        if theirs.excluded and theirs.session == self.session:
+            return False  # excluded here earlier: the mask drawn now replaces that
         if self.review and theirs.label_id == row.label_id:
             return False  # nobody else changed it since it was handed out
         keep = conflict_path(self._set.bundle_dir, annotation_id, self.session)
@@ -456,6 +467,66 @@ class AnnotationSession:
         self._set.save_local_table()
         self._set.events(UnitConflict(annotation_id, str(keep)))
         return True
+
+    def exclude(
+        self,
+        batch: Batch,
+        annotation_ids: Collection[str],
+        *,
+        publish_config: bool = True,
+    ) -> tuple[str, ...]:
+        """Mark units of ``batch`` excluded (e.g. out of focus), then update the table.
+
+        An excluded unit is done: it has no mask, uploads or claim, is not handed
+        out again and is not exported. Units not open in the batch (committed,
+        released, excluded already) are skipped, so calling this again is safe; on
+        OMERO sets so is a unit another session saved first (its row is taken
+        over). With ``publish_config=False`` the config on OMERO is only replaced
+        at :meth:`finish`.
+
+        Returns:
+            The units excluded by this call.
+
+        Raises:
+            ValueError: This is a review session (its units have uploads).
+            TableWriteError: The tracking table could not be updated (the exclusion
+                is saved locally; resuming writes it to the table).
+        """
+        if self.review:
+            raise ValueError("A review session cannot exclude units")
+        waiting = self._open.get(batch.index, set())
+        todo = [
+            i.annotation_id
+            for i in batch.items
+            if i.annotation_id in annotation_ids and i.annotation_id in waiting
+        ]
+        if not todo:
+            return ()
+        rows = self._set.rows
+        position = {r.annotation_id: n for n, r in enumerate(rows)}
+        if not self._set.is_local:
+            current = self._set.current_rows(todo)
+            for annotation_id in list(todo):
+                theirs = current.get(annotation_id)
+                if theirs is not None and theirs.processed:
+                    rows[position[annotation_id]] = theirs
+                    waiting.discard(annotation_id)
+                    todo.remove(annotation_id)
+        for annotation_id in todo:
+            rows[position[annotation_id]].mark_excluded(self.session)
+            # A mask left by an earlier failed upload would be taken for this unit's.
+            mask_path(self._set.bundle_dir, annotation_id).unlink(missing_ok=True)
+            waiting.discard(annotation_id)
+        self._excluded.update(todo)
+        self._set.save_local_table()
+        if todo and not self._set.is_local:
+            self._set.write_table([rows[position[i]] for i in todo])
+            if publish_config:
+                self._set.publish_config()
+        self._set.save_config()
+        for annotation_id in todo:
+            self._set.events(UnitExcluded(annotation_id))
+        return tuple(todo)
 
     def release(self, batch: Batch) -> None:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
@@ -491,6 +562,8 @@ class AnnotationSession:
             self._unclaim(self._open.pop(index, set()))
             shutil.rmtree(scratch, ignore_errors=True)
         self._scratch.clear()
-        self._set.end_session(self.session, self.annotated, note, status)
+        self._set.end_session(
+            self.session, self.annotated, note, status, excluded=len(self._excluded)
+        )
         self._set.events(SessionFinished(self.session, self.annotated, note))
         return self.annotated

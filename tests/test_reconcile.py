@@ -9,14 +9,28 @@ from omero_annotate_ai import provenance
 from omero_annotate_ai import session as session_module
 from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.bundle import file_digest
+from omero_annotate_ai.errors import TableWriteError
 from omero_annotate_ai.reconcile import Record, decide
-from tests.fakes import Crash, annotate, create_set, image_mask, omero_set, reopen
-from tests.test_session import edited
+from tests.fakes import (
+    Crash,
+    Upload,
+    annotate,
+    create_set,
+    image_mask,
+    omero_set,
+    reopen,
+)
+from tests.test_session import edited, masks_for
 
 DONE = Record(processed=True, label_id=5, roi_id=6)
 ACCEPTED = Record(processed=True, label_id=None, roi_id=None)
 PENDING = Record(processed=False, label_id=None, roi_id=None)
 UPLOADED = Record(processed=True, label_id=5, roi_id=None)
+EXCLUDED = Record(processed=True, label_id=None, roi_id=None, excluded=True, session=2)
+# The same session (2) annotated the unit after excluding it; or another one (1).
+ACCEPTED_AFTER = Record(processed=True, label_id=None, roi_id=None, session=2)
+UPLOADED_AFTER = Record(processed=True, label_id=5, roi_id=None, session=2)
+UPLOADED_BEFORE = Record(processed=True, label_id=5, roi_id=None, session=1)
 
 
 @pytest.mark.unit
@@ -33,6 +47,15 @@ class TestDecide:
             (PENDING, ACCEPTED, False, True, "reset"),
             (PENDING, PENDING, False, True, "nothing"),
             (None, PENDING, False, True, "nothing"),
+            (EXCLUDED, EXCLUDED, False, True, "excluded"),
+            (EXCLUDED, None, False, False, "excluded"),
+            (EXCLUDED, EXCLUDED, True, True, "find_tagged"),  # crash before accept
+            (EXCLUDED, ACCEPTED_AFTER, True, True, "find_tagged"),
+            (EXCLUDED, UPLOADED_AFTER, True, True, "verify"),
+            (EXCLUDED, UPLOADED_BEFORE, True, True, "excluded"),
+            (PENDING, EXCLUDED, False, True, "exclude"),  # table write failed
+            (None, EXCLUDED, False, True, "exclude"),
+            (DONE, EXCLUDED, False, True, "mirror"),
         ],
     )
     def test_steps(self, remote, local, mask, local_known, step):
@@ -223,6 +246,92 @@ class TestRepairs:
         resume(first, source, omero)
 
         assert dropped in set(omero.tables[table_id]["annotation_id"])
+
+
+@pytest.mark.unit
+class TestExcludedUnits:
+    def _excluded(self, tmp_path, n_images=2):
+        """A set whose first unit is excluded, the others annotated."""
+        first, source, omero = run_first(tmp_path, n_images=n_images)
+        session = first.start_session()
+        batch = session.next_batch()
+        bad = batch.items[0].annotation_id
+        session.exclude(batch, [bad])
+        session.commit(batch, masks_for(batch, set(range(1, n_images))))
+        session.finish()
+        return first, source, omero, bad
+
+    def test_excluded_unit_is_left_alone(self, tmp_path):
+        first, source, omero, bad = self._excluded(tmp_path)
+        before = omero.tables[first.table_id].copy()
+        events = []
+
+        reopened = reopen(first, source, omero, events=events)
+
+        assert not [e for e in events if hasattr(e, "action")]
+        assert next(r for r in reopened.rows if r.annotation_id == bad).excluded
+        pd.testing.assert_frame_equal(omero.tables[first.table_id], before)
+        assert reopened.reconcile() is False
+
+    def test_tagged_upload_of_another_session_is_reported_not_adopted(self, tmp_path):
+        first, source, omero, bad = self._excluded(tmp_path)
+        unit = next(r for r in first.rows if r.annotation_id == bad)
+        assert unit.image_id is not None
+        orphan = max(omero.labels) + 1
+        omero.labels[orphan] = Upload(
+            unit.image_id, first.upload_tag(bad), np.ones((16, 16), np.uint16)
+        )
+        (first.bundle_dir / "tracking_table.csv").unlink()  # force a tag lookup
+        events = []
+
+        reopened = reopen(first, source, omero, events=events)
+
+        reported = [e for e in events if getattr(e, "action", "") == "excluded"]
+        assert [e.annotation_id for e in reported] == [bad]
+        assert f"label {orphan}" in reported[0].detail
+        row = omero.tables[first.table_id].set_index("annotation_id").loc[bad]
+        assert row["annotation_type"] == "excluded" and row["label_id"] == 0
+        assert next(r for r in reopened.rows if r.annotation_id == bad).excluded
+
+    def test_exclusion_the_table_missed_is_written_on_resume(self, tmp_path):
+        first, source, omero = run_first(tmp_path, n_images=2)
+        session = first.start_session()
+        batch = session.next_batch()
+        bad = batch.items[0].annotation_id
+        omero.fail = {"table": omero.calls.get("table", 0) + 1}
+        with pytest.raises(TableWriteError):
+            session.exclude(batch, [bad])
+        omero.fail = {}
+
+        reopened = resume(first, source, omero)
+
+        row = omero.tables[first.table_id].set_index("annotation_id").loc[bad]
+        assert row["processed"] and row["annotation_type"] == "excluded"
+        assert row["claimed_by"] == ""
+        assert next(r for r in reopened.rows if r.annotation_id == bad).excluded
+        assert first.upload_tag(bad) not in omero.uploads_per_tag()
+
+    @pytest.mark.parametrize(
+        "crash", ["label", "label_after", "roi", "roi_after", "table"]
+    )
+    def test_crash_in_a_commit_after_exclude(self, tmp_path, crash):
+        first, source, omero = run_first(tmp_path, n_images=2)
+        session = first.start_session()
+        batch = session.next_batch()
+        unit = batch.items[0].annotation_id
+        session.exclude(batch, [unit])
+        omero.crash = {crash: omero.calls.get(crash, 0) + 1}
+        with pytest.raises(Crash):
+            session.commit(batch, masks_for(batch, {0}))
+        omero.crash = {}
+
+        pipeline = resume(first, source, omero)
+
+        row = next(r for r in pipeline.rows if r.annotation_id == unit)
+        assert not row.excluded and row.annotation_type == "segmentation_mask"
+        assert_consistent(omero, pipeline, first.table_id, 2)
+        table = omero.tables[first.table_id].set_index("annotation_id")
+        assert table.loc[unit, "annotation_type"] == "segmentation_mask"
 
 
 @pytest.mark.unit

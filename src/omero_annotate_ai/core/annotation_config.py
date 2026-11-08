@@ -657,6 +657,7 @@ class SessionRecord(_Section):
     n_annotated: int = Field(
         default=0, description="Units saved (annotated, or changed in a review)"
     )
+    n_excluded: int = Field(default=0, description="Units the annotator excluded")
     note: str | None = None
 
 

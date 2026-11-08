@@ -167,6 +167,19 @@ class TestSummaryAndFacade:
         annotate(ts, limit=2)
         assert summarize(ts.bundle_dir).progress["training"] == (2, 3)
 
+    def test_summary_counts_excluded_units_as_done(self, tmp_path):
+        ts, _, _ = new(tmp_path)
+        session = ts.start_session(batch_size=1)
+        batch = session.next_batch()
+        session.exclude(batch, [batch.items[0].annotation_id])
+        session.finish()
+
+        summary = summarize(ts.bundle_dir)
+
+        assert summary.progress["training"] == (1, 3)
+        assert summary.excluded == {"training": 1, "validation": 0, "test": 0}
+        assert summary.sessions[-1].n_excluded == 1
+
     def test_create_pipeline_is_deprecated(self, tmp_path):
         from omero_annotate_ai.core.annotation_pipeline import create_pipeline
 
