@@ -33,8 +33,9 @@ def setup_training(
         training_result: Dictionary from prepare_training_data_from_table()
         model_name: Name for the training session/model
         model_type: SAM model variant ("vit_b", "vit_l", "vit_h")
-        epochs: Number of training epochs (primary training parameter)
-        n_iterations: Number of training iterations (calculated from epochs if None)
+        epochs: Number of training epochs
+        n_iterations: Number of training iterations; when given it overrides
+            ``epochs`` (micro-SAM's ``train_sam`` semantics), e.g. for a short test run
         batch_size: Training batch size
         learning_rate: Learning rate for training
         patch_shape: Input patch dimensions (height, width) or (slices, height, width)
@@ -77,14 +78,10 @@ def setup_training(
 
     checkpoint_folder = output_dir / "checkpoints"
 
-    # Calculate n_iterations if not provided
-    if n_iterations is None and epochs > 0:
-        # Estimate iterations per epoch based on dataset size
-        training_stats = training_result.get("stats", {})
-        n_training_images = training_stats.get("n_training_images", 100)
-        # Rough estimate: iterations per epoch = dataset_size / batch_size
-        iterations_per_epoch = max(1, n_training_images // batch_size)
-        n_iterations = epochs * iterations_per_epoch
+    if n_iterations is None and epochs <= 0:
+        raise ValueError("Set epochs > 0, or n_iterations for a fixed number of steps")
+    if n_iterations is not None and n_iterations <= 0:
+        raise ValueError("n_iterations must be positive")
 
     # Build training configuration
     training_config = {
@@ -187,7 +184,10 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"  Patch shape: {config['patch_shape']}")
     logger.info(f"  Batch size: {config['batch_size']}")
     logger.info(f"  Learning rate: {config['learning_rate']}")
-    logger.info(f"  Epochs: {config['epochs']}")
+    if config.get("n_iterations"):
+        logger.info(f"  Iterations: {config['n_iterations']} (overrides epochs)")
+    else:
+        logger.info(f"  Epochs: {config['epochs']}")
     logger.info(f"  Objects per batch: {config['n_objects_per_batch']}")
     logger.info(f"  Checkpoint folder: {checkpoint_folder}")
 
@@ -253,7 +253,8 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
             model_type=config["model_type"],
             train_loader=train_loader,
             val_loader=val_loader,
-            n_epochs=config["epochs"],  # n_epochs instead of n_iterations
+            n_epochs=config["epochs"],
+            n_iterations=config.get("n_iterations"),  # overrides n_epochs when set
             n_objects_per_batch=config["n_objects_per_batch"],
             with_segmentation_decoder=train_instance_segmentation,
             device=device,
@@ -307,6 +308,7 @@ def _run_microsam_training(config: dict[str, Any]) -> dict[str, Any]:
         "training_config": config,
         "training_stats": {
             "n_epochs": config["epochs"],
+            "n_iterations": config.get("n_iterations"),
             "batch_size": config["batch_size"],
             "learning_rate": config["learning_rate"],
             "n_checkpoints": len(checkpoints),

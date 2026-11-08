@@ -1372,6 +1372,13 @@ class TestZarrConfig:
         with pytest.raises(ValueError, match="storage: local"):
             AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
 
+    def test_switching_an_existing_config_to_zarr_is_validated(self):
+        """Assignment runs the same checks as construction (no silent OMERO storage)."""
+        config = AnnotationConfig(name="z", zarr={"uris": ["a.zarr"]})
+        with pytest.raises(ValueError, match="storage: local"):
+            config.source = "zarr"
+        assert config.source == "omero"
+
     def test_yaml_round_trip(self):
         config = AnnotationConfig(
             name="z",
