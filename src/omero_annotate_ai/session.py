@@ -186,15 +186,28 @@ def commit_unit(
     return upload_unit(training_set, annotation, target)
 
 
+def _same_labels(reviewed: Path, saved: Path) -> bool:
+    """Whether a reviewed mask holds the saved mask's labels, whatever its data type.
+
+    The annotator may write the same labels with a wider type (micro-SAM uses
+    uint32); that is not a revision.
+    """
+    if not saved.exists():
+        return False
+    a = np.squeeze(np.asarray(tifffile.imread(reviewed)))
+    b = np.squeeze(np.asarray(tifffile.imread(saved)))
+    return a.shape == b.shape and np.array_equal(a.astype(np.int64), b.astype(np.int64))
+
+
 def review_unit(
     training_set: TrainingSet, annotation: Row, mask_source: Path, session: int
 ) -> Literal["revised", "unchanged", "failed"]:
     """Save a reviewed mask: replace the unit's mask and uploads if it changed."""
     digest = file_digest(mask_source)
-    if digest == annotation.mask_digest:
+    target = mask_path(training_set.bundle_dir, annotation.annotation_id)
+    if digest == annotation.mask_digest or _same_labels(mask_source, target):
         Path(mask_source).unlink(missing_ok=True)
         return "unchanged"
-    target = mask_path(training_set.bundle_dir, annotation.annotation_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     previous = target.with_name(f"{target.stem}.previous.tif")
     if target.exists():
@@ -343,10 +356,15 @@ class AnnotationSession:
         if not chosen:
             return None
         items: list[BatchItem] = []
-        for done, annotation in enumerate(chosen, start=1):
-            check_cancel(self._set, self._cancel, "load")
-            items.append(self._set.prepare_item(annotation, with_mask=self.review))
-            self._set.events(Progress("load", done, len(chosen)))
+        try:
+            for done, annotation in enumerate(chosen, start=1):
+                check_cancel(self._set, self._cancel, "load")
+                items.append(self._set.prepare_item(annotation, with_mask=self.review))
+                self._set.events(Progress("load", done, len(chosen)))
+        except BaseException:
+            # Claimed but never handed out: free them, or they block for claim_hours.
+            self._unclaim({a.annotation_id for a in chosen})
+            raise
         self._set.save_local_table()  # records the input digests
         index = self._set.next_batch_index()
         scratch = fresh_scratch(self._set.bundle_dir, self.session, index)

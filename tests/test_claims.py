@@ -113,6 +113,22 @@ class TestTwoComputers:
         )
         assert done.processed and done.label_id is not None
 
+    def test_a_batch_that_fails_to_load_frees_its_claims(
+        self, tmp_path, on, monkeypatch
+    ):
+        a, _, _, omero = two_computers(tmp_path, on)
+        on("a")
+        session = a.start_session()
+
+        def broken(*args, **kwargs):
+            raise OSError("image unreadable")
+
+        monkeypatch.setattr(a, "prepare_item", broken)
+        with pytest.raises(OSError):
+            session.next_batch()
+
+        assert (table(omero, a)["claimed_by"] == "").all()
+
     def test_release_and_finish_hand_the_claims_back(self, tmp_path, on):
         a, _, _, omero = two_computers(tmp_path, on)
         on("a")
