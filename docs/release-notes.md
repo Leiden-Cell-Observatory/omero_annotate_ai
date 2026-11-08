@@ -3,6 +3,21 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## 0.5.2
+
+- **Session numbers start at 1.** A new training set numbered its first session 0
+  (unannotated rows carry session -1). Existing sets keep their numbers; the next
+  session follows the highest one.
+- **napari plugin:** while the next image's embedding is computed, that image is shown
+  dimmed, the previous image's objects and prompts are hidden and micro-SAM's dock is
+  disabled, so nothing is drawn against the wrong embedding. Each image gets its own
+  contrast limits.
+- **One pixel reader.** The training export and the BioImage Archive export read
+  planes, patches and volumes through the same image source as annotation
+  (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.
+  This fixes the training export of 3D units, which wrote one plane instead of the
+  annotated z range.
+
 ## 0.5.1
 
 - **napari plugin** (experimental, `pip install "omero-annotate-ai[napari]"`): a dock in

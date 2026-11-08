@@ -1,6 +1,5 @@
 """Training data preparation functions for micro-SAM workflows."""
 
-import ast
 import logging
 import shutil
 from collections.abc import Callable
@@ -22,6 +21,7 @@ from ..errors import IntegrityError
 from ..omero._untyped import ezomero
 from ..provenance import describe_change
 from ..rows import rows_from_frame
+from ..sources import OmeroImageSource, read_unit
 from ..utils.logging import create_training_logger
 from .normalization import NormalizationRecorder, write_native_sidecar
 from .training_layout import (
@@ -330,207 +330,6 @@ def prepare_training_data_from_table(
     return result
 
 
-def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
-    """
-    Fetch one annotated image from OMERO at its native bit depth.
-
-    Handles the 2D, 2D-patch and 3D-volumetric cases. Returns the array rather than
-    writing it, so the caller decides where it lands - which is what lets files be
-    named by annotation_id instead of by loop index.
-
-    Args:
-        conn: OMERO connection
-        row: One row of the tracking table
-        channel: Channel to fetch; the caller has resolved label vs training already
-        logger: Optional logger
-
-    Returns:
-        The image as a numpy array (2D, or 3D for volumetric data), unscaled.
-        Normalisation is defined in the config and applied by the caller or the trainer.
-
-    Raises:
-        ValueError: If the image is not found in OMERO
-    """
-    log = logger or _LOGGER
-    # Extract metadata
-    image_id = int(row["image_id"])
-
-    # Handle z_slice - could be int, string representation of list, or NaN
-    z_slice = row["z_slice"]
-    if pd.isna(z_slice):
-        z_slice = 0
-    elif isinstance(z_slice, str) and z_slice.startswith("["):
-        try:
-            z_slice = ast.literal_eval(z_slice)
-            if isinstance(z_slice, list) and len(z_slice) > 0:
-                z_slice = z_slice[0]  # Use first slice for 2D
-        except (ValueError, SyntaxError):
-            z_slice = 0
-
-    # channel is supplied by the caller, which has already resolved label vs training
-    timepoint = int(row["timepoint"]) if pd.notna(row["timepoint"]) else 0
-    is_volumetric = (
-        bool(row["is_volumetric"])
-        if "is_volumetric" in row and pd.notna(row["is_volumetric"])
-        else False
-    )
-
-    # Get patch information
-    is_patch = bool(row["is_patch"])
-    patch_x = int(row["patch_x"])
-    patch_y = int(row["patch_y"])
-    patch_width = int(row["patch_width"])
-    patch_height = int(row["patch_height"])
-
-    log.debug(
-        f"Image {image_id}: patch={is_patch} {patch_width}x{patch_height} "
-        f"at ({patch_x},{patch_y}), volumetric={is_volumetric}, channel={channel}"
-    )
-
-    # Process based on whether it's 3D volumetric or 2D
-    if is_volumetric:
-        # Handle 3D volumetric data
-        # Determine which z-slices to load
-        if isinstance(z_slice, list):
-            z_slices = z_slice
-        elif z_slice == "all":
-            # Get image object to determine size
-            omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
-            if not omero_image:
-                raise ValueError(f"Image {image_id} not found in OMERO")
-            z_slices = range(omero_image.getSizeZ())
-        else:
-            z_slices = [int(z_slice)]
-
-        # Create empty 3D array to hold all z-slices
-        img_3d = []
-
-        # Pre-fetch image dimensions for non-patch full plane extraction
-        # (avoids repeated fetches and unreliable locals() check in loop)
-        size_x = None
-        size_y = None
-
-        # Load each z-slice using ezomero.get_image
-        for z in z_slices:
-            z_val = int(z)
-            if is_patch and patch_width > 0 and patch_height > 0:
-                # Debug start_coords and axis_lengths
-                log.debug(
-                    f"3D patch request: start ({patch_x}, {patch_y}, {z_val}, {channel}, "
-                    f"{timepoint}), size {patch_width}x{patch_height}"
-                )
-                # Use ezomero.get_image to extract the patch for this z-slice
-                _, img_slice = ezomero.get_image(
-                    conn,
-                    image_id,
-                    start_coords=(patch_x, patch_y, z_val, channel, timepoint),
-                    axis_lengths=(patch_width, patch_height, 1, 1, 1),
-                    xyzct=True,  # Use XYZCT ordering
-                )
-
-                # Check shape of returned array
-                log.debug(
-                    f"Returned array shape (before extraction): {img_slice.shape}"
-                )
-                # The result will be 5D, extract just the 2D slice.
-                # ezomero hands back XYZCT, so x is axis 0; swap to (Y, X) like every
-                # other branch does. Omitting this swap here transposed volumetric
-                # patches against their labels.
-                if len(img_slice.shape) == 5:
-                    img_slice = img_slice[:, :, 0, 0, 0]
-                    img_slice = np.swapaxes(img_slice, 0, 1)
-                log.debug(f"Extracted slice shape: {img_slice.shape}")
-            else:
-                # Get full plane for this z-slice
-                # Get image dimensions if not already obtained
-                if size_x is None:
-                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
-                    size_x = omero_image.getSizeX()
-                    size_y = omero_image.getSizeY()
-
-                _, img_slice = ezomero.get_image(
-                    conn,
-                    image_id,
-                    start_coords=(0, 0, z_val, channel, timepoint),
-                    axis_lengths=(size_x, size_y, 1, 1, 1),
-                    xyzct=True,  # Use XYZCT ordering
-                )
-                # Check shape of returned array
-                log.debug(f"Full plane shape (before extraction): {img_slice.shape}")
-                # The result will be 5D, extract just the 2D slice
-                if len(img_slice.shape) == 5:
-                    img_slice = img_slice[:, :, 0, 0, 0]
-                    img_slice = np.swapaxes(img_slice, 0, 1)
-                log.debug(f"Extracted full plane shape: {img_slice.shape}")
-            img_3d.append(img_slice)
-
-        # Convert to numpy array
-        img_3d = np.array(img_3d)
-        log.debug(f"Final 3D array shape: {img_3d.shape}")
-        return img_3d
-
-    # Handle 2D data with patch support using ezomero.get_image
-    if is_patch and patch_width > 0 and patch_height > 0:
-        # Use ezomero.get_image with appropriate coordinates and dimensions
-        z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
-
-        # Debug start_coords and axis_lengths
-        log.debug(
-            f"2D patch request: start ({patch_x}, {patch_y}, {z_val}, {channel}, "
-            f"{timepoint}), size {patch_width}x{patch_height}"
-        )
-        _, img_data = ezomero.get_image(
-            conn,
-            image_id,
-            start_coords=(patch_x, patch_y, int(z_val), channel, timepoint),
-            axis_lengths=(patch_width, patch_height, 1, 1, 1),
-            xyzct=True,
-        )
-
-        # Check shape of returned array
-        log.debug(f"Returned array shape: {img_data.shape}")
-        # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
-        # We just need to remove the trailing dimensions
-        if len(img_data.shape) == 5:
-            # Take only the first (and only) z, c, t indices
-            img_data = img_data[:, :, 0, 0, 0]
-            # swap x and y dimensions in the numpy array
-            img_data = np.swapaxes(img_data, 0, 1)
-
-        log.debug(f"Extracted 2D shape: {img_data.shape}")
-    else:
-        # Get full plane
-        z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
-
-        # Get image dimensions to specify exact plane size
-        omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
-        size_x = omero_image.getSizeX()
-        size_y = omero_image.getSizeY()
-
-        # Debug start_coords
-        log.debug(
-            f"2D full image request: start (0, 0, {z_val}, {channel}, {timepoint}), "
-            f"size {size_x}x{size_y}"
-        )
-        _, img_data = ezomero.get_image(
-            conn,
-            image_id,
-            start_coords=(0, 0, int(z_val), channel, timepoint),
-            axis_lengths=(size_x, size_y, 1, 1, 1),
-            xyzct=True,
-        )
-
-        # Check shape of returned array
-        log.debug(f"Returned array shape: {img_data.shape}")
-        # Remove trailing dimensions
-        if len(img_data.shape) == 5:
-            img_data = img_data[:, :, 0, 0, 0]
-            img_data = np.swapaxes(img_data, 0, 1)
-
-        log.debug(f"Extracted 2D shape: {img_data.shape}")
-    return img_data
-
-
 def _optional_int(value) -> int | None:
     """Parse a table cell that may be int, float, NaN, or the string 'None'."""
     if value is None or pd.isna(value):
@@ -625,7 +424,8 @@ def _records_from_table(
     n_missing = 0
     changed: list[str] = []
 
-    for _, row in df.iterrows():
+    source = OmeroImageSource(conn)
+    for (_, row), unit in zip(df.iterrows(), rows_from_frame(df), strict=True):
         annotation_id = str(row["annotation_id"])
 
         label_id = _optional_int(row.get("label_id"))
@@ -651,9 +451,9 @@ def _records_from_table(
             train_channel if train_channel is not None else _channel_from_row(row)
         )
 
-        # Bind row/channel per iteration: a bare closure would capture the final values.
-        def load_image(row=row, ch=image_channel, annotation_id=str(annotation_id)):
-            image = _fetch_plane(conn, row, ch, logger)
+        # Bind unit/channel per iteration: a bare closure would capture the final values.
+        def load_image(unit=unit, ch=image_channel, annotation_id=str(annotation_id)):
+            image = read_unit(source, unit, ch)
             return transform(annotation_id, image) if transform else image
 
         image_source = ArraySource(load_image)
@@ -661,7 +461,7 @@ def _records_from_table(
         annotation_source = None
         if uses_separate_channels and label_channel is not None:
             annotation_source = ArraySource(
-                lambda row=row, ch=label_channel: _fetch_plane(conn, row, ch, logger)
+                lambda unit=unit, ch=label_channel: read_unit(source, unit, ch)
             )
 
         records.append(

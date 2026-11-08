@@ -1,6 +1,6 @@
 """Image sources: where the annotation pipeline reads pixels from."""
 
-from .base import ImageMeta, ImageSource, Region, clamp_region
+from .base import ImageMeta, ImageSource, Region, clamp_region, read_unit
 from .omero import OmeroImageSource
 from .zarr import ZarrImage, ZarrImageSource
 
@@ -21,4 +21,5 @@ __all__ = [
     "ZarrImageSource",
     "clamp_region",
     "make_image_source",
+    "read_unit",
 ]

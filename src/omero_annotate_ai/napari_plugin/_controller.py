@@ -40,6 +40,8 @@ class MicroSamController:
         self._annotator: Any = None
         self._dock: Any = None
         self._created: list[Any] = []  # layers this controller or micro-SAM added
+        self._held: list[Any] = []  # layers hidden while the next image loads
+        self._opacity: float | None = None  # the image layer's opacity before a hold
 
     def check_layers(self) -> None:
         """Raise :class:`LayerConflict` if the viewer holds layers micro-SAM needs.
@@ -54,6 +56,36 @@ class MicroSamController:
                     f"Rename or remove the layers '{IMAGE_LAYER}' and '{MASK_LAYER}' "
                     "first: micro-SAM uses these names."
                 )
+
+    def hold(self, pixels: np.ndarray | None) -> None:
+        """While the next embedding computes: show ``pixels`` (if known) dimmed, hide
+        micro-SAM's layers (the previous image's objects and prompts) and disable its
+        dock, so nothing is drawn against an embedding of another image. A no-op
+        before the first image, or if the user removed the image layer.
+        """
+        if self._annotator is None or IMAGE_LAYER not in self._viewer.layers:
+            return
+        image: Any = self._viewer.layers[IMAGE_LAYER]  # napari.layers.Image
+        if pixels is not None:
+            image.data = pixels
+            image.reset_contrast_limits()
+        if self._opacity is None:
+            self._opacity = float(image.opacity)
+            image.opacity = 0.4 * self._opacity
+        self._held += [x for x in self._created if x is not image and x.visible]
+        for layer in self._held:
+            layer.visible = False
+        self._dock.setEnabled(False)
+
+    def _release_hold(self) -> None:
+        if self._opacity is not None and IMAGE_LAYER in self._viewer.layers:
+            self._viewer.layers[IMAGE_LAYER].opacity = self._opacity
+        self._opacity = None
+        for layer in self._held:
+            if layer in self._viewer.layers:
+                layer.visible = True
+        self._held = []
+        self._dock.setEnabled(True)
 
     def show(
         self,
@@ -75,7 +107,9 @@ class MicroSamController:
             self.check_layers()
             self._created = [self._viewer.add_image(pixels, name=IMAGE_LAYER)]
         else:
-            self._viewer.layers[IMAGE_LAYER].data = pixels
+            image: Any = self._viewer.layers[IMAGE_LAYER]  # napari.layers.Image
+            image.data = pixels
+            image.reset_contrast_limits()
             if state.amg is not None:
                 state.amg.clear_state()
 
@@ -101,6 +135,7 @@ class MicroSamController:
                 self._annotator, name="micro-SAM", area="right"
             )
         self._annotator._update_image(segmentation_result=mask)
+        self._release_hold()
 
     def current_mask(self) -> np.ndarray:
         """The objects the user has committed for the current image."""
@@ -118,7 +153,7 @@ class MicroSamController:
             if layer in self._viewer.layers:
                 self._viewer.layers.remove(layer)
         self._annotator = self._dock = None
-        self._created = []
+        self._created, self._held, self._opacity = [], [], None
 
 
 def check_micro_sam_version() -> None:

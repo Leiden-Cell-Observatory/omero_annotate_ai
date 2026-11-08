@@ -27,6 +27,7 @@ class FakeController:
 
     def __init__(self) -> None:
         self.shown: list[np.ndarray] = []
+        self.held: list[np.ndarray | None] = []
         self.initial: list[np.ndarray | None] = []
         self.mask = np.zeros((16, 16), np.uint32)
         self.torn_down = False
@@ -39,6 +40,9 @@ class FakeController:
             from omero_annotate_ai.napari_plugin._controller import LayerConflict
 
             raise LayerConflict(self.conflict)
+
+    def hold(self, pixels) -> None:
+        self.held.append(pixels)
 
     def show(self, pixels, embedding, model_type, mask=None) -> None:
         self.shown.append(pixels)
@@ -148,6 +152,13 @@ class TestDock:
         saved = sorted((ts.bundle_dir / "annotation_output").glob("*_mask.tif"))
         assert len(saved) == 2
         assert controller.torn_down
+        # Each image is held (shown dimmed) until its embedding is ready; while a
+        # next batch loads, the last image is held (None: no new pixels yet).
+        assert [h is None for h in controller.held] == [False, False, True, False, True]
+        for held, shown in zip(
+            [h for h in controller.held if h is not None], controller.shown, strict=True
+        ):
+            assert held is shown
 
     def test_omero_set_uploads_each_accepted_image_once(
         self, tmp_path, make_dock, qtbot
@@ -633,8 +644,17 @@ class TestMicroSamContract:
         viewer.add_image(images[0], name="added mid-session")
         viewer.layers[MASK_LAYER].data[5:9, 5:9] = 3
         assert controller.current_mask().max() == 3
+        # While the next embedding computes: the next image, dimmed; no old objects.
+        viewer.layers["image"].opacity = 0.8  # the user's choice survives holds
+        controller.hold(images[1])
+        np.testing.assert_array_equal(viewer.layers["image"].data, images[1])
+        assert viewer.layers["image"].opacity < 1
+        assert not viewer.layers[MASK_LAYER].visible
+        assert viewer.layers["mine"].visible  # the user's layers stay as they are
         controller.show(images[1], results[1], "vit_b_lm")  # fresh empty mask
         assert not controller.current_mask().any()
+        assert viewer.layers[MASK_LAYER].visible
+        assert viewer.layers["image"].opacity == 0.8
         saved = np.zeros(images[0].shape, np.uint16)
         saved[30:60, 30:60] = 4
         controller.show(images[0], results[0], "vit_b_lm", saved)  # a review

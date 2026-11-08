@@ -31,6 +31,7 @@ from ..errors import IntegrityError
 from ..omero._untyped import ezomero
 from ..provenance import describe_change
 from ..rows import Row, rows_from_frame
+from ..sources import ImageSource, OmeroImageSource, read_unit
 
 __all__ = ["prepare_bia_data_from_table"]
 
@@ -50,101 +51,9 @@ def _read_table(conn: Any, table_id: int) -> Any:
     return read_tracking_table(conn, table_id)
 
 
-def _non_negative(value: int | None, default: int = 0) -> int:
-    """Coerce an Row coordinate to a usable index (``-1``/None -> default)."""
-    if value is None:
-        return default
-    value = int(value)
-    return value if value >= 0 else default
-
-
-def _z_slices(annotation: Row) -> list[int]:
-    """Z indices to fetch: the volume's range for 3D records, one plane otherwise."""
-    if not annotation.is_volumetric:
-        return [_non_negative(annotation.z_slice)]
-    z_start, z_end = annotation.z_start, annotation.z_end
-    if z_start >= 0 and z_end >= z_start:
-        return list(range(z_start, z_end + 1))
-    return [_non_negative(annotation.z_slice)]
-
-
-def _fetch_plane(
-    conn: Any, annotation: Row, z: int, channel: int, timepoint: int
-) -> np.ndarray:
-    """Fetch one 2D plane (or patch) from OMERO as a ``(y, x)`` array, native dtype.
-
-    ``ezomero.get_image`` returns an XYZCT-ordered 5D array here, so the singleton
-    z/c/t axes are dropped and x/y swapped to give the row-major (y, x) layout
-    ``tifffile`` expects.
-    """
-    if annotation.image_id is None:
-        raise ValueError(
-            f"Annotation {annotation.annotation_id!r} has no OMERO image id"
-        )
-    image_id = annotation.image_id
-    if (
-        annotation.is_patch
-        and annotation.patch_width > 0
-        and annotation.patch_height > 0
-    ):
-        start_coords = (
-            int(annotation.patch_x),
-            int(annotation.patch_y),
-            int(z),
-            int(channel),
-            int(timepoint),
-        )
-        axis_lengths = (
-            int(annotation.patch_width),
-            int(annotation.patch_height),
-            1,
-            1,
-            1,
-        )
-    else:
-        omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
-        if omero_image is None:
-            raise ValueError(f"Image {image_id} not found in OMERO")
-        start_coords = (0, 0, int(z), int(channel), int(timepoint))
-        axis_lengths = (
-            int(omero_image.getSizeX()),
-            int(omero_image.getSizeY()),
-            1,
-            1,
-            1,
-        )
-
-    _, pixels = ezomero.get_image(
-        conn,
-        image_id,
-        start_coords=start_coords,
-        axis_lengths=axis_lengths,
-        xyzct=True,
-    )
-    if pixels is None:
-        raise ValueError(f"No pixel data returned for image {image_id}")
-
-    pixels = np.asarray(pixels)
-    if pixels.ndim == 5:
-        pixels = pixels[:, :, 0, 0, 0]
-        pixels = np.swapaxes(pixels, 0, 1)
-    return pixels
-
-
-def _write_image(conn: Any, annotation: Row, dest: Path) -> None:
-    """Fetch the plane/patch/volume for one annotation and write it to ``dest``.
-
-    No intensity rescaling: the array is written at the dtype OMERO returned.
-    """
-    channel = _non_negative(annotation.channel)
-    timepoint = _non_negative(annotation.timepoint)
-
-    planes = [
-        _fetch_plane(conn, annotation, z, channel, timepoint)
-        for z in _z_slices(annotation)
-    ]
-    pixels = np.stack(planes) if annotation.is_volumetric else planes[0]
-
+def _write_image(source: ImageSource, annotation: Row, dest: Path) -> None:
+    """Write the plane/patch/volume of one annotation to ``dest``, at native dtype."""
+    pixels = read_unit(source, annotation, max(annotation.channel, 0))
     dest.parent.mkdir(parents=True, exist_ok=True)
     # photometric="minisblack": a (z, y, x) stack is grayscale pages, never RGB planes.
     imwrite(str(dest), pixels, photometric="minisblack")
@@ -257,6 +166,7 @@ def prepare_bia_data_from_table(
     skipped_no_mask = 0
     exported: list[Row] = []
     changed: list[str] = []
+    source = OmeroImageSource(conn)
 
     try:
         for annotation in rows:
@@ -270,7 +180,7 @@ def prepare_bia_data_from_table(
             annotation_id = annotation.annotation_id
 
             try:
-                _write_image(conn, annotation, image_dir / f"{annotation_id}.tif")
+                _write_image(source, annotation, image_dir / f"{annotation_id}.tif")
                 n_images += 1
             except Exception as exc:  # noqa: BLE001 - best effort per record
                 warnings.warn(
