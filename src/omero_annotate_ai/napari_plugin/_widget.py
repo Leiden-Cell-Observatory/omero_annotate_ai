@@ -44,6 +44,7 @@ from qtpy.QtWidgets import (
 
 from ..annotators import Batch, BatchItem
 from ..bundle import home_dir
+from ..errors import TableWriteError
 from ..events import (
     ClaimsHeld,
     ClaimsReleased,
@@ -736,7 +737,6 @@ class OMEROAnnotateDock(QWidget):
             self._excluded.discard(item.annotation_id)
             self._count_excluded(item, -1)
         path = batch.mask_dir / f"seg_{index:05}.tif"
-        path.parent.mkdir(parents=True, exist_ok=True)  # gone once the batch is done
         initial = item.initial_mask
         if initial is not None and np.array_equal(mask, initial):
             mask = initial  # unchanged: same dtype too, so the review keeps the upload
@@ -802,25 +802,39 @@ class OMEROAnnotateDock(QWidget):
             or not self._can_exclude()
         ):
             return
-        item = batch.items[self._cursor]
+        index = self._cursor
+        item = batch.items[index]
         annotation_id = item.annotation_id
         self._excluded.add(annotation_id)
         self._skipped.discard(annotation_id)
         self._count_excluded(item, +1)
 
         def excluded(ids: tuple[str, ...]) -> None:
-            if annotation_id not in ids and annotation_id in self._excluded:
+            if annotation_id in ids or annotation_id not in self._excluded:
+                return
+            # Another computer saved (or excluded) it first: theirs is kept. It is
+            # done, but not by this session: never offered here again.
+            self._excluded.discard(annotation_id)
+            self._count_excluded(item, -1, done=False)
+            self._committed.add(index)
+            self._unsaved.add(annotation_id)
+            self._notify(
+                f"{annotation_id} was done on another computer meanwhile; "
+                "theirs is kept."
+            )
+
+        def failed(exc: BaseException) -> None:
+            # Not marked at all (a table write failure keeps the local mark): the
+            # image stays to do.
+            if not isinstance(exc, TableWriteError) and annotation_id in self._excluded:
                 self._excluded.discard(annotation_id)
-                self._count_excluded(item, -1, done=False)
-                self._notify(
-                    f"{annotation_id} was saved on another computer meanwhile; "
-                    "it is not excluded."
-                )
+                self._count_excluded(item, -1)
+            self._on_error(exc)
 
         self._io.run(
             lambda: session.exclude(batch, [annotation_id], publish_config=False),
             excluded,
-            self._on_error,
+            failed,
         )
         self._advance()
 
