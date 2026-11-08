@@ -3,6 +3,14 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## Unreleased
+
+- **Public IDR data via OME-Zarr.** The IDR's OMERO API is no longer open for
+  logins, so the [public-data tutorial](tutorials/public-data-idr.md) and the new
+  `idr-zarr-demo.py` notebook (replacing `omero-idr-demo.py`) read IDR studies as
+  OME-Zarr from its public S3 storage, with an example config
+  (`notebooks/marimo/configs/idr0013-mitocheck-zarr.yaml`).
+
 ## 0.5.0
 
 0.5.0 makes annotation runs reliable and traceable, adds OME-Zarr as an image source, and

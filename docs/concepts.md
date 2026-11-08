@@ -59,7 +59,7 @@ units: one image with four patches gives four units.
 |---|---|---|
 | Writes to OMERO | yes: masks, ROIs, tracking table, config | nothing |
 | Local folder | images, masks and `tracking_table.csv` | the same; it is the only copy |
-| Typical use | your own data on your institute's server | public servers such as the IDR, OME-Zarr data, or a trial run |
+| Typical use | your own data on your institute's server | OME-Zarr data (e.g. public IDR studies), servers you cannot write to, or a trial run |
 
 Set it with `storage` in the config or the **Storage** choice in the widget. It is fixed
 when the training set is created; OME-Zarr sets are always local.

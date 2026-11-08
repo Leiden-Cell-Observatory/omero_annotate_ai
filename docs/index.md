@@ -94,7 +94,7 @@ table, OMERO or local storage) before your first run.
 
 ## What you need
 
-- Access to an OMERO server: your institute's, or the public [IDR](https://idr.openmicroscopy.org) to try things out.
+- Access to an OMERO server (your institute's), or none at all for public OME-Zarr data such as the [IDR](https://idr.openmicroscopy.org)'s.
 - A computer with a screen: napari opens a desktop window. A GPU makes micro-SAM much faster but is not required.
 - Jupyter or [marimo](https://marimo.io) to run the [example notebooks](notebooks.md). The standard workflows need no programming beyond running notebook cells.
 
