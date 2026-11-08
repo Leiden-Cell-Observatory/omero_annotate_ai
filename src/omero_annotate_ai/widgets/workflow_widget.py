@@ -23,6 +23,8 @@ from ..core.annotation_config import AnnotationConfig, create_default_config
 from ..errors import OmeroAnnotateAIError
 from ..events import (
     BatchPrepared,
+    ClaimsHeld,
+    ClaimsReleased,
     Event,
     Progress,
     ReconcileAction,
@@ -30,6 +32,7 @@ from ..events import (
     SessionFinished,
     SessionStarted,
     UnitCommitted,
+    UnitConflict,
     UploadFailed,
 )
 from ..omero.omero_utils import get_container_info
@@ -203,7 +206,8 @@ def render_summary(summary: TrainingSetSummary) -> str:
     )
     sessions = (
         "".join(
-            f"<li>Session {s.id} ({s.status}, {s.n_annotated} saved"
+            f"<li>Session {s.id} ({'review, ' if s.kind == 'review' else ''}"
+            f"{s.status}, {s.n_annotated} {'revised' if s.kind == 'review' else 'saved'}"
             f"{', ' + html.escape(s.user) if s.user else ''})"
             f"{': <i>' + html.escape(s.note) + '</i>' if s.note else ''}</li>"
             for s in summary.sessions
@@ -224,7 +228,7 @@ class WorkflowWidget:
         self.connection = connection
         self.home = home_dir(home)
         self._training_set: TrainingSet | None = None
-        self._last_session: int | None = None
+        self._notes: dict[int, str] = {}  # session ID -> note, for the note editor
         self._log: list[str] = []
         self._build()
         self._load_containers()
@@ -314,6 +318,17 @@ class WorkflowWidget:
         self.add = {
             category: number(f"+ {category}", 0, 0, 100_000) for category, _ in SPLITS
         }
+        self.task = widgets.ToggleButtons(
+            options=[
+                ("Annotate pending", "annotate"),
+                ("Review annotated", "review"),
+            ],
+            value="annotate",
+            tooltips=[
+                "Annotate the units not annotated yet",
+                "Open annotated units with their saved mask to correct them",
+            ],
+        )
         self.open_card = _card(
             "Open training set",
             self.sets,
@@ -322,6 +337,7 @@ class WorkflowWidget:
                 "<span class='oai-muted'>Add images per split (optional)</span>"
             ),
             widgets.HBox(list(self.add.values())),
+            self.task,
         )
 
         # Run settings (both modes)
@@ -342,9 +358,13 @@ class WorkflowWidget:
             placeholder="How did it go? e.g. 'nuclei only, skipped small objects'",
             layout=widgets.Layout(width="420px", height="60px"),
         )
+        self.note_session = widgets.Dropdown(
+            options=[], description="Session", style=_LABEL, layout=_narrow()
+        )
+        self.note_session.observe(lambda _: self._show_note(), names="value")
         self.save_note = widgets.Button(
             description="Save session note",
-            tooltip="One note per session: saving replaces the last session's note",
+            tooltip="One note per session: saving replaces that session's note",
         )
         self.save_note.on_click(lambda _: self._save_note())
 
@@ -365,7 +385,13 @@ class WorkflowWidget:
                     self.go,
                     self.status,
                 ),
-                _card("Progress", self.progress, self.log, self.note, self.save_note),
+                _card(
+                    "Progress",
+                    self.progress,
+                    self.log,
+                    widgets.HBox([self.note_session, self.save_note]),
+                    self.note,
+                ),
             ]
         )
         self._show_mode()
@@ -440,8 +466,11 @@ class WorkflowWidget:
         self._training_set = None
         self.sets.options = []
         self.summary.value = ""
+        self._notes = {}
+        self.note_session.options = []
         for box in self.add.values():
             box.value = 0
+        self.task.value = "annotate"
         self.status.value = ""
 
     def _load_sets(self) -> None:
@@ -467,6 +496,8 @@ class WorkflowWidget:
 
     def _on_set(self) -> None:
         self._training_set = None
+        self._notes = {}
+        self.note_session.options = []
         self._refresh_summary()
 
     def _refresh_summary(self) -> None:
@@ -481,6 +512,8 @@ class WorkflowWidget:
             )
             return
         self.summary.value = render_summary(info)
+        for record in info.sessions:
+            self._remember_session(record.id, record.note or "")
 
     # --- requests -----------------------------------------------------------------
 
@@ -540,13 +573,22 @@ class WorkflowWidget:
     def annotate(
         self, annotator: Annotator | None = None, note: str | None = None
     ) -> int:
-        """Annotate the set's pending units with the form's model and batch size."""
-        return self.training_set().annotate(
+        """Run a session with the form's model and batch size.
+
+        Annotates the pending units, or - with *Review annotated* chosen for an
+        opened set - opens the annotated units with their masks to correct them.
+        """
+        ts = self.training_set()
+        run = ts.review if self._reviewing() else ts.annotate
+        return run(
             annotator,
             model=str(self.model.value),
             batch_size=int(self.batch_size.value) or None,
             note=note,
         )
+
+    def _reviewing(self) -> bool:
+        return self.mode.value == "open" and self.task.value == "review"
 
     def _resolve(self) -> None:
         self._training_set = None
@@ -555,10 +597,12 @@ class WorkflowWidget:
         except (OmeroAnnotateAIError, OSError, ValueError) as error:
             self._error(str(error))
             return
-        pending = sum(not row.processed for row in ts.units())
+        reviewing = self._reviewing()
+        count = sum(row.processed == reviewing for row in ts.units())
+        todo = "annotated units to review" if reviewing else "units to annotate"
         where = f"table {ts.table_id}" if ts.table_id else "local"
         self.status.value = (
-            f"✅ <b>{html.escape(ts.name)}</b> ({where}): {pending} units to annotate. "
+            f"✅ <b>{html.escape(ts.name)}</b> ({where}): {count} {todo}. "
             f"<span class='oai-muted'>Folder: {html.escape(str(ts.bundle_dir))}</span>"
         )
 
@@ -568,10 +612,10 @@ class WorkflowWidget:
         """Event sink: annotation progress is shown in the Progress card."""
         match event:
             case SessionStarted(session=session, pending=pending):
-                self._last_session = session
+                self._remember_session(session, "")
                 self.progress.max = max(1, pending)
                 self.progress.value = 0
-                self._add_log(f"Session {session}: {pending} units to annotate")
+                self._add_log(f"Session {session}: {pending} units")
             case BatchPrepared(index=index, annotation_ids=ids):
                 self._add_log(f"Batch {index}: {len(ids)} units in napari")
             case UnitCommitted():
@@ -584,12 +628,20 @@ class WorkflowWidget:
                 self.progress.max = max(1, total)
                 self.progress.value = done
                 self.progress.description = str(stage)
+            case UnitConflict(annotation_id=aid, mask_file=kept):
+                self._add_log(
+                    f"{aid} was saved by another session first; yours is kept as {kept}",
+                    error=True,
+                )
+            case ClaimsHeld(units=units):
+                self._add_log(f"{units} units are being annotated elsewhere (skipped)")
+            case ClaimsReleased(units=units):
+                self._add_log(f"Released {units} units an earlier run left claimed")
             case RunCancelled(stage=stage):
                 self._add_log(f"Cancelled during {stage}", error=True)
             case SessionFinished(session=session, annotated=annotated):
-                self._last_session = session
                 self._add_log(f"Session {session} finished: {annotated} saved")
-                self.note.value = self._session_note(session)
+                self._remember_session(session, self._session_note(session))
             case _:
                 pass
 
@@ -598,13 +650,36 @@ class WorkflowWidget:
         self._log = [*self._log, f"<div{css}>{html.escape(text)}</div>"][-LOG_LINES:]
         self.log.value = "".join(self._log)
 
+    def _remember_session(self, session: int, note: str) -> None:
+        """Offer ``session`` in the note editor and select it (the latest one)."""
+        self._notes[session] = note
+        self.note_session.options = [(str(s), s) for s in sorted(self._notes)]
+        self.note_session.value = max(self._notes)
+        self._show_note()
+
+    def _show_note(self) -> None:
+        session = self.note_session.value
+        self.note.value = "" if session is None else self._notes.get(session, "")
+
     def _save_note(self) -> None:
         note = self.note.value.strip()
-        if self._training_set is None or self._last_session is None or not note:
-            self._error("Annotate a session first, then write a note")
+        session = self.note_session.value
+        no_set = self._training_set is None and (
+            self.mode.value != "open" or self.sets.value is None
+        )
+        if session is None or not note or no_set:
+            self._error(
+                "Pick a set with a session (or annotate one), then write a note"
+            )
             return
-        self._training_set.set_session_note(self._last_session, note)
-        self._add_log(f"Note saved to session {self._last_session}")
+        try:
+            ts = self.training_set()  # opens the picked set; never creates one
+            ts.set_session_note(session, note)
+        except (OmeroAnnotateAIError, OSError, ValueError, KeyError) as error:
+            self._error(str(error))
+            return
+        self._notes[session] = note
+        self._add_log(f"Note saved to session {session}")
         if self.mode.value == "open":
             self._refresh_summary()
 

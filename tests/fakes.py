@@ -9,7 +9,9 @@ catch, like a killed kernel.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -20,6 +22,7 @@ from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     create_default_config,
 )
+from omero_annotate_ai.omero.tracking_table import update_table_cells
 from omero_annotate_ai.rows import rows_to_frame
 from omero_annotate_ai.sources import ImageMeta
 from omero_annotate_ai.sources.base import clamp_region
@@ -84,6 +87,64 @@ class FakeImageSource:
         )
 
 
+class FrameTable:
+    """An OMERO.tables table over a fake's DataFrame, with the server's semantics.
+
+    ``readCoordinates`` returns every column of the rows asked for; ``slice`` the
+    given columns; ``update`` writes every column it is given for every row it is
+    given - exactly what the server does, so a client that writes back more than it
+    changed overwrites a concurrent writer. ``FakeOmero.hooks`` runs another
+    computer's action once just before a method.
+    """
+
+    def __init__(self, omero: FakeOmero, table_id: int):
+        self._omero, self._id = omero, table_id
+
+    @property
+    def _frame(self) -> pd.DataFrame:
+        return self._omero.tables[self._id]
+
+    def _hook(self, name: str) -> None:
+        self._omero._hook(name)
+
+    def getHeaders(self):
+        return [SimpleNamespace(name=str(c)) for c in self._frame.columns]
+
+    def getNumberOfRows(self):
+        return len(self._frame)
+
+    def _data(self, columns, rows):
+        frame = self._frame
+        return SimpleNamespace(
+            columns=[
+                SimpleNamespace(
+                    name=str(frame.columns[c]), values=[frame.iat[r, c] for r in rows]
+                )
+                for c in columns
+            ],
+            rowNumbers=list(rows),
+        )
+
+    def read(self, columns, start, stop):
+        self._hook("read")
+        return self._data(columns, range(start, stop))
+
+    def readCoordinates(self, rows):
+        self._hook("readCoordinates")
+        return self._data(range(len(self._frame.columns)), rows)
+
+    def slice(self, columns, rows):
+        self._hook("slice")
+        return self._data(columns, rows)
+
+    def update(self, data):
+        self._hook("update")
+        frame = self._frame
+        for i, row in enumerate(data.rowNumbers):
+            for column in data.columns:
+                frame.iat[row, frame.columns.get_loc(column.name)] = column.values[i]
+
+
 @dataclass
 class Upload:
     image_id: int
@@ -96,9 +157,13 @@ class FakeOmero(OmeroWrites):
     """OMERO in memory: one tracking table, label files and ROIs with their tags.
 
     ``fail`` / ``crash`` map a call name (``label``, ``label_after``, ``roi``,
-    ``roi_after``, ``table``, ``read``) to the 1-based call number that fails with a
-    ``ConnectionError`` / dies with :class:`Crash`. ``*_after`` fire once the object
-    exists on the server, i.e. the upload happened but the caller never heard back.
+    ``roi_after``, ``table``, ``read``, ``cells``, ``delete``) to the 1-based call
+    number that fails with a ``ConnectionError`` / dies with :class:`Crash`.
+    ``*_after`` fire once the object exists on the server, i.e. the upload happened
+    but the caller never heard back. ``hooks`` maps ``read_config``,
+    ``replace_config`` or a table method (see :class:`FrameTable`) to a callable run
+    once just before it (``read_config``: just after reading): another computer
+    acting at that moment.
     """
 
     fail: dict[str, int] = field(default_factory=dict)
@@ -109,6 +174,7 @@ class FakeOmero(OmeroWrites):
     configs: list[int] = field(default_factory=list)
     config_text: dict[int, str] = field(default_factory=dict)
     calls: dict[str, int] = field(default_factory=dict)
+    hooks: dict[str, Callable[[], None]] = field(default_factory=dict)
     _next_id: int = 100
 
     def conn(self) -> Mock:
@@ -149,15 +215,41 @@ class FakeOmero(OmeroWrites):
         return self.tables[table_id].copy()
 
     def write_rows(self, conn, table_id, rows):
+        """In place, like OMERO: existing rows keep their row number, new ones append."""
         self._call("table")
-        new = rows_to_frame(rows).set_index("annotation_id")
-        old = self.tables[table_id].set_index("annotation_id")
-        added = len(new.index.difference(old.index))
-        merged = pd.concat([old.drop(new.index, errors="ignore"), new])
-        self.tables[table_id] = merged.reset_index()
-        return {"updated": len(new) - added, "added": added}
+        new = rows_to_frame(rows)
+        table = self.tables[table_id]
+        position = {str(k): i for i, k in enumerate(table["annotation_id"])}
+        fresh = new[~new["annotation_id"].astype(str).isin(position)]
+        for _, row in new.iterrows():
+            at = position.get(str(row["annotation_id"]))
+            if at is None:
+                continue
+            for name in new.columns:
+                if name not in table.columns:
+                    table[name] = None
+                table.iat[at, table.columns.get_loc(name)] = row[name]
+        if len(fresh):
+            self.tables[table_id] = pd.concat([table, fresh], ignore_index=True)
+        return {"updated": len(new) - len(fresh), "added": len(fresh)}
+
+    def read_rows(self, conn, table_id, keys):
+        self._call("read")
+        table = self.tables[table_id]
+        wanted = [str(k) for k in keys]
+        return table[table["annotation_id"].astype(str).isin(wanted)].copy()
+
+    def update_cells(self, conn, table_id, keys, change):
+        self._call("cells")
+        return update_table_cells(FrameTable(self, table_id), keys, change)
+
+    def _hook(self, name: str) -> None:
+        hook = self.hooks.pop(name, None)
+        if hook is not None:
+            hook()
 
     def replace_config(self, conn, table_id, file_path, container_type, container_id):
+        self._hook("replace_config")
         self.configs.append(table_id)
         with open(file_path, encoding="utf-8") as handle:
             self.config_text[table_id] = handle.read()
@@ -165,6 +257,7 @@ class FakeOmero(OmeroWrites):
 
     def read_config(self, conn, table_id):
         text = self.config_text.get(int(table_id))
+        self._hook("read_config")  # after reading: the caller acts on what it read
         return None if text is None else AnnotationConfig.from_yaml(text)
 
     # uploads ------------------------------------------------------------------
@@ -201,6 +294,7 @@ class FakeOmero(OmeroWrites):
         return int(object_id) in store
 
     def delete_objects(self, conn, kind, ids):
+        self._call("delete")
         store = self.rois if kind == "Roi" else self.labels
         for i in ids:
             store.pop(int(i), None)

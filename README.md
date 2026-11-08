@@ -108,6 +108,9 @@ Each training set keeps its files in one folder: images, masks, `config.yaml` (w
 sessions and their notes) and a local copy of the tracking table. By default that is
 `~/omero_annotate_ai/<server>/<table id>_<name>/`; set `OMERO_ANNOTATE_AI_HOME` (or pass
 `home=` to `TrainingSet.create` / `open`) to keep the sets elsewhere.
+`ts.review()` reopens annotated images with their masks to correct them.
+Open the same set on another computer to carry on there; two people can even annotate
+it at the same time, because each session claims the images it shows.
 `create_pipeline(config, conn).run_full_micro_sam_workflow()` from 0.4 still works but
 is deprecated.
 

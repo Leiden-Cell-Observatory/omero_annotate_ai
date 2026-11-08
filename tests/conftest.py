@@ -1,5 +1,6 @@
 """Simple pytest configuration and fixtures for testing."""
 
+import contextlib
 import os
 import subprocess
 import tempfile
@@ -236,9 +237,14 @@ def omero_seed(docker_omero_server):
     try:
         yield data
     finally:
+        # A fresh connection: the seeding one may have timed out during long tests.
+        with contextlib.suppress(Exception):
+            conn.close()
         if os.environ.get("OAI_KEEP_OMERO") != "1":
-            seed_module.cleanup(conn, data)
-        conn.close()
+            cleanup_conn = _connect(docker_omero_server)
+            if cleanup_conn is not None:
+                seed_module.cleanup(cleanup_conn, data)
+                cleanup_conn.close()
 
 
 # =============================================================================

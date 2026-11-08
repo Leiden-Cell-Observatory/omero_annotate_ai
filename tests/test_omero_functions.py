@@ -213,6 +213,44 @@ class TestReplaceTableConfig:
         }
         conn.deleteObjects.assert_called_once_with("Annotation", [200], wait=True)
 
+    def test_two_computers_publishing_at_once_keep_the_newest(self, tmp_path):
+        local = tmp_path / "config.yaml"
+        local.write_text("name: run\n")
+        store = {200}  # config file IDs on OMERO
+        next_id = [300]
+        other_computer = []
+
+        def post(conn_, file_path, ns, object_type, object_id):
+            new = next_id[0]
+            next_id[0] += 1
+            store.add(new)
+            if other_computer:  # b publishes between a's post and a's cleanup
+                other_computer.pop()()
+            return new
+
+        def listing(conn_, object_type, object_id, ns):
+            name = "annotation_config_table_7.yaml"
+            return [{"id": i, "file_name": name} for i in sorted(store)]
+
+        def delete(kind, ids, wait):
+            if not set(ids) <= store:
+                raise RuntimeError("already deleted")
+            store.difference_update(ids)
+
+        conn = Mock()
+        conn.deleteObjects.side_effect = delete
+        mod = "omero_annotate_ai.omero.omero_functions"
+        with (
+            patch(f"{mod}.ezomero.post_file_annotation", side_effect=post),
+            patch(f"{mod}.list_annotations_by_namespace", side_effect=listing),
+        ):
+            other_computer.append(
+                lambda: replace_table_config(conn, 7, str(local), "plate", 803)
+            )
+            replace_table_config(conn, 7, str(local), "plate", 803)
+
+        assert store == {301}  # b's newer file stays; nothing is left without one
+
 
 @pytest.mark.unit
 class TestGenerateUniqueTableNameDatetime:

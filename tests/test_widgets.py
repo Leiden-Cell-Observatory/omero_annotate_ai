@@ -11,7 +11,7 @@ from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.core.annotation_config import SessionRecord
 from omero_annotate_ai.errors import ConnectionFailed
 from omero_annotate_ai.events import SessionStarted, UnitCommitted, UploadFailed
-from omero_annotate_ai.trainingset import TrainingSet, TrainingSetSummary
+from omero_annotate_ai.trainingset import TrainingSet, TrainingSetSummary, summarize
 from tests.fakes import image_mask, omero_set
 
 # Test imports with fallbacks for missing dependencies
@@ -22,6 +22,7 @@ try:
         OpenTrainingSet,
         WorkflowWidget,
         open_or_create,
+        render_summary,
     )
 
     WIDGETS_AVAILABLE = True
@@ -658,7 +659,29 @@ class TestWorkflowWidget:
         widget = WorkflowWidget(self._conn(), home=tmp_path)
         widget.note.value = "looks good"
         widget._save_note()
-        assert "Annotate a session first" in widget.status.value
+        assert "Pick a set with a session" in widget.status.value
+
+    def test_note_after_changing_container_creates_nothing(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        conn = omero.conn()
+        conn.getObjects.return_value = []
+        widget = WorkflowWidget(conn, home=tmp_path / "home")
+        widget.name.value = "widget_set"
+        widget.counts["training"].value, widget.counts["validation"].value = 2, 0
+        widget.training_set(
+            image_source=source,
+            omero_writes=omero,
+            images=[source.get_image(i) for i in (1, 2)],
+        )
+        widget.annotate(ScriptedAnnotator(image_mask))
+
+        widget._reset_selection()  # the user picks another container
+        widget.note.value = "for the old set"
+        widget._save_note()
+
+        assert widget.note_session.options == ()
+        assert "Pick a set with a session" in widget.status.value
+        assert len(omero.tables) == 1  # no second set was created
 
     def test_new_set_annotate_and_note_on_the_real_core(self, tmp_path):
         config, source, omero = omero_set(tmp_path, n_images=2)
@@ -675,6 +698,7 @@ class TestWorkflowWidget:
         )
         saved = widget.annotate(ScriptedAnnotator(image_mask), note="first pass")
         assert widget.note.value == "first pass"  # prefilled to edit
+        assert widget.note_session.value == ts.config.sessions[-1].id
         widget.note.value = "second look: fine"
         widget._save_note()
 
@@ -684,6 +708,35 @@ class TestWorkflowWidget:
         assert widget.progress.value == 2
         assert widget.training_set() is ts  # resolved once
         assert "second look: fine" in omero.config_text[ts.table_id]
+
+    def test_review_annotated_runs_a_review_session(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        conn = omero.conn()
+        conn.getObjects.return_value = []
+        widget = WorkflowWidget(conn, home=tmp_path / "home")
+        widget.name.value = "widget_set"
+        widget.counts["training"].value, widget.counts["validation"].value = 2, 0
+        ts = widget.training_set(
+            image_source=source,
+            omero_writes=omero,
+            images=[source.get_image(i) for i in (1, 2)],
+        )
+        widget.annotate(ScriptedAnnotator(image_mask))
+
+        widget.mode.value = "open"
+        widget._training_set = ts  # as if the set was opened from the list
+        widget.task.value = "review"
+
+        def edit(pixels, mask):
+            out = mask.copy()
+            out[0, 0] = 0
+            return out
+
+        revised = widget.annotate(ScriptedAnnotator(image_mask, review_fn=edit))
+
+        assert revised == 2
+        assert ts.config.sessions[-1].kind == "review"
+        assert "review, finished, 2 revised" in render_summary(summarize(ts.bundle_dir))
 
 
 @pytest.mark.unit

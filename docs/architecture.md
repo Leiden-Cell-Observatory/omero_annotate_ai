@@ -11,6 +11,7 @@ flowchart LR
     P --> PL[planning]
     P --> SE[session]
     P --> R[reconcile]
+    SE --> CL[claims]
     SE --> A[annotators]
     SE --> B[bundle]
     R --> SE
@@ -28,11 +29,12 @@ flowchart LR
 | `trainingset.py` | `TrainingSet`: create (select images, plan units, create the table) or open (by table ID or folder, repair), annotate, extend, notes, external tools. Lists images and loads pixels. `OmeroWrites` holds every OMERO call it makes (replaceable in tests). Read-only `list_training_sets` / `summarize`. |
 | `rows.py` | `Row`, one per annotation unit, and the one codec between rows and a table (`tracking_table.csv` and the OMERO table). |
 | `core/annotation_pipeline.py` | Deprecated `create_pipeline` facade over `TrainingSet`, kept for 0.4 notebooks. |
-| `session.py` | One annotation session, step by step: `next_batch()`, `commit()`, `release()`, `finish()`. Owns the write order of a unit: mask into the bundle, local accept (CSV), upload label then ROI (each ID saved straight away, tagged), table update per commit. |
-| `reconcile.py` | On resume, compares the OMERO table, the local CSV and the mask files per unit (`decide`) and repairs: adopts tagged uploads, uploads what is missing, reports pixel mismatches. Idempotent. |
+| `session.py` | One annotation session, step by step: `next_batch()`, `commit()`, `release()`, `finish()`. Owns the write order of a unit: mask into the bundle, local accept (CSV), upload label then ROI (each ID saved straight away, tagged), table update per commit (only the rows it saved). A review session hands out annotated units with their saved mask and replaces changed ones: new upload first, then the old one deleted. |
+| `claims.py` | Several computers on one OMERO set: a session claims a batch's units in the table (`claimed_by`, `claimed_at`) before showing them, releases them on commit or hand-back; claims expire after `workflow.claim_hours`. Claims write only the claim cells, and only if they are unchanged since read; `commit()` re-reads each row before uploading and adopts uploads already carrying the unit's tag, so a unit saved elsewhere is never uploaded twice. Failed and conflicting units are unclaimed at once; `collect_masks()` claims like a session. The config on OMERO is merged on publish: other computers' sessions, notes set here, and the larger image counts; the newest config file wins, and a session number taken by another computer at the same moment is renumbered. |
+| `reconcile.py` | On resume, compares the OMERO table, the local CSV and the mask files per unit (`decide`) and repairs: adopts tagged uploads, uploads what is missing, finishes an interrupted review (keeps the newer tagged upload that holds the local mask), reports pixel mismatches. Idempotent. |
 | `events.py` | What a run reports (`UnitCommitted`, `UploadFailed`, `ReconcileAction`, `Progress`, ...) to an `EventSink`; default: logging. Front-ends pass their own. |
 | `planning.py` | Pure planning: which images go to which split (`plan_split`), the units of one image (`units_for_image`), and which images to add to a set (`plan_extension`). Every random choice comes from `training.seed` via `rng_for`, so a plan can be reproduced. |
-| `annotators.py` | The `Annotator` protocol and its two implementations: `MicroSamAnnotator` (napari, interactive) and `ScriptedAnnotator` (draws masks with a function; for scripts and tests). |
+| `annotators.py` | The `Annotator` protocol and its two implementations: `MicroSamAnnotator` (napari, interactive; a review passes the saved masks as micro-SAM's `initial_segmentations`) and `ScriptedAnnotator` (draws masks with a function; for scripts and tests). |
 | `sources/` | Reading pixels and image sizes from OMERO or OME-Zarr behind one `ImageSource` protocol. |
 | `omero/` | OMERO access: the tracking table (updated in place, so its ID identifies the training set), uploads of ROIs and labels, connections (`ConnectionFailed`), and `delete_training_set` (by table ID and tag, dry run first, refuses other users' objects). |
 | `processing/` | Training data export (`prepare_training_data_from_table`, by each row's category), normalisation for micro-SAM/BiaPy, and training helpers. |
@@ -43,8 +45,8 @@ flowchart LR
 
 **Rules of thumb**
 
-- `planning.py`, `annotators.py`, `bundle.py`, `errors.py`, `events.py`, `session.py` and
-  `reconcile.py` are type-checked strictly (pyright); nothing in the core prints. The
+- `planning.py`, `annotators.py`, `bundle.py`, `errors.py`, `events.py`, `session.py`,
+  `reconcile.py` and `claims.py` are type-checked strictly (pyright); nothing in the core prints. The
   workflow widget only holds form state: it builds a request that `open_or_create`
   turns into a `TrainingSet`, and shows progress from the events.
 - A protocol needs two real implementations before it is introduced.

@@ -6,8 +6,11 @@ import pytest
 import tifffile
 
 from omero_annotate_ai import session as session_module
+from omero_annotate_ai.annotators import ScriptedAnnotator
+from omero_annotate_ai.bundle import file_digest
 from omero_annotate_ai.reconcile import Record, decide
-from tests.fakes import Crash, annotate, create_set, omero_set, reopen
+from tests.fakes import Crash, annotate, create_set, image_mask, omero_set, reopen
+from tests.test_session import edited
 
 DONE = Record(processed=True, label_id=5, roi_id=6)
 ACCEPTED = Record(processed=True, label_id=None, roi_id=None)
@@ -216,3 +219,53 @@ class TestRepairs:
         resume(first, source, omero)
 
         assert dropped in set(omero.tables[table_id]["annotation_id"])
+
+
+@pytest.mark.unit
+class TestReviewCrashes:
+    """Kill the process at each step of replacing a reviewed mask, then resume."""
+
+    def _reviewed_with_crash(self, tmp_path, crash):
+
+        first, source, omero = run_first(tmp_path, n_images=1)
+        annotate(first)
+        omero.crash = {name: omero.calls.get(name, 0) + 1 for name in crash}
+        with pytest.raises(Crash):
+            first.review(ScriptedAnnotator(image_mask, review_fn=edited))
+        omero.crash = {}
+        return first, source, omero
+
+    @pytest.mark.parametrize(
+        "crash",
+        [
+            ["label_after"],  # new label posted, its ID never saved
+            ["roi"],  # new label saved, ROI not posted
+            ["roi_after"],  # new ROI posted, its ID never saved
+            ["delete"],  # new uploads saved, old ones not deleted
+            ["table"],  # old ones deleted, table never updated
+        ],
+    )
+    def test_resume_keeps_the_newer_upload_only(self, tmp_path, crash):
+        first, source, omero = self._reviewed_with_crash(tmp_path, crash)
+
+        reopened = reopen(first, source, omero)
+
+        row = reopened.rows[0]
+        assert omero.uploads_per_tag() == {first.upload_tag(row.annotation_id): (1, 1)}
+        assert omero.labels[row.label_id].pixels[0, 0] == 0  # the reviewed mask
+        table = omero.tables[first.table_id].set_index("annotation_id")
+        mask = first.bundle_dir / "annotation_output" / f"{row.annotation_id}_mask.tif"
+        assert table.loc[row.annotation_id, "mask_digest"] == file_digest(mask)
+        assert table.loc[row.annotation_id, "label_id"] == row.label_id
+        assert table.loc[row.annotation_id, "roi_id"] == row.roi_id
+
+    def test_crash_before_the_upload_keeps_omero_and_reports(self, tmp_path):
+        first, source, omero = self._reviewed_with_crash(tmp_path, ["label"])
+        events = []
+
+        reopened = reopen(first, source, omero, events=events)
+
+        row = reopened.rows[0]
+        assert omero.uploads_per_tag() == {first.upload_tag(row.annotation_id): (1, 1)}
+        assert omero.labels[row.label_id].pixels[0, 0] != 0  # OMERO's is kept
+        assert any(getattr(e, "action", "") == "divergent" for e in events)

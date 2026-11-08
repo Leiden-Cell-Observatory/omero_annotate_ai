@@ -6,7 +6,10 @@ local ``tracking_table.csv`` row and the mask file, and :func:`decide` picks a s
 
 =================  =========================================================
 ``mirror``         OMERO already has the unit: keep its row; report a local
-                   mask whose pixels differ from the digest OMERO recorded.
+                   mask whose pixels differ from the digest OMERO recorded -
+                   unless a newer tagged upload holds exactly that mask (a
+                   review that stopped halfway): then keep the newer upload,
+                   delete the older one and update the table.
 ``verify``         Only the local copy has the upload IDs (the table update
                    failed): check the uploads still exist and match the mask,
                    then write them to the table.
@@ -24,7 +27,7 @@ reported (``divergent``) and left for the user. Running it twice changes nothing
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -32,6 +35,7 @@ import numpy as np
 import tifffile
 
 from .bundle import atomic_write, file_digest, input_path, mask_path, pixel_digest
+from .claims import is_live
 from .events import Progress, ReconcileAction, RepairKind
 from .session import NEEDS_REVIEW, check_cancel, upload_unit
 
@@ -89,13 +93,17 @@ class _Reconciler:
     training_set: TrainingSet
     prune_duplicates: bool
     changed: bool = False
+    repaired: set[str] = field(default_factory=set[str])
 
     def event(self, annotation_id: str, action: RepairKind, detail: str = "") -> None:
         self.training_set.events(ReconcileAction(annotation_id, action, detail))
 
-    def mirror(self, unit: Row, mask: Path) -> None:
-        """OMERO has the unit; only report local files that no longer match it."""
+    def mirror(self, unit: Row, local: Row | None, mask: Path) -> None:
+        """OMERO has the unit; finish a review, or report local files that differ."""
         if unit.mask_digest and mask.exists() and file_digest(mask) != unit.mask_digest:
+            if (label_id := self._newer_label(unit, mask)) is not None:
+                self._supersede(unit, local, mask, label_id)
+                return
             self.event(
                 unit.annotation_id,
                 "divergent",
@@ -112,6 +120,48 @@ class _Reconciler:
                 "divergent",
                 "the local input image differs from the one annotated",
             )
+
+    def _newer_label(self, unit: Row, mask: Path) -> int | None:
+        """A tagged label file newer than the table's whose pixels are the mask's."""
+        if unit.image_id is None or unit.label_id is None:
+            return None
+        writes, conn = self.training_set.omero_writes, self.training_set.conn
+        tag = self.training_set.upload_tag(unit.annotation_id)
+        labels, _ = writes.find_tagged(conn, unit.image_id, tag)
+        digest = file_digest(mask)
+        for label_id in sorted((i for i in labels if i > unit.label_id), reverse=True):
+            pixels = writes.download_label(conn, label_id)  # OMERO IDs only grow
+            if pixels is not None and pixel_digest(pixels) == digest:
+                return label_id
+        return None
+
+    def _supersede(
+        self, unit: Row, local: Row | None, mask: Path, label_id: int
+    ) -> None:
+        """Keep a review's newer upload; delete the older label file and ROI."""
+        writes, conn = self.training_set.omero_writes, self.training_set.conn
+        old_label, old_roi = unit.label_id, unit.roi_id
+        unit.label_id = label_id
+        new_roi = local.roi_id if local is not None else None
+        if new_roi not in (None, old_roi) and writes.object_exists(
+            conn, "Roi", new_roi
+        ):
+            unit.roi_id = new_roi
+        else:
+            assert unit.image_id is not None
+            tag = self.training_set.upload_tag(unit.annotation_id)
+            _, rois = writes.find_tagged(conn, unit.image_id, tag)
+            unit.roi_id = self._keep_first(
+                unit, "Roi", [r for r in rois if r != old_roi]
+            )
+        if local is not None:
+            unit.session = local.session
+            unit.annotation_updated_at = local.annotation_updated_at
+        for kind, object_id in (("FileAnnotation", old_label), ("Roi", old_roi)):
+            if object_id is not None and writes.object_exists(conn, kind, object_id):
+                writes.delete_objects(conn, kind, [object_id])
+                self.event(unit.annotation_id, "pruned", f"replaced {kind} {object_id}")
+        self._accept(unit, mask, "adopted", f"reviewed label {label_id}")
 
     def verify(self, unit: Row, local: Row, mask: Path) -> None:
         """The local copy has upload IDs the table lacks: check them, then adopt."""
@@ -188,6 +238,7 @@ class _Reconciler:
         self.training_set.save_local_table()
         if upload_unit(self.training_set, unit, mask):
             self.changed = True
+            self.repaired.add(unit.annotation_id)
             self.event(unit.annotation_id, action, detail)
 
 
@@ -217,16 +268,19 @@ def reconcile(
             remote_flags[annotation_id] = None
 
     fixer = _Reconciler(training_set, prune_duplicates)
+    hours = training_set.config.workflow.claim_hours
     units = list(rows)
     for done, unit in enumerate(units, start=1):
         check_cancel(training_set, cancel, "reconcile")
+        if not unit.processed and is_live(unit.claimed_by, unit.claimed_at, hours):
+            continue  # another session is annotating it right now
         local = local_rows.get(unit.annotation_id)
         mask = mask_path(training_set.bundle_dir, unit.annotation_id)
         step = decide(
             remote_flags[unit.annotation_id], _record(local), mask.exists(), local_known
         )
         if step == "mirror":
-            fixer.mirror(unit, mask)
+            fixer.mirror(unit, local, mask)
         elif step == "verify":
             assert local is not None
             fixer.verify(unit, local, mask)
@@ -239,6 +293,8 @@ def reconcile(
         training_set.events(Progress("reconcile", done, len(units)))
 
     training_set.save_local_table()
-    if fixer.changed or len(rows) > len(remote_ids):
-        training_set.write_table()
+    changed = [r for r in rows if r.annotation_id in fixer.repaired]
+    changed += [r for r in rows if r.annotation_id not in remote_ids]
+    if changed:
+        training_set.write_table(changed)
     return fixer.changed

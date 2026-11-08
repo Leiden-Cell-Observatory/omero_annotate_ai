@@ -589,6 +589,26 @@ class TestTrainingData:
             training_channels=[0],
         )
 
+    def test_training_data_widget_finds_the_set(
+        self, omero_conn, omero_seed, finished_set, tmp_path
+    ):
+        from omero_annotate_ai.widgets.training_data_widget import (
+            create_training_data_widget,
+        )
+
+        table_id, config = finished_set
+        widget = create_training_data_widget(omero_conn)
+        widget.container_type_dropdown.value = "dataset"
+        widget._load_containers()
+        widget.container_dropdown.value = omero_seed.dataset_id
+        widget.scan_button.click()
+        assert table_id in [value for _, value in widget.table_dropdown.options]
+        widget.table_dropdown.value = table_id
+
+        assert widget.get_selected_table_id() == table_id
+        result = self._export(omero_conn, table_id, config, tmp_path / "out")
+        assert result["stats"]["n_training_images"] > 0
+
     def test_layout_dtype_pairing_and_normalisation(
         self, omero_conn, finished_set, tmp_path
     ):
@@ -692,27 +712,33 @@ class TestTrainingData:
 
 class TestOtherPaths:
     def test_cellpose_prepare_then_collect(self, omero_conn, omero_seed, tmp_path):
-        from omero_annotate_ai.core.annotation_pipeline import create_pipeline
+        from omero_annotate_ai.trainingset import TrainingSet
 
         config = make_config(omero_seed, "cellpose", train_n=2, validate_n=1, test_n=0)
         config.ai_model.framework = "cellpose"
-        pipeline = create_pipeline(config, omero_conn)
-        table_id, config = pipeline.run_cp_workflow()
+        ts = TrainingSet.create(config, omero_conn, home=tmp_path)
+        assert ts.prepare_external() == 3
 
         # The user segments the exported images with Cellpose: masks from the images.
-        bundle = pipeline.bundle_dir
-        inputs = sorted((bundle / "annotation_input").glob("*.tif"))
+        inputs = sorted((ts.bundle_dir / "annotation_input").glob("*.tif"))
         assert len(inputs) == 3
-        (bundle / "annotation_output").mkdir(exist_ok=True)
-        for path in inputs:
+        for path in inputs[:2]:
             tifffile.imwrite(
-                bundle / "annotation_output" / f"{path.stem}_mask.tif",
+                ts.bundle_dir / "external_output" / f"{path.stem}_mask.tif",
                 mask_for(tifffile.imread(path)),
             )
-        n, _ = pipeline.collect_annotations_from_disk()
+        assert ts.collect_masks() == 2
+        assert ts.collect_masks() == 0  # collecting again uploads nothing twice
 
-        assert n == 3
-        rows = table_rows(omero_conn, table_id)
+        # The last mask arrives later; a reopened set collects only that one.
+        tifffile.imwrite(
+            ts.bundle_dir / "external_output" / f"{inputs[2].stem}_mask.tif",
+            mask_for(tifffile.imread(inputs[2])),
+        )
+        reopened = TrainingSet.open(ts.table_id, omero_conn, home=tmp_path)
+        assert reopened.collect_masks() == 1
+        rows = table_rows(omero_conn, ts.table_id)
+        assert len(rows) == 3
         assert_labels_on_right_images(omero_conn, omero_seed, rows)
 
     def test_read_only_writes_nothing_to_omero(
@@ -821,6 +847,273 @@ class TestDelete:
 
 
 # ---------------------------------------------------------------------------
+# Two computers annotating one set (claims)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def on(monkeypatch):
+    """``on("a")`` makes the following calls run on computer ``a`` (its host ID)."""
+    from omero_annotate_ai import claims
+
+    host = ["a"]
+    monkeypatch.setattr(claims, "host_id", lambda: host[0])
+    return lambda name: host.__setitem__(0, name)
+
+
+def scripted_masks(batch) -> dict[str, Path]:
+    """Masks for every unit of a batch, written like micro-SAM writes them."""
+    batch.mask_dir.mkdir(parents=True, exist_ok=True)
+    result = {}
+    for position, item in enumerate(batch.items):
+        path = batch.mask_dir / f"seg_{position:05}.tif"
+        tifffile.imwrite(path, mask_for(item.pixels))
+        result[item.annotation_id] = path
+    return result
+
+
+def age_claims(conn, table_id: int, hours: float) -> None:
+    """Make every claim in the table ``hours`` old (a computer that went quiet)."""
+    from datetime import UTC, datetime, timedelta
+
+    from omero_annotate_ai.omero.tracking_table import update_cells
+
+    stamp = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    keys = list(table_rows(conn, table_id)["annotation_id"])
+    update_cells(
+        conn,
+        table_id,
+        keys,
+        lambda row: {"claimed_at": stamp} if row["claimed_by"] else None,
+    )
+
+
+def open_set(conn, table_id: int, home: Path, events: list | None = None):
+    from omero_annotate_ai.trainingset import TrainingSet
+
+    return TrainingSet.open(
+        table_id, conn, home=home, events=None if events is None else events.append
+    )
+
+
+class TestTwoComputers:
+    def _create_and_open(self, conn, seed, on, tmp_path, name, **kwargs):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        on("a")
+        a = TrainingSet.create(
+            make_config(seed, name, **kwargs), conn, home=tmp_path / "a"
+        )
+        on("b")
+        return a, open_set(conn, a.table_id, tmp_path / "b")
+
+    def test_interleaved_sessions_share_the_units(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        a, b = self._create_and_open(omero_conn, omero_seed, on, tmp_path, "two")
+        on("a")
+        session_a = a.start_session(batch_size=2)
+        batch_a = session_a.next_batch()
+        on("b")
+        session_b = b.start_session(batch_size=4)
+        batch_b = session_b.next_batch()
+
+        ids_a = {i.annotation_id for i in batch_a.items}
+        ids_b = {i.annotation_id for i in batch_b.items}
+        assert len(ids_a) == len(ids_b) == 2 and not ids_a & ids_b
+
+        session_b.commit(batch_b, scripted_masks(batch_b))
+        session_b.finish("from b")
+        on("a")
+        session_a.commit(batch_a, scripted_masks(batch_a))
+        session_a.finish("from a")
+
+        rows = table_rows(omero_conn, a.table_id)
+        assert len(rows) == 4 and rows["processed"].all()
+        assert (rows["claimed_by"] == "").all()
+        assert_labels_on_right_images(omero_conn, omero_seed, rows)
+        rois = tagged_rois(omero_conn, a.table_id, rows["image_id"])
+        assert len(rois) == 4 and all(len(v) == 1 for v in rois.values())
+        elsewhere = open_set(omero_conn, a.table_id, tmp_path / "c")
+        assert {s.note for s in elsewhere.config.sessions} == {"from a", "from b"}
+
+    def test_expired_claim_is_taken_over_and_late_commit_conflicts(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        a, b = self._create_and_open(
+            omero_conn, omero_seed, on, tmp_path, "expire", validate_n=0, test_n=0
+        )
+        on("a")
+        session_a = a.start_session(batch_size=1)
+        batch_a = session_a.next_batch()
+        unit = batch_a.items[0].annotation_id
+        age_claims(omero_conn, a.table_id, hours=7)  # a went quiet
+
+        on("b")
+        session_b = b.start_session(batch_size=2)
+        batch_b = session_b.next_batch()
+        assert unit in {i.annotation_id for i in batch_b.items}
+        session_b.commit(batch_b, scripted_masks(batch_b))
+
+        on("a")
+        report = session_a.commit(batch_a, scripted_masks(batch_a))
+
+        assert report.conflicts == (unit,) and not report.committed
+        rows = table_rows(omero_conn, a.table_id)
+        rois = tagged_rois(omero_conn, a.table_id, rows["image_id"])
+        assert all(len(v) == 1 for v in rois.values())
+        assert any((a.bundle_dir / "annotation_output" / "conflicts").iterdir())
+
+    def test_crash_leaves_a_claim_that_expires(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        from omero_annotate_ai.events import ClaimsHeld, ClaimsReleased
+
+        a, _ = self._create_and_open(
+            omero_conn, omero_seed, on, tmp_path, "crash", validate_n=0, test_n=0
+        )
+        on("a")
+        a.start_session(batch_size=1).next_batch()  # then the kernel dies
+
+        on("b")
+        events: list = []
+        b = open_set(omero_conn, a.table_id, tmp_path / "b", events)
+        assert any(isinstance(e, ClaimsHeld) and e.units == 1 for e in events)
+        assert len(b.start_session().next_batch().items) == 1  # only the free one
+
+        on("a")  # the crashed computer releases its leftovers when it opens the set
+        events = []
+        a2 = open_set(omero_conn, a.table_id, tmp_path / "a", events)
+        assert any(isinstance(e, ClaimsReleased) and e.units == 1 for e in events)
+        a2.start_session().next_batch()  # claims it again, then dies again
+
+        age_claims(omero_conn, a.table_id, hours=7)
+        on("b")
+        again = open_set(omero_conn, a.table_id, tmp_path / "b")
+        assert len(again.start_session().next_batch().items) == 2  # expired: free
+
+    def test_own_leftover_claims_never_block(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        a, _ = self._create_and_open(
+            omero_conn, omero_seed, on, tmp_path, "own", validate_n=0, test_n=0
+        )
+        on("a")
+        a.start_session().next_batch()  # then an exception: never finished
+
+        session = a.start_session()  # the same object, a new session
+        batch = session.next_batch()
+        assert len(batch.items) == 2
+        session.commit(batch, scripted_masks(batch))
+        session.finish()
+
+        rows = table_rows(omero_conn, a.table_id)
+        assert rows["processed"].all() and (rows["claimed_by"] == "").all()
+
+
+# ---------------------------------------------------------------------------
+# Reviewing annotated units
+# ---------------------------------------------------------------------------
+
+
+def corrected(pixels: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """A reviewer's correction: the object loses its first row."""
+    out = np.array(mask, copy=True)
+    rows = np.nonzero(out.any(axis=-1))[0]
+    out[..., rows[0], :] = 0
+    return out
+
+
+class DyingDelete(OmeroWrites):
+    """The process dies when a review deletes an old upload (then works again)."""
+
+    def __init__(self) -> None:
+        self.dead = False
+
+    def delete_objects(self, conn, kind, ids):
+        if not self.dead:
+            self.dead = True
+            raise KeyboardInterrupt("killed before the old upload was deleted")
+        super().delete_objects(conn, kind, ids)
+
+
+def assert_one_upload_matching_the_local_mask(conn, ts, row) -> None:
+    """The unit has one tagged label file and ROI, and the label is the local mask."""
+    from omero_annotate_ai.bundle import mask_path
+    from omero_annotate_ai.omero.omero_functions import find_tagged
+
+    labels, rois = find_tagged(
+        conn, int(row["image_id"]), ts.upload_tag(row["annotation_id"])
+    )
+    assert labels == [row["label_id"]] and rois == [row["roi_id"]]
+    local = tifffile.imread(mask_path(ts.bundle_dir, row["annotation_id"]))
+    assert np.array_equal(download_label(conn, row["label_id"]), local)
+
+
+class TestReview:
+    def _annotated(self, conn, seed, tmp_path, name, writes=None):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        ts = TrainingSet.create(
+            make_config(seed, name, validate_n=0, test_n=0),
+            conn,
+            home=tmp_path,
+            omero_writes=writes,
+        )
+        ts.annotate(ScriptedAnnotator(mask_for))
+        return ts
+
+    def test_review_replaces_changed_masks_only(self, omero_conn, omero_seed, tmp_path):
+        ts = self._annotated(omero_conn, omero_seed, tmp_path, "review")
+        before = table_rows(omero_conn, ts.table_id).set_index("annotation_id")
+
+        assert ts.review(ScriptedAnnotator(mask_for)) == 0  # looked, changed nothing
+        assert (
+            table_rows(omero_conn, ts.table_id)
+            .set_index("annotation_id")["label_id"]
+            .equals(before["label_id"])
+        )
+        assert ts.review(ScriptedAnnotator(mask_for, review_fn=corrected)) == 2
+
+        rows = table_rows(omero_conn, ts.table_id)
+        for _, row in rows.iterrows():
+            old = before.loc[row["annotation_id"]]
+            assert row["label_id"] > old["label_id"] and row["roi_id"] != old["roi_id"]
+            assert omero_conn.getObject("FileAnnotation", int(old["label_id"])) is None
+            assert omero_conn.getObject("Roi", int(old["roi_id"])) is None
+            assert row["mask_digest"] != old["mask_digest"]
+            assert_one_upload_matching_the_local_mask(omero_conn, ts, row)
+        assert [s.kind for s in ts.config.sessions] == ["annotate", "review", "review"]
+
+    def test_crash_between_upload_and_delete_keeps_the_newer_upload(
+        self, omero_conn, omero_seed, tmp_path
+    ):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        ts = self._annotated(
+            omero_conn, omero_seed, tmp_path, "reviewcrash", DyingDelete()
+        )
+        old = table_rows(omero_conn, ts.table_id).set_index("annotation_id")
+        with pytest.raises(KeyboardInterrupt):
+            ts.review(ScriptedAnnotator(mask_for, review_fn=corrected))
+
+        TrainingSet.open(ts.table_id, omero_conn, home=tmp_path)
+
+        rows = table_rows(omero_conn, ts.table_id)
+        replaced = [
+            row
+            for _, row in rows.iterrows()
+            if row["label_id"] != old.loc[row["annotation_id"], "label_id"]
+        ]
+        assert len(replaced) == 1  # the unit the crash interrupted, finished on open
+        gone = old.loc[replaced[0]["annotation_id"]]
+        assert omero_conn.getObject("FileAnnotation", int(gone["label_id"])) is None
+        assert omero_conn.getObject("Roi", int(gone["roi_id"])) is None
+        for _, row in rows.iterrows():
+            assert_one_upload_matching_the_local_mask(omero_conn, ts, row)
+
+
+# ---------------------------------------------------------------------------
 # 10. Front ends: the Jupyter widget and a YAML file
 # ---------------------------------------------------------------------------
 
@@ -882,6 +1175,16 @@ class TestFrontEndRoutes:
         assert "2 / 2 annotated" in reopened.summary.value
         assert "checked" in reopened.summary.value
         assert "session 1" not in reopened.summary.value
+
+        # A fresh widget edits an earlier session's note via the session picker.
+        session = reopened.note_session.value
+        assert session is not None and reopened.note.value == "checked"
+        reopened.note.value = "checked again"
+        reopened.save_note.click()
+        assert "checked again" in reopened.summary.value
+        remote = OmeroWrites().read_config(omero_conn, table_id)
+        assert remote is not None
+        assert [r.note for r in remote.sessions if r.id == session] == ["checked again"]
 
         reopened.add["training"].value = 1
         reopened.go.click()

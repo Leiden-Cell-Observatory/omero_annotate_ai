@@ -243,6 +243,7 @@ types guess the bit depth from the image maximum, so exporting with
 | Key | Default | Meaning |
 |---|---|---|
 | `batch_size` | `0` | Units per napari session; progress is saved after each unit. `0` = all at once. |
+| `claim_hours` | `6` | OMERO sets: how long a session's claim on the units it shows lasts before another computer may take them over. |
 
 ## `storage`: where rows and masks are kept
 

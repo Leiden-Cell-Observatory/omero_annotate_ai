@@ -14,6 +14,7 @@ adding images, notes) is a method on it.
         - units
         - extend
         - annotate
+        - review
         - start_session
         - set_session_note
         - reconcile
@@ -27,6 +28,14 @@ adding images, notes) is a method on it.
 ## Annotation sessions
 
 ::: omero_annotate_ai.session.AnnotationSession
+
+::: omero_annotate_ai.session.BatchReport
+
+## Several computers (claims)
+
+::: omero_annotate_ai.claims
+    options:
+      members: false
 
 ## Rows
 

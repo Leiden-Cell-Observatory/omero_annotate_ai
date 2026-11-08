@@ -532,6 +532,12 @@ class WorkflowConfig(BaseModel):
     batch_size: int = Field(
         default=0, ge=0, description="Images per napari session (0 = all)"
     )
+    claim_hours: float = Field(
+        default=6.0,
+        gt=0,
+        description="OMERO sets: hours a session's claim on a unit lasts before "
+        "another computer may take the unit over (see omero_annotate_ai.claims)",
+    )
 
 
 class OMEROConfig(BaseModel):
@@ -633,14 +639,18 @@ class SessionRecord(BaseModel):
     """One annotation session: who, when, how many units, and the user's note."""
 
     id: int
+    kind: Literal["annotate", "review"] = "annotate"
     started: datetime
     ended: datetime | None = None
     status: Literal["open", "finished", "interrupted"] = "open"
     user: str | None = None
+    host: str | None = Field(default=None, description="Hashed ID of the computer")
     software_version: str | None = None
     model: str | None = None
     batch_size: int | None = None
-    n_annotated: int = 0
+    n_annotated: int = Field(
+        default=0, description="Units saved (annotated, or changed in a review)"
+    )
     note: str | None = None
 
 
@@ -985,6 +995,7 @@ normalization:
 
 workflow:
   batch_size: 8                # images per napari session (0 = all)
+  claim_hours: 6               # OMERO sets: claims on shown units expire after this
 
 storage: "omero"               # "omero": tracking table + uploads; "local": folder only
 

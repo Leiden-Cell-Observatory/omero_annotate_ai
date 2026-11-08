@@ -98,7 +98,8 @@ Each training set has one folder on your disk, with the same layout in every mod
     ├── config.yaml                   the config and progress, used to resume
     ├── tracking_table.csv            local copy of the progress table
     ├── annotation_input/             images as annotated: <unit id>.tif
-    ├── annotation_output/            masks: <unit id>_mask.tif
+    ├── annotation_output/            accepted masks: <unit id>_mask.tif
+    ├── external_output/              masks from Cellpose or other tools, until collected
     ├── model_input/                  training channel(s), if different from the annotated one
     └── .scratch/                     micro-SAM's files for the current batch only
 ```
