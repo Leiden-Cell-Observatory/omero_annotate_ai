@@ -188,26 +188,6 @@ def container_options(
     return [(f"{c.getName()} (ID {c.getId()})", c.getId()) for c in found]
 
 
-def load_set_choices(
-    connection: Any,
-    container_type: Any,
-    container_id: Any,
-    home: Path,
-    on_error: Callable[[str], None],
-) -> list[tuple[str, int | Path]]:
-    """Set picker options; an OMERO error is reported and the local sets still shown."""
-    try:
-        return training_set_choices(
-            connection,
-            str(container_type),
-            None if container_id is None else int(container_id),
-            home=home,
-        )
-    except Exception as error:  # noqa: BLE001 - UI boundary
-        on_error(f"Could not list training sets: {error}")
-        return training_set_choices(home=home)
-
-
 def render_summary(summary: TrainingSetSummary) -> str:
     """HTML for a set's summary card: progress per split and its sessions."""
     ident = f"table {summary.table_id}" if summary.table_id else "local"
@@ -480,12 +460,12 @@ class WorkflowWidget:
         self.status.value = ""
 
     def _load_sets(self) -> None:
-        options = load_set_choices(
+        options = training_set_choices(
             self.connection,
-            self.container_type.value,
+            str(self.container_type.value),
             self.container.value,
-            self.home,
-            self._error,
+            home=self.home,
+            on_error=self._error,
         )
         self.sets.options = options
         if not options:

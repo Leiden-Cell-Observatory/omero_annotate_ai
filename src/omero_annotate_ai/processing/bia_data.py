@@ -26,6 +26,8 @@ from typing import Any
 import numpy as np
 from tifffile import imwrite
 
+from ..bundle import file_digest
+from ..errors import IntegrityError
 from ..omero._untyped import ezomero
 from ..rows import Row, rows_from_frame
 
@@ -224,6 +226,8 @@ def prepare_bia_data_from_table(
 
     Raises:
         ValueError: If the table cannot be loaded or is empty.
+        IntegrityError: A downloaded mask no longer matches the ``mask_digest``
+            recorded when it was annotated (it was changed on OMERO since).
     """
     output_dir = Path(output_dir)
 
@@ -251,6 +255,7 @@ def prepare_bia_data_from_table(
     skipped_unprocessed = 0
     skipped_no_mask = 0
     exported: list[Row] = []
+    changed: list[str] = []
 
     try:
         for annotation in rows:
@@ -276,12 +281,11 @@ def prepare_bia_data_from_table(
                 continue
 
             try:
-                if _download_mask(
-                    conn,
-                    annotation.label_id,
-                    mask_dir / f"{annotation_id}_mask.tif",
-                    tmp_dir,
-                ):
+                mask_file = mask_dir / f"{annotation_id}_mask.tif"
+                if _download_mask(conn, annotation.label_id, mask_file, tmp_dir):
+                    recorded = annotation.mask_digest
+                    if recorded and file_digest(mask_file) != recorded:
+                        changed.append(annotation_id)
                     n_masks += 1
                     exported.append(annotation)
             except Exception as exc:  # noqa: BLE001 - best effort per record
@@ -293,6 +297,13 @@ def prepare_bia_data_from_table(
                 )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if changed:
+        raise IntegrityError(
+            f"{len(changed)} label file(s) on OMERO no longer match the masks recorded "
+            f"when they were annotated: {', '.join(changed[:5])}"
+            + (" ..." if len(changed) > 5 else "")
+        )
 
     if skipped_unprocessed or skipped_no_mask:
         warnings.warn(

@@ -858,17 +858,15 @@ def reorganize_local_data_for_training(
 def default_export_dir(
     ref: int | str | Path, name: str, home: str | Path | None = None
 ) -> Path:
-    """Where a set's training export goes by default: ``<home>/exports/<name>_<ref>``.
+    """Where a set's training export goes by default, under ``<home>/exports/``.
 
-    Outside the set's folder, so cleaning an export never touches the set.
+    ``<name>_<table id>`` for an OMERO set, the set's own folder name (which holds its
+    unique ID) for a local set: one folder per set, never inside the set's folder.
     """
-    from ..bundle import home_dir
+    from ..bundle import home_dir, slug
 
-    return (
-        home_dir(home)
-        / "exports"
-        / f"{name}_{ref if isinstance(ref, int) else 'local'}"
-    )
+    folder = f"{slug(name)}_{ref}" if isinstance(ref, int) else Path(ref).name
+    return home_dir(home) / "exports" / folder
 
 
 def export_training_set(
@@ -879,6 +877,7 @@ def export_training_set(
     training_channels: list[int] | None = None,
     label_channel: int | None = None,
     apply_normalization: bool | None = None,
+    home: str | Path | None = None,
 ) -> dict[str, Any]:
     """Write a training set's annotated units into the training layout.
 
@@ -886,12 +885,21 @@ def export_training_set(
     table ID (the data comes from OMERO, see :func:`prepare_training_data_from_table`)
     or a set's folder (offline, see :func:`reorganize_local_data_for_training`).
     Channels and normalisation default to the set's config; ``apply_normalization``
-    overrides ``normalization.apply_at_export``. A local set exports the channels its
-    folder holds, so other channels are refused there.
+    overrides ``normalization.apply_at_export``.
+
+    Channel arguments equal to the set's own are always accepted, so a caller can pass
+    its form values as they are. A local set exports the channels its folder holds, so
+    other channels are refused there; an OMERO export trains on one channel.
+
+    Raises:
+        ValueError: Other channels for a local set, more than one training channel,
+            or an output folder inside the set's folder (``home`` is searched for the
+            local folder of an OMERO set).
 
     Returns:
         The export result: the created folders and ``stats``.
     """
+    from ..bundle import home_dir
     from ..trainingset import read_set_config  # the core imports this module
 
     config = read_set_config(ref, conn).model_copy(deep=True)
@@ -914,14 +922,24 @@ def export_training_set(
         coverage.training_channels = training_channels
     if apply_normalization is not None:
         config.normalization.apply_at_export = apply_normalization
-    if isinstance(ref, int):
-        return prepare_training_data_from_table(
-            conn,
-            ref,
-            output_dir,
-            training_name=config.name,
-            label_channel=coverage.get_label_channel(),
-            training_channels=coverage.get_training_channels(),
-            normalization=config.normalization,
+    if not isinstance(ref, int):
+        return reorganize_local_data_for_training(config, Path(ref), output_dir)
+
+    if len(coverage.get_training_channels()) > 1:
+        raise ValueError(
+            "An OMERO export trains on one channel; pick one training channel "
+            f"(got {coverage.get_training_channels()})"
         )
-    return reorganize_local_data_for_training(config, Path(ref), output_dir)
+    root = home_dir(home)
+    for folder in root.glob(f"*/{ref}_*"):  # the set's local folder, on any server
+        if folder.is_dir() and folder.parent.name not in ("local", "exports"):
+            assert_output_dir_is_separate(Path(output_dir), folder)
+    return prepare_training_data_from_table(
+        conn,
+        ref,
+        output_dir,
+        training_name=config.name,
+        label_channel=coverage.get_label_channel(),
+        training_channels=coverage.get_training_channels(),
+        normalization=config.normalization,
+    )

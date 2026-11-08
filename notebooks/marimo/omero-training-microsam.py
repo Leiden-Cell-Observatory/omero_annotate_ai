@@ -143,23 +143,20 @@ def _(mo):
 @app.cell
 def _(conn, container_id, container_type, mo, training_set_choices):
     _connected = conn is not None and conn.isConnected()
-    _note = ""
-    try:
-        _choices = training_set_choices(
-            conn if _connected else None,
-            container_type.value,
-            int(container_id.value) if container_id.value else None,
-        )
-    except Exception as _error:  # an OMERO error still lists the local sets
-        _note = f"Could not list the sets on OMERO: {_error}"
-        _choices = training_set_choices()
+    _notes = []  # an OMERO error is shown; the local sets are still listed
+    _choices = training_set_choices(
+        conn if _connected else None,
+        container_type.value,
+        int(container_id.value) if container_id.value else None,
+        on_error=_notes.append,
+    )
     training_set = mo.ui.dropdown(
         options=dict(_choices), label="Training set", full_width=True
     )
     mo.vstack(
         [
             training_set if _choices else mo.md("No training sets found yet."),
-            mo.md(_note),
+            mo.md("\n\n".join(_notes)),
         ]
     )
     return (training_set,)
@@ -171,18 +168,21 @@ def _(conn, mo, read_set_config, summarize, training_set):
     annotation_config = read_set_config(training_set.value, conn)
     _summary = summarize(training_set.value, conn)
     _where = f"table {_summary.table_id}" if _summary.table_id else "local"
-    _rows = "\n".join(
-        f"| {_split} | {_done} / {_total} |"
-        for _split, (_done, _total) in _summary.progress.items()
-        if _total
+    mo.md(
+        "\n".join(
+            [
+                f"**{_summary.name}** ({_where})",
+                "",
+                "| Split | Annotated |",
+                "|---|---|",
+                *(
+                    f"| {_split} | {_done} / {_total} |"
+                    for _split, (_done, _total) in _summary.progress.items()
+                    if _total
+                ),
+            ]
+        )
     )
-    mo.md(f"""
-    **{_summary.name}** ({_where})
-
-    | Split | Annotated |
-    |---|---|
-    {_rows}
-    """)
     return (annotation_config,)
 
 
@@ -309,32 +309,34 @@ def _(
         not prepare_button.value,
         mo.md("Click 'Prepare Training Data' to export the training set"),
     )
-    _local = not isinstance(training_set.value, int)
     try:
         training_result = export_training_set(
             training_set.value,
             Path(export_directory.value).expanduser(),
             conn,
-            training_channels=None
-            if _local
-            else parse_indices(training_channels.value, "Training channels"),
-            label_channel=None if _local else int(label_channel.value),
+            training_channels=parse_indices(
+                training_channels.value, "Training channels"
+            ),
+            label_channel=int(label_channel.value),
             apply_normalization=apply_normalization.value,
         )
-        _stats = "\n".join(
-            f"    | {_key} | {_value} |"
-            for _key, _value in training_result["stats"].items()
-        )
         mo.output.replace(
-            mo.md(f"""
-        **Training data prepared** in `{training_result["base_dir"]}`
-
-        | Statistic | Value |
-        |-----------|-------|
-    {_stats}
-
-        The splits come from the training set (each unit's category).
-        """)
+            mo.md(
+                "\n".join(
+                    [
+                        f"**Training data prepared** in `{training_result['base_dir']}`",
+                        "",
+                        "| Statistic | Value |",
+                        "|-----------|-------|",
+                        *(
+                            f"| {_key} | {_value} |"
+                            for _key, _value in training_result["stats"].items()
+                        ),
+                        "",
+                        "The splits come from the training set (each unit's category).",
+                    ]
+                )
+            )
         )
     except Exception as _error:
         mo.output.replace(mo.md(f"**Error:** {_error}"))

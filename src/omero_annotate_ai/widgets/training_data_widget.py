@@ -20,7 +20,7 @@ from ..core.annotation_config import AnnotationConfig
 from ..errors import OmeroAnnotateAIError
 from ..planning import parse_indices
 from ..processing.training_functions import default_export_dir, export_training_set
-from ..trainingset import read_set_config, summarize
+from ..trainingset import read_set_config, summarize, training_set_choices
 from .workflow_widget import (
     _LABEL,
     _STYLE,
@@ -28,7 +28,6 @@ from .workflow_widget import (
     _card,
     _wide,
     container_options,
-    load_set_choices,
     render_summary,
 )
 
@@ -127,12 +126,12 @@ class TrainingDataWidget:
         )
 
     def _load_sets(self) -> None:
-        self.sets.options = load_set_choices(
+        self.sets.options = training_set_choices(
             self.connection,
-            self.container_type.value,
+            str(self.container_type.value),
             self.container.value,
-            self.home,
-            self._error,
+            home=self.home,
+            on_error=self._error,
         )
         if not self.sets.options:
             self.summary.value = (
@@ -150,6 +149,9 @@ class TrainingDataWidget:
             config = read_set_config(ref, self.connection)
         except (OmeroAnnotateAIError, OSError, ValueError) as error:
             self._error(str(error))
+            return
+        except Exception as error:  # noqa: BLE001 - UI boundary: e.g. a dropped connection
+            self._error(f"Could not read the set: {error}")
             return
         self._config = config
         coverage = config.spatial_coverage
@@ -185,16 +187,16 @@ class TrainingDataWidget:
             raise ValueError("Pick a training set first")
         if not self.output_dir.value.strip():
             raise ValueError("Choose an output folder")
-        local = not isinstance(ref, int)
         self.result = export_training_set(
             ref,
             Path(self.output_dir.value.strip()).expanduser(),
             self.connection,
-            training_channels=None
-            if local
-            else parse_indices(self.training_channels.value, "Training channels"),
-            label_channel=None if local else int(self.label_channel.value),
+            training_channels=parse_indices(
+                self.training_channels.value, "Training channels"
+            ),
+            label_channel=int(self.label_channel.value),
             apply_normalization=bool(self.normalization.value),
+            home=self.home,
         )
         return self.result
 
@@ -205,6 +207,8 @@ class TrainingDataWidget:
             result = self.export()
         except (OmeroAnnotateAIError, OSError, ValueError) as error:
             self._error(str(error))
+        except Exception as error:  # noqa: BLE001 - UI boundary: never leave it "Exporting…"
+            self._error(f"Export failed: {error}")
         else:
             stats = result.get("stats", {})
             counts = ", ".join(

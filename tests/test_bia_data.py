@@ -451,3 +451,22 @@ def test_local_set_bundle_holds_only_annotated_units(tmp_path):
     assert result["missing"] == 0
     assert len(list((tmp_path / "bia" / "annotations").glob("*_mask.tif"))) == 2
     assert len(list(ts.bundle_dir.glob("annotation_output/*_mask.tif"))) == 2  # copied
+
+
+def test_mask_changed_on_omero_since_annotation_is_refused(
+    mock_conn, mock_ezomero, tmp_path
+):
+    from omero_annotate_ai.bundle import file_digest
+    from omero_annotate_ai.errors import IntegrityError
+
+    # What the fake OMERO serves for label 555, and its digest as recorded at annotation.
+    served = tmp_path / "served"
+    recorded = file_digest(Path(fake_get_file_annotation(None, 555, served)))
+    mock_ezomero.get_table.return_value = build_table(
+        [
+            annotation(image_id=101, mask_digest=recorded),
+            annotation(image_id=102, label_id=556, mask_digest=recorded),  # differs
+        ]
+    )
+    with pytest.raises(IntegrityError, match="102_0_0"):
+        prepare_bia_data_from_table(mock_conn, 1, tmp_path / "out")

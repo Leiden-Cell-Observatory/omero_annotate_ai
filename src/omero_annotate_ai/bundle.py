@@ -41,7 +41,7 @@ def home_dir(home: str | Path | None = None) -> Path:
     return Path.home() / "omero_annotate_ai"
 
 
-def _slug(text: str) -> str:
+def slug(text: str) -> str:
     """Lower-case, filesystem-safe: anything but letters, digits, ``.`` and ``_`` becomes ``-``."""
     return re.sub(r"[^a-z0-9._]+", "-", text.lower()).strip("-.") or "unnamed"
 
@@ -53,12 +53,12 @@ def server_slug(host: str, port: int | None = None) -> str:
     scheme.
     """
     host = re.sub(r"^[a-z]+://", "", host.strip().lower()).rstrip("/")
-    return _slug(f"{host}-{port}" if port else host)
+    return slug(f"{host}-{port}" if port else host)
 
 
 def omero_bundle(home: Path, server: str, table_id: int, name: str) -> Path:
     """Bundle of a set tracked in OMERO table ``table_id`` on ``server``."""
-    return home / server / f"{table_id}_{_slug(name)}"
+    return home / server / f"{table_id}_{slug(name)}"
 
 
 def new_local_id() -> str:
@@ -68,7 +68,7 @@ def new_local_id() -> str:
 
 def local_bundle(home: Path, local_id: str, name: str) -> Path:
     """Bundle of a set kept only on disk (``storage: local``, e.g. OME-Zarr)."""
-    return home / "local" / f"{local_id}_{_slug(name)}"
+    return home / "local" / f"{local_id}_{slug(name)}"
 
 
 def atomic_write(path: Path, write: Callable[[Path], object]) -> None:

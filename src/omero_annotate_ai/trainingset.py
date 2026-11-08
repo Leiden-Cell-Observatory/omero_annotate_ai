@@ -1662,18 +1662,26 @@ def training_set_choices(
     container_id: int | None = None,
     *,
     home: str | Path | None = None,
+    on_error: Callable[[str], None] | None = None,
 ) -> list[tuple[str, int | Path]]:
     """``(label, ref)`` for a picker: the sets on a container, then the local sets.
 
     ``ref`` is a table ID (OMERO set) or a folder (local set), as :func:`summarize`,
-    :meth:`TrainingSet.open` and the training export take it. Read-only.
+    :meth:`TrainingSet.open` and the training export take it. Read-only. With
+    ``on_error``, an error listing the OMERO sets is reported there and the local sets
+    are still returned; without it, it is raised.
     """
     choices: list[tuple[str, int | Path]] = []
     if conn is not None and container_type and container_id is not None:
-        choices += [
-            (f"{s.name} (table {s.table_id})", s.table_id)
-            for s in list_training_sets(conn, container_type, int(container_id))
-        ]
+        try:
+            choices += [
+                (f"{s.name} (table {s.table_id})", s.table_id)
+                for s in list_training_sets(conn, container_type, int(container_id))
+            ]
+        except Exception as error:
+            if on_error is None:
+                raise
+            on_error(f"Could not list training sets: {error}")
     folders = sorted((home_dir(home) / "local").glob("*/config.yaml"))
     choices += [(f"{f.parent.name} (local)", f.parent) for f in folders]
     return choices

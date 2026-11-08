@@ -35,8 +35,9 @@ table's `category` column (training, validation or test), the split chosen when 
 training set was created. The output folder must be outside the set's folder.
 
 Channels and normalisation come from the set's config. For an OMERO set you can train on
-other channels than the annotated one with `training_channels=` and `label_channel=`; a
-local set exports the channels it was annotated with. `apply_normalization=True` writes
+another channel than the annotated one with `training_channels=[c]` (one channel) and
+`label_channel=`; a local set exports the channels it was annotated with. An output
+folder inside the set's own folder is refused. `apply_normalization=True` writes
 normalised float32 images instead of the native bit depth.
 
 ### In Jupyter: the training-data widget
@@ -56,7 +57,8 @@ training_widget.display()
 ```
 
 Pick the container and the training set (local sets are listed too); its progress per
-split is shown. Check the output folder (default `~/omero_annotate_ai/exports/<name>_<table id>`),
+split is shown. Check the output folder (default `~/omero_annotate_ai/exports/<name>_<table id>`, or
+the set's folder name for a local set),
 the channels and the normalisation, then click **Export**. The result is in
 `training_widget.result`. The marimo training notebook offers the same choices.
 
