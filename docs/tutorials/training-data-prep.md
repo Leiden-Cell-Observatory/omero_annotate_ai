@@ -61,7 +61,7 @@ training set was created. A copy of the tracking table is saved alongside
     - If you annotated one channel but want to train on another, pass
       `label_channel=` and `training_channels=`.
 
-## From a local run (read-only mode or Cellpose)
+## From a local training set
 
 When the images and masks are on your disk (`annotation_input/` and
 `annotation_output/`), reorganise them without contacting OMERO:
@@ -77,8 +77,8 @@ result = reorganize_local_data_for_training(
 )
 ```
 
-By default the data is copied to a folder next to your working directory, named
-`<working directory>_training`. Images keep their original bit depth, and
+By default the data is copied to a folder next to the set's folder, named
+`<set folder>_training`. Images keep their original bit depth, and
 `include_test=True` also writes `test_input/` and `test_label/`.
 
 ## Train a model
@@ -108,11 +108,9 @@ overrides `epochs`.
 
 The trained model is saved as `<output_dir>/<model_name>_final.pt`, with checkpoints in
 `<output_dir>/checkpoints/`. Load it in the micro-SAM napari plugin by choosing the
-checkpoint as a custom model. The micro-SAM training notebook also exports the model in
-[BioImage Model Zoo](https://bioimage.io) format.
+checkpoint as a custom model. Export to the [BioImage Model Zoo](https://bioimage.io) format with micro-SAM's own tools.
 
-Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-microsam.ipynb)
-· [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
+Notebook: [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
 
 ### BiaPy
 
@@ -130,7 +128,7 @@ DATA:
     GT_PATH: my_training_data/val_label
 ```
 
-Notebook: [prepare data for BiaPy](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training_biapy.ipynb)
+Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
 
 ### DL4MicEverywhere
 
@@ -138,7 +136,7 @@ Notebook: [prepare data for BiaPy](https://github.com/Leiden-Cell-Observatory/om
 notebooks (StarDist, Cellpose, U-Net, …) in containers. Give it the prepared folder as
 its data directory.
 
-Notebook: [prepare data for DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training_DL4mic.ipynb)
+Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
 
 ## Tips
 

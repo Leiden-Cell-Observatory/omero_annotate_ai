@@ -58,14 +58,14 @@ and resume again; see
 
 ## Config files
 
-**A setting I put in the YAML has no effect.**
-Unknown keys are ignored without a warning. Compare your key names with the
-[configuration reference](configuration.md) and print the loaded config.
+**Loading my YAML fails with "unknown key" or `RemovedConfigKey`.**
+Unknown keys are refused, so a typo never goes unnoticed; check the name against the
+[configuration reference](configuration.md). Keys from 0.4 that moved name their
+replacement in the error, see [migrating from 0.4](whats-new-0.5.md#migrating-from-04).
 
-**My YAML file was overwritten with a long list of annotations.**
-When you load a file and run the pipeline, progress is saved back to that file. Set
-`config.config_file_path = None` after loading to save progress in the working directory
-instead.
+**Does running a training set change my YAML file?**
+No. A loaded YAML is a template; the set keeps its own `config.yaml` (with sessions and
+progress) in its folder under `~/omero_annotate_ai/`.
 
 ## Still stuck?
 

@@ -319,7 +319,7 @@ a new set from a saved config, remove `identity` and `sessions`.
 
 Configs from 0.4 and earlier are refused with a message naming each removed key's
 replacement (for example `workflow.read_only_mode` → `storage: local`,
-`omero.table_id` → `TrainingSet.open(table_id)`, `output.output_directory` → `home=`).
+`omero.table_id` → `TrainingSet.open(table_id)`, `output.output_directory` → `home=`). The full list is in [migrating from 0.4](whats-new-0.5.md#migrating-from-04).
 
 ## Example recipes
 

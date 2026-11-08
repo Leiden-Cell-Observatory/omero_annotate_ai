@@ -103,14 +103,15 @@ ts.annotate()
     their replacement (for example `workflow.read_only_mode` → `storage: local`), so a
     misspelt setting never goes unnoticed.
 
-Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-from-yaml.ipynb)
-· [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-from-yaml.py)
+Notebook: [annotate from YAML (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/annotate-from-yaml.py)
 
 ## Check progress
 
 ```python
-print(config.get_progress_summary())
-done = config.get_processed()
-todo = config.get_unprocessed()
-df = config.to_dataframe()  # one row per unit, as a pandas table
+from omero_annotate_ai.rows import rows_to_frame
+from omero_annotate_ai.trainingset import summarize
+
+print(summarize(ts.table_id, conn).progress)  # per split: (annotated, total), read-only
+todo = [row for row in ts.units() if not row.processed]
+df = rows_to_frame(ts.units())  # one row per unit, as a pandas table
 ```
