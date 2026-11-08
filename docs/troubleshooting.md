@@ -27,8 +27,9 @@ Check the server address in OMERO.insight or with your OMERO admin. Websocket ad
 often blocked outside the institute network.
 
 **My password is not remembered.**
-By design. Tick the option to store it in your system keychain if you want this; on a
-Linux server without a desktop there may be no keychain available.
+By design. In the Jupyter connection widget you can tick the option to store it in your
+system keychain (a Linux server without a desktop may have none); the napari plugin
+never stores it.
 
 ## Annotating
 

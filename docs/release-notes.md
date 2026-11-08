@@ -11,7 +11,9 @@ Newest first. The full list of pull requests per version is on
 - **napari plugin:** while the next image's embedding is computed, that image is shown
   dimmed, the previous image's objects and prompts are hidden and micro-SAM's dock is
   disabled, so nothing is drawn against the wrong embedding. Each image gets its own
-  contrast limits.
+  contrast limits; the opacity you set on the image layer is kept.
+- **The napari plugin no longer offers to store the OMERO password** in the system
+  keychain; it is asked for at each connect and the field is cleared straight away.
 - **napari plugin:** the dock can be made as short as the annotate page, so micro-SAM's
   dock below it gets the room (it kept the height of the start page).
 - **One pixel reader.** The training export and the BioImage Archive export read
