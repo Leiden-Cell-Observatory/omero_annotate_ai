@@ -21,6 +21,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
+from . import claims
 from .annotators import Annotator, Batch, BatchItem, MicroSamAnnotator
 from .bundle import (
     atomic_write,
@@ -39,8 +40,8 @@ from .errors import (
     TableReadError,
     TableWriteError,
 )
-from .events import EventSink, TableWritten, log_events
-from .omero import omero_functions
+from .events import ClaimsHeld, ClaimsReleased, EventSink, TableWritten, log_events
+from .omero import omero_functions, tracking_table
 from .omero._untyped import ezomero
 from .omero.omero_functions import create_tracking_table as create_omero_tracking_table
 from .omero.omero_functions import replace_table_config
@@ -105,6 +106,20 @@ class OmeroWrites:
     def write_rows(self, conn: Any, table_id: int, rows: Sequence[Row]) -> dict:
         """Write rows to the tracking table in place."""
         return omero_functions.write_rows_to_table(conn, table_id, rows)
+
+    def read_rows(self, conn: Any, table_id: int, keys: Sequence[str]) -> Any:
+        """The current table rows for ``keys`` (a DataFrame)."""
+        return tracking_table.read_rows(conn, table_id, keys)
+
+    def update_cells(
+        self,
+        conn: Any,
+        table_id: int,
+        keys: Sequence[str],
+        change: Callable[[dict[str, Any]], dict[str, Any] | None],
+    ) -> list[str]:
+        """Change some cells of the rows for ``keys`` in place (claims)."""
+        return tracking_table.update_cells(conn, table_id, keys, change)
 
     def read_config(self, conn: Any, table_id: int) -> AnnotationConfig | None:
         """The set's one config YAML on OMERO, or None if it has none."""
@@ -840,8 +855,11 @@ class TrainingSet:
             )
         return tag_for(self.table_id, annotation_id)
 
-    def write_table(self) -> int:
-        """Write the rows to the tracking table, in place (it keeps its ID).
+    def write_table(self, rows: Sequence[Row]) -> int:
+        """Write ``rows`` to the tracking table, in place (it keeps its ID).
+
+        Only the rows this run changed are written, so rows other computers
+        annotate meanwhile are never overwritten with a stale copy.
 
         Raises:
             TableWriteError: The update failed (chained to the OMERO error).
@@ -849,7 +867,7 @@ class TrainingSet:
         table_id = self.table_id
         assert table_id is not None, "local sets have no tracking table"
         try:
-            result = self.omero_writes.write_rows(self.conn, table_id, self.rows)
+            result = self.omero_writes.write_rows(self.conn, table_id, rows)
         except OmeroAnnotateAIError:
             raise
         except Exception as error:
@@ -877,10 +895,65 @@ class TrainingSet:
             raise TableReadError(f"Tracking table {table_id} has no rows")
         return rows_from_frame(df)
 
+    def update_cells(
+        self,
+        keys: Sequence[str],
+        change: Callable[[dict[str, Any]], dict[str, Any] | None],
+    ) -> list[str]:
+        """Change cells of the table rows for ``keys``, mirrored into ``rows``."""
+        assert self.table_id is not None, "local sets have no tracking table"
+        changes: dict[str, dict[str, Any]] = {}
+
+        def record(row: dict[str, Any]) -> dict[str, Any] | None:
+            cells = change(row)
+            if cells:
+                changes[str(row["annotation_id"])] = cells
+            return cells
+
+        changed = self.omero_writes.update_cells(self.conn, self.table_id, keys, record)
+        by_id = {r.annotation_id: r for r in self.rows}
+        for annotation_id in changed:
+            for name, value in changes[annotation_id].items():
+                setattr(by_id[annotation_id], name, value)
+        if changed:
+            self.save_local_table()
+        return changed
+
+    def current_rows(self, keys: Sequence[str]) -> dict[str, Row]:
+        """The tracking table's rows for ``keys`` as they are now, by ID."""
+        assert self.table_id is not None, "local sets have no tracking table"
+        frame = self.omero_writes.read_rows(self.conn, self.table_id, keys)
+        return {r.annotation_id: r for r in rows_from_frame(frame)}
+
+    def refresh(self) -> None:
+        """Take over what other computers saved meanwhile (OMERO sets).
+
+        Units another session annotated get the table's row; rows another
+        computer added are appended; claims are updated. Units this run
+        annotated keep the local row.
+        """
+        if self.is_local or self.table_id is None:
+            return
+        remote = {r.annotation_id: r for r in self._read_table_rows(self.table_id)}
+        for position, row in enumerate(self.rows):
+            theirs = remote.pop(row.annotation_id, None)
+            if theirs is None:
+                continue
+            if theirs.processed and not row.processed:
+                self.rows[position] = theirs
+            else:
+                row.claimed_by, row.claimed_at = theirs.claimed_by, theirs.claimed_at
+        self.rows.extend(remote.values())
+        self.save_local_table()
+
     def publish_config(self) -> int | None:
-        """Replace the set's one config YAML on OMERO with the local one."""
+        """Replace the set's one config YAML on OMERO with the local one.
+
+        Sessions other computers recorded meanwhile are merged in first.
+        """
         if self.table_id is None:
             return None
+        self._merge_remote_sessions()
         self.save_config()
         return self.omero_writes.replace_config(
             self.conn,
@@ -1014,7 +1087,9 @@ class TrainingSet:
             if ts.table_id is None:
                 raise ConfigError("This OMERO training set's config has no table ID")
             ts.rows = ts._read_table_rows(ts.table_id)
+            ts._release_own_claims()
             reconcile(ts, prune_duplicates=prune_duplicates, cancel=cancel)
+            ts._report_claims()
         ts._close_open_sessions()
         return ts
 
@@ -1078,11 +1153,12 @@ class TrainingSet:
                     f"{key} can only be raised (it is {getattr(training, key)})"
                 )
             setattr(training, key, value)
+        before = len(self.rows)
         added = self._extend_rows()
         if added:
             self.save_local_table()
             if not self.is_local:
-                self.write_table()
+                self.write_table(self.rows[before:])
         self.save_config()
         self.publish_config()
         return added
@@ -1154,8 +1230,28 @@ class TrainingSet:
             raise
         return session.finish(note)
 
+    def _merge_remote_sessions(self) -> None:
+        """Take other computers' session records from the config on OMERO."""
+        if self.table_id is None:
+            return
+        remote = self.omero_writes.read_config(self.conn, self.table_id)
+        if remote is None:
+            return
+        host = claims.host_id()
+        merged = {s.id: s for s in self._config.sessions}
+        for theirs in remote.sessions:
+            mine = merged.get(theirs.id)
+            if mine is None or mine.host not in (None, host):
+                merged[theirs.id] = theirs  # another computer's session: theirs wins
+        self._config.sessions = sorted(merged.values(), key=lambda s: s.id)
+
     def begin_session(self, model: str | None, batch_size: int | None) -> int:
-        """Record a new session in the config; returns its number."""
+        """Record a new session in the config; returns its number.
+
+        For OMERO sets the number is taken after merging the sessions on OMERO,
+        and published at once so other computers continue after it.
+        """
+        self._merge_remote_sessions()
         known = [s.id for s in self._config.sessions] + [r.session for r in self.rows]
         session_id = 1 + max(known, default=0)
         self._config.sessions.append(
@@ -1163,12 +1259,15 @@ class TrainingSet:
                 id=session_id,
                 started=datetime.now(),
                 user=self._user(),
+                host=claims.host_id(),
                 software_version=_software_version(),
                 model=model or self._config.ai_model.pretrained_from,
                 batch_size=batch_size,
             )
         )
-        if self._can_save():
+        if self.table_id is not None:
+            self.publish_config()
+        elif self._can_save():
             self.save_config()
         return session_id
 
@@ -1202,10 +1301,14 @@ class TrainingSet:
         raise KeyError(f"No session {session_id} in this training set")
 
     def _close_open_sessions(self) -> None:
-        """Sessions a crashed run left open become ``interrupted``."""
+        """Sessions a crashed run on this computer left open become ``interrupted``.
+
+        Open sessions of other computers may still be running and stay open.
+        """
         changed = False
+        host = claims.host_id()
         for record in self._config.sessions:
-            if record.status == "open":
+            if record.status == "open" and record.host in (None, host):
                 record.status = "interrupted"
                 record.n_annotated = sum(
                     r.processed and r.session == record.id for r in self.rows
@@ -1214,8 +1317,34 @@ class TrainingSet:
         if changed:
             self.save_config()
 
+    def _release_own_claims(self) -> None:
+        """Release the claims an earlier run of this user on this computer left."""
+        held = [r.annotation_id for r in self.rows if r.claimed_by]
+        if held:
+            released = claims.release(
+                self, claims.owner(self._user()), held, suffix=True
+            )
+            if released:
+                self.events(ClaimsReleased(len(released)))
+
+    def _report_claims(self) -> None:
+        """Report units other sessions are annotating now (they are skipped)."""
+        hours = self._config.workflow.claim_hours
+        live = [
+            r.claimed_by.partition("@")[2]
+            for r in self.rows
+            if not r.processed and claims.is_live(r.claimed_by, r.claimed_at, hours)
+        ]
+        if live:
+            self.events(ClaimsHeld(len(live), tuple(sorted(set(live)))))
+
     def _can_save(self) -> bool:
         return self.is_local or self.table_id is not None or self._bundle is not None
+
+    @property
+    def user(self) -> str | None:
+        """The OMERO user (or the login name without a connection)."""
+        return self._user()
 
     def _user(self) -> str | None:
         try:
@@ -1299,7 +1428,7 @@ class TrainingSet:
         session_id = self.begin_session(None, None)
         saved = sum(commit_unit(self, row, path, session_id) for row, path in todo)
         if saved and not self.is_local:
-            self.write_table()
+            self.write_table([row for row, _ in todo])
         self.end_session(session_id, saved, None)
         logger.info("Saved %d annotations", saved)
         return saved

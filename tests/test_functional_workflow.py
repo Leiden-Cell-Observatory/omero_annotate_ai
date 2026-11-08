@@ -817,3 +817,150 @@ class TestDelete:
             for i in label_ids + config_ids
         )
         assert tagged_rois(omero_conn, table_id, rows["image_id"]) == {}
+
+
+# ---------------------------------------------------------------------------
+# Two computers annotating one set (claims)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def on(monkeypatch):
+    """``on("a")`` makes the following calls run on computer ``a`` (its host ID)."""
+    from omero_annotate_ai import claims
+
+    host = ["a"]
+    monkeypatch.setattr(claims, "host_id", lambda: host[0])
+    return lambda name: host.__setitem__(0, name)
+
+
+def scripted_masks(batch) -> dict[str, Path]:
+    """Masks for every unit of a batch, written like micro-SAM writes them."""
+    batch.mask_dir.mkdir(parents=True, exist_ok=True)
+    result = {}
+    for position, item in enumerate(batch.items):
+        path = batch.mask_dir / f"seg_{position:05}.tif"
+        tifffile.imwrite(path, mask_for(item.pixels))
+        result[item.annotation_id] = path
+    return result
+
+
+def age_claims(conn, table_id: int, hours: float) -> None:
+    """Make every claim in the table ``hours`` old (a computer that went quiet)."""
+    from datetime import UTC, datetime, timedelta
+
+    from omero_annotate_ai.omero.tracking_table import update_cells
+
+    stamp = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    keys = list(table_rows(conn, table_id)["annotation_id"])
+    update_cells(
+        conn,
+        table_id,
+        keys,
+        lambda row: {"claimed_at": stamp} if row["claimed_by"] else None,
+    )
+
+
+def open_set(conn, table_id: int, home: Path, events: list | None = None):
+    from omero_annotate_ai.trainingset import TrainingSet
+
+    return TrainingSet.open(
+        table_id, conn, home=home, events=None if events is None else events.append
+    )
+
+
+class TestTwoComputers:
+    def _create_and_open(self, conn, seed, on, tmp_path, name, **kwargs):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        on("a")
+        a = TrainingSet.create(
+            make_config(seed, name, **kwargs), conn, home=tmp_path / "a"
+        )
+        on("b")
+        return a, open_set(conn, a.table_id, tmp_path / "b")
+
+    def test_interleaved_sessions_share_the_units(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        a, b = self._create_and_open(omero_conn, omero_seed, on, tmp_path, "two")
+        on("a")
+        session_a = a.start_session(batch_size=2)
+        batch_a = session_a.next_batch()
+        on("b")
+        session_b = b.start_session(batch_size=4)
+        batch_b = session_b.next_batch()
+
+        ids_a = {i.annotation_id for i in batch_a.items}
+        ids_b = {i.annotation_id for i in batch_b.items}
+        assert len(ids_a) == len(ids_b) == 2 and not ids_a & ids_b
+
+        session_b.commit(batch_b, scripted_masks(batch_b))
+        session_b.finish("from b")
+        on("a")
+        session_a.commit(batch_a, scripted_masks(batch_a))
+        session_a.finish("from a")
+
+        rows = table_rows(omero_conn, a.table_id)
+        assert len(rows) == 4 and rows["processed"].all()
+        assert (rows["claimed_by"] == "").all()
+        assert_labels_on_right_images(omero_conn, omero_seed, rows)
+        rois = tagged_rois(omero_conn, a.table_id, rows["image_id"])
+        assert len(rois) == 4 and all(len(v) == 1 for v in rois.values())
+        elsewhere = open_set(omero_conn, a.table_id, tmp_path / "c")
+        assert {s.note for s in elsewhere.config.sessions} == {"from a", "from b"}
+
+    def test_expired_claim_is_taken_over_and_late_commit_conflicts(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        a, b = self._create_and_open(
+            omero_conn, omero_seed, on, tmp_path, "expire", validate_n=0, test_n=0
+        )
+        on("a")
+        session_a = a.start_session(batch_size=1)
+        batch_a = session_a.next_batch()
+        unit = batch_a.items[0].annotation_id
+        age_claims(omero_conn, a.table_id, hours=7)  # a went quiet
+
+        on("b")
+        session_b = b.start_session(batch_size=2)
+        batch_b = session_b.next_batch()
+        assert unit in {i.annotation_id for i in batch_b.items}
+        session_b.commit(batch_b, scripted_masks(batch_b))
+
+        on("a")
+        report = session_a.commit(batch_a, scripted_masks(batch_a))
+
+        assert report.conflicts == (unit,) and not report.committed
+        rows = table_rows(omero_conn, a.table_id)
+        rois = tagged_rois(omero_conn, a.table_id, rows["image_id"])
+        assert all(len(v) == 1 for v in rois.values())
+        assert any((a.bundle_dir / "annotation_output" / "conflicts").iterdir())
+
+    def test_crash_leaves_a_claim_that_expires(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        from omero_annotate_ai.events import ClaimsHeld, ClaimsReleased
+
+        a, _ = self._create_and_open(
+            omero_conn, omero_seed, on, tmp_path, "crash", validate_n=0, test_n=0
+        )
+        on("a")
+        a.start_session(batch_size=1).next_batch()  # then the kernel dies
+
+        on("b")
+        events: list = []
+        b = open_set(omero_conn, a.table_id, tmp_path / "b", events)
+        assert any(isinstance(e, ClaimsHeld) and e.units == 1 for e in events)
+        assert len(b.start_session().next_batch().items) == 1  # only the free one
+
+        on("a")  # the crashed computer releases its leftovers when it opens the set
+        events = []
+        a2 = open_set(omero_conn, a.table_id, tmp_path / "a", events)
+        assert any(isinstance(e, ClaimsReleased) and e.units == 1 for e in events)
+        a2.start_session().next_batch()  # claims it again, then dies again
+
+        age_claims(omero_conn, a.table_id, hours=7)
+        on("b")
+        again = open_set(omero_conn, a.table_id, tmp_path / "b")
+        assert len(again.start_session().next_batch().items) == 2  # expired: free

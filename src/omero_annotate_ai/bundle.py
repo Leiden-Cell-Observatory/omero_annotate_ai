@@ -122,6 +122,16 @@ def mask_path(bundle: Path, annotation_id: str) -> Path:
     return bundle / "annotation_output" / f"{annotation_id}_mask.tif"
 
 
+def conflict_path(bundle: Path, annotation_id: str, session: int) -> Path:
+    """Where a mask is kept that lost to another session's upload of the same unit."""
+    return (
+        bundle
+        / "annotation_output"
+        / "conflicts"
+        / f"{annotation_id}_session{session}.tif"
+    )
+
+
 def pixel_digest(pixels: np.ndarray) -> str:
     """SHA-256 of an image's pixels: data type, shape and values, not the file.
 

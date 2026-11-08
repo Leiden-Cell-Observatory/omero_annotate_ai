@@ -23,6 +23,8 @@ from ..core.annotation_config import AnnotationConfig, create_default_config
 from ..errors import OmeroAnnotateAIError
 from ..events import (
     BatchPrepared,
+    ClaimsHeld,
+    ClaimsReleased,
     Event,
     Progress,
     ReconcileAction,
@@ -30,6 +32,7 @@ from ..events import (
     SessionFinished,
     SessionStarted,
     UnitCommitted,
+    UnitConflict,
     UploadFailed,
 )
 from ..omero.omero_utils import get_container_info
@@ -584,6 +587,15 @@ class WorkflowWidget:
                 self.progress.max = max(1, total)
                 self.progress.value = done
                 self.progress.description = str(stage)
+            case UnitConflict(annotation_id=aid, mask_file=kept):
+                self._add_log(
+                    f"{aid} was saved by another session first; yours is kept as {kept}",
+                    error=True,
+                )
+            case ClaimsHeld(units=units):
+                self._add_log(f"{units} units are being annotated elsewhere (skipped)")
+            case ClaimsReleased(units=units):
+                self._add_log(f"Released {units} units an earlier run left claimed")
             case RunCancelled(stage=stage):
                 self._add_log(f"Cancelled during {stage}", error=True)
             case SessionFinished(session=session, annotated=annotated):

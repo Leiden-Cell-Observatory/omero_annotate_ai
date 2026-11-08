@@ -72,6 +72,32 @@ class BatchReleased:
 
 
 @dataclass(frozen=True, slots=True)
+class UnitConflict:
+    """Another session saved this unit first: its upload is kept, not replaced.
+
+    The mask drawn here is kept in the folder as ``mask_file``.
+    """
+
+    annotation_id: str
+    mask_file: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimsReleased:
+    """Opening the set released claims an earlier run on this computer left."""
+
+    units: int
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimsHeld:
+    """Other sessions (``<user>/<host>``) are annotating these units right now."""
+
+    units: int
+    holders: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RunCancelled:
     stage: Stage
 
@@ -98,6 +124,9 @@ Event = (
     | TableWritten
     | ReconcileAction
     | BatchReleased
+    | UnitConflict
+    | ClaimsReleased
+    | ClaimsHeld
     | RunCancelled
     | Progress
     | SessionFinished
@@ -110,6 +139,12 @@ def log_events(event: Event) -> None:
     match event:
         case UploadFailed(annotation_id, error):
             logger.warning("Upload failed for %s: %s", annotation_id, error)
+        case UnitConflict(annotation_id, mask_file):
+            logger.warning(
+                "%s was saved by another session first; your mask is kept as %s",
+                annotation_id,
+                mask_file,
+            )
         case ReconcileAction(annotation_id, action, detail) if action in (
             "divergent",
             "duplicate",

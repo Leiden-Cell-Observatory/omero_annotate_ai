@@ -65,6 +65,11 @@ class Row(BaseModel):
     annotation_input_id: int | None = None
     input_digest: str | None = Field(default=None, description="Pixel SHA-256 of input")
     mask_digest: str | None = Field(default=None, description="Pixel SHA-256 of mask")
+    claimed_by: str = Field(
+        default="",
+        description="Session holding the unit (see omero_annotate_ai.claims)",
+    )
+    claimed_at: str = Field(default="", description="When it was claimed (UTC, ISO)")
     error: str | None = Field(
         default=None, description="Last upload error (local tracking_table.csv only)"
     )
@@ -176,6 +181,8 @@ COLUMNS: tuple[str, ...] = (
     "well_metadata",
     "input_digest",
     "mask_digest",
+    "claimed_by",
+    "claimed_at",
 )
 _INT_COLUMNS = (
     "image_id",
@@ -276,6 +283,8 @@ def rows_to_frame(rows: Sequence[Row], *, local: bool = False) -> pd.DataFrame:
             "well_metadata": json.dumps(r.well_metadata, sort_keys=True),
             "input_digest": r.input_digest or "",
             "mask_digest": r.mask_digest or "",
+            "claimed_by": r.claimed_by,
+            "claimed_at": r.claimed_at,
             **({"error": r.error or ""} if local else {}),
         }
         for r in rows
@@ -340,6 +349,8 @@ def rows_from_frame(frame: pd.DataFrame | None) -> list[Row]:
                 annotation_input_id=_id(row.get("annotation_input_id")),
                 input_digest=_str(row, "input_digest") or None,
                 mask_digest=_str(row, "mask_digest") or None,
+                claimed_by=_str(row, "claimed_by"),
+                claimed_at=_str(row, "claimed_at"),
                 error=_str(row, "error") or None,
             )
         )

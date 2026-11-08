@@ -24,7 +24,7 @@ reported (``divergent``) and left for the user. Running it twice changes nothing
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -32,6 +32,7 @@ import numpy as np
 import tifffile
 
 from .bundle import atomic_write, file_digest, input_path, mask_path, pixel_digest
+from .claims import is_live
 from .events import Progress, ReconcileAction, RepairKind
 from .session import NEEDS_REVIEW, check_cancel, upload_unit
 
@@ -89,6 +90,7 @@ class _Reconciler:
     training_set: TrainingSet
     prune_duplicates: bool
     changed: bool = False
+    repaired: set[str] = field(default_factory=set[str])
 
     def event(self, annotation_id: str, action: RepairKind, detail: str = "") -> None:
         self.training_set.events(ReconcileAction(annotation_id, action, detail))
@@ -188,6 +190,7 @@ class _Reconciler:
         self.training_set.save_local_table()
         if upload_unit(self.training_set, unit, mask):
             self.changed = True
+            self.repaired.add(unit.annotation_id)
             self.event(unit.annotation_id, action, detail)
 
 
@@ -217,9 +220,12 @@ def reconcile(
             remote_flags[annotation_id] = None
 
     fixer = _Reconciler(training_set, prune_duplicates)
+    hours = training_set.config.workflow.claim_hours
     units = list(rows)
     for done, unit in enumerate(units, start=1):
         check_cancel(training_set, cancel, "reconcile")
+        if not unit.processed and is_live(unit.claimed_by, unit.claimed_at, hours):
+            continue  # another session is annotating it right now
         local = local_rows.get(unit.annotation_id)
         mask = mask_path(training_set.bundle_dir, unit.annotation_id)
         step = decide(
@@ -239,6 +245,8 @@ def reconcile(
         training_set.events(Progress("reconcile", done, len(units)))
 
     training_set.save_local_table()
-    if fixer.changed or len(rows) > len(remote_ids):
-        training_set.write_table()
+    changed = [r for r in rows if r.annotation_id in fixer.repaired]
+    changed += [r for r in rows if r.annotation_id not in remote_ids]
+    if changed:
+        training_set.write_table(changed)
     return fixer.changed

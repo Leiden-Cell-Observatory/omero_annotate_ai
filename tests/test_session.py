@@ -133,8 +133,8 @@ class TestAnnotationSession:
 
     def test_config_published_per_commit_or_at_finish(self, tmp_path):
         pipeline, omero = ready_pipeline(tmp_path)
-        published = len(omero.configs)  # once when the set was created
         session = pipeline.start_session(batch_size=1)
+        published = len(omero.configs)  # at creation, and the session's start
         for _ in range(2):
             batch = session.next_batch()
             session.commit(batch, masks_for(batch), publish_config=False)

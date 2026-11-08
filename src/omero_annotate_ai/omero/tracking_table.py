@@ -15,7 +15,8 @@ description. Tables without it (written by versions before 0.5.0) are refused:
 old tables are not supported.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -25,7 +26,7 @@ from ._untyped import NSBULKANNOTATIONS, omero_grid, omero_model, omero_rtypes
 rstring = omero_rtypes.rstring
 
 
-TABLE_MARKER = "omero-annotate-ai table v2"
+TABLE_MARKER = "omero-annotate-ai table v3"
 
 # Width of each string column. Anything not listed gets DEFAULT_STRING_WIDTH.
 STRING_WIDTHS: dict[str, int] = {
@@ -41,6 +42,8 @@ STRING_WIDTHS: dict[str, int] = {
     "well_metadata": 4096,
     "input_digest": 64,
     "mask_digest": 64,
+    "claimed_by": 160,
+    "claimed_at": 40,
 }
 DEFAULT_STRING_WIDTH = 256
 
@@ -338,5 +341,73 @@ def write_rows(conn, table_id: int, df: pd.DataFrame) -> dict[str, int]:
         if len(to_add):
             table.addData(_fill_columns(table.getHeaders(), to_add))
         return {"updated": len(to_update), "added": len(to_add)}
+    finally:
+        table.close()
+
+
+def _row_numbers(table, keys: Iterable[str]) -> list[tuple[str, int]]:
+    """``(key, row number)`` for each of ``keys`` the table has, in that order."""
+    headers = table.getHeaders()
+    key_index = [h.name for h in headers].index(KEY_COLUMN)
+    n_rows = table.getNumberOfRows()
+    if not n_rows:
+        return []
+    stored = table.read([key_index], 0, n_rows).columns[0].values
+    position = {str(k): i for i, k in enumerate(stored)}
+    return [(str(k), position[str(k)]) for k in keys if str(k) in position]
+
+
+def read_rows(conn, table_id: int, keys: Iterable[str]) -> pd.DataFrame:
+    """The current rows for ``keys`` (by annotation_id), straight from the table."""
+    table = _open(conn, table_id)
+    try:
+        found = _row_numbers(table, keys)
+        if not found:
+            return pd.DataFrame(columns=[_df_name(h.name) for h in table.getHeaders()])
+        data = table.readCoordinates([n for _, n in found])
+        return pd.DataFrame({_df_name(c.name): list(c.values) for c in data.columns})
+    finally:
+        table.close()
+
+
+def update_cells(
+    conn,
+    table_id: int,
+    keys: Iterable[str],
+    change: Callable[[dict[str, Any]], dict[str, Any] | None],
+) -> list[str]:
+    """Change some cells of some rows in one read-modify-write.
+
+    ``change`` gets each row (by ``keys``, in order) as it is in the table now and
+    returns the cells to set, or None to leave the row alone. Other cells keep the
+    table's values, so a concurrent writer's columns are never overwritten with a
+    stale copy.
+
+    Returns:
+        The keys of the rows changed.
+    """
+    table = _open(conn, table_id)
+    try:
+        found = _row_numbers(table, keys)
+        if not found:
+            return []
+        data = table.readCoordinates([n for _, n in found])
+        columns = {_df_name(c.name): c for c in data.columns}
+        changed: list[str] = []
+        for position, (key, _) in enumerate(found):
+            row = {name: column.values[position] for name, column in columns.items()}
+            cells = change(row)
+            if not cells:
+                continue
+            for name, value in cells.items():
+                columns[name].values[position] = value
+            changed.append(key)
+        if changed:
+            widths = _header_widths(table.getHeaders())
+            check_string_lengths(
+                pd.DataFrame({n: list(c.values) for n, c in columns.items()}), widths
+            )
+            table.update(data)
+        return changed
     finally:
         table.close()

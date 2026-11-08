@@ -128,6 +128,7 @@ strict = [
     "src/omero_annotate_ai/events.py",
     "src/omero_annotate_ai/session.py",
     "src/omero_annotate_ai/reconcile.py",
+    "src/omero_annotate_ai/claims.py",
 ]
 
 [tool.pytest.ini_options]

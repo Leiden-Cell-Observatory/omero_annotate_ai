@@ -11,6 +11,7 @@ flowchart LR
     P --> PL[planning]
     P --> SE[session]
     P --> R[reconcile]
+    SE --> CL[claims]
     SE --> A[annotators]
     SE --> B[bundle]
     R --> SE
@@ -28,7 +29,8 @@ flowchart LR
 | `trainingset.py` | `TrainingSet`: create (select images, plan units, create the table) or open (by table ID or folder, repair), annotate, extend, notes, external tools. Lists images and loads pixels. `OmeroWrites` holds every OMERO call it makes (replaceable in tests). Read-only `list_training_sets` / `summarize`. |
 | `rows.py` | `Row`, one per annotation unit, and the one codec between rows and a table (`tracking_table.csv` and the OMERO table). |
 | `core/annotation_pipeline.py` | Deprecated `create_pipeline` facade over `TrainingSet`, kept for 0.4 notebooks. |
-| `session.py` | One annotation session, step by step: `next_batch()`, `commit()`, `release()`, `finish()`. Owns the write order of a unit: mask into the bundle, local accept (CSV), upload label then ROI (each ID saved straight away, tagged), table update per commit. |
+| `session.py` | One annotation session, step by step: `next_batch()`, `commit()`, `release()`, `finish()`. Owns the write order of a unit: mask into the bundle, local accept (CSV), upload label then ROI (each ID saved straight away, tagged), table update per commit (only the rows it saved). |
+| `claims.py` | Several computers on one OMERO set: a session claims a batch's units in the table (`claimed_by`, `claimed_at`) before showing them, releases them on commit or hand-back; claims expire after `workflow.claim_hours`. Claims change only the claim cells (read-modify-write), and `commit()` re-reads each row before uploading, so a unit saved elsewhere is never uploaded twice. |
 | `reconcile.py` | On resume, compares the OMERO table, the local CSV and the mask files per unit (`decide`) and repairs: adopts tagged uploads, uploads what is missing, reports pixel mismatches. Idempotent. |
 | `events.py` | What a run reports (`UnitCommitted`, `UploadFailed`, `ReconcileAction`, `Progress`, ...) to an `EventSink`; default: logging. Front-ends pass their own. |
 | `planning.py` | Pure planning: which images go to which split (`plan_split`), the units of one image (`units_for_image`), and which images to add to a set (`plan_extension`). Every random choice comes from `training.seed` via `rng_for`, so a plan can be reproduced. |
@@ -43,8 +45,8 @@ flowchart LR
 
 **Rules of thumb**
 
-- `planning.py`, `annotators.py`, `bundle.py`, `errors.py`, `events.py`, `session.py` and
-  `reconcile.py` are type-checked strictly (pyright); nothing in the core prints. The
+- `planning.py`, `annotators.py`, `bundle.py`, `errors.py`, `events.py`, `session.py`,
+  `reconcile.py` and `claims.py` are type-checked strictly (pyright); nothing in the core prints. The
   workflow widget only holds form state: it builds a request that `open_or_create`
   turns into a `TrainingSet`, and shows progress from the events.
 - A protocol needs two real implementations before it is introduced.

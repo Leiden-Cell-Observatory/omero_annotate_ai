@@ -15,6 +15,9 @@ reorganises the package around **training sets**. It is a breaking release; the
   unit unannotated instead of marking it done.
 - **Integrity checks.** Pixel checksums of every image and mask are stored in the table;
   a resume or an export reports a mask that changed after upload.
+- **Several computers, one set.** Sessions claim the units they show, so two people can
+  annotate the same OMERO set at the same time without doing an image twice; claims
+  expire if a computer goes quiet, and a unit saved elsewhere is never uploaded again.
 - **Sessions and notes.** Every annotation session is recorded (who, when, model, how
   many units) with an optional note, e.g. "nuclei only, small debris skipped".
 - **One folder per set** under `~/omero_annotate_ai/` (or `$OMERO_ANNOTATE_AI_HOME`), with

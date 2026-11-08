@@ -96,7 +96,7 @@ class FakeOmero(OmeroWrites):
     """OMERO in memory: one tracking table, label files and ROIs with their tags.
 
     ``fail`` / ``crash`` map a call name (``label``, ``label_after``, ``roi``,
-    ``roi_after``, ``table``, ``read``) to the 1-based call number that fails with a
+    ``roi_after``, ``table``, ``read``, ``cells``) to the 1-based call number that fails with a
     ``ConnectionError`` / dies with :class:`Crash`. ``*_after`` fire once the object
     exists on the server, i.e. the upload happened but the caller never heard back.
     """
@@ -156,6 +156,27 @@ class FakeOmero(OmeroWrites):
         merged = pd.concat([old.drop(new.index, errors="ignore"), new])
         self.tables[table_id] = merged.reset_index()
         return {"updated": len(new) - added, "added": added}
+
+    def read_rows(self, conn, table_id, keys):
+        self._call("read")
+        table = self.tables[table_id]
+        wanted = [str(k) for k in keys]
+        return table[table["annotation_id"].astype(str).isin(wanted)].copy()
+
+    def update_cells(self, conn, table_id, keys, change):
+        self._call("cells")
+        table = self.tables[table_id]
+        position = {str(k): i for i, k in enumerate(table["annotation_id"])}
+        changed = []
+        for key in (str(k) for k in keys):
+            if key not in position:
+                continue
+            cells = change(table.iloc[position[key]].to_dict())
+            if cells:
+                for name, value in cells.items():
+                    table.loc[table.index[position[key]], name] = value
+                changed.append(key)
+        return changed
 
     def replace_config(self, conn, table_id, file_path, container_type, container_id):
         self.configs.append(table_id)

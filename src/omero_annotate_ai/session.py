@@ -10,6 +10,11 @@ steps, so a mask is always saved in the same order:
    its ID - each ID straight after its own upload, both tagged with the set's tag;
 4. once per commit, the tracking table rows are updated in place.
 
+On OMERO sets a session claims the units of a batch before showing them and
+re-reads each unit's row before saving it, so several computers can annotate one set
+(see :mod:`omero_annotate_ai.claims`). A unit another session saved first is not
+uploaded again: the mask drawn here is kept next to it as a conflict file.
+
 A crash between any two steps loses at most one upload, and the tag finds that one
 again when the set is resumed (see :mod:`omero_annotate_ai.reconcile`). A failed
 upload leaves the unit unannotated, with the error in the local CSV, and the session
@@ -27,8 +32,9 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import tifffile
 
+from . import claims
 from .annotators import Batch, BatchItem
-from .bundle import file_digest, fresh_scratch, mask_path
+from .bundle import conflict_path, file_digest, fresh_scratch, mask_path
 from .errors import Cancelled
 from .events import (
     BatchPrepared,
@@ -39,6 +45,7 @@ from .events import (
     SessionStarted,
     Stage,
     UnitCommitted,
+    UnitConflict,
     UploadFailed,
 )
 
@@ -55,10 +62,15 @@ upload, or delete the upload to keep the local mask), then resumes the set."""
 
 @dataclass(frozen=True, slots=True)
 class BatchReport:
-    """Units a :meth:`AnnotationSession.commit` call saved, and those whose upload failed."""
+    """What a :meth:`AnnotationSession.commit` call did with each unit.
+
+    ``committed``: saved; ``failed``: upload failed (stays pending);
+    ``conflicts``: another session saved it first (its upload is kept).
+    """
 
     committed: tuple[str, ...]
     failed: tuple[str, ...]
+    conflicts: tuple[str, ...] = ()
 
 
 def check_cancel(
@@ -125,6 +137,7 @@ def commit_unit(
     annotation.mask_digest = file_digest(target)
     annotation.session = session
     annotation.error = None
+    annotation.claimed_by = annotation.claimed_at = ""  # the table write releases it
     annotation.mark_processed(annotation_type=training_set.annotation_type)
     training_set.save_local_table()
     if training_set.is_local:
@@ -158,28 +171,47 @@ class AnnotationSession:
         self._handed_out: set[str] = set()  # each unit at most once per session
         self._finished = False
         self.session = training_set.begin_session(model, batch_size)
+        self.token = claims.token(self.session, training_set.user)
         self.annotated = 0
         training_set.events(SessionStarted(self.session, len(self._pending())))
 
     def _pending(self) -> list[Row]:
+        hours = self._set.config.workflow.claim_hours
         return [
             a
             for a in self._set.rows
             if not a.processed
             and a.annotation_id not in self._handed_out
             and not (a.error or "").startswith(NEEDS_REVIEW)
+            and not (
+                a.claimed_by != self.token
+                and claims.is_live(a.claimed_by, a.claimed_at, hours)
+            )
         ]
+
+    def _choose(self) -> list[Row]:
+        """The next batch's units; on OMERO sets, claimed for this session."""
+        if self._set.is_local:
+            pending = self._pending()
+            return pending[: self._batch_size or len(pending)]
+        self._set.refresh()
+        pending = self._pending()
+        size = self._batch_size or len(pending)
+        taken = set(
+            claims.claim(
+                self._set, self.token, [a.annotation_id for a in pending], size
+            )
+        )
+        return [a for a in pending if a.annotation_id in taken]
 
     def next_batch(self) -> Batch | None:
         """Load the next pending units (pixels, context channels, input images).
 
         Returns None when nothing is left to hand out.
         """
-        pending = self._pending()
-        if not pending:
+        chosen = self._choose()
+        if not chosen:
             return None
-        size = self._batch_size or len(pending)
-        chosen = pending[:size]
         items: list[BatchItem] = []
         for done, annotation in enumerate(chosen, start=1):
             check_cancel(self._set, self._cancel, "load")
@@ -219,34 +251,62 @@ class AnnotationSession:
         todo = [annotation_id for annotation_id in todo if annotation_id in waiting]
         committed: list[str] = []
         failed: list[str] = []
+        conflicts: list[str] = []
         for done, annotation_id in enumerate(todo, start=1):
             check_cancel(self._set, self._cancel, "upload")
-            ok = commit_unit(
-                self._set,
-                by_id[annotation_id],
-                result[annotation_id],
-                self.session,
-            )
-            (committed if ok else failed).append(annotation_id)
+            if self._saved_elsewhere(annotation_id, result[annotation_id]):
+                conflicts.append(annotation_id)
+            else:
+                ok = commit_unit(
+                    self._set,
+                    by_id[annotation_id],
+                    result[annotation_id],
+                    self.session,
+                )
+                (committed if ok else failed).append(annotation_id)
             waiting.discard(annotation_id)
             self._set.events(Progress("upload", done, len(todo)))
         self.annotated += len(committed)
 
         if committed and not self._set.is_local:
-            self._set.write_table()
+            self._set.write_table([by_id[i] for i in committed])
             if publish_config:
                 self._set.publish_config()
         self._set.save_config()
         if not waiting:
             self._close(batch)
-        return BatchReport(tuple(committed), tuple(failed))
+        return BatchReport(tuple(committed), tuple(failed), tuple(conflicts))
+
+    def _saved_elsewhere(self, annotation_id: str, mask_source: Path) -> bool:
+        """Whether another session saved the unit first (OMERO sets; re-reads the row).
+
+        If so the table's row is taken over and the mask is kept as a conflict file.
+        """
+        if self._set.is_local:
+            return False
+        theirs = self._set.current_rows([annotation_id]).get(annotation_id)
+        if theirs is None or not theirs.processed:
+            return False
+        keep = conflict_path(self._set.bundle_dir, annotation_id, self.session)
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(mask_source, keep)
+        rows = self._set.rows
+        rows[[r.annotation_id for r in rows].index(annotation_id)] = theirs
+        self._set.save_local_table()
+        self._set.events(UnitConflict(annotation_id, str(keep)))
+        return True
 
     def release(self, batch: Batch) -> None:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
         left = self._open.get(batch.index, set())
         if left:
+            self._unclaim(left)
             self._set.events(BatchReleased(batch.index, tuple(sorted(left))))
         self._close(batch)
+
+    def _unclaim(self, annotation_ids: set[str]) -> None:
+        if not self._set.is_local and annotation_ids:
+            claims.release(self._set, self.token, sorted(annotation_ids))
 
     def _close(self, batch: Batch) -> None:
         self._open.pop(batch.index, None)
@@ -267,7 +327,7 @@ class AnnotationSession:
             return self.annotated
         self._finished = True
         for index, scratch in list(self._scratch.items()):  # still-open batches
-            self._open.pop(index, None)
+            self._unclaim(self._open.pop(index, set()))
             shutil.rmtree(scratch, ignore_errors=True)
         self._scratch.clear()
         self._set.end_session(self.session, self.annotated, note, status)
