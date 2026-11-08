@@ -36,6 +36,7 @@ from .bundle import (
     server_slug,
 )
 from .core.annotation_config import AnnotationConfig, SessionRecord
+from .crate import write_ro_crate
 from .errors import (
     ConfigError,
     OmeroAnnotateAIError,
@@ -1490,6 +1491,21 @@ class TrainingSet:
         if self.is_local:
             return False
         return reconcile(self, prune_duplicates=prune_duplicates, cancel=self.cancel)
+
+    def write_ro_crate(self) -> Path:
+        """Describe the set's folder as an RO-Crate; returns the metadata file.
+
+        Writes ``ro-crate-metadata.json`` (see :mod:`omero_annotate_ai.crate`): the
+        files with their digests, the source images, and the sessions with their
+        notes. Call it before sharing or archiving the folder.
+        """
+        from . import __version__
+
+        self.save_local_table()
+        self.save_config()
+        return write_ro_crate(
+            self._config, self.rows, self.bundle_dir, software_version=__version__
+        )
 
     def next_batch_index(self) -> int:
         """Number of the next batch handed out (1, 2, ...)."""

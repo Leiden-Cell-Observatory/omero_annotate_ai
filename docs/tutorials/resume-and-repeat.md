@@ -140,6 +140,19 @@ ts.annotate()
 
 Notebook: [annotate from YAML (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/annotate-from-yaml.py)
 
+## Share or archive a set (RO-Crate)
+
+```python
+ts.write_ro_crate()  # writes ro-crate-metadata.json into ts.bundle_dir
+```
+
+This describes the set's folder as an [RO-Crate](https://www.researchobject.org/ro-crate/)
+(1.1), the JSON-LD format repositories and workflow tools such as WorkflowHub and Galaxy
+read. It lists the config, the tracking table, every annotated image and mask with its
+pixel digest (and ISCC code with the `provenance` extra), the source images by URI, and
+every session as an action with who, when, which model and its note. Write it when you
+share or archive the folder; zip the folder and it is a self-describing dataset.
+
 ## Check progress
 
 ```python

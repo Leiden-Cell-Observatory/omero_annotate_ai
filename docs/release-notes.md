@@ -10,6 +10,9 @@ Newest first. The full list of pull requests per version is on
   warnings say whether a changed file is a near-duplicate or different content, and the
   BioImage Archive file lists carry `pixel_sha256` and `iscc` per file. Tables made by
   0.5.0 keep working without the new columns.
+- **RO-Crate**: `ts.write_ro_crate()` describes a training set's folder as an RO-Crate
+  1.1 (`ro-crate-metadata.json`): files with digests and codes, source images, and the
+  sessions with their notes.
 
 ## 0.5.0
 
