@@ -1656,6 +1656,49 @@ def list_training_sets(
     return found
 
 
+def training_set_choices(
+    conn: Any = None,
+    container_type: str | None = None,
+    container_id: int | None = None,
+    *,
+    home: str | Path | None = None,
+    on_error: Callable[[str], None] | None = None,
+) -> list[tuple[str, int | Path]]:
+    """``(label, ref)`` for a picker: the sets on a container, then the local sets.
+
+    ``ref`` is a table ID (OMERO set) or a folder (local set), as :func:`summarize`,
+    :meth:`TrainingSet.open` and the training export take it. Read-only. With
+    ``on_error``, an error listing the OMERO sets is reported there and the local sets
+    are still returned; without it, it is raised.
+    """
+    choices: list[tuple[str, int | Path]] = []
+    if conn is not None and container_type and container_id is not None:
+        try:
+            choices += [
+                (f"{s.name} (table {s.table_id})", s.table_id)
+                for s in list_training_sets(conn, container_type, int(container_id))
+            ]
+        except Exception as error:
+            if on_error is None:
+                raise
+            on_error(f"Could not list training sets: {error}")
+    folders = sorted((home_dir(home) / "local").glob("*/config.yaml"))
+    choices += [(f"{f.parent.name} (local)", f.parent) for f in folders]
+    return choices
+
+
+def read_set_config(ref: int | str | Path, conn: Any = None) -> AnnotationConfig:
+    """A set's config, by table ID (from OMERO) or folder, without opening it."""
+    if isinstance(ref, int):
+        if conn is None:
+            raise ConfigError("Reading a set by table ID needs a connection")
+        config = OmeroWrites().read_config(conn, ref)
+        if config is None:
+            raise ConfigError(f"Training set {ref} has no config on OMERO")
+        return config
+    return AnnotationConfig.from_yaml(Path(ref).expanduser() / "config.yaml")
+
+
 def summarize(
     ref: int | str | Path, conn: Any = None, *, home: str | Path | None = None
 ) -> TrainingSetSummary:
@@ -1663,16 +1706,11 @@ def summarize(
 
     Unlike :meth:`TrainingSet.open` nothing is repaired or written.
     """
+    config = read_set_config(ref, conn)
     if isinstance(ref, int):
-        if conn is None:
-            raise ConfigError("Summarizing a set by table ID needs a connection")
-        config = OmeroWrites().read_config(conn, ref)
         rows = rows_from_frame(omero_functions.read_tracking_table(conn, ref))
-        if config is None:
-            raise ConfigError(f"Training set {ref} has no config on OMERO")
     else:
         folder = Path(ref).expanduser()
-        config = AnnotationConfig.from_yaml(folder / "config.yaml")
         csv = folder / "tracking_table.csv"
         rows = (
             rows_from_frame(pd.read_csv(csv, keep_default_na=False))

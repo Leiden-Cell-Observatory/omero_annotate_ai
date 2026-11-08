@@ -1008,3 +1008,104 @@ class TestRunTrainingLength:
 
         assert seen["n_epochs"] == 2
         assert seen["n_iterations"] is None
+
+
+@pytest.mark.unit
+class TestExportTrainingSet:
+    """One entry point: table ID -> OMERO export, folder -> local reorganise."""
+
+    def test_table_id_uses_the_set_config_and_overrides(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        config = create_default_config()
+        config.name = "nuclei"
+        config.spatial_coverage.channels = [2]
+        with (
+            patch("omero_annotate_ai.trainingset.read_set_config", return_value=config),
+            patch.object(tf, "prepare_training_data_from_table") as prepare,
+        ):
+            tf.export_training_set(
+                7, tmp_path, "conn", training_channels=[3], apply_normalization=True
+            )
+        args, kwargs = prepare.call_args
+        assert args == ("conn", 7, tmp_path)
+        assert kwargs["training_name"] == "nuclei"
+        assert kwargs["label_channel"] == 2
+        assert kwargs["training_channels"] == [3]
+        assert kwargs["normalization"].apply_at_export is True
+        assert config.normalization.apply_at_export is False  # caller's copy untouched
+
+    def test_local_set_refuses_other_channels(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        with (
+            patch(
+                "omero_annotate_ai.trainingset.read_set_config",
+                return_value=create_default_config(),
+            ),
+            pytest.raises(ValueError, match="exports the channels it was annotated"),
+        ):
+            tf.export_training_set(tmp_path / "set", tmp_path / "out", label_channel=3)
+
+    def test_omero_export_refuses_a_folder_inside_the_sets_folder(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        set_folder = tmp_path / "omero.example.org" / "7_nuclei"
+        set_folder.mkdir(parents=True)
+        with (
+            patch(
+                "omero_annotate_ai.trainingset.read_set_config",
+                return_value=create_default_config(),
+            ),
+            patch.object(tf, "prepare_training_data_from_table") as prepare,
+        ):
+            with pytest.raises(ValueError):
+                tf.export_training_set(7, set_folder / "out", "conn", home=tmp_path)
+            tf.export_training_set(7, tmp_path / "exports" / "x", "conn", home=tmp_path)
+        assert prepare.call_count == 1
+
+    def test_omero_export_refuses_several_training_channels(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        with (
+            patch(
+                "omero_annotate_ai.trainingset.read_set_config",
+                return_value=create_default_config(),
+            ),
+            pytest.raises(ValueError, match="trains on one channel"),
+        ):
+            tf.export_training_set(7, tmp_path, "conn", training_channels=[0, 1])
+
+    def test_local_set_accepts_its_own_channels(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        config = create_default_config()
+        with (
+            patch("omero_annotate_ai.trainingset.read_set_config", return_value=config),
+            patch.object(tf, "reorganize_local_data_for_training") as reorganize,
+        ):
+            tf.export_training_set(
+                tmp_path / "set",
+                tmp_path / "out",
+                training_channels=config.spatial_coverage.get_training_channels(),
+                label_channel=config.spatial_coverage.get_label_channel(),
+            )
+        assert reorganize.called
+
+
+@pytest.mark.unit
+class TestDefaultExportDir:
+    def test_one_folder_per_set_and_safe_names(self, tmp_path):
+        omero_a = tf.default_export_dir(7, "Nuclei/HeLa v1", tmp_path)
+        omero_b = tf.default_export_dir(8, "Nuclei/HeLa v1", tmp_path)
+        local_a = tf.default_export_dir(
+            tmp_path / "local" / "ab12_nuclei", "nuclei", tmp_path
+        )
+        local_b = tf.default_export_dir(
+            tmp_path / "local" / "cd34_nuclei", "nuclei", tmp_path
+        )
+
+        assert omero_a == tmp_path / "exports" / "nuclei-hela-v1_7"
+        assert len({omero_a, omero_b, local_a, local_b}) == 4
+        assert local_a.name == "ab12_nuclei"
+        assert all(p.parent == tmp_path / "exports" for p in (omero_a, local_b))

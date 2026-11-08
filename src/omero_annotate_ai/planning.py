@@ -23,6 +23,26 @@ CATEGORIES: tuple[Category, ...] = ("training", "validation", "test")
 Mode = Literal["all", "random", "specific"]
 
 
+def parse_indices(text: str, what: str) -> list[int]:
+    """``"0, 3, 5-7"`` as ``[0, 3, 5, 6, 7]``; a clear ``ValueError`` otherwise."""
+    indices: list[int] = []
+    for part in filter(None, (p.strip() for p in text.split(","))):
+        low, dash, high = part.partition("-")
+        try:
+            start = int(low)
+            stop = int(high) if dash else start
+        except ValueError:
+            raise ValueError(
+                f"{what}: '{part}' is not a number or range (use e.g. 0, 3, 5-7)"
+            ) from None
+        if start < 0 or stop < start:
+            raise ValueError(f"{what}: '{part}' is not a valid range")
+        indices.extend(range(start, stop + 1))
+    if not indices:
+        raise ValueError(f"{what}: list at least one index (e.g. 0)")
+    return sorted(set(indices))
+
+
 def rng_for(seed: int, purpose: str, *parts: object) -> random.Random:
     """A random stream for ``purpose`` (and e.g. an image URI), reproducible from ``seed``."""
     return random.Random(":".join(str(part) for part in (seed, purpose, *parts)))
