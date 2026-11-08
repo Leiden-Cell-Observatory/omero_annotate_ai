@@ -219,6 +219,19 @@ class TestReview:
         )
         assert (omero.tables[ts.table_id]["claimed_by"] == "").all()
 
+    def test_same_labels_in_a_wider_type_are_unchanged(self, tmp_path):
+        # micro-SAM writes masks as uint32; the saved ones here are uint16.
+        ts, _, omero = annotated_set(tmp_path)
+        before = dict(omero.labels)
+
+        def widened(pixels, initial):
+            return np.asarray(initial).astype(np.uint32)
+
+        revised = ts.review(ScriptedAnnotator(image_mask, review_fn=widened))
+
+        assert revised == 0
+        assert omero.labels.keys() == before.keys()
+
     def test_changed_mask_replaces_label_and_roi(self, tmp_path):
         ts, _, omero = annotated_set(tmp_path)
         old = {r.annotation_id: (r.label_id, r.roi_id) for r in ts.rows}

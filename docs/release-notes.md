@@ -5,6 +5,9 @@ Newest first. The full list of pull requests per version is on
 
 ## Unreleased
 
+- **Review** counts a mask with the same labels in a wider data type (micro-SAM writes
+  uint32) as unchanged, so it is not uploaded again. A batch that fails to load (or is
+  cancelled while loading) releases its claims at once.
 - **ISCC content codes** (optional `provenance` extra, `iscc-lib`): each unit records an
   ISCC Image-Code of its image and mask next to the SHA-256 digests. Resume and export
   warnings say whether a changed file is a near-duplicate or different content, and the
