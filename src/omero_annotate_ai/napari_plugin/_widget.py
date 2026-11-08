@@ -266,10 +266,6 @@ class OMEROAnnotateDock(QWidget):
         self.user = QLineEdit()
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        usable, backend_name, _ = SimpleOMEROConnection.keyring_backend()
-        self.remember = QCheckBox("Remember password in keychain")
-        self.remember.setEnabled(usable)
-        self.remember.setToolTip(backend_name)
         history = SimpleOMEROConnection().load_connection_history()
         if history:
             self.host.setText(str(history[0].get("host", "")))
@@ -279,7 +275,6 @@ class OMEROAnnotateDock(QWidget):
         form.addRow("Host", self.host)
         form.addRow("User", self.user)
         form.addRow("Password", self.password)
-        form.addRow(self.remember)
         form.addRow(self.connect_button)
         self.container_type = QComboBox()
         self.container_type.addItems(CONTAINER_TYPES)
@@ -391,23 +386,19 @@ class OMEROAnnotateDock(QWidget):
             self.user.text().strip(),
             self.password.text(),
         )
-        remember = self.remember.isChecked()
+        self.password.clear()  # never kept, also not after a failed login
         if not (host and user and password):
             self._say("Fill in host, user and password.", error=True)
             return
 
         def connect() -> Any:
-            omero = SimpleOMEROConnection()
-            conn = omero.connect(host, user, password, verbose=False)
-            if remember:
-                omero.save_password(host, user, password)
-            return conn
+            # The password is never stored: it is asked for each time.
+            return SimpleOMEROConnection().connect(host, user, password, verbose=False)
 
         def done(conn: Any) -> None:
             self._conn = conn
             self.connect_button.setEnabled(True)
             self.list_button.setEnabled(True)
-            self.password.clear()
             self._say(f"Connected to {host}. Choose a container and list its sets.")
 
         self.connect_button.setEnabled(False)

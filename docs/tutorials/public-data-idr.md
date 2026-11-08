@@ -75,7 +75,8 @@ https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/<study folder>/<plate id>.zarr
 
 where the study folder is the study name with its screen letter (`idr0013A`) and the
 plate ID is the one the IDR shows. Plate IDs of a screen come from the IDR web API, which
-needs no login:
+needs no login (adapted from the IDR's
+[IDR API example notebook](https://github.com/IDR/idr-notebooks/blob/master/IDR_API_example_script.ipynb)):
 
 ```python
 import requests
