@@ -52,6 +52,15 @@ Its mask in your folder and its label file on OMERO differ. Delete the one that 
 and resume again; see
 [Pixel checks](tutorials/resume-and-repeat.md#pixel-checks).
 
+**"N units are being annotated elsewhere (skipped)".**
+Another computer claimed those units for its current session. They come back when that
+session saves or releases them, or after `workflow.claim_hours` (default 6) if it went
+quiet. Claims left by your own earlier runs on this computer never block you.
+
+**A mask ended up in `annotation_output/conflicts/`.**
+Someone else saved that unit first, so yours was not uploaded. Compare the two and, if
+yours is better, use `ts.review()` on that unit.
+
 **"Not enough images" when starting.**
 `train_n + validate_n + test_n` is larger than the number of images in the container
 (after well filtering). Lower the counts or use `segment_all: true`.
@@ -61,7 +70,7 @@ and resume again; see
 **Loading my YAML fails with "unknown key" or `RemovedConfigKey`.**
 Unknown keys are refused, so a typo never goes unnoticed; check the name against the
 [configuration reference](configuration.md). Keys from 0.4 that moved name their
-replacement in the error, see [migrating from 0.4](whats-new-0.5.md#migrating-from-04).
+replacement in the error, see [migrating from 0.4](release-notes.md#migrating-from-04).
 
 **Does running a training set change my YAML file?**
 No. A loaded YAML is a template; the set keeps its own `config.yaml` (with sessions and

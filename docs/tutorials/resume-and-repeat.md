@@ -19,7 +19,7 @@ ts.annotate(note="second session")
 The units are read back from the table and only the unfinished ones are opened, with
 the same images and patches as before. A local set (`storage: local`) is opened by its
 folder: `TrainingSet.open("~/omero_annotate_ai/local/<id>_<name>")`. In the widget,
-choose *Continue Existing* on the table instead.
+choose *Open training set* and pick the set.
 
 On an opened set you can change only what does not alter the existing rows:
 
@@ -59,8 +59,9 @@ Two people (or two computers) can also annotate the same set **at the same time*
 Before napari shows a batch (also in a review), the session claims its units in the table (columns
 `claimed_by`, `claimed_at`), so the other session gets different units. Claims are
 released when a unit is saved or handed back, and expire after
-`workflow.claim_hours` (default 6) if a computer goes quiet. Opening the set again on
-the computer that crashed releases its claims at once.
+`workflow.claim_hours` (default 6) if a computer goes quiet. Claims left by your own
+earlier runs on the same computer (a crash, a dropped connection) never block you: a new
+session takes those units straight away, and opening the set releases them.
 
 If a claim expired and someone else saved the unit first, your mask is not uploaded
 over theirs: it is kept in `annotation_output/conflicts/` and the session reports it.

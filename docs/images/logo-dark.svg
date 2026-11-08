@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+<rect width="200" height="200" fill="#1B2A41"/><path d="M100,100 L55.78,91.66 L25.68,65.35" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="25.68" cy="65.35" r="9" fill="#6C5CE7" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="55.78" cy="91.66" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L64.38,72.50 L49.52,35.38" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="49.52" cy="35.38" r="9" fill="#6C5CE7" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="64.38" cy="72.50" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L135.62,72.50 L150.48,35.38" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="150.48" cy="35.38" r="9" fill="#F25F5C" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="135.62" cy="72.50" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L144.22,91.66 L174.32,65.35" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="174.32" cy="65.35" r="9" fill="#F25F5C" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="144.22" cy="91.66" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L55.78,108.34 L25.68,134.65" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="25.68" cy="134.65" r="9" fill="#6C5CE7" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="55.78" cy="108.34" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L63.45,126.24 L47.29,162.82" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="47.29" cy="162.82" r="9" fill="#6C5CE7" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="63.45" cy="126.24" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L136.55,126.24 L152.71,162.82" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="152.71" cy="162.82" r="9" fill="#F25F5C" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="136.55" cy="126.24" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M100,100 L144.22,108.34 L174.32,134.65" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="174.32" cy="134.65" r="9" fill="#F25F5C" stroke="#1B2A41" stroke-width="2.5"/>
+<circle cx="144.22" cy="108.34" r="5.5" fill="#1B2A41" stroke="white" stroke-width="2.5"/>
+<path d="M131.56,110.00 L131.46,112.75 L131.09,115.48 L130.47,118.16 L129.62,120.78 L128.55,123.31 L127.28,125.75 L125.83,128.09 L124.20,130.31 L122.40,132.40 L120.44,134.35 L118.31,136.15 L116.02,137.75 L113.59,139.15 L111.03,140.32 L108.36,141.21 L105.61,141.82 L102.81,142.12 L100.00,142.11 L97.22,141.77 L94.51,141.12 L91.91,140.18 L89.45,138.98 L87.15,137.56 L85.02,135.94 L83.07,134.17 L81.29,132.29 L79.67,130.33 L78.17,128.31 L76.79,126.25 L75.51,124.14 L74.30,121.99 L73.16,119.77 L72.09,117.48 L71.12,115.09 L70.27,112.60 L69.56,110.00 L69.05,107.29 L68.78,104.50 L68.79,101.64 L69.11,98.76 L69.78,95.91 L70.80,93.14 L72.18,90.52 L73.90,88.10 L75.93,85.93 L78.23,84.05 L80.74,82.50 L83.41,81.27 L86.19,80.38 L89.01,79.81 L91.84,79.53 L94.62,79.51 L97.35,79.71 L100.00,80.11 L102.57,80.65 L105.06,81.32 L107.48,82.09 L109.84,82.97 L112.15,83.95 L114.41,85.04 L116.63,86.25 L118.79,87.61 L120.88,89.12 L122.86,90.82 L124.72,92.69 L126.41,94.75 L127.90,96.99 L129.17,99.38 L130.18,101.91 L130.93,104.55 L131.39,107.25 Z" fill="#2E6F7A" stroke="white" stroke-width="5.5"/>
+<path d="M120.46,113.00 L120.36,114.52 L120.12,116.02 L119.76,117.49 L119.29,118.93 L118.70,120.32 L118.00,121.66 L117.19,122.93 L116.27,124.14 L115.25,125.25 L114.14,126.28 L112.94,127.19 L111.65,127.98 L110.29,128.64 L108.88,129.15 L107.43,129.52 L105.95,129.74 L104.47,129.80 L103.00,129.72 L101.56,129.51 L100.15,129.17 L98.79,128.73 L97.47,128.18 L96.22,127.55 L95.01,126.85 L93.85,126.07 L92.73,125.24 L91.65,124.35 L90.62,123.39 L89.63,122.36 L88.69,121.26 L87.82,120.08 L87.03,118.81 L86.33,117.47 L85.75,116.04 L85.31,114.55 L85.03,113.00 L84.92,111.42 L85.01,109.83 L85.28,108.25 L85.75,106.72 L86.41,105.26 L87.24,103.90 L88.23,102.66 L89.34,101.54 L90.56,100.56 L91.86,99.73 L93.22,99.03 L94.61,98.47 L96.01,98.02 L97.42,97.68 L98.83,97.43 L100.23,97.27 L101.62,97.18 L103.00,97.16 L104.38,97.20 L105.76,97.32 L107.15,97.52 L108.53,97.81 L109.90,98.21 L111.25,98.71 L112.57,99.33 L113.84,100.08 L115.04,100.96 L116.16,101.96 L117.18,103.07 L118.07,104.30 L118.83,105.62 L119.45,107.01 L119.92,108.47 L120.25,109.96 L120.42,111.48 Z" fill="#0FA3B1"/>
+<circle cx="100" cy="78" r="13" fill="white"/>
+</svg>

@@ -24,14 +24,20 @@ logger = logging.getLogger(__name__)
 # Sub-models for the configuration
 
 
-class FeatureType(BaseModel):
+class _Section(BaseModel):
+    """A config section: unknown keys are errors, so a typo never goes unnoticed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class FeatureType(_Section):
     """An annotation class (e.g. cell, nucleus, background)."""
 
     name: str
     color: str  # hex color, e.g. "#FF0000"
 
 
-class AuthorInfo(BaseModel):
+class AuthorInfo(_Section):
     """Author information compatible with bioimage.io"""
 
     name: str | None = Field(default=None, description="Full name of the author")
@@ -40,7 +46,7 @@ class AuthorInfo(BaseModel):
     orcid: HttpUrl | None = Field(None, description="ORCID identifier")
 
 
-class AnnotationTool(BaseModel):
+class AnnotationTool(_Section):
     """Tool configuration for annotation workflows"""
 
     name: str = Field(description="Tool name (e.g., 'micro-sam', 'cellpose')")
@@ -53,7 +59,7 @@ class AnnotationTool(BaseModel):
     )
 
 
-class AnnotationMethodology(BaseModel):
+class AnnotationMethodology(_Section):
     """MIFA-compatible annotation methodology"""
 
     annotation_type: Literal[
@@ -76,7 +82,7 @@ class AnnotationMethodology(BaseModel):
 _CONTEXT_COLORMAP_CYCLE = ["blue", "magenta", "green", "yellow", "cyan"]
 
 
-class SpatialCoverage(BaseModel):
+class SpatialCoverage(_Section):
     """Spatial scope of annotations (MIFA requirement)"""
 
     channels: list[int] = Field(
@@ -323,7 +329,7 @@ class SpatialCoverage(BaseModel):
         return self
 
 
-class NormalizationConfig(BaseModel):
+class NormalizationConfig(_Section):
     """Intensity normalisation of model input images.
 
     Defined once and applied either when exporting training data
@@ -356,7 +362,7 @@ class NormalizationConfig(BaseModel):
         return self
 
 
-class DatasetInfo(BaseModel):
+class DatasetInfo(_Section):
     """Dataset identification and linking (both schemas)"""
 
     source_dataset_id: str | None = Field(
@@ -369,7 +375,7 @@ class DatasetInfo(BaseModel):
     license: str = Field(default="CC-BY-4.0", description="Data license")
 
 
-class StudyContext(BaseModel):
+class StudyContext(_Section):
     """Biological and experimental context (MIFA emphasis)"""
 
     title: str = Field(description="Study/experiment title")
@@ -385,10 +391,10 @@ class StudyContext(BaseModel):
     )
 
 
-class AIModelConfig(BaseModel):
+class AIModelConfig(_Section):
     """AI model configuration (bioimage.io compatible)"""
 
-    model_config = ConfigDict(protected_namespaces=())
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     # Framework information
     framework: Literal["micro_sam", "cellpose", "web_annotation"] = Field(
@@ -413,7 +419,7 @@ class AIModelConfig(BaseModel):
     )
 
 
-class TrainingConfig(BaseModel):
+class TrainingConfig(_Section):
     """Quality metrics and validation (MIFA requirement)"""
 
     validation_strategy: Literal[
@@ -526,7 +532,7 @@ class TrainingConfig(BaseModel):
         return self
 
 
-class WorkflowConfig(BaseModel):
+class WorkflowConfig(_Section):
     """How annotation sessions run."""
 
     batch_size: int = Field(
@@ -540,7 +546,7 @@ class WorkflowConfig(BaseModel):
     )
 
 
-class OMEROConfig(BaseModel):
+class OMEROConfig(_Section):
     """OMERO connection and data selection configuration"""
 
     container_type: str = Field(default="dataset", description="OMERO container type")
@@ -598,7 +604,7 @@ class OMEROConfig(BaseModel):
         return len(self.get_all_container_ids()) > 1
 
 
-class ZarrConfig(BaseModel):
+class ZarrConfig(_Section):
     """OME-Zarr image selection (used when ``source == "zarr"``)."""
 
     uris: list[str] = Field(
@@ -622,7 +628,7 @@ class ZarrConfig(BaseModel):
     well_filter_mode: Literal["include", "exclude"] = Field(default="include")
 
 
-class Identity(BaseModel):
+class Identity(_Section):
     """Which training set this config belongs to. Written by omero-annotate-ai.
 
     ``table_id`` is set for sets tracked in an OMERO table (``storage: omero``),
@@ -635,7 +641,7 @@ class Identity(BaseModel):
     local_uuid: str | None = Field(default=None, description="ID of a local-only set")
 
 
-class SessionRecord(BaseModel):
+class SessionRecord(_Section):
     """One annotation session: who, when, how many units, and the user's note."""
 
     id: int

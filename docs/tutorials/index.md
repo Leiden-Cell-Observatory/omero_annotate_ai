@@ -8,6 +8,7 @@ Step-by-step guides for each part of the workflow. If this is your first time, s
 | Annotate images with AI help in napari | [Annotate with micro-SAM](microsam-annotation-pipeline.md) |
 | Annotate in the Cellpose GUI or another tool | [Annotate with Cellpose](cellpose-integration.md) |
 | Continue an interrupted run, or rerun with the same settings | [Resume or repeat a run](resume-and-repeat.md) |
+| Check or fix masks I already saved | [Correct earlier annotations](microsam-annotation-pipeline.md#correct-earlier-annotations) |
 | Train a model on my annotations | [Prepare training data](training-data-prep.md) |
 | Publish my annotations | [Share via the BioImage Archive](bioimage-archive-export.md) |
 

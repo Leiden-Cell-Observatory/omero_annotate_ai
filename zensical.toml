@@ -14,7 +14,6 @@ nav = [
   { "Get started" = [
     { "Installation" = "installation.md" },
     { "How it works" = "concepts.md" },
-    { "What's new in 0.5" = "whats-new-0.5.md" },
     { "Try it on public data" = "tutorials/public-data-idr.md" },
   ] },
   { "Guides" = [
@@ -30,6 +29,7 @@ nav = [
     { "Example notebooks" = "notebooks.md" },
     { "Troubleshooting" = "troubleshooting.md" },
     { "Architecture" = "architecture.md" },
+    { "Release notes" = "release-notes.md" },
   ] },
   { "API" = [
     "api/index.md",
@@ -43,6 +43,8 @@ nav = [
 
 [project.theme]
 language = "en"
+logo = "images/logo.svg"
+favicon = "images/logo.svg"
 features = [
   "navigation.tabs",
   "navigation.sections",
