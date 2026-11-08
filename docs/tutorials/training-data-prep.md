@@ -1,20 +1,22 @@
 # Prepare training data
 
 Once you have annotations, turn them into a training dataset: pairs of images and label
-masks, split into training and validation folders. The same layout works for micro-SAM,
+masks, split into training, validation and (if you annotated one) test folders. The same layout works for micro-SAM,
 BiaPy, DL4MicEverywhere and most other segmentation tools.
 
 ```text
 my_training_data/
-├── train_input/    12345_0_0.tif   ← image
-├── train_label/    12345_0_0.tif   ← label mask with the same name
+├── train_input/    4ba674d4_0_0.tif   ← image
+├── train_label/    4ba674d4_0_0.tif   ← label mask with the same name
 ├── val_input/
-└── val_label/
+├── val_label/
+├── test_input/     ← only when the set has test units
+└── test_label/
 ```
 
 Labels are instance masks: 0 is background, and each object has its own number.
 
-## From OMERO (after an upload-mode run)
+## From OMERO (`storage: omero`)
 
 Use this when your annotations are stored in OMERO. It works from any computer that can
 reach the server, and needs no display.
@@ -45,19 +47,21 @@ result = prepare_training_data_from_table(
 print(result["stats"])
 ```
 
-Only finished units with a mask are used. The training/validation split is the one
-chosen when you annotated. A copy of the tracking table is saved alongside
+Only finished units with a mask are used. Each unit goes to the split recorded in the
+table's `category` column (training, validation or test), the split chosen when the
+training set was created. A copy of the tracking table is saved alongside
 (`table_<id>.csv`).
 
 !!! note "Things to know"
-    - Images are converted to 8-bit (scaled to each image's maximum). If you need the
-      original bit depth, use the local route below or the
-      [BioImage Archive export](bioimage-archive-export.md).
-    - Units in the *test* set are not exported by this function.
+    - Images keep their original bit depth. `normalization.json` records how to scale
+      them; micro-SAM training applies it when loading (see
+      [normalisation settings](../configuration.md#normalization-intensity-scaling-of-model-input)).
+    - A label that no longer matches its recorded pixel digest stops the export, so a
+      mask changed after upload is never trained on unnoticed.
     - If you annotated one channel but want to train on another, pass
       `label_channel=` and `training_channels=`.
 
-## From a local run (read-only mode or Cellpose)
+## From a local training set
 
 When the images and masks are on your disk (`annotation_input/` and
 `annotation_output/`), reorganise them without contacting OMERO:
@@ -73,8 +77,8 @@ result = reorganize_local_data_for_training(
 )
 ```
 
-By default the data is copied to a folder next to your working directory, named
-`<working directory>_training`. Images keep their original bit depth, and
+By default the data is copied to a folder next to the set's folder, named
+`<set folder>_training`. Images keep their original bit depth, and
 `include_test=True` also writes `test_input/` and `test_label/`.
 
 ## Train a model
@@ -98,13 +102,15 @@ training_config = setup_training(
 training_results = run_training(training_config, framework="microsam")
 ```
 
+`epochs` sets the training length. Pass `n_iterations=` instead for a fixed number of
+steps, for example `n_iterations=10` for a quick check that everything runs; it
+overrides `epochs`.
+
 The trained model is saved as `<output_dir>/<model_name>_final.pt`, with checkpoints in
 `<output_dir>/checkpoints/`. Load it in the micro-SAM napari plugin by choosing the
-checkpoint as a custom model. The micro-SAM training notebook also exports the model in
-[BioImage Model Zoo](https://bioimage.io) format.
+checkpoint as a custom model. Export to the [BioImage Model Zoo](https://bioimage.io) format with micro-SAM's own tools.
 
-Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-microsam.ipynb)
-· [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
+Notebook: [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
 
 ### BiaPy
 
@@ -122,7 +128,7 @@ DATA:
     GT_PATH: my_training_data/val_label
 ```
 
-Notebook: [prepare data for BiaPy](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training_biapy.ipynb)
+Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
 
 ### DL4MicEverywhere
 
@@ -130,7 +136,7 @@ Notebook: [prepare data for BiaPy](https://github.com/Leiden-Cell-Observatory/om
 notebooks (StarDist, Cellpose, U-Net, …) in containers. Give it the prepared folder as
 its data directory.
 
-Notebook: [prepare data for DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training_DL4mic.ipynb)
+Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
 
 ## Tips
 

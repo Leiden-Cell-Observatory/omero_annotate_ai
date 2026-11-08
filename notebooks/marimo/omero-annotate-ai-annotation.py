@@ -1,30 +1,47 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.11"
 # dependencies = [
 #     "marimo",
-#     "omero-annotate-ai",
+#     "omero-annotate-ai[microsam]",
 # ]
 # ///
 
 import marimo
 
-__generated_with = "0.19.2"
+__generated_with = "0.19.11"
 app = marimo.App(width="medium")
 
 
 @app.cell
+def _():
+    import marimo as mo
+
+    from omero_annotate_ai import TrainingSet, create_default_config
+    from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+    from omero_annotate_ai.trainingset import list_training_sets, summarize
+
+    return (
+        SimpleOMEROConnection,
+        TrainingSet,
+        create_default_config,
+        list_training_sets,
+        mo,
+        summarize,
+    )
+
+
+@app.cell
 def _(mo):
     mo.md("""
-    # OMERO Image Annotation Workflow with micro-SAM
+    # Annotate OMERO images with micro-SAM or Cellpose
 
-    This notebook guides you through annotating images in OMERO using the micro-SAM annotation plugin.
-
-    **Workflow Steps:**
-    1. Connect to your OMERO server
-    2. Select a container (project, dataset, or plate)
-    3. Configure annotation parameters
-    4. Run the annotation pipeline
-    5. Save your configuration for future use
+    Create a **training set** (images picked from an OMERO container and split into
+    training/validation/test) or open an earlier one, then annotate it: interactively in
+    napari with micro-SAM, or in the Cellpose GUI (images are exported, you annotate, the
+    notebook collects the masks). Masks are uploaded to OMERO as ROIs and label files and tracked in the set's
+    table; a local copy lives in the set's folder under `~/omero_annotate_ai/`. You can stop
+    at any time: opening the set again continues where you left off and repairs anything a
+    crash left half-done.
     """)
     return
 
@@ -32,91 +49,73 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 1. OMERO Connection
+    ## 1. Connect to OMERO
     """)
     return
 
 
 @app.cell
 def _(mo):
-    omero_host = mo.ui.text(
-        value="", label="OMERO Host", placeholder="omero.server.edu"
-    )
-    omero_username = mo.ui.text(value="", label="Username", placeholder="your_username")
-    omero_password = mo.ui.text(
-        value="", label="Password", placeholder="password", kind="password"
-    )
-    omero_group = mo.ui.text(
-        value="", label="Group (optional)", placeholder="Leave empty for default"
-    )
+    omero_host = mo.ui.text(label="Host", placeholder="omero.example.org")
+    omero_username = mo.ui.text(label="Username")
+    omero_password = mo.ui.text(label="Password", kind="password")
+    omero_group = mo.ui.text(label="Group (optional)")
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
-    connect_button = mo.ui.run_button(label="Connect to OMERO")
-
+    connect_button = mo.ui.run_button(label="Connect")
     mo.vstack(
         [
-            omero_host,
-            omero_username,
-            omero_password,
-            omero_group,
-            omero_secure,
-            connect_button,
+            mo.hstack([omero_host, omero_username, omero_password], justify="start"),
+            mo.hstack([omero_group, omero_secure, connect_button], justify="start"),
         ]
     )
     return (
-        omero_host,
-        omero_username,
-        omero_password,
-        omero_group,
-        omero_secure,
         connect_button,
+        omero_group,
+        omero_host,
+        omero_password,
+        omero_secure,
+        omero_username,
     )
 
 
 @app.cell
 def _(
+    SimpleOMEROConnection,
     connect_button,
-    omero_host,
-    omero_username,
-    omero_password,
-    omero_group,
-    omero_secure,
-    establish_connection,
     mo,
+    omero_group,
+    omero_host,
+    omero_password,
+    omero_secure,
+    omero_username,
 ):
-    conn = None
-    connection_status = "Not connected"
-
-    if connect_button.value:
-        host = omero_host.value
-        username = omero_username.value
-        password = omero_password.value
-        group = omero_group.value if omero_group.value else None
-        secure = omero_secure.value
-
-        if host and username and password:
-            try:
-                conn = establish_connection(host, username, password, group, secure)
-                if conn and conn.isConnected():
-                    user = conn.getUser().getName()
-                    group_name = conn.getGroupFromContext().getName()
-                    connection_status = (
-                        f"Connected as **{user}** to group **{group_name}**"
-                    )
-                else:
-                    connection_status = "Connection failed"
-            except Exception as e:
-                connection_status = f"Connection error: {str(e)}"
-        else:
-            connection_status = "Please fill in host, username, and password"
-
-    mo.md(f"**Status:** {connection_status}")
+    mo.stop(
+        not connect_button.value, mo.md("Fill in the fields and click **Connect**.")
+    )
+    _settings = {
+        "host": omero_host.value,
+        "username": omero_username.value,
+        "password": omero_password.value,
+        "secure": omero_secure.value,
+    }
+    if omero_group.value:
+        _settings["group"] = omero_group.value
+    try:
+        conn = SimpleOMEROConnection().create_connection_from_config(_settings)
+    except Exception as _error:  # ConnectionFailed: show it, don't crash the notebook
+        conn = None
+        _status = f"**Not connected:** {_error}"
+    else:
+        conn.c.enableKeepAlive(60)
+        _status = f"Connected to group **{conn.getGroupFromContext().getName()}**."
+    mo.md(_status)
     return (conn,)
 
 
 @app.cell
 def _(mo):
     mo.md("""
-    ## 2. Container Selection
+    ## 2. Container and training set
     """)
     return
 
@@ -124,474 +123,326 @@ def _(mo):
 @app.cell
 def _(mo):
     container_type = mo.ui.dropdown(
-        options=["project", "dataset", "plate", "screen"],
+        options=["dataset", "project", "plate", "screen"],
         value="dataset",
-        label="Container Type",
+        label="Container type",
     )
-    container_id = mo.ui.number(
-        value=0,
-        label="Container ID",
-        start=0,
+    container_id = mo.ui.number(value=0, start=0, label="Container ID")
+    mode = mo.ui.radio(
+        options=["New training set", "Open training set"],
+        value="New training set",
     )
-    mo.hstack([container_type, container_id], justify="start", gap=2)
-    return container_id, container_type
+    mo.vstack([mo.hstack([container_type, container_id], justify="start"), mode])
+    return container_id, container_type, mode
 
 
 @app.cell
-def _(conn, container_id, container_type, mo):
-    container_info = None
-    if conn and conn.isConnected() and container_id.value > 0:
-        try:
-            container = conn.getObject(
-                container_type.value.capitalize(), container_id.value
-            )
-            if container:
-                container_info = f"Found: **{container.getName()}**"
-            else:
-                container_info = f"Container not found with ID {container_id.value}"
-        except Exception as e:
-            container_info = f"Error: {str(e)}"
-    elif container_id.value > 0:
-        container_info = "Connect to OMERO first to validate container"
-
-    mo.md(container_info) if container_info else mo.md("")
-    return
+def _(conn, container_id, container_type, list_training_sets, mo, mode):
+    existing_sets = []
+    if conn is not None and container_id.value > 0:
+        existing_sets = list_training_sets(
+            conn, container_type.value, int(container_id.value)
+        )
+    set_choice = mo.ui.dropdown(
+        options={f"{s.name} (table {s.table_id})": s.table_id for s in existing_sets},
+        label="Training set",
+    )
+    _view = (
+        set_choice if existing_sets else mo.md("No training sets on this container.")
+    )
+    _view if mode.value == "Open training set" else mo.md("")
+    return (set_choice,)
 
 
 @app.cell
-def _(mo):
-    mo.md("""
-    ## 3. Annotation Settings
+def _(conn, mo, mode, set_choice, summarize):
+    mo.stop(mode.value != "Open training set" or set_choice.value is None)
+    _summary = summarize(set_choice.value, conn)
+    _progress = "<br>".join(
+        f"{name}: {done}/{total} annotated"
+        for name, (done, total) in _summary.progress.items()
+        if total
+    )
+    _sessions = "<br>".join(
+        f"#{s.id} {s.started or ''}: {s.n_annotated} saved"
+        + (f", *{s.note}*" if s.note else "")
+        for s in _summary.sessions[-5:]
+    )
+    mo.md(f"""
+    | {_summary.name} | |
+    |---|---|
+    | Progress | {_progress or "-"} |
+    | Last sessions | {_sessions or "none yet"} |
     """)
     return
 
 
 @app.cell
 def _(mo):
-    segment_all = mo.ui.checkbox(value=False, label="Annotate all images")
-    train_n = mo.ui.slider(start=1, stop=50, value=3, label="Training images")
-    validate_n = mo.ui.slider(start=0, stop=50, value=2, label="Validation images")
-    test_n = mo.ui.slider(start=0, stop=50, value=0, label="Test images")
-
-    mo.vstack(
-        [
-            segment_all,
-            mo.md("**Image split** (ignored if 'Annotate all' is checked):")
-            if not segment_all.value
-            else mo.md(""),
-            mo.hstack([train_n, validate_n, test_n], justify="start", gap=2)
-            if not segment_all.value
-            else mo.md(""),
-        ]
+    set_name = mo.ui.text(value="", label="Name", placeholder="e.g. hela_nuclei_v1")
+    train_n = mo.ui.number(value=3, start=0, label="Training images")
+    validate_n = mo.ui.number(value=2, start=0, label="Validation images")
+    test_n = mo.ui.number(value=0, start=0, label="Test images")
+    seed = mo.ui.text(value="", label="Seed (empty = random)")
+    channel = mo.ui.number(value=0, start=0, label="Channel")
+    timepoints = mo.ui.text(value="0", label="Timepoints")
+    z_slices = mo.ui.text(value="0", label="Z-slices")
+    three_d = mo.ui.checkbox(value=False, label="3D (volumes)")
+    use_patches = mo.ui.checkbox(value=False, label="Patches")
+    patch_size = mo.ui.text(value="512, 512", label="Patch size (w, h)")
+    patches_per_image = mo.ui.number(value=1, start=1, label="Patches per image")
+    storage = mo.ui.dropdown(
+        options={
+            "OMERO (upload masks, keep a table)": "omero",
+            "Local folder only": "local",
+        },
+        value="OMERO (upload masks, keep a table)",
+        label="Storage",
     )
-    return segment_all, test_n, train_n, validate_n
+    return (
+        channel,
+        patch_size,
+        patches_per_image,
+        seed,
+        set_name,
+        storage,
+        test_n,
+        three_d,
+        timepoints,
+        train_n,
+        use_patches,
+        validate_n,
+        z_slices,
+    )
 
 
 @app.cell
 def _(mo):
-    channel = mo.ui.number(value=0, label="Channel", start=0)
-    timepoint_mode = mo.ui.dropdown(
-        options=["specific", "all", "random"],
-        value="specific",
-        label="Timepoint Mode",
-    )
-    timepoints = mo.ui.text(value="0", label="Timepoints (comma-separated)")
-    z_slice_mode = mo.ui.dropdown(
-        options=["specific", "all", "random"],
-        value="specific",
-        label="Z-slice Mode",
-    )
-    z_slices = mo.ui.text(value="0", label="Z-slices (comma-separated)")
-    three_d = mo.ui.checkbox(value=False, label="3D volumetric processing")
-
-    mo.vstack(
-        [
-            mo.hstack([channel], justify="start"),
-            mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
-            mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
-            three_d,
-        ]
-    )
-    return channel, three_d, timepoint_mode, timepoints, z_slice_mode, z_slices
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 4. Processing Settings
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    use_patches = mo.ui.checkbox(value=False, label="Use patches")
-    patches_per_image = mo.ui.slider(
-        start=1, stop=20, value=1, label="Patches per image"
-    )
-    patch_size = mo.ui.text(value="512, 512", label="Patch size (width, height)")
-
-    mo.vstack(
-        [
-            use_patches,
-            mo.hstack([patches_per_image, patch_size], justify="start", gap=2)
-            if use_patches.value
-            else mo.md(""),
-        ]
-    )
-    return patch_size, patches_per_image, use_patches
-
-
-@app.cell
-def _(mo):
-    batch_size = mo.ui.slider(
-        start=0, stop=10, value=0, label="Batch size (0 = all at once)"
-    )
-    model_type = mo.ui.dropdown(
-        options=["vit_b_lm", "vit_b", "vit_l", "vit_h"],
-        value="vit_b_lm",
-        label="SAM Model",
-    )
-    read_only_mode = mo.ui.checkbox(
-        value=False, label="Read-only mode (save locally only)"
-    )
-
-    mo.vstack(
-        [
-            mo.hstack([batch_size, model_type], justify="start", gap=2),
-            read_only_mode,
-        ]
-    )
-    return batch_size, model_type, read_only_mode
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 5. Output Settings
-    """)
-    return
-
-
-@app.cell
-def _(Path, datetime, mo):
-    output_directory = mo.ui.text(
-        value=str(Path.home() / "omero_annotate_ai" / "omero_annotations"),
-        label="Output Directory",
-        full_width=True,
-    )
-    workflow_name = mo.ui.text(
-        value=f"annotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        label="Workflow Name",
-    )
-    mo.vstack([output_directory, workflow_name])
-    return output_directory, workflow_name
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 6. Configuration Summary
-    """)
-    return
+    add_train = mo.ui.number(value=0, start=0, label="Training images (0 = keep)")
+    add_validate = mo.ui.number(value=0, start=0, label="Validation images (0 = keep)")
+    add_test = mo.ui.number(value=0, start=0, label="Test images (0 = keep)")
+    return add_test, add_train, add_validate
 
 
 @app.cell
 def _(
-    batch_size,
-    build_config,
+    add_test,
+    add_train,
+    add_validate,
     channel,
-    container_id,
-    container_type,
     mo,
-    model_type,
-    output_directory,
+    mode,
     patch_size,
     patches_per_image,
-    read_only_mode,
-    segment_all,
+    seed,
+    set_name,
+    storage,
     test_n,
     three_d,
-    timepoint_mode,
     timepoints,
     train_n,
     use_patches,
     validate_n,
-    workflow_name,
-    z_slice_mode,
     z_slices,
 ):
-    config = build_config(
-        name=workflow_name.value,
-        container_type=container_type.value,
-        container_id=int(container_id.value),
-        output_dir=output_directory.value,
-        segment_all=segment_all.value,
-        train_n=train_n.value,
-        validate_n=validate_n.value,
-        test_n=test_n.value,
-        channel=int(channel.value),
-        timepoint_mode=timepoint_mode.value,
-        timepoints=timepoints.value,
-        z_slice_mode=z_slice_mode.value,
-        z_slices=z_slices.value,
-        three_d=three_d.value,
-        use_patches=use_patches.value,
-        patches_per_image=patches_per_image.value,
-        patch_size=patch_size.value,
-        batch_size=batch_size.value,
-        model_type=model_type.value,
-        read_only_mode=read_only_mode.value,
-    )
-
-    mo.md(f"""
-    **Configuration Summary:**
-
-    | Setting | Value |
-    |---------|-------|
-    | Workflow Name | {config.name} |
-    | Container | {config.omero.container_type} (ID: {config.omero.container_id}) |
-    | Output Directory | {config.output.output_directory} |
-    | Model | {config.ai_model.pretrained_from} |
-    | Channel | {config.spatial_coverage.channels} |
-    | Segment All | {config.training.segment_all} |
-    | Train/Val/Test | {config.training.train_n}/{config.training.validate_n}/{config.training.test_n} |
-    | Use Patches | {config.spatial_coverage.use_patches} |
-    | Read-only Mode | {config.workflow.read_only_mode} |
-    """)
-    return (config,)
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 7. Run Annotation Pipeline
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    run_button = mo.ui.run_button(label="Run Annotation Pipeline", kind="success")
-    run_button
-    return (run_button,)
-
-
-@app.cell
-def _(config, conn, container_id, create_pipeline, mo, run_button):
-    mo.stop(not run_button.value, mo.md("Click 'Run Annotation Pipeline' to start"))
-
-    if not conn or not conn.isConnected():
-        mo.output.replace(mo.md("**Error:** Please connect to OMERO first"))
-    elif container_id.value <= 0:
-        mo.output.replace(mo.md("**Error:** Please select a valid container ID"))
-    else:
-        try:
-            pipeline = create_pipeline(config, conn)
-            mo.output.replace(
-                mo.md(
-                    "**Starting annotation pipeline...** Napari will open for interactive annotation."
-                )
-            )
-
-            table_id, updated_config = pipeline.run_full_micro_sam_workflow()
-
-            result_md = f"""
-            **Annotation pipeline completed successfully!**
-
-            - Tracking table ID: {table_id}
-            - Total images processed: {len(updated_config.get_processed())}
-            - Output directory: {updated_config.output.output_directory}
-            """
-            mo.output.replace(mo.md(result_md))
-        except Exception as e:
-            mo.output.replace(mo.md(f"**Error during pipeline execution:** {str(e)}"))
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## 8. Save Configuration
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    save_button = mo.ui.run_button(label="Save Configuration to YAML")
-    save_button
-    return (save_button,)
-
-
-@app.cell
-def _(Path, config, mo, save_button):
-    mo.stop(
-        not save_button.value,
-        mo.md("Click 'Save Configuration' to export your settings"),
-    )
-
-    _result = None
-    try:
-        config_path = (
-            Path(config.output.output_directory)
-            / f"annotation_config_{config.name}.yaml"
+    if mode.value == "New training set":
+        _form = mo.vstack(
+            [
+                set_name,
+                mo.hstack([train_n, validate_n, test_n, seed], justify="start"),
+                mo.hstack([channel, timepoints, z_slices, three_d], justify="start"),
+                mo.hstack(
+                    [use_patches, patch_size, patches_per_image], justify="start"
+                ),
+                storage,
+            ]
         )
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config.save_yaml(config_path)
-        _result = mo.md(f"""
-        **Configuration saved!**
-
-        File: `{config_path}`
-
-        To reuse this configuration:
-        ```python
-        from omero_annotate_ai import load_config
-        config = load_config('{config_path}')
-        ```
-        """)
-    except Exception as e:
-        _result = mo.md(f"**Error saving configuration:** {str(e)}")
-    _result
+    else:
+        _form = mo.vstack(
+            [
+                mo.md("Raise a count to add images to the set (counts only go up):"),
+                mo.hstack([add_train, add_validate, add_test], justify="start"),
+            ]
+        )
+    _form
     return
 
 
 @app.cell
-def _():
-    import marimo as mo
-
-    return (mo,)
-
-
-@app.cell
-def _():
-    from datetime import datetime
-    from pathlib import Path
-
-    return Path, datetime
+def _(mo):
+    mo.md("""
+    ## 3. Annotate
+    """)
+    return
 
 
 @app.cell
-def _():
-    from omero_annotate_ai import create_default_config, create_pipeline
-
-    try:
-        from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
-
-        OMERO_AVAILABLE = True
-    except ImportError:
-        OMERO_AVAILABLE = False
-    return (
-        OMERO_AVAILABLE,
-        SimpleOMEROConnection,
-        create_default_config,
-        create_pipeline,
+def _(mo):
+    tool = mo.ui.dropdown(
+        options=["micro-SAM (napari)", "Cellpose GUI"],
+        value="micro-SAM (napari)",
+        label="Annotation tool",
     )
+    model_type = mo.ui.dropdown(
+        options=["vit_b_lm", "vit_l_lm", "vit_b", "vit_l", "vit_h"],
+        value="vit_b_lm",
+        label="micro-SAM model",
+    )
+    batch_size = mo.ui.number(
+        value=0, start=0, label="Images per napari session (0 = all)"
+    )
+    note = mo.ui.text_area(
+        label="Note for this session (optional)",
+        placeholder="e.g. nuclei only, small debris skipped",
+        full_width=True,
+    )
+    run_button = mo.ui.run_button(label="Start", kind="success")
+    mo.vstack(
+        [mo.hstack([tool, model_type, batch_size], justify="start"), note, run_button]
+    )
+    return batch_size, model_type, note, run_button, tool
 
 
 @app.cell
-def _(OMERO_AVAILABLE, SimpleOMEROConnection):
-    def establish_connection(host, username, password, group=None, secure=True):
-        if not OMERO_AVAILABLE:
-            raise ImportError(
-                "OMERO functionality not available. Install with: pip install -e .[omero]"
-            )
+def _(
+    TrainingSet,
+    add_test,
+    add_train,
+    add_validate,
+    batch_size,
+    channel,
+    conn,
+    container_id,
+    container_type,
+    create_default_config,
+    mo,
+    mode,
+    model_type,
+    note,
+    patch_size,
+    patches_per_image,
+    run_button,
+    seed,
+    set_choice,
+    set_name,
+    storage,
+    test_n,
+    three_d,
+    timepoints,
+    tool,
+    train_n,
+    use_patches,
+    validate_n,
+    z_slices,
+):
+    mo.stop(not run_button.value, mo.md("Click **Start**."))
+    mo.stop(conn is None, mo.md("**Connect to OMERO first.**"))
 
-        connection = SimpleOMEROConnection()
-        config = {
-            "host": host,
-            "username": username,
-            "password": password,
-            "secure": secure,
-        }
-        if group:
-            config["group"] = group
+    def _ints(text):
+        return [int(v) for v in text.replace(" ", "").split(",") if v]
 
-        conn = connection.create_connection_from_config(config)
-        if conn:
-            conn.c.enableKeepAlive(60)
-        return conn
+    _added = 0
+    if mode.value == "Open training set":
+        mo.stop(set_choice.value is None, mo.md("**Choose a training set.**"))
+        ts = TrainingSet.open(set_choice.value, conn)
+        _added = ts.extend(
+            train_n=add_train.value or None,
+            validate_n=add_validate.value or None,
+            test_n=add_test.value or None,
+        )
+    else:
+        mo.stop(
+            not set_name.value or container_id.value <= 0,
+            mo.md("**Give the set a name and choose a container.**"),
+        )
+        _config = create_default_config()
+        _config.name = set_name.value
+        _config.storage = storage.value
+        _config.omero.container_type = container_type.value
+        _config.omero.container_id = int(container_id.value)
+        _config.training.train_n = int(train_n.value)
+        _config.training.validate_n = int(validate_n.value)
+        _config.training.test_n = int(test_n.value)
+        _config.training.seed = int(seed.value) if seed.value.strip() else None
+        _config.spatial_coverage.channels = [int(channel.value)]
+        _config.spatial_coverage.timepoints = _ints(timepoints.value)
+        _config.spatial_coverage.z_slices = _ints(z_slices.value)
+        _config.spatial_coverage.three_d = three_d.value
+        _config.spatial_coverage.use_patches = use_patches.value
+        _config.spatial_coverage.patch_size = _ints(patch_size.value)
+        _config.spatial_coverage.patches_per_image = int(patches_per_image.value)
+        _config.ai_model.pretrained_from = model_type.value
+        if tool.value == "Cellpose GUI":
+            _config.ai_model.framework = "cellpose"
+        ts = TrainingSet.create(_config, conn)
 
-    return (establish_connection,)
+    _table = ts.table_id if ts.table_id is not None else "local"
+    if tool.value == "Cellpose GUI":
+        _exported = ts.prepare_external()
+        _result = f"""
+    **{_exported} images exported for Cellpose** (training set **{ts.name}**, table {_table}).
+
+    1. Open the Cellpose GUI (`cellpose`; install with `pixi add cellpose` or
+       `pip install cellpose`).
+    2. Annotate the images in `{ts.bundle_dir / "annotation_input"}`.
+    3. Save each mask in `{ts.bundle_dir / "external_output"}` as
+       `<image name>_mask.tif` (e.g. `4ba674d4_0_0.tif` → `4ba674d4_0_0_mask.tif`; Cellpose's
+       own `_seg.npy` / `_cp_masks.png` files are not picked up).
+    4. Come back and click **Collect masks** below.
+    """
+    else:
+        _saved = ts.annotate(
+            model=model_type.value,
+            batch_size=int(batch_size.value) or None,
+            note=note.value or None,
+        )
+        _done = sum(r.processed for r in ts.units())
+        _result = f"""
+    **Session finished: {_saved} units saved.**
+
+    - Training set: **{ts.name}** (table {_table})
+    - Annotated: {_done} of {len(ts.units())}
+    - Images added: {_added}
+    - Local folder: `{ts.bundle_dir}`
+    """
+    mo.md(_result)
+    return (ts,)
 
 
 @app.cell
-def _():
-    def parse_int_list(text):
-        if not text or not text.strip():
-            return [0]
-        try:
-            return [int(x.strip()) for x in text.split(",") if x.strip()]
-        except ValueError:
-            return [0]
-
-    def parse_patch_size(text):
-        try:
-            parts = [int(x.strip()) for x in text.split(",")]
-            if len(parts) == 2:
-                return parts
-            return [512, 512]
-        except ValueError:
-            return [512, 512]
-
-    return parse_int_list, parse_patch_size
+def _(mo, tool, ts):
+    collect_button = mo.ui.run_button(label="Collect masks")
+    collect_button if tool.value == "Cellpose GUI" else mo.md("")
+    return (collect_button,)
 
 
 @app.cell
-def _(Path, create_default_config, parse_int_list, parse_patch_size):
-    def build_config(
-        name,
-        container_type,
-        container_id,
-        output_dir,
-        segment_all,
-        train_n,
-        validate_n,
-        test_n,
-        channel,
-        timepoint_mode,
-        timepoints,
-        z_slice_mode,
-        z_slices,
-        three_d,
-        use_patches,
-        patches_per_image,
-        patch_size,
-        batch_size,
-        model_type,
-        read_only_mode,
-    ):
-        config = create_default_config()
+def _(collect_button, mo, ts):
+    mo.stop(not collect_button.value)
+    _collected = ts.collect_masks()
+    _done = sum(r.processed for r in ts.units())
+    mo.md(
+        f"**{_collected} masks saved** (uploaded for OMERO sets). "
+        f"Annotated: {_done} of {len(ts.units())}."
+    )
+    return
 
-        config.name = name
-        config.omero.container_type = container_type
-        config.omero.container_id = container_id
-        config.output.output_directory = Path(output_dir)
 
-        config.training.segment_all = segment_all
-        config.training.train_n = train_n
-        config.training.validate_n = validate_n
-        config.training.test_n = test_n
+@app.cell
+def _(mo, ts):
+    later_note = mo.ui.text_area(label="Add or change the note of the last session")
+    save_note = mo.ui.run_button(label="Save note")
+    mo.vstack([later_note, save_note]) if ts.config.sessions else mo.md("")
+    return later_note, save_note
 
-        config.spatial_coverage.channels = [channel]
-        config.spatial_coverage.timepoint_mode = timepoint_mode
-        config.spatial_coverage.timepoints = parse_int_list(timepoints)
-        config.spatial_coverage.z_slice_mode = z_slice_mode
-        config.spatial_coverage.z_slices = parse_int_list(z_slices)
-        config.spatial_coverage.three_d = three_d
 
-        config.spatial_coverage.use_patches = use_patches
-        config.spatial_coverage.patches_per_image = patches_per_image
-        config.spatial_coverage.patch_size = parse_patch_size(patch_size)
-        config.workflow.batch_size = batch_size
-
-        config.ai_model.pretrained_from = model_type
-
-        config.workflow.read_only_mode = read_only_mode
-
-        return config
-
-    return (build_config,)
+@app.cell
+def _(later_note, mo, save_note, ts):
+    mo.stop(not save_note.value)
+    _session = ts.config.sessions[-1]
+    ts.set_session_note(_session.id, later_note.value)
+    mo.md(f"Note saved to session #{_session.id}.")
+    return
 
 
 if __name__ == "__main__":

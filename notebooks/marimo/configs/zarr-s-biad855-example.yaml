@@ -1,5 +1,5 @@
 # Annotate a public Cell Painting plate (BioImage Archive S-BIAD855) straight from OME-Zarr.
-# Load it in notebooks/marimo/zarr-annotate-ai-from-yaml.py.
+# Load it in notebooks/marimo/annotate-from-yaml.py.
 name: s-biad855-zarr-demo
 source: zarr
 zarr:

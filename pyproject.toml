@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omero-annotate-ai"
-version = "0.4.0"
+version = "0.5.0"
 description = "OMERO integration for AI-powered image annotation and segmentation workflows"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -117,7 +117,6 @@ max-line-length = 100
 "src/omero_annotate_ai/widgets/**" = ["T201"]
 ".github/scripts/**" = ["T201"]
 # legacy, rewritten in 0.5.0 core PRs
-"src/omero_annotate_ai/widgets/workflow_widget.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 "src/omero_annotate_ai/omero/omero_functions.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 
 [tool.pyright]
@@ -128,7 +127,6 @@ reportMissingImports = "warning"
 reportMissingModuleSource = "none"
 # legacy, rewritten in 0.5.0 core PRs: analysed for imports, diagnostics not reported.
 ignore = [
-    "src/omero_annotate_ai/widgets/workflow_widget.py",
     "src/omero_annotate_ai/omero/omero_functions.py",
 ]
 # New core modules (0.5.0 core PRs) are checked strictly from their first commit.
@@ -140,6 +138,7 @@ strict = [
     "src/omero_annotate_ai/events.py",
     "src/omero_annotate_ai/session.py",
     "src/omero_annotate_ai/reconcile.py",
+    "src/omero_annotate_ai/claims.py",
 ]
 
 [tool.pytest.ini_options]

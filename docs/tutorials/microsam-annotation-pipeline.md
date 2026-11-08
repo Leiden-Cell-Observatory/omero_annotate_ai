@@ -48,43 +48,32 @@ workflow_widget = create_workflow_widget(connection=conn)
 workflow_widget.display()
 ```
 
-The widget walks you through a few tabs. Use **Next** to move on.
+The widget has one screen, in cards:
 
-**Working directory.** Where local files go. Pick a folder with some free space; every
-run gets its own subfolder.
+**Data.** Choose the container type (project, dataset, plate, screen) and the container.
+A line below shows the number of images, a sample image's dimensions and its channel names.
 
-**Container.** Choose the type (project, dataset, plate, screen) and the container
-itself from the list.
-
-![Choosing an OMERO container](../images/widget_container.png)
-
-**Tables.** If annotations already exist for this container, they are listed here. For a
-first run, choose **Name New Table** and give the run a short, descriptive name such as
-`hela_nuclei_v1`. This name is used for the OMERO table and the files.
-
-**Configuration.** The scientific choices:
+**New training set** or **Open training set.** For a first run choose *New*:
 
 | Setting | What to choose |
 |---|---|
-| Training / validation / test images | How many images to annotate for each set. Start small, e.g. 5 training and 2 validation. |
+| Name | A short, descriptive name such as `hela_nuclei_v1`; used for the OMERO table and the local folder. |
 | Channel | The channel you will draw on, e.g. the DAPI channel for nuclei. Channel numbers start at 0. |
-| Timepoints, Z-slices | Which planes to annotate. For 2D images leave them at 0. |
-| 3D processing | Annotate whole z-stacks as volumes instead of single planes. |
-| Use patches | Annotate crops instead of whole images. Recommended for large images or a CPU-only computer. |
-| SAM model | `vit_b_lm` is a good default for light microscopy; `vit_b_em_organelles` for electron microscopy. |
-| Batch size | Units per napari session; progress is saved after each batch. 0 = all at once. |
-| Read-only mode | Save results only on your computer and write nothing to OMERO. |
+| Timepoints, Z-slices | Which planes to annotate: *Specific* (a list such as `0, 3, 5-7`), *All*, or *Random* (`n` drawn per image with the seed). For 2D images leave them at *Specific* `0`. |
+| 3D | Annotate one volume over the chosen z-slices instead of single planes (e.g. z-slices *Specific* `10-20`, or *All*). |
+| Patches | Annotate crops instead of whole images, with patch size and patches per image. Recommended for large images or a CPU-only computer. |
+| Training / Validation / Test | How many images to annotate for each split. Start small, e.g. 5 and 2. |
+| Seed | Empty picks one at random and stores it, so the selection can be repeated. |
+| Storage | *OMERO* uploads masks and keeps a tracking table; *Local folder only* writes nothing to OMERO. |
 
-**Save.** Shows the YAML configuration that will be used. Click **Save Configuration**
-to keep a copy.
+*Open* lists the training sets on the container (and local ones). Selecting one shows its
+progress per split and the notes of earlier sessions; you can add images per split, and
+choose *Annotate pending* (the default) or *Review annotated* (see
+[Correct earlier annotations](#correct-earlier-annotations)).
 
-![Reviewing the generated YAML](../images/widget_config.png)
-
-Then collect the configuration:
-
-```python
-config = workflow_widget.get_config()
-```
+**Annotation.** The SAM model (`vit_b_lm` for light microscopy, `vit_b_em_organelles` for
+electron microscopy) and the batch size (images per napari session, 0 = all; the masks of a
+batch are saved and uploaded when you close its napari window). Click **Create** or **Open**.
 
 !!! tip "Not sure what a setting means?"
     [How it works](../concepts.md) explains annotation units, patches and the two modes.
@@ -93,14 +82,20 @@ config = workflow_widget.get_config()
 ## 3. Annotate in napari
 
 ```python
-ts = TrainingSet.create(config, conn)
-ts.annotate(note="nuclei only")  # the note is stored with this session
+ts = workflow_widget.training_set()
+workflow_widget.annotate(note="nuclei only")  # the note is stored with this session
 ```
 
-`TrainingSet.create`:
+Progress appears in the widget's **Progress** card. After the session the note box shows
+the session's note; edit it and click **Save session note** to replace it (one note per
+session). To change an earlier session's note, open the set and pick the session next to
+the note box. Without the widget, `TrainingSet.create(config, conn)`
+and `ts.annotate(...)` do the same.
 
-1. picks images (reproducibly, from the stored seed) and assigns them to training and
-   validation,
+Creating the set:
+
+1. picks images (reproducibly, from the stored seed) and assigns them to training,
+   validation and test,
 2. creates the tracking table in OMERO (not for `storage: local`) and the set's folder,
 
 and `annotate` downloads the first batch and opens it in napari with the micro-SAM annotator. To continue
@@ -109,6 +104,21 @@ later, open the set again with `TrainingSet.open(ts.table_id, conn)`.
 The first time, micro-SAM downloads its model (a few hundred MB). For each image it then
 computes an *embedding*; this is what makes the clicks fast afterwards, and takes a few
 seconds on a GPU or longer on a CPU.
+
+### Correct earlier annotations
+
+To check or fix masks you already saved, open the set, choose **Review annotated** and
+run the same cell, or call `ts.review()`:
+
+```python
+ts.review(note="tightened the outlines")  # every annotated unit
+ts.review(ids=["4ba674d4_0_0"])  # or only some (annotation IDs)
+```
+
+Each unit opens in napari with its saved mask (downloaded from OMERO if your folder lacks
+it); correct it with micro-SAM or napari's label tools and go to the next image as usual.
+A changed mask replaces the old label file and ROI on OMERO; an unchanged one is left
+alone. The session is recorded as a review, with the number of masks it changed.
 
 ### In napari
 
@@ -140,18 +150,20 @@ for all annotator features and shortcuts.
 In the notebook:
 
 ```python
-print(config.get_progress_summary())
+done = sum(row.processed for row in ts.units())
+print(f"{done} of {len(ts.units())} units annotated; folder: {ts.bundle_dir}")
 ```
 
-In OMERO.web (upload mode):
+In OMERO.web (`storage: omero`):
 
 - Each annotated image now has **ROIs** (open it in OMERO.iviewer) and a **mask file**
   in its attachments.
-- The container has a **table** named after your run, listing every unit and whether it
-  is done, plus the **configuration file** as an attachment.
+- The container has a **table** named after your training set, listing every unit and
+  whether it is done, plus the set's **configuration file** as an attachment.
 
-In read-only mode, the images and masks are in `annotation_input/` and
-`annotation_output/` in your working directory, with a `tracking_table.csv`.
+Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
+`annotation_input/` and `annotation_output/`, a `tracking_table.csv` and its
+`config.yaml`.
 
 ## 5. What next?
 

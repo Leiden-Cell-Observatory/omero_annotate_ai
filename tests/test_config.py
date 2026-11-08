@@ -153,7 +153,7 @@ class TestAnnotationConfig:
         yaml_content = """
         name: test
         training:
-          trainingset_name: "test_set"
+          train_n: 4
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -163,6 +163,7 @@ class TestAnnotationConfig:
             config = AnnotationConfig.from_yaml(f.name)
 
             assert config.name == "test"
+            assert config.training.train_n == 4
 
         # Clean up
         Path(f.name).unlink()
@@ -260,6 +261,26 @@ class TestConfigEdgeCases:
         with pytest.raises(RemovedConfigKey, match=replacement):
             AnnotationConfig.from_dict({"name": "x", **data})
 
+    def test_old_yaml_file_raises_naming_the_replacement(self, tmp_path):
+        from omero_annotate_ai.errors import RemovedConfigKey
+
+        path = tmp_path / "old.yaml"
+        path.write_text("name: x\nworkflow:\n  read_only_mode: true\n")
+        with pytest.raises(RemovedConfigKey, match="storage: local"):
+            load_config_from_yaml(str(path))
+
+    def test_spatial_coverage_lists_default_to_first_plane(self):
+        # As documented: a YAML may leave out channels, timepoints and z_slices.
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "spatial_coverage": {"use_patches": True}}
+        )
+        coverage = config.spatial_coverage
+        assert (coverage.channels, coverage.timepoints, coverage.z_slices) == (
+            [0],
+            [0],
+            [0],
+        )
+
     def test_other_schema_versions_are_refused(self):
         from omero_annotate_ai.errors import ConfigError
 
@@ -269,6 +290,10 @@ class TestConfigEdgeCases:
     def test_unknown_keys_and_assignments_are_rejected(self):
         with pytest.raises(ValueError):
             AnnotationConfig.from_dict({"name": "x", "colour": "red"})
+        with pytest.raises(ValueError, match="chanels"):  # a typo inside a section
+            AnnotationConfig.from_dict(
+                {"name": "x", "spatial_coverage": {"chanels": [1]}}
+            )
         config = create_default_config()
         with pytest.raises(ValueError):
             config.storage = "cloud"
@@ -1371,6 +1396,13 @@ class TestZarrConfig:
     def test_zarr_needs_local_storage(self):
         with pytest.raises(ValueError, match="storage: local"):
             AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
+
+    def test_switching_an_existing_config_to_zarr_is_validated(self):
+        """Assignment runs the same checks as construction (no silent OMERO storage)."""
+        config = AnnotationConfig(name="z", zarr={"uris": ["a.zarr"]})
+        with pytest.raises(ValueError, match="storage: local"):
+            config.source = "zarr"
+        assert config.source == "omero"
 
     def test_yaml_round_trip(self):
         config = AnnotationConfig(

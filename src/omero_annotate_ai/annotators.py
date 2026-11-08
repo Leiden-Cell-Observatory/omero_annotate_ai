@@ -28,12 +28,14 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class BatchItem:
     """One unit to annotate: its pixels ``(y, x)`` or ``(z, y, x)``, context channels,
-    and the unit itself (image, plane, patch, category)."""
+    the unit itself (image, plane, patch, category) and, when reviewing, the mask
+    saved earlier (``initial_mask``) to start from."""
 
     annotation_id: str
     pixels: np.ndarray
     context: Mapping[str, np.ndarray] = field(default_factory=dict[str, np.ndarray])
     unit: Unit | None = None
+    initial_mask: np.ndarray | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,9 @@ def _ids(batch: Batch) -> list[str]:
 class MicroSamAnnotator:
     """micro-SAM's image series annotator in napari; blocks until the viewer closes.
 
+    Items with an ``initial_mask`` open with that mask (micro-SAM's
+    ``initial_segmentations``), ready to correct.
+
     napari and micro-SAM are imported on first use; a missing install raises
     :class:`~omero_annotate_ai.errors.AnnotatorUnavailable`.
     """
@@ -93,8 +98,19 @@ class MicroSamAnnotator:
         settings.application.save_window_geometry = False
         try:
             images = [item.pixels for item in batch.items]
+            initial = None
+            if any(item.initial_mask is not None for item in batch.items):
+                # A label image has no channel axis: (z,) y, x of the pixels.
+                ndim = 3 if batch.is_volumetric else 2
+                initial = [
+                    np.zeros(item.pixels.shape[:ndim], np.uint32)
+                    if item.initial_mask is None
+                    else item.initial_mask
+                    for item in batch.items
+                ]
             viewer = sam_annotator.image_series_annotator(
                 images=images,
+                initial_segmentations=initial,
                 output_folder=str(batch.mask_dir),
                 model_type=batch.model_type,
                 viewer=None,
@@ -192,7 +208,8 @@ class ScriptedAnnotator:
 
     Writes ``seg_{i:05}.tif`` like micro-SAM, skipping positions whose file exists
     when ``skip_existing``; ``limit`` stops after that many masks, as if the user
-    closed napari early.
+    closed napari early. An item with an ``initial_mask`` (a review) gets
+    ``review_fn(pixels, initial_mask)``, or the initial mask unchanged without one.
     """
 
     name = "scripted"
@@ -203,8 +220,10 @@ class ScriptedAnnotator:
         *,
         limit: int | None = None,
         skip_existing: bool = True,
+        review_fn: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
     ) -> None:
         self.mask_fn = mask_fn
+        self.review_fn = review_fn
         self.limit = limit
         self.skip_existing = skip_existing
         self.calls: list[ScriptedCall] = []
@@ -220,10 +239,17 @@ class ScriptedAnnotator:
             elif self.limit is not None and len(written) >= self.limit:
                 break
             else:
-                tifffile.imwrite(path, self.mask_fn(item.pixels))
+                tifffile.imwrite(path, self._mask(item))
                 written.append(position)
         shapes = tuple(tuple(item.pixels.shape) for item in batch.items)
         self.calls.append(
             ScriptedCall(len(batch.items), tuple(written), tuple(skipped), shapes)
         )
         return collect_masks(batch.mask_dir, _ids(batch))
+
+    def _mask(self, item: BatchItem) -> np.ndarray:
+        if item.initial_mask is None:
+            return self.mask_fn(item.pixels)
+        if self.review_fn is None:
+            return item.initial_mask
+        return self.review_fn(item.pixels, item.initial_mask)

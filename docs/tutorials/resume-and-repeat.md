@@ -19,7 +19,7 @@ ts.annotate(note="second session")
 The units are read back from the table and only the unfinished ones are opened, with
 the same images and patches as before. A local set (`storage: local`) is opened by its
 folder: `TrainingSet.open("~/omero_annotate_ai/local/<id>_<name>")`. In the widget,
-choose *Continue Existing* on the table instead.
+choose *Open training set* and pick the set.
 
 On an opened set you can change only what does not alter the existing rows:
 
@@ -39,7 +39,33 @@ print(ts.config.sessions)
 ```
 
 A session that stopped without finishing (napari closed, kernel died) is marked
-`interrupted` the next time the set is opened.
+`interrupted` the next time the set is opened on the same computer.
+
+### Correct earlier annotations
+
+`ts.review()` (or *Review annotated* in the widget) opens annotated units with their saved
+masks so you can correct them; a changed mask replaces the upload on OMERO. Replacing is
+crash-safe too: the new label file and ROI are uploaded before the old ones are deleted,
+and opening the set finishes a replacement a crash interrupted. See the
+[micro-SAM tutorial](microsam-annotation-pipeline.md#correct-earlier-annotations).
+
+### Several computers, one set
+
+The OMERO tracking table is the source of truth; the local folder is a working copy.
+Open the set by its table ID on another computer and carry on: rows come from the
+table, and nothing is uploaded twice.
+
+Two people (or two computers) can also annotate the same set **at the same time**.
+Before napari shows a batch (also in a review), the session claims its units in the table (columns
+`claimed_by`, `claimed_at`), so the other session gets different units. Claims are
+released when a unit is saved or handed back, and expire after
+`workflow.claim_hours` (default 6) if a computer goes quiet. Claims left by your own
+earlier runs on the same computer (a crash, a dropped connection) never block you: a new
+session takes those units straight away, and opening the set releases them.
+
+If a claim expired and someone else saved the unit first, your mask is not uploaded
+over theirs: it is kept in `annotation_output/conflicts/` and the session reports it.
+Local sets (`storage: local`) have no claims; their folder belongs to one computer.
 
 ### What resuming repairs
 
@@ -103,14 +129,15 @@ ts.annotate()
     their replacement (for example `workflow.read_only_mode` → `storage: local`), so a
     misspelt setting never goes unnoticed.
 
-Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-from-yaml.ipynb)
-· [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-from-yaml.py)
+Notebook: [annotate from YAML (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/annotate-from-yaml.py)
 
 ## Check progress
 
 ```python
-print(config.get_progress_summary())
-done = config.get_processed()
-todo = config.get_unprocessed()
-df = config.to_dataframe()  # one row per unit, as a pandas table
+from omero_annotate_ai.rows import rows_to_frame
+from omero_annotate_ai.trainingset import summarize
+
+print(summarize(ts.table_id, conn).progress)  # per split: (annotated, total), read-only
+todo = [row for row in ts.units() if not row.processed]
+df = rows_to_frame(ts.units())  # one row per unit, as a pandas table
 ```

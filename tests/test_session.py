@@ -5,7 +5,8 @@ import pandas as pd
 import pytest
 import tifffile
 
-from omero_annotate_ai.bundle import file_digest
+from omero_annotate_ai.annotators import ScriptedAnnotator
+from omero_annotate_ai.bundle import file_digest, mask_path
 from omero_annotate_ai.errors import Cancelled
 from omero_annotate_ai.events import (
     BatchReleased,
@@ -15,7 +16,7 @@ from omero_annotate_ai.events import (
     UnitCommitted,
     UploadFailed,
 )
-from tests.fakes import annotate, create_set, omero_set
+from tests.fakes import annotate, create_set, image_mask, omero_set
 
 
 def ready_pipeline(tmp_path, n_images=3, events=None, **kwargs):
@@ -133,8 +134,8 @@ class TestAnnotationSession:
 
     def test_config_published_per_commit_or_at_finish(self, tmp_path):
         pipeline, omero = ready_pipeline(tmp_path)
-        published = len(omero.configs)  # once when the set was created
         session = pipeline.start_session(batch_size=1)
+        published = len(omero.configs)  # at creation, and the session's start
         for _ in range(2):
             batch = session.next_batch()
             session.commit(batch, masks_for(batch), publish_config=False)
@@ -169,3 +170,123 @@ class TestAnnotationSession:
         masks = list((pipeline.bundle_dir / "annotation_output").glob("*_mask.tif"))
         assert len(masks) == 2
         assert all(a.processed and a.mask_digest for a in pipeline.rows)
+
+
+def edited(pixels, mask):
+    """A reviewer's correction: one pixel less of the object."""
+    out = np.array(mask, copy=True)
+    out[..., 0, 0] = 0
+    return out
+
+
+def annotated_set(tmp_path, n_images=2, storage="omero"):
+    config, source, omero = omero_set(tmp_path, n_images=n_images)
+    config.storage = storage
+    ts = create_set(config, source, omero, tmp_path / "home")
+    annotate(ts)
+    return ts, source, omero
+
+
+@pytest.mark.unit
+class TestReview:
+    def test_annotated_units_come_with_their_saved_masks(self, tmp_path):
+        ts, _, _ = annotated_set(tmp_path)
+        session = ts.start_session(review=True)
+        batch = session.next_batch()
+
+        assert len(batch.items) == 2
+        for item in batch.items:
+            saved = tifffile.imread(mask_path(ts.bundle_dir, item.annotation_id))
+            assert np.array_equal(item.initial_mask, saved)
+
+    def test_unchanged_masks_change_nothing(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path)
+        before = dict(omero.labels)
+
+        revised = ts.review(ScriptedAnnotator(image_mask), note="all fine")
+
+        assert revised == 0
+        assert omero.labels.keys() == before.keys()
+        record = ts.config.sessions[-1]
+        assert (record.kind, record.n_annotated, record.note) == (
+            "review",
+            0,
+            "all fine",
+        )
+        assert (omero.tables[ts.table_id]["claimed_by"] == "").all()
+
+    def test_changed_mask_replaces_label_and_roi(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path)
+        old = {r.annotation_id: (r.label_id, r.roi_id) for r in ts.rows}
+
+        revised = ts.review(ScriptedAnnotator(image_mask, review_fn=edited))
+
+        assert revised == 2
+        assert all(n == (1, 1) for n in omero.uploads_per_tag().values())
+        table = omero.tables[ts.table_id].set_index("annotation_id")
+        for row in ts.rows:
+            assert (row.label_id, row.roi_id) != old[row.annotation_id]
+            assert old[row.annotation_id][0] not in omero.labels  # deleted
+            mask = mask_path(ts.bundle_dir, row.annotation_id)
+            assert tifffile.imread(mask)[0, 0] == 0
+            assert table.loc[row.annotation_id, "mask_digest"] == file_digest(mask)
+            assert table.loc[row.annotation_id, "label_id"] == row.label_id
+            assert omero.labels[row.label_id].pixels[0, 0] == 0
+
+    def test_failed_review_upload_leaves_the_unit_as_it_was(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path, n_images=1)
+        (row,) = ts.rows
+        before = (row.label_id, row.roi_id, row.mask_digest)
+        mask = mask_path(ts.bundle_dir, row.annotation_id)
+        saved = tifffile.imread(mask)
+        omero.fail = {"roi": omero.calls.get("roi", 0) + 1}  # label posts, ROI fails
+
+        assert ts.review(ScriptedAnnotator(image_mask, review_fn=edited)) == 0
+
+        assert (row.label_id, row.roi_id, row.mask_digest) == before
+        assert np.array_equal(tifffile.imread(mask), saved)
+        assert omero.uploads_per_tag() == {ts.upload_tag(row.annotation_id): (1, 1)}
+        kept = list((ts.bundle_dir / "annotation_output" / "conflicts").iterdir())
+        assert len(kept) == 1 and tifffile.imread(kept[0])[0, 0] == 0
+        assert not list(mask.parent.glob("*.previous.tif"))
+
+    def test_ids_limit_the_review(self, tmp_path):
+        ts, _, _ = annotated_set(tmp_path, n_images=3)
+        chosen = ts.rows[1].annotation_id
+
+        batch = ts.start_session(review=True, ids=[chosen]).next_batch()
+
+        assert [i.annotation_id for i in batch.items] == [chosen]
+
+    def test_mask_is_downloaded_when_the_folder_lacks_it(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path, n_images=1)
+        row = ts.rows[0]
+        mask_path(ts.bundle_dir, row.annotation_id).unlink()
+
+        batch = ts.start_session(review=True).next_batch()
+
+        assert np.array_equal(
+            batch.items[0].initial_mask, omero.labels[row.label_id].pixels
+        )
+        assert mask_path(ts.bundle_dir, row.annotation_id).exists()
+
+    def test_failed_upload_keeps_the_old_uploads(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path, n_images=1)
+        old = (ts.rows[0].label_id, ts.rows[0].roi_id)
+        omero.fail = {"label": omero.calls["label"] + 1}
+
+        revised = ts.review(ScriptedAnnotator(image_mask, review_fn=edited))
+
+        assert revised == 0
+        assert old[0] in omero.labels and old[1] in omero.rois
+        assert "simulated label failure" in ts.rows[0].error
+
+    def test_local_set_review_replaces_the_mask_only(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path, storage="local")
+
+        revised = ts.review(ScriptedAnnotator(image_mask, review_fn=edited))
+
+        assert revised == 2 and omero.labels == {}
+        for row in ts.rows:
+            mask = mask_path(ts.bundle_dir, row.annotation_id)
+            assert row.mask_digest == file_digest(mask)

@@ -20,12 +20,16 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import tifffile
 
+from . import claims
 from .annotators import Annotator, Batch, BatchItem, MicroSamAnnotator
 from .bundle import (
     atomic_write,
+    file_digest,
     home_dir,
     local_bundle,
+    mask_path,
     new_local_id,
     omero_bundle,
     pixel_digest,
@@ -39,8 +43,8 @@ from .errors import (
     TableReadError,
     TableWriteError,
 )
-from .events import EventSink, TableWritten, log_events
-from .omero import omero_functions
+from .events import ClaimsHeld, ClaimsReleased, EventSink, TableWritten, log_events
+from .omero import omero_functions, tracking_table
 from .omero._untyped import ezomero
 from .omero.omero_functions import create_tracking_table as create_omero_tracking_table
 from .omero.omero_functions import replace_table_config
@@ -65,6 +69,9 @@ from .sources.wells import match_well_filter
 from .sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 
 logger = logging.getLogger(__name__)
+
+# Where external tools (e.g. Cellpose) write masks for collect_masks.
+EXTERNAL_OUTPUT = "external_output"
 
 
 def _well_name(row: int, column: int) -> str:
@@ -105,6 +112,20 @@ class OmeroWrites:
     def write_rows(self, conn: Any, table_id: int, rows: Sequence[Row]) -> dict:
         """Write rows to the tracking table in place."""
         return omero_functions.write_rows_to_table(conn, table_id, rows)
+
+    def read_rows(self, conn: Any, table_id: int, keys: Sequence[str]) -> Any:
+        """The current table rows for ``keys`` (a DataFrame)."""
+        return tracking_table.read_rows(conn, table_id, keys)
+
+    def update_cells(
+        self,
+        conn: Any,
+        table_id: int,
+        keys: Sequence[str],
+        change: Callable[[dict[str, Any]], dict[str, Any] | None],
+    ) -> list[str]:
+        """Change some cells of the rows for ``keys`` in place (claims)."""
+        return tracking_table.update_cells(conn, table_id, keys, change)
 
     def read_config(self, conn: Any, table_id: int) -> AnnotationConfig | None:
         """The set's one config YAML on OMERO, or None if it has none."""
@@ -192,6 +213,11 @@ class TrainingSet:
         self.cancel = cancel
         self._bundle = bundle
         self._batches_run = 0
+        # Notes set here on sessions of other computers, kept over their copy on
+        # OMERO until published (see _merge_remote_config).
+        self._note_edits: dict[int, str] = {}
+        # A session being started: renumbered if another computer took its number.
+        self._starting: SessionRecord | None = None
         _ = self._seed  # generate and store the seed before anything is planned
         self.image_source = (
             image_source
@@ -430,10 +456,11 @@ class TrainingSet:
         )
         return [Row.from_unit(unit) for unit in units]
 
-    def prepare_item(self, annotation: Row) -> BatchItem:
+    def prepare_item(self, annotation: Row, *, with_mask: bool = False) -> BatchItem:
         """Load a unit for annotation and save its input image(s) into the bundle.
 
-        Records the digest of the pixels shown to the annotator.
+        Records the digest of the pixels shown to the annotator. ``with_mask`` adds
+        the unit's saved mask (a review).
         """
         meta = self._meta_for(annotation)
         image_obj = self.image_source.get_image(annotation.image_uri)
@@ -445,7 +472,22 @@ class TrainingSet:
             pixels=pixels,
             context=self._context_for(image_obj, meta),
             unit=annotation.unit(),
+            initial_mask=self.saved_mask(annotation) if with_mask else None,
         )
+
+    def saved_mask(self, annotation: Row) -> np.ndarray | None:
+        """The unit's mask: the folder's copy if it matches the recorded digest,
+        else the label file on OMERO (saved into the folder if it has none)."""
+        path = mask_path(self.bundle_dir, annotation.annotation_id)
+        if path.exists() and file_digest(path) == annotation.mask_digest:
+            return np.asarray(tifffile.imread(path))
+        if not self.is_local and annotation.label_id is not None:
+            pixels = self.omero_writes.download_label(self.conn, annotation.label_id)
+            if pixels is not None:
+                if not path.exists():
+                    atomic_write(path, lambda tmp: tifffile.imwrite(tmp, pixels))
+                return pixels
+        return np.asarray(tifffile.imread(path)) if path.exists() else None
 
     def make_batch(
         self, index: int, items: Sequence[BatchItem], scratch: Path
@@ -840,8 +882,11 @@ class TrainingSet:
             )
         return tag_for(self.table_id, annotation_id)
 
-    def write_table(self) -> int:
-        """Write the rows to the tracking table, in place (it keeps its ID).
+    def write_table(self, rows: Sequence[Row]) -> int:
+        """Write ``rows`` to the tracking table, in place (it keeps its ID).
+
+        Only the rows this run changed are written, so rows other computers
+        annotate meanwhile are never overwritten with a stale copy.
 
         Raises:
             TableWriteError: The update failed (chained to the OMERO error).
@@ -849,7 +894,7 @@ class TrainingSet:
         table_id = self.table_id
         assert table_id is not None, "local sets have no tracking table"
         try:
-            result = self.omero_writes.write_rows(self.conn, table_id, self.rows)
+            result = self.omero_writes.write_rows(self.conn, table_id, rows)
         except OmeroAnnotateAIError:
             raise
         except Exception as error:
@@ -877,18 +922,76 @@ class TrainingSet:
             raise TableReadError(f"Tracking table {table_id} has no rows")
         return rows_from_frame(df)
 
+    def update_cells(
+        self,
+        keys: Sequence[str],
+        change: Callable[[dict[str, Any]], dict[str, Any] | None],
+    ) -> list[str]:
+        """Change cells of the table rows for ``keys``, mirrored into ``rows``."""
+        assert self.table_id is not None, "local sets have no tracking table"
+        changes: dict[str, dict[str, Any]] = {}
+
+        def record(row: dict[str, Any]) -> dict[str, Any] | None:
+            cells = change(row)
+            if cells:
+                changes[str(row["annotation_id"])] = cells
+            return cells
+
+        changed = self.omero_writes.update_cells(self.conn, self.table_id, keys, record)
+        by_id = {r.annotation_id: r for r in self.rows}
+        for annotation_id in changed:
+            for name, value in changes[annotation_id].items():
+                setattr(by_id[annotation_id], name, value)
+        if changed:
+            self.save_local_table()
+        return changed
+
+    def current_rows(self, keys: Sequence[str]) -> dict[str, Row]:
+        """The tracking table's rows for ``keys`` as they are now, by ID."""
+        assert self.table_id is not None, "local sets have no tracking table"
+        frame = self.omero_writes.read_rows(self.conn, self.table_id, keys)
+        return {r.annotation_id: r for r in rows_from_frame(frame)}
+
+    def refresh(self) -> None:
+        """Take over what other computers saved meanwhile (OMERO sets).
+
+        Units another session annotated (or reviewed: a newer label file) get the
+        table's row; rows another computer added are appended; claims are updated.
+        """
+        if self.is_local or self.table_id is None:
+            return
+        remote = {r.annotation_id: r for r in self._read_table_rows(self.table_id)}
+        for position, row in enumerate(self.rows):
+            theirs = remote.pop(row.annotation_id, None)
+            if theirs is None:
+                continue
+            newer = (theirs.label_id or 0) > (row.label_id or 0)  # OMERO IDs only grow
+            if theirs.processed and (not row.processed or newer):
+                self.rows[position] = theirs
+            else:
+                row.claimed_by, row.claimed_at = theirs.claimed_by, theirs.claimed_at
+        self.rows.extend(remote.values())
+        self.save_local_table()
+
     def publish_config(self) -> int | None:
-        """Replace the set's one config YAML on OMERO with the local one."""
+        """Replace the set's one config YAML on OMERO with the local one.
+
+        What other computers published meanwhile is merged in first (see
+        :meth:`_merge_remote_config`).
+        """
         if self.table_id is None:
             return None
+        self._merge_remote_config()
         self.save_config()
-        return self.omero_writes.replace_config(
+        file_id = self.omero_writes.replace_config(
             self.conn,
             self.table_id,
             str(self._config_path()),
             self._config.omero.container_type,
             self._config.omero.get_primary_container_id(),
         )
+        self._note_edits.clear()
+        return file_id
 
     # --- Creating and opening ----------------------------------------------------
 
@@ -1014,7 +1117,9 @@ class TrainingSet:
             if ts.table_id is None:
                 raise ConfigError("This OMERO training set's config has no table ID")
             ts.rows = ts._read_table_rows(ts.table_id)
+            ts._release_own_claims()
             reconcile(ts, prune_duplicates=prune_duplicates, cancel=cancel)
+            ts._report_claims()
         ts._close_open_sessions()
         return ts
 
@@ -1065,6 +1170,9 @@ class TrainingSet:
         Raises:
             ConfigError: A count is lower than the set already has.
         """
+        if not self.is_local:
+            self.refresh()  # rows other computers added count towards the targets
+            self._merge_remote_config()
         training = self._config.training
         for key, value in (
             ("train_n", train_n),
@@ -1078,11 +1186,12 @@ class TrainingSet:
                     f"{key} can only be raised (it is {getattr(training, key)})"
                 )
             setattr(training, key, value)
+        before = len(self.rows)
         added = self._extend_rows()
         if added:
             self.save_local_table()
             if not self.is_local:
-                self.write_table()
+                self.write_table(self.rows[before:])
         self.save_config()
         self.publish_config()
         return added
@@ -1118,9 +1227,17 @@ class TrainingSet:
         return added
 
     def start_session(
-        self, *, model: str | None = None, batch_size: int | None = None
+        self,
+        *,
+        model: str | None = None,
+        batch_size: int | None = None,
+        review: bool = False,
+        ids: Sequence[str] | None = None,
     ) -> AnnotationSession:
-        """A new annotation session over the pending units (see :mod:`..session`)."""
+        """A new session over the pending units, or a review of annotated ones.
+
+        See :mod:`..session`; ``ids`` limits a session to those units.
+        """
         if not self.rows:
             raise ValueError("The training set has no units")
         return AnnotationSession(
@@ -1128,6 +1245,8 @@ class TrainingSet:
             batch_size=batch_size or self._config.workflow.batch_size or None,
             model=model,
             cancel=self.cancel,
+            review=review,
+            ids=ids,
         )
 
     def annotate(
@@ -1143,8 +1262,36 @@ class TrainingSet:
         ``annotator`` defaults to micro-SAM in napari. ``note`` is stored with the
         session (see :meth:`set_session_note` to add one afterwards).
         """
-        annotator = annotator if annotator is not None else MicroSamAnnotator()
         session = self.start_session(model=model, batch_size=batch_size)
+        return self._run(session, annotator, note)
+
+    def review(
+        self,
+        annotator: Annotator | None = None,
+        *,
+        ids: Sequence[str] | None = None,
+        batch_size: int | None = None,
+        model: str | None = None,
+        note: str | None = None,
+    ) -> int:
+        """Correct annotated units (all, or ``ids``); returns how many changed.
+
+        Each unit opens with its saved mask (downloaded from OMERO if the folder
+        lacks it). A changed mask replaces the upload; an unchanged one is left
+        alone. The session is recorded as a review, with ``note``.
+        """
+        session = self.start_session(
+            model=model, batch_size=batch_size, review=True, ids=ids
+        )
+        return self._run(session, annotator, note)
+
+    def _run(
+        self,
+        session: AnnotationSession,
+        annotator: Annotator | None,
+        note: str | None,
+    ) -> int:
+        annotator = annotator if annotator is not None else MicroSamAnnotator()
         try:
             while (batch := session.next_batch()) is not None:
                 session.commit(batch, annotator.annotate(batch))
@@ -1154,23 +1301,96 @@ class TrainingSet:
             raise
         return session.finish(note)
 
-    def begin_session(self, model: str | None, batch_size: int | None) -> int:
-        """Record a new session in the config; returns its number."""
-        known = [s.id for s in self._config.sessions] + [r.session for r in self.rows]
-        session_id = 1 + max(known, default=0)
-        self._config.sessions.append(
-            SessionRecord(
-                id=session_id,
-                started=datetime.now(),
-                user=self._user(),
-                software_version=_software_version(),
-                model=model or self._config.ai_model.pretrained_from,
-                batch_size=batch_size,
+    def _merge_remote_config(self) -> AnnotationConfig | None:
+        """Take what other computers published from the config on OMERO.
+
+        - Sessions: this computer's records are kept, other computers' records are
+          taken from OMERO - except notes set here (:meth:`set_session_note`). A
+          session being started whose number another computer took meanwhile is
+          renumbered (no rows carry it yet).
+        - Image counts only grow (:meth:`extend`), so the larger count wins.
+
+        Everything else in a set's config is fixed once it is created.
+        """
+        if self.table_id is None:
+            return None
+        remote = self.omero_writes.read_config(self.conn, self.table_id)
+        if remote is None:
+            return None
+        host = claims.host_id()
+        merged = {s.id: s for s in self._config.sessions}
+        for theirs in remote.sessions:
+            mine = merged.get(theirs.id)
+            if mine is not None and mine is self._starting and theirs.host != host:
+                merged[theirs.id] = theirs
+                taken = [*merged, *(t.id for t in remote.sessions)]
+                taken += [r.session for r in self.rows]
+                mine.id = 1 + max(taken)
+                merged[mine.id] = mine
+            elif mine is None or mine.host not in (None, host):
+                merged[theirs.id] = theirs  # another computer's session: theirs wins
+        for session_id, note in self._note_edits.items():
+            if session_id in merged:
+                merged[session_id].note = note
+        self._config.sessions = sorted(merged.values(), key=lambda s: s.id)
+        training = self._config.training
+        for key in ("train_n", "validate_n", "test_n"):
+            setattr(
+                training,
+                key,
+                max(getattr(training, key), getattr(remote.training, key)),
             )
+        return remote
+
+    def begin_session(
+        self,
+        model: str | None,
+        batch_size: int | None,
+        kind: Literal["annotate", "review"] = "annotate",
+    ) -> int:
+        """Record a new session in the config; returns its number.
+
+        For OMERO sets the number follows the sessions on OMERO and is published at
+        once, then checked: if another computer published the same number at the
+        same time, this session takes the next free one. (Two computers publishing
+        within the same instant can still overwrite each other's new record; see
+        :mod:`omero_annotate_ai.claims`.)
+        """
+        self._merge_remote_config()
+        known = [s.id for s in self._config.sessions] + [r.session for r in self.rows]
+        record = SessionRecord(
+            id=1 + max(known, default=0),
+            kind=kind,
+            started=datetime.now(),
+            user=self._user(),
+            host=claims.host_id(),
+            software_version=_software_version(),
+            model=model or self._config.ai_model.pretrained_from,
+            batch_size=batch_size,
         )
-        if self._can_save():
-            self.save_config()
-        return session_id
+        self._config.sessions.append(record)
+        if self.table_id is None:
+            if self._can_save():
+                self.save_config()
+            return record.id
+        self._starting = record
+        try:
+            for _ in range(5):
+                self.publish_config()
+                remote = self.omero_writes.read_config(self.conn, self.table_id)
+                owner = next(
+                    (
+                        s.host
+                        for s in (remote.sessions if remote else [])
+                        if s.id == record.id
+                    ),
+                    record.host,
+                )
+                if owner == record.host:
+                    break
+        finally:
+            self._starting = None
+        return record.id
 
     def end_session(
         self,
@@ -1190,8 +1410,18 @@ class TrainingSet:
         self.publish_config()
 
     def set_session_note(self, session_id: int, note: str) -> None:
-        """Set (or replace) a session's note, locally and on OMERO."""
+        """Set (or replace) a session's note, locally and on OMERO.
+
+        Works for sessions of other computers too: the note set here wins over
+        their copy on OMERO.
+
+        Raises:
+            KeyError: The set has no such session.
+        """
+        if self.table_id is not None:
+            self._merge_remote_config()
         self._session(session_id).note = note
+        self._note_edits[session_id] = note
         self.save_config()
         self.publish_config()
 
@@ -1202,10 +1432,14 @@ class TrainingSet:
         raise KeyError(f"No session {session_id} in this training set")
 
     def _close_open_sessions(self) -> None:
-        """Sessions a crashed run left open become ``interrupted``."""
+        """Sessions a crashed run on this computer left open become ``interrupted``.
+
+        Open sessions of other computers may still be running and stay open.
+        """
         changed = False
+        host = claims.host_id()
         for record in self._config.sessions:
-            if record.status == "open":
+            if record.status == "open" and record.host in (None, host):
                 record.status = "interrupted"
                 record.n_annotated = sum(
                     r.processed and r.session == record.id for r in self.rows
@@ -1214,8 +1448,34 @@ class TrainingSet:
         if changed:
             self.save_config()
 
+    def _release_own_claims(self) -> None:
+        """Release the claims an earlier run of this user on this computer left."""
+        held = [r.annotation_id for r in self.rows if r.claimed_by]
+        if held:
+            released = claims.release(
+                self, claims.owner(self._user()), held, suffix=True
+            )
+            if released:
+                self.events(ClaimsReleased(len(released)))
+
+    def _report_claims(self) -> None:
+        """Report units other sessions are annotating now (they are skipped)."""
+        hours = self._config.workflow.claim_hours
+        live = [
+            r.claimed_by.partition("@")[2]
+            for r in self.rows
+            if not r.processed and claims.is_live(r.claimed_by, r.claimed_at, hours)
+        ]
+        if live:
+            self.events(ClaimsHeld(len(live), tuple(sorted(set(live)))))
+
     def _can_save(self) -> bool:
         return self.is_local or self.table_id is not None or self._bundle is not None
+
+    @property
+    def user(self) -> str | None:
+        """The OMERO user (or the login name without a connection)."""
+        return self._user()
 
     def _user(self) -> str | None:
         try:
@@ -1240,12 +1500,14 @@ class TrainingSet:
         """Save the pending units' images for an external tool; returns how many.
 
         Images go to ``annotation_input/`` (and ``model_input/`` for separate
-        channels); the tool writes ``annotation_output/{annotation_id}_mask.tif``.
-        The units stay pending until :meth:`collect_masks` finds their masks.
+        channels); the tool writes ``external_output/{annotation_id}_mask.tif``.
+        The units stay pending until :meth:`collect_masks` finds their masks:
+        ``annotation_output/`` only ever holds accepted masks, so drafts in
+        ``external_output/`` are never uploaded by the repair on open.
         """
         pending = [r for r in self.rows if not r.processed]
         self._save_images_for_external(pending)
-        (self.bundle_dir / "annotation_output").mkdir(parents=True, exist_ok=True)
+        (self.bundle_dir / EXTERNAL_OUTPUT).mkdir(parents=True, exist_ok=True)
         self.save_local_table()
         self.save_config()
         return len(pending)
@@ -1271,12 +1533,13 @@ class TrainingSet:
                         "Could not save the model image of %s", row.annotation_id
                     )
 
-    def collect_masks(self, folder: str = "annotation_output") -> int:
+    def collect_masks(self, folder: str = EXTERNAL_OUTPUT) -> int:
         """Save the masks an external tool wrote as ``{annotation_id}_mask.tif``.
 
         ``folder`` is relative to the set's folder and may be a glob pattern. Each
-        mask goes through the same write order as a session (one new session).
-        Returns the number of units saved.
+        mask goes through the same write order as a session (one new session). On
+        OMERO sets the table is read first and the units claimed: units saved or
+        claimed on another computer are skipped. Returns the number of units saved.
         """
         files: list[Path] = []
         folders = (
@@ -1287,22 +1550,39 @@ class TrainingSet:
         for found in folders:
             if found.is_dir():
                 files += [*found.glob("*_mask.tif"), *found.glob("*_mask.tiff")]
+        if not self.is_local:
+            self.refresh()  # units saved on other computers meanwhile are skipped
         by_id = {r.annotation_id: r for r in self.rows}
-        todo = [
-            (by_id[f.stem.removesuffix("_mask")], f)
+        todo = {
+            f.stem.removesuffix("_mask"): f
             for f in files
             if f.stem.removesuffix("_mask") in by_id
             and not by_id[f.stem.removesuffix("_mask")].processed
-        ]
+        }
         if not todo:
             return 0
         session_id = self.begin_session(None, None)
-        saved = sum(commit_unit(self, row, path, session_id) for row, path in todo)
-        if saved and not self.is_local:
-            self.write_table()
-        self.end_session(session_id, saved, None)
-        logger.info("Saved %d annotations", saved)
-        return saved
+        token = claims.token(session_id, self._user())
+        if not self.is_local:  # like a session: claim first, skip units held elsewhere
+            todo = {
+                k: todo[k] for k in claims.claim(self, token, list(todo), len(todo))
+            }
+        committed: list[Row] = []
+        failed: list[str] = []
+        for annotation_id, path in todo.items():
+            row = by_id[annotation_id]
+            if commit_unit(self, row, path, session_id):
+                committed.append(row)
+            else:
+                failed.append(annotation_id)
+        if not self.is_local:
+            if committed:
+                self.write_table(committed)
+            if failed:
+                claims.release(self, token, failed)
+        self.end_session(session_id, len(committed), None)
+        logger.info("Saved %d annotations", len(committed))
+        return len(committed)
 
     def _meta_for(self, annotation: Row) -> dict:
         """A unit's plane, patch and image as the image loaders expect them."""

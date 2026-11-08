@@ -6,7 +6,7 @@ Run everything from the repository root in the pixi `dev` environment.
 |---|---|---|
 | Unit | `pixi run -e dev pytest tests/ -q -m "not (omero or docker)"` | nothing |
 | Docker integration + functional | `pixi run -e dev pytest tests/ -m "docker and not slow"` | Docker |
-| Slow (micro-SAM training loaders) | `pixi run -e dev pytest tests/ -m "docker and slow"` | Docker |
+| Slow (micro-SAM training loaders, a 2-iteration training run) | `pixi run -e dev pytest tests/ -m "docker and slow"` | Docker |
 | Lint, format, types | `pixi run -e dev lint` and `pixi run -e dev typecheck` | nothing |
 
 ## Docker OMERO
@@ -72,4 +72,3 @@ tests in `tests/test_reconcile.py` use to check that resuming repairs every stat
 | `OAI_OMERO_HOST` / `OAI_OMERO_PORT` | `localhost` / `6064` | server to test against |
 | `OAI_OMERO_USER` / `OAI_OMERO_PASSWORD` | `root` / `omero` | login |
 | `OAI_KEEP_OMERO` | unset | `1` keeps the stack and the seeded data after the session |
-| `OAI_FULL_TRAINING` | unset | `1` runs a full micro-SAM training (over 30 min on CPU) |

@@ -4,8 +4,11 @@ The [Image Data Resource (IDR)](https://idr.openmicroscopy.org) is a public OMER
 with reference image sets from published studies. Anyone can log in, which makes it a
 good place to try OMERO Annotate AI before using your own data.
 
-Because you cannot write to the IDR, the run uses **read-only mode**: everything is
-saved on your computer and nothing is uploaded.
+Because you cannot write to the IDR, the demo creates a **local** training set
+(`storage: local`): everything is saved on your computer and nothing is uploaded. If the
+IDR's OMERO API is unavailable, annotate the same data as OME-Zarr with the
+[annotate-from-YAML notebook](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/annotate-from-yaml.py)
+(`source: zarr`, no OMERO needed).
 
 ## With the demo notebook
 
@@ -28,23 +31,23 @@ Follow the [micro-SAM tutorial](microsam-annotation-pipeline.md) with these valu
 | Username / password | `public` / `public` |
 | Container | screen `1203` (idr0019, NF-κB signalling) or dataset `369` (idr0015, endosomes) |
 | Training / validation images | 3 / 2 |
-| Read-only mode | **on** |
+| Storage | **Local folder only** (nothing is written to the public server) |
 
 The IDR server is connected through a websocket (`ws://…/omero-ws`), which works through
 most institutional firewalls.
 
 ## What you get
 
-After annotating, your working directory holds:
+After annotating, the set's folder (`~/omero_annotate_ai/local/<id>_<name>/`) holds:
 
 ```text
 annotation_input/     the images you annotated, as TIFF
 annotation_output/    your masks, <unit id>_mask.tif
-tracking_table.csv    which units were done, and their train/validation split
-annotation_config_<name>.yaml
+tracking_table.csv    which units were done, and their split
+config.yaml           the set's config, sessions and notes
 ```
 
-These can go straight into [training](training-data-prep.md#from-a-local-run-read-only-mode-or-cellpose).
+These can go straight into [training](training-data-prep.md#from-a-local-training-set).
 
 ## Finding other data
 

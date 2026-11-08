@@ -183,10 +183,11 @@ def replace_table_config(
 ) -> int:
     """Attach a training set's config YAML, replacing the previous one.
 
-    Every set keeps exactly one config on OMERO, named
-    ``annotation_config_table_<id>.yaml``. The new file is posted first and
-    the old ones deleted after, so a failed upload never leaves the set
-    without a config.
+    Every set keeps one config on OMERO, named
+    ``annotation_config_table_<id>.yaml``. The new file is posted first and only
+    older copies (lower IDs) are deleted after, so a failed upload never leaves
+    the set without a config, and two computers publishing at once never delete
+    each other's new file: the newest one stays (readers take the newest).
 
     Args:
         conn: OMERO connection
@@ -216,10 +217,13 @@ def replace_table_config(
         for ann in _table_config_annotations(
             conn, table_id, [(container_type, container_id)]
         )
-        if ann["id"] != new_id
+        if ann["id"] < new_id
     ]
-    if old:
-        conn.deleteObjects("Annotation", old, wait=True)
+    for old_id in old:  # one by one: another computer may delete the same copy
+        try:
+            conn.deleteObjects("Annotation", [old_id], wait=True)
+        except Exception:  # noqa: BLE001 - already gone or not ours: harmless
+            logger.debug("Old config %s not deleted", old_id)
     return new_id
 
 
@@ -327,12 +331,53 @@ def _tagged_objects(
     return rois, labels
 
 
+# Large ROI deletes can take a while; wait up to 10 minutes per call.
+_DELETE_WAIT_LOOPS = 1200
+_DELETE_WAIT_MS = 500
+
+# Report keys and the OMERO type each kind is checked (and owned) as.
+_DELETE_KINDS = {
+    "rois": "Roi",
+    "labels": "FileAnnotation",
+    "annotation_inputs": "FileAnnotation",
+    "configs": "FileAnnotation",
+    "table": "FileAnnotation",
+}
+
+
+def _owner_id(obj: Any) -> int | None:
+    """The owner's experimenter ID of a gateway object, if it can be read."""
+    try:
+        return int(obj.getDetails().getOwner().getId())
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _delete_and_wait(conn: Any, graph: str, ids: list[int]) -> None:
+    """Delete ``ids`` and wait until the server reports the command done.
+
+    ``deleteObjects(wait=True)`` gives up silently after a few seconds; this
+    waits much longer and raises if the server reports an error or never
+    finishes, so a report never says "deleted" for work still running.
+    """
+    handle = conn.deleteObjects(graph, ids, wait=False)
+    conn._waitOnCmd(
+        handle,
+        loops=_DELETE_WAIT_LOOPS,
+        ms=_DELETE_WAIT_MS,
+        failonerror=True,
+        failontimeout=True,
+        closehandle=True,
+    )
+
+
 def delete_training_set(
     conn,
     table_id: int,
     container_type: str | None = None,
     container_id: int | None = None,
     dry_run: bool = True,
+    force_others: bool = False,
 ) -> dict[str, Any]:
     """Delete a tracking table and everything a run created for it.
 
@@ -347,6 +392,11 @@ def delete_training_set(
     - ``configs``: the set's config YAML(s), ``annotation_config_table_<id>.yaml``.
     - ``table``: the tracking table FileAnnotation, deleted last.
 
+    Objects are looked up in every group the user can see and deleted in the
+    table's group. Objects owned by another user (possible in read-write groups)
+    are listed under ``others`` and block the deletion unless ``force_others``
+    is True.
+
     Args:
         conn: OMERO connection
         table_id: Tracking table (FileAnnotation) ID
@@ -355,140 +405,113 @@ def delete_training_set(
         container_id: Container ID that goes with ``container_type``
         dry_run: When True (default) nothing is deleted; the report says what
             would be.
+        force_others: Also delete objects owned by other users.
 
     Returns:
         Report dict with the IDs per kind, ``missing`` (IDs in the table that
-        no longer exist on the server), ``containers`` searched, and
-        ``deleted`` (False on a dry run).
+        no longer exist), ``others`` (IDs owned by another user),
+        ``containers`` searched, and ``deleted`` (False on a dry run).
+
+    Raises:
+        PermissionError: Objects belong to another user and ``force_others``
+            is False (nothing is deleted).
+        omero.CmdError: The server reported an error while deleting, or did
+            not finish in time.
     """
-    kinds = ("rois", "labels", "annotation_inputs", "configs", "table")
+    kinds = tuple(_DELETE_KINDS)
     report: dict[str, Any] = {kind: [] for kind in kinds}
     report["missing"] = {kind: [] for kind in kinds}
+    report["others"] = {kind: [] for kind in kinds}
     report["containers"] = []
     report["deleted"] = False
 
-    table = conn.getObject("FileAnnotation", table_id)
-    if table is None:
-        report["missing"]["table"].append(table_id)
-        print(f"Table {table_id} not found; nothing to delete")
-        return report
-    report["table"].append(table_id)
+    original_group = conn.SERVICE_OPTS.getOmeroGroup()
+    conn.SERVICE_OPTS.setOmeroGroup("-1")  # find the table in any group
+    try:
+        table = conn.getObject("FileAnnotation", table_id)
+        if table is None:
+            report["missing"]["table"].append(table_id)
+            print(f"Table {table_id} not found; nothing to delete")
+            return report
+        # Work in the table's group from here on, so its objects are found and
+        # deleted there instead of being reported missing.
+        conn.SERVICE_OPTS.setOmeroGroup(str(table.getDetails().getGroup().getId()))
+        report["table"].append(table_id)
 
-    df = _read_any_table(conn, table_id)
-    row_kinds = [
-        ("rois", "Roi", "roi_id"),
-        ("labels", "FileAnnotation", "label_id"),
-        ("annotation_inputs", "FileAnnotation", "annotation_input_id"),
-    ]
-    for kind, omero_type, column in row_kinds:
-        if df is None or column not in df.columns:
-            continue
-        for object_id in _valid_omero_ids(df[column]):
-            if conn.getObject(omero_type, object_id) is None:
-                report["missing"][kind].append(object_id)
-            else:
-                report[kind].append(object_id)
+        df = _read_any_table(conn, table_id)
+        row_kinds = [
+            ("rois", "roi_id"),
+            ("labels", "label_id"),
+            ("annotation_inputs", "annotation_input_id"),
+        ]
+        for kind, column in row_kinds:
+            if df is None or column not in df.columns:
+                continue
+            for object_id in _valid_omero_ids(df[column]):
+                if conn.getObject(_DELETE_KINDS[kind], object_id) is None:
+                    report["missing"][kind].append(object_id)
+                else:
+                    report[kind].append(object_id)
 
-    image_ids = (
-        _valid_omero_ids(df["image_id"])
-        if df is not None and "image_id" in df.columns
-        else []
-    )
-    tagged_rois, tagged_labels = _tagged_objects(conn, image_ids, table_id)
-    report["rois"].extend(i for i in tagged_rois if i not in report["rois"])
-    report["labels"].extend(i for i in tagged_labels if i not in report["labels"])
-
-    if container_type and container_id:
-        containers = [(str(container_type).lower(), int(container_id))]
-    else:
-        containers = _table_containers(conn, table_id)
-    report["containers"] = containers
-    report["configs"] = [
-        a["id"] for a in _table_config_annotations(conn, table_id, containers)
-    ]
-
-    summary = ", ".join(f"{len(report[k])} {k}" for k in kinds)
-    missing = sum(len(v) for v in report["missing"].values())
-    if dry_run:
-        print(
-            f"Dry run, nothing deleted. Would delete: {summary}"
-            + (f" ({missing} IDs in the table no longer exist)" if missing else "")
-            + ". Pass dry_run=False to delete."
+        image_ids = (
+            _valid_omero_ids(df["image_id"])
+            if df is not None and "image_id" in df.columns
+            else []
         )
+        tagged_rois, tagged_labels = _tagged_objects(conn, image_ids, table_id)
+        report["rois"].extend(i for i in tagged_rois if i not in report["rois"])
+        report["labels"].extend(i for i in tagged_labels if i not in report["labels"])
+
+        if container_type and container_id:
+            containers = [(str(container_type).lower(), int(container_id))]
+        else:
+            containers = _table_containers(conn, table_id)
+        report["containers"] = containers
+        report["configs"] = [
+            a["id"] for a in _table_config_annotations(conn, table_id, containers)
+        ]
+
+        me = conn.getUserId()
+        for kind in kinds:
+            for object_id in report[kind]:
+                obj = conn.getObject(_DELETE_KINDS[kind], object_id)
+                owner = _owner_id(obj) if obj is not None else None
+                if owner is not None and owner != me:
+                    report["others"][kind].append(object_id)
+
+        summary = ", ".join(f"{len(report[k])} {k}" for k in kinds)
+        missing = sum(len(v) for v in report["missing"].values())
+        others = sum(len(v) for v in report["others"].values())
+        notes = (
+            f" ({missing} IDs in the table no longer exist)" if missing else ""
+        ) + (f" ({others} owned by another user)" if others else "")
+        if dry_run:
+            print(
+                f"Dry run, nothing deleted. Would delete: {summary}{notes}. "
+                "Pass dry_run=False to delete."
+            )
+            return report
+        if others and not force_others:
+            raise PermissionError(
+                f"{others} objects of training set {table_id} belong to another "
+                "user; nothing was deleted. Pass force_others=True to delete them "
+                "too (needs the rights to do so)."
+            )
+
+        # Children first, the table last.
+        if report["rois"]:
+            _delete_and_wait(conn, "Roi", report["rois"])
+        annotations = report["labels"] + report["annotation_inputs"] + report["configs"]
+        if annotations:
+            _delete_and_wait(conn, "Annotation", annotations)
+        _delete_and_wait(conn, "Annotation", [table_id])
+        report["deleted"] = conn.getObject("FileAnnotation", table_id) is None
+        if not report["deleted"]:
+            raise RuntimeError(f"Table {table_id} still exists after deleting it")
+        print(f"Deleted: {summary}")
         return report
-
-    # Children first, the table last.
-    if report["rois"]:
-        conn.deleteObjects("Roi", report["rois"], wait=True)
-    annotations = report["labels"] + report["annotation_inputs"] + report["configs"]
-    if annotations:
-        conn.deleteObjects("Annotation", annotations, wait=True)
-    conn.deleteObjects("Annotation", [table_id], wait=True)
-    report["deleted"] = True
-    print(f"Deleted: {summary}")
-    return report
-
-
-def infer_settings_from_table(df: pd.DataFrame) -> dict[str, Any]:
-    """Infer the run settings that a tracking table's rows pin down.
-
-    Used when no saved config matches the table. Returns only what the rows
-    show: the annotated channel, 3D and patch settings, and the number of
-    distinct images per category.
-    """
-    settings: dict[str, Any] = {}
-    if df is None or df.empty:
-        return settings
-
-    def first(column):
-        if column not in df.columns:
-            return None
-        values = df[column].dropna()
-        return values.iloc[0] if len(values) else None
-
-    def as_bool(value):
-        if isinstance(value, str):
-            return value.strip().lower() in ("true", "1", "yes")
-        return bool(value)
-
-    channel = first("channel")
-    if channel is not None:
-        settings["channel"] = int(channel)
-    volumetric = first("is_volumetric")
-    if volumetric is not None:
-        settings["three_d"] = as_bool(volumetric)
-    is_patch = first("is_patch")
-    if is_patch is not None:
-        settings["use_patches"] = as_bool(is_patch)
-        if settings["use_patches"]:
-            patches = df[df["is_patch"].map(as_bool)]
-            width, height = first("patch_width"), first("patch_height")
-            if width is not None and height is not None:
-                settings["patch_size"] = [int(width), int(height)]
-            image_col = "image_uri" if "image_uri" in df.columns else "image_id"
-            plane = [
-                c for c in (image_col, "timepoint", "z_slice") if c in patches.columns
-            ]
-            if image_col in plane and len(patches):
-                settings["patches_per_image"] = int(patches.groupby(plane).size().max())
-
-    for column, mode_key, list_key in (
-        ("timepoint", "timepoint_mode", "timepoints"),
-        ("z_slice", "z_slice_mode", "z_slices"),
-    ):
-        if column in df.columns:
-            values = sorted({int(v) for v in df[column].dropna()})
-            if values:
-                settings[mode_key] = "specific"
-                settings[list_key] = values
-
-    image_col = "image_uri" if "image_uri" in df.columns else "image_id"
-    if "category" in df.columns and image_col in df.columns:
-        counts = df.groupby("category")[image_col].nunique()
-        settings["train_n"] = int(counts.get("training", 0))
-        settings["validate_n"] = int(counts.get("validation", 0))
-        settings["test_n"] = int(counts.get("test", 0))
-    return settings
+    finally:
+        conn.SERVICE_OPTS.setOmeroGroup(original_group)
 
 
 def _label_file_name(

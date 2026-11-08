@@ -1,7 +1,5 @@
 """Tests for training data preparation functions."""
 
-import shutil
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,37 +13,9 @@ from omero_annotate_ai.core.annotation_config import (
 )
 from omero_annotate_ai.processing import training_functions as tf
 from omero_annotate_ai.processing.training_functions import (
-    prepare_training_data_from_table,
     reorganize_local_data_for_training,
 )
 from omero_annotate_ai.rows import Row, rows_to_frame
-
-
-class TestPrepareTrainingDataFromTable:
-    """Test the automated training data preparation function."""
-
-    @pytest.fixture
-    def mock_conn(self):
-        """Mock OMERO connection."""
-        return Mock()
-
-    @pytest.fixture
-    def temp_output_dir(self):
-        """Temporary output directory for tests."""
-        temp_dir = Path(tempfile.mkdtemp())
-        yield temp_dir
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-
-    def test_invalid_validation_split(self, mock_conn, temp_output_dir):
-        """validation_split outside 0.0-1.0 must raise."""
-        with pytest.raises(ValueError, match="validation_split must be between"):
-            prepare_training_data_from_table(
-                conn=mock_conn,
-                table_id=123,
-                output_dir=temp_output_dir,
-                validation_split=1.5,
-            )
 
 
 @pytest.mark.unit
@@ -198,7 +168,6 @@ class TestReorganizeOntoRecords:
 
         assert (result["train_input"] / "0.tif").read_bytes() == b"ann"
         assert (result["train_label"] / "0.tif").read_bytes() == b"lbl"
-        assert (result["val_input"] / "1.tif").exists()
         assert "validation_input" not in result
 
     def test_image_and_label_pair_by_id(self, tmp_path):
@@ -524,8 +493,7 @@ class TestPrepareFromTableRecords:
                 {
                     "image_id": 100 + i,
                     "annotation_id": str(i),
-                    "train": True,
-                    "validate": False,
+                    "category": "training",
                     "channel": 0,
                     "z_slice": 0,
                     "timepoint": 0,
@@ -566,7 +534,6 @@ class TestPrepareFromTableRecords:
                 conn=Mock(),
                 table_id=1,
                 output_dir=tmp_path / "training",
-                validation_split=0.0,
             )
 
     def test_a_missing_label_does_not_shift_later_pairs(self, tmp_path):
@@ -594,14 +561,31 @@ class TestPrepareFromTableRecords:
 
     def test_result_keys_feed_setup_training(self, tmp_path):
         table = self._table()
-        table.loc[1, "train"] = False
-        table.loc[1, "validate"] = True
+        table.loc[1, "category"] = "validation"
 
         result = self._run(tmp_path, table)
 
         for key in ("train_input", "train_label", "val_input", "val_label"):
             assert key in result, f"setup_training requires {key}"
         assert (result["val_input"] / "1.tif").exists()
+        assert (result["val_input"] / "1.tif").exists()
+
+    def test_test_rows_get_their_own_folders(self, tmp_path):
+        table = self._table()
+        table.loc[1, "category"] = "test"
+
+        result = self._run(tmp_path, table)
+
+        assert (result["train_input"] / "0.tif").exists()
+        assert (result["test_input"] / "1.tif").exists()
+        assert (result["test_label"] / "1.tif").exists()
+
+    def test_unknown_category_is_rejected(self, tmp_path):
+        table = self._table()
+        table.loc[1, "category"] = "holdout"
+
+        with pytest.raises(ValueError, match="Unknown category"):
+            self._run(tmp_path, table)
 
     def test_label_that_no_longer_matches_its_digest_stops_the_export(self, tmp_path):
         from omero_annotate_ai.bundle import pixel_digest
@@ -968,3 +952,59 @@ class TestFetchPlaneErrors:
             tf._fetch_plane(
                 None, _plane_row(is_volumetric=True, z_slice="all"), channel=0
             )
+
+
+@pytest.mark.unit
+class TestRunTrainingLength:
+    """How long micro-SAM trains: epochs, or n_iterations when given."""
+
+    def _result(self, tmp_path):
+        folders = {}
+        for key in ("train_input", "train_label", "val_input", "val_label"):
+            folders[key] = tmp_path / key
+            folders[key].mkdir()
+        return folders
+
+    def test_epochs_zero_without_iterations_is_rejected(self, tmp_path):
+        from omero_annotate_ai.processing.training_utils import setup_training
+
+        with pytest.raises(ValueError, match="epochs > 0"):
+            setup_training(self._result(tmp_path), epochs=0)
+
+    def test_n_iterations_reaches_train_sam(self, tmp_path, monkeypatch):
+        sam_training = pytest.importorskip("micro_sam.training")
+        from omero_annotate_ai.processing.training_utils import (
+            run_training,
+            setup_training,
+        )
+
+        seen = {}
+        monkeypatch.setattr(sam_training, "default_sam_loader", lambda **_: object())
+        monkeypatch.setattr(
+            sam_training, "train_sam", lambda **kwargs: seen.update(kwargs)
+        )
+
+        config = setup_training(self._result(tmp_path), epochs=5, n_iterations=3)
+        outcome = run_training(config)
+
+        assert seen["n_iterations"] == 3
+        assert seen["n_epochs"] == 5  # micro-SAM ignores it when n_iterations is set
+        assert outcome["training_stats"]["n_iterations"] == 3
+
+    def test_epochs_only_leaves_iterations_unset(self, tmp_path, monkeypatch):
+        sam_training = pytest.importorskip("micro_sam.training")
+        from omero_annotate_ai.processing.training_utils import (
+            run_training,
+            setup_training,
+        )
+
+        seen = {}
+        monkeypatch.setattr(sam_training, "default_sam_loader", lambda **_: object())
+        monkeypatch.setattr(
+            sam_training, "train_sam", lambda **kwargs: seen.update(kwargs)
+        )
+
+        run_training(setup_training(self._result(tmp_path), epochs=2))
+
+        assert seen["n_epochs"] == 2
+        assert seen["n_iterations"] is None

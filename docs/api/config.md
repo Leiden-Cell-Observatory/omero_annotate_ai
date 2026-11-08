@@ -22,6 +22,10 @@
 
 ::: omero_annotate_ai.core.annotation_config.WorkflowConfig
 
+::: omero_annotate_ai.core.annotation_config.NormalizationConfig
+
+::: omero_annotate_ai.core.annotation_config.ZarrConfig
+
 ::: omero_annotate_ai.core.annotation_config.Identity
 
 ::: omero_annotate_ai.core.annotation_config.SessionRecord

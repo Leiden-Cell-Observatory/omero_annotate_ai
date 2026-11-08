@@ -25,8 +25,7 @@ def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
         "z_slice",
         "timepoint",
         "label_id",
-        "train",
-        "validate",
+        "category",
         "is_patch",
         "patch_x",
         "patch_y",
@@ -40,6 +39,13 @@ def validate_table_schema(df: pd.DataFrame, logger=None) -> None:
     missing_columns = required_columns - set(df.columns)
     if missing_columns:
         raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
+
+    unknown = set(df["category"].astype(str)) - {"training", "validation", "test"}
+    if unknown:
+        raise ValueError(
+            f"Unknown category values {sorted(unknown)}; expected training, "
+            "validation or test"
+        )
 
     # Check for completely null critical columns
     critical_columns = ["image_id", "label_id"]
