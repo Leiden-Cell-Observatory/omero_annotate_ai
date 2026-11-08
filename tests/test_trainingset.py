@@ -85,6 +85,7 @@ class TestOpen:
         path = batch.mask_dir / "seg_00000.tif"
         tifffile.imwrite(path, np.ones(batch.items[0].pixels.shape, np.uint16))
         session.commit(batch, {batch.items[0].annotation_id: path})
+        session.exclude(batch, [batch.items[1].annotation_id])  # not "annotated"
         # the kernel dies here: finish() is never called
 
         again = reopen(ts, source, omero)
@@ -178,7 +179,7 @@ class TestSummaryAndFacade:
 
         assert summary.progress["training"] == (1, 3)
         assert summary.excluded == {"training": 1, "validation": 0, "test": 0}
-        assert summary.sessions[-1].n_excluded == 1
+        assert summary.sessions[-1].n_annotated == 0
 
     def test_create_pipeline_is_deprecated(self, tmp_path):
         from omero_annotate_ai.core.annotation_pipeline import create_pipeline

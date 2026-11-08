@@ -513,7 +513,10 @@ class AnnotationSession:
                     waiting.discard(annotation_id)
                     todo.remove(annotation_id)
         for annotation_id in todo:
-            rows[position[annotation_id]].mark_excluded(self.session)
+            row = rows[position[annotation_id]]
+            if not self._set.is_local:
+                self._delete_partial_upload(row)
+            row.mark_excluded(self.session)
             # A mask left by an earlier failed upload would be taken for this unit's.
             mask_path(self._set.bundle_dir, annotation_id).unlink(missing_ok=True)
             waiting.discard(annotation_id)
@@ -526,7 +529,29 @@ class AnnotationSession:
         self._set.save_config()
         for annotation_id in todo:
             self._set.events(UnitExcluded(annotation_id))
+        if not waiting:
+            self._close(batch)
         return tuple(todo)
+
+    def _delete_partial_upload(self, row: Row) -> None:
+        """Delete what an earlier failed commit of ``row`` uploaded (label, no ROI).
+
+        A failed delete is reported, not fatal: the upload stays tagged on OMERO.
+        """
+        writes, conn = self._set.omero_writes, self._set.conn
+        for kind, object_id in (("FileAnnotation", row.label_id), ("Roi", row.roi_id)):
+            if object_id is None:
+                continue
+            try:
+                writes.delete_objects(conn, kind, [object_id])
+            except Exception as error:  # noqa: BLE001 - a leftover is reported, not fatal
+                self._set.events(
+                    ReconcileAction(
+                        row.annotation_id,
+                        "excluded",
+                        f"{kind} {object_id} of a failed upload not deleted: {error}",
+                    )
+                )
 
     def release(self, batch: Batch) -> None:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
@@ -562,8 +587,6 @@ class AnnotationSession:
             self._unclaim(self._open.pop(index, set()))
             shutil.rmtree(scratch, ignore_errors=True)
         self._scratch.clear()
-        self._set.end_session(
-            self.session, self.annotated, note, status, excluded=len(self._excluded)
-        )
+        self._set.end_session(self.session, self.annotated, note, status)
         self._set.events(SessionFinished(self.session, self.annotated, note))
         return self.annotated

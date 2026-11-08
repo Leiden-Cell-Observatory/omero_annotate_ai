@@ -5,6 +5,7 @@ import json
 import pytest
 
 from omero_annotate_ai import provenance
+from omero_annotate_ai.bundle import mask_path
 from omero_annotate_ai.core.annotation_config import (
     AuthorInfo,
     SessionRecord,
@@ -101,6 +102,18 @@ class TestRoCrate:
                 assert values["iscc"] == row.mask_iscc
         pending = next(r for r in ts.rows if not r.processed)
         assert f"annotation_output/{pending.annotation_id}_mask.tif" not in by_id
+
+    def test_excluded_unit_lists_no_mask(self, tmp_path):
+        ts, _, _, _ = _crate(tmp_path)
+        unit = next(r for r in ts.rows if not r.processed)
+        unit.mark_excluded(session=1)
+        mask = mask_path(ts.bundle_dir, unit.annotation_id)
+        mask.write_bytes(b"left over")  # e.g. kept after a conflicting upload
+
+        crate = json.loads(ts.write_ro_crate().read_text(encoding="utf-8"))
+
+        ids = {e["@id"] for e in crate["@graph"]}
+        assert f"annotation_output/{unit.annotation_id}_mask.tif" not in ids
 
     def test_sessions_are_actions_with_agent_note_and_results(self, tmp_path):
         ts, _, _, by_id = _crate(tmp_path)

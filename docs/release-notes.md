@@ -22,10 +22,13 @@ Newest first. The full list of pull requests per version is on
   excluded` with `processed` true and no mask, label file or ROI, is never handed out
   or reviewed again, and is left out of the training and BioImage Archive exports.
   Progress counts it as done and reports it separately (`summarize(...).excluded`,
-  `progress_summary(...)["excluded_units"]`, `SessionRecord.n_excluded`). Committing a
-  mask for it later in the same session makes it a normal annotation. Tables made by
-  0.5.x need no new column. Resuming now compares against the local copy as the last
-  run left it (it was rewritten when leftover claims were released first).
+  `progress_summary(...)["excluded_units"]`); a session's `n_annotated` does not count
+  it. Committing a mask for it later in the same session makes it a normal annotation.
+  Excluding a unit whose earlier upload failed halfway deletes that upload. Tables and
+  configs stay readable by 0.5.0-0.5.2: no column or config key is added (those
+  versions see an excluded unit as annotated without a mask). Resuming now compares
+  against the local copy as the last run left it (it was rewritten when leftover
+  claims were released first).
 
 ## 0.5.1
 

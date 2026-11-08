@@ -11,6 +11,7 @@ from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.core.annotation_config import SessionRecord
 from omero_annotate_ai.errors import ConnectionFailed
 from omero_annotate_ai.events import SessionStarted, UnitCommitted, UploadFailed
+from omero_annotate_ai.rows import Row
 from omero_annotate_ai.trainingset import TrainingSet, TrainingSetSummary, summarize
 from tests.fakes import image_mask, omero_set
 
@@ -624,6 +625,21 @@ class TestWorkflowWidget:
         assert widget.request() == OpenTrainingSet(
             99, {"training": 2, "validation": 0, "test": 0}
         )
+
+    def test_review_count_leaves_excluded_units_out(self, tmp_path):
+        annotated = Row(image_name="a", annotation_id="a", processed=True)
+        excluded = Row(image_name="b", annotation_id="b")
+        excluded.mark_excluded(session=1)
+        ts = Mock(table_id=5)
+        ts.name = "set"
+        ts.units.return_value = (annotated, excluded)
+        widget = WorkflowWidget(self._conn(), home=tmp_path)
+        with patch.object(widget, "training_set", return_value=ts):
+            widget.mode.value = "open"
+            widget.task.value = "review"
+            widget._resolve()
+
+        assert "1 annotated units to review" in widget.status.value
 
     def test_open_without_a_selection_shows_an_inline_error(self, tmp_path):
         widget = WorkflowWidget(self._conn(), home=tmp_path)

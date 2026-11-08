@@ -54,6 +54,7 @@ class TestDecide:
             (EXCLUDED, UPLOADED_AFTER, True, True, "verify"),
             (EXCLUDED, UPLOADED_BEFORE, True, True, "excluded"),
             (PENDING, EXCLUDED, False, True, "exclude"),  # table write failed
+            (PENDING, EXCLUDED, True, True, "find_tagged"),  # and then annotated
             (None, EXCLUDED, False, True, "exclude"),
             (DONE, EXCLUDED, False, True, "mirror"),
         ],

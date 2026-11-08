@@ -1404,15 +1404,12 @@ class TrainingSet:
         annotated: int,
         note: str | None,
         status: Literal["finished", "interrupted"] = "finished",
-        *,
-        excluded: int = 0,
     ) -> None:
         """Close a session's record and publish the config."""
         record = self._session(session_id)
         record.ended = datetime.now()
         record.status = status
         record.n_annotated = annotated
-        record.n_excluded = excluded
         if note is not None:
             record.note = note
         self.save_config()
@@ -1450,9 +1447,10 @@ class TrainingSet:
         for record in self._config.sessions:
             if record.status == "open" and record.host in (None, host):
                 record.status = "interrupted"
-                ours = [r for r in self.rows if r.processed and r.session == record.id]
-                record.n_excluded = sum(r.excluded for r in ours)
-                record.n_annotated = len(ours) - record.n_excluded
+                record.n_annotated = sum(
+                    r.processed and not r.excluded and r.session == record.id
+                    for r in self.rows
+                )
                 changed = True
         if changed:
             self.save_config()

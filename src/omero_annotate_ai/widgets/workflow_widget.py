@@ -577,7 +577,9 @@ class WorkflowWidget:
             self._error(str(error))
             return
         reviewing = self._reviewing()
-        count = sum(row.processed == reviewing for row in ts.units())
+        count = sum(
+            row.processed == reviewing and not row.excluded for row in ts.units()
+        )
         todo = "annotated units to review" if reviewing else "units to annotate"
         where = f"table {ts.table_id}" if ts.table_id else "local"
         self.status.value = (
