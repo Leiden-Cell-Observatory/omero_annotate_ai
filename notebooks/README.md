@@ -13,7 +13,7 @@ Reactive notebooks stored as plain `.py` files. Run with `marimo edit notebooks/
 | `omero-annotate-ai-annotation.py` | Create or open a training set on an OMERO container and annotate it with micro-SAM (napari) or the Cellpose GUI; session notes |
 | `annotate-from-yaml.py` | Create a training set from a YAML config (OMERO or OME-Zarr, `source: zarr` needs no OMERO) or open a set's folder, then annotate |
 | `omero-training-microsam.py` | Export a training set from OMERO (train/validation/test) and fine-tune micro-SAM |
-| `omero-idr-demo.py` | Annotate and train on public IDR data as a local training set |
+| `idr-zarr-demo.py` | Annotate and train on public IDR OME-Zarr data as a local training set |
 | `configs/zarr-s-biad855-example.yaml` | Example OME-Zarr config (a BioImage Archive plate) for `annotate-from-yaml.py` |
 
 ## Jupyter (`jupyter/`)
