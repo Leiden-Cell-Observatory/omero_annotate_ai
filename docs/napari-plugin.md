@@ -34,7 +34,8 @@ message naming the one it needs.
 2. **Annotate.** Click *Annotate*. The set is opened, and repaired first if an earlier
    run was interrupted (*Cancel* stops that). The image appears with micro-SAM's annotator docked
    next to it; the image embedding is computed in the background first (a progress
-   bar shows while it runs). Segment with micro-SAM's usual keys, commit the objects,
+   bar shows while it runs). Meanwhile the next image is shown dimmed, without the
+   previous image's objects, and micro-SAM's dock is disabled. Segment with micro-SAM's usual keys, commit the objects,
    then:
     - **Accept** (`N`) saves the committed objects for this image and moves on. An
       image without objects asks for a second press, so empty images are saved on

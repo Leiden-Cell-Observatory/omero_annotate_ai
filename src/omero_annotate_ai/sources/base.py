@@ -9,9 +9,12 @@ never depend on what a handle is.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ..rows import Row
 
 # (x, y, width, height) in pixels, as OMERO's getTile takes it.
 Region = tuple[int, int, int, int]
@@ -75,3 +78,24 @@ class ImageSource(Protocol):
     ) -> np.ndarray:
         """Return planes ``z_start..z_end`` (inclusive) as ``(z, y, x)``."""
         ...
+
+
+def read_unit(source: ImageSource, row: Row, channel: int) -> np.ndarray:
+    """The pixels of one tracking-table row in ``channel``, at native bit depth.
+
+    Returns its plane or patch as ``(y, x)``, or its volume as ``(z, y, x)``.
+    """
+    image = source.get_image(row.image_uri)
+    t, z = max(row.timepoint, 0), max(row.z_slice, 0)
+    region = (
+        (row.patch_x, row.patch_y, row.patch_width, row.patch_height)
+        if row.is_patch and row.patch_width > 0 and row.patch_height > 0
+        else None
+    )
+    if row.is_volumetric:
+        valid = 0 <= row.z_start <= row.z_end
+        z_start, z_end = (row.z_start, row.z_end) if valid else (z, z)
+        return source.read_volume(
+            image, t=t, c=channel, z_start=z_start, z_end=z_end, region=region
+        )
+    return source.read_plane(image, t=t, c=channel, z=z, region=region)

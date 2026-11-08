@@ -114,6 +114,22 @@ class TestExtendAndNotes:
         with pytest.raises(ConfigError, match="raised"):
             ts.extend(train_n=1)
 
+    @pytest.mark.parametrize("storage", ["omero", "local"])
+    def test_sessions_are_numbered_from_one(self, tmp_path, storage):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        config.storage = storage
+        ts = create_set(config, source, omero, tmp_path / "home")
+        session = ts.start_session()
+        batch = session.next_batch()
+        path = batch.mask_dir / "seg_00000.tif"
+        tifffile.imwrite(path, np.ones(batch.items[0].pixels.shape, np.uint16))
+        session.commit(batch, {batch.items[0].annotation_id: path})
+        session.finish()
+        annotate(ts)
+
+        assert [s.id for s in ts.config.sessions] == [1, 2]
+        assert {r.session for r in ts.rows} == {1, 2}
+
     def test_session_note_is_kept_locally_and_on_omero(self, tmp_path):
         ts, _, omero = new(tmp_path)
         annotate(ts, note="nuclei only")

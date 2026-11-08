@@ -154,6 +154,62 @@ class TestOmeroImageSource:
 
 
 @pytest.mark.unit
+class TestReadUnit:
+    """read_unit: the pixels a tracking-table row refers to, from any ImageSource."""
+
+    # (t, c, z, y, x), non-square, each voxel encoding its own coordinates.
+    VOLUME = np.fromfunction(
+        lambda t, c, z, y, x: x + 10 * y + 100 * z + 1000 * c, (1, 2, 3, 5, 7)
+    ).astype(np.uint16)
+
+    def _read(self, channel=0, **fields):
+        from omero_annotate_ai.rows import Row
+        from omero_annotate_ai.sources import read_unit
+        from tests.fakes import FakeImageSource
+
+        source = FakeImageSource({1: self.VOLUME})
+        row = Row(image_id=1, image_name="a", annotation_id="u", **fields)
+        return read_unit(source, row, channel), source.reads
+
+    def test_plane_in_the_requested_channel_native_dtype(self):
+        pixels, reads = self._read(channel=1, z_slice=2)
+        np.testing.assert_array_equal(pixels, self.VOLUME[0, 1, 2])
+        assert pixels.dtype == np.uint16
+        assert reads == [("plane", 1, 0, 1, 2, None)]
+
+    def test_unset_timepoint_and_z_read_the_first_plane(self):
+        pixels, _ = self._read(timepoint=-1, z_slice=-1)
+        np.testing.assert_array_equal(pixels, self.VOLUME[0, 0, 0])
+
+    def test_patch_is_height_by_width_at_its_origin(self):
+        pixels, _ = self._read(
+            is_patch=True, patch_x=2, patch_y=1, patch_width=3, patch_height=2
+        )
+        np.testing.assert_array_equal(pixels, self.VOLUME[0, 0, 0, 1:3, 2:5])
+
+    def test_volume_reads_its_z_range(self):
+        pixels, reads = self._read(is_volumetric=True, z_start=1, z_end=2)
+        np.testing.assert_array_equal(pixels, self.VOLUME[0, 0, 1:3])
+        assert reads[0][:5] == ("volume", 1, 0, 0, (1, 2))
+
+    def test_volume_patch_reads_its_region_in_every_plane(self):
+        pixels, _ = self._read(
+            is_volumetric=True,
+            z_start=0,
+            z_end=2,
+            is_patch=True,
+            patch_x=2,
+            patch_y=1,
+            patch_width=3,
+            patch_height=2,
+        )
+        np.testing.assert_array_equal(pixels, self.VOLUME[0, 0, :, 1:3, 2:5])
+
+    def test_volume_without_a_range_is_a_one_plane_stack(self):
+        pixels, _ = self._read(is_volumetric=True, z_slice=1)
+        np.testing.assert_array_equal(pixels, self.VOLUME[0, 0, 1:2])
+
+
 class TestUri:
     def test_omero_round_trip(self):
         assert omero_uri(42) == "omero:image:42"

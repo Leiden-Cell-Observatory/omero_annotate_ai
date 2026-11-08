@@ -1,6 +1,6 @@
 """Tests for prepare_bia_data_from_table (OMERO table -> BIA on-disk layout).
 
-The OMERO connection and the ``ezomero`` module are mocked - no live server.
+The OMERO connection, ``ezomero`` and the image source are faked - no live server.
 """
 
 from pathlib import Path
@@ -32,33 +32,30 @@ def make_plane(dtype=np.uint16, size_y=SIZE_Y, size_x=SIZE_X):
     return plane
 
 
-def fake_get_image_factory(plane):
-    """Mimic ezomero.get_image: XYZCT 5D pixels, or the image object with no_pixels."""
+class PlaneSource:
+    """ImageSource serving the same (y, x) plane for every image, t, c and z."""
 
-    def fake_get_image(
-        conn,
-        image_id,
-        start_coords=None,
-        axis_lengths=None,
-        xyzct=False,
-        no_pixels=False,
-        **kwargs,
-    ):
-        if no_pixels:
-            omero_image = Mock()
-            omero_image.getSizeX.return_value = SIZE_X
-            omero_image.getSizeY.return_value = SIZE_Y
-            omero_image.getSizeZ.return_value = 1
-            return omero_image, None
+    def __init__(self, plane):
+        self.plane = plane
+        self.reads = []
 
-        x0, y0 = int(start_coords[0]), int(start_coords[1])
-        width, height = int(axis_lengths[0]), int(axis_lengths[1])
-        region = plane[y0 : y0 + height, x0 : x0 + width]  # (y, x)
-        # ezomero with xyzct=True returns (x, y, z, c, t)
-        pixels = np.swapaxes(region, 0, 1)[:, :, None, None, None]
-        return None, pixels
+    def get_image(self, image_uri):
+        return image_uri
 
-    return fake_get_image
+    def read_plane(self, image, *, t, c, z, region=None):
+        self.reads.append((image, t, c, z, region))
+        if region is None:
+            return self.plane
+        x, y, width, height = region
+        return self.plane[y : y + height, x : x + width]
+
+    def read_volume(self, image, *, t, c, z_start, z_end, region=None):
+        return np.stack(
+            [
+                self.read_plane(image, t=t, c=c, z=z, region=region)
+                for z in range(z_start, z_end + 1)
+            ]
+        )
 
 
 def fake_get_file_annotation(conn, label_id, folder, **kwargs):
@@ -86,16 +83,21 @@ def plane():
 
 @pytest.fixture
 def mock_ezomero(plane):
-    """Patched ezomero module inside bia_data."""
+    """Patched ezomero module inside bia_data; pixels come from ``ez.source``."""
+    source = PlaneSource(plane)
     with (
         patch("omero_annotate_ai.processing.bia_data.ezomero") as ez,
         patch(
             "omero_annotate_ai.processing.bia_data._read_table",
             side_effect=lambda conn, table_id: ez.get_table(conn, table_id),
         ),
+        patch(
+            "omero_annotate_ai.processing.bia_data.OmeroImageSource",
+            return_value=source,
+        ),
     ):
-        ez.get_image.side_effect = fake_get_image_factory(plane)
         ez.get_file_annotation.side_effect = fake_get_file_annotation
+        ez.source = source
         yield ez
 
 
@@ -310,10 +312,8 @@ def test_empty_table_raises(mock_conn, mock_ezomero, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_patch_row_requests_patch_coords_from_ezomero(
-    mock_conn, mock_ezomero, tmp_path
-):
-    """A patch row asks ezomero for exactly its patch region, no full-plane fetch."""
+def test_patch_row_reads_only_its_patch(mock_conn, mock_ezomero, tmp_path):
+    """A patch row reads exactly its patch region, never the full plane."""
     patch_row = annotation(
         image_id=101,
         timepoint=2,
@@ -329,12 +329,8 @@ def test_patch_row_requests_patch_coords_from_ezomero(
 
     stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
-    # Only the pixel fetch; a patch needs no no_pixels dimension lookup.
-    assert mock_ezomero.get_image.call_count == 1
-    _, kwargs = mock_ezomero.get_image.call_args
-    assert kwargs["start_coords"] == (2, 1, 1, 3, 2)  # (x, y, z, c, t)
-    assert kwargs["axis_lengths"] == (4, 3, 1, 1, 1)  # (w, h, 1, 1, 1)
-    assert kwargs["xyzct"] is True
+    # (image, t, c, z, (x, y, width, height))
+    assert mock_ezomero.source.reads == [("omero:image:101", 2, 3, 1, (2, 1, 4, 3))]
 
     written = imread(
         str(tmp_path / "annotation_input" / f"{stats['rows'][0].annotation_id}.tif")
@@ -343,16 +339,12 @@ def test_patch_row_requests_patch_coords_from_ezomero(
     assert written.dtype == np.uint16
 
 
-def test_full_plane_row_requests_image_size(mock_conn, mock_ezomero, tmp_path):
+def test_full_plane_row_reads_the_whole_plane(mock_conn, mock_ezomero, tmp_path):
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
     stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
-    # First call resolves the size (no_pixels), second fetches the plane.
-    assert mock_ezomero.get_image.call_count == 2
-    _, kwargs = mock_ezomero.get_image.call_args
-    assert kwargs["start_coords"] == (0, 0, 0, 0, 0)
-    assert kwargs["axis_lengths"] == (SIZE_X, SIZE_Y, 1, 1, 1)
+    assert mock_ezomero.source.reads == [("omero:image:101", 0, 0, 0, None)]
 
     written = imread(
         str(tmp_path / "annotation_input" / f"{stats['rows'][0].annotation_id}.tif")

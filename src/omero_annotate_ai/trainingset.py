@@ -1363,7 +1363,7 @@ class TrainingSet:
         self._merge_remote_config()
         known = [s.id for s in self._config.sessions] + [r.session for r in self.rows]
         record = SessionRecord(
-            id=1 + max(known, default=0),
+            id=1 + max([0, *known]),  # unannotated rows carry session -1
             kind=kind,
             started=datetime.now(),
             user=self._user(),

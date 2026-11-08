@@ -525,6 +525,7 @@ class OMEROAnnotateDock(QWidget):
         )
         self._update_progress()
         self._set_buttons(False)
+        self._controller.hold(item.pixels)
         self.busy.setVisible(True)
         self._say("Computing the image embedding…")
         embeddings = batch.embedding_dir or batch.mask_dir / "embeddings"
@@ -624,6 +625,7 @@ class OMEROAnnotateDock(QWidget):
 
         self._ready = False  # no Accept/Skip (also by key) until the next image shows
         self._set_buttons(False)
+        self._controller.hold(None)
         self._io.run(next_batch, self._start_batch, self._on_error)
 
     def _finish(self) -> None:
