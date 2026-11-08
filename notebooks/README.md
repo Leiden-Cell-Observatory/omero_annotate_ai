@@ -1,67 +1,36 @@
 # Notebooks
 
-Example notebooks demonstrating the omero-annotate-ai package workflows.
+Example notebooks for the omero-annotate-ai workflows. The Jupyter widget notebook is the
+easiest start; the marimo notebooks cover everything else. Committed notebooks carry no
+outputs (`pixi run -e dev install-hooks` sets up the hook that strips them).
 
-## Marimo Notebooks (`marimo/`)
+## marimo (`marimo/`)
 
-[Marimo](https://marimo.io) notebooks are reactive Python notebooks that are easier to maintain and version control. They are stored as plain `.py` files.
+Reactive notebooks stored as plain `.py` files. Run with `marimo edit notebooks/marimo/<notebook>.py`.
 
-**To run:** `marimo edit notebooks/marimo/<notebook>.py`
+| Notebook | What it does |
+|---|---|
+| `omero-annotate-ai-annotation.py` | Create or open a training set on an OMERO container and annotate it with micro-SAM (napari) or the Cellpose GUI; session notes |
+| `annotate-from-yaml.py` | Create a training set from a YAML config (OMERO or OME-Zarr, `source: zarr` needs no OMERO) or open a set's folder, then annotate |
+| `omero-training-microsam.py` | Export a training set from OMERO (train/validation/test) and fine-tune micro-SAM |
+| `omero-idr-demo.py` | Annotate and train on public IDR data as a local training set |
+| `configs/zarr-s-biad855-example.yaml` | Example OME-Zarr config (a BioImage Archive plate) for `annotate-from-yaml.py` |
 
-| Notebook | Description |
-|----------|-------------|
-| `omero-annotate-ai-annotation.py` | Micro-SAM annotation workflow — connect to OMERO, configure parameters, run interactive annotation via Napari |
-| `omero-annotate-ai-cellpose.py` | CellPose annotation workflow — export images for CellPose annotation, then collect and upload masks |
-| `omero-annotate-ai-from-yaml.py` | Load an existing YAML configuration and run the pipeline without configuration widgets |
-| `omero-training-microsam.py` | Micro-SAM training — select an annotation table, download training data, fine-tune a micro-SAM model |
-| `omero-idr-demo.py` | Full demo using public IDR data — no local OMERO server needed. Annotation + training in read-only mode |
+## Jupyter (`jupyter/`)
 
-## Jupyter Notebooks (`jupyter/`)
+Notebooks with ipywidgets forms. Run with `jupyter lab`.
 
-Classic Jupyter notebooks using ipywidgets for the UI.
-
-**To run:** `jupyter notebook notebooks/jupyter/<path>/<notebook>.ipynb`
-
-### Annotation (`jupyter/annotation/`)
-
-| Notebook | Description |
-|----------|-------------|
-| `omero-annotate-ai-annotation-widget.ipynb` | Widget-based micro-SAM annotation workflow |
-| `omero-annotate-ai-cellpose.ipynb` | CellPose annotation workflow — export, annotate, upload |
-| `omero-annotate-ai-from-yaml.ipynb` | Run annotation from a saved YAML configuration |
-
-### Training (`jupyter/training/`)
-
-| Notebook | Description |
-|----------|-------------|
-| `omero-training-microsam.ipynb` | Full micro-SAM training pipeline with BioImage.IO model export |
-| `omero-training_biapy.ipynb` | Prepare OMERO annotation data for BiaPy training |
-| `omero-training_DL4mic.ipynb` | Prepare OMERO annotation data for DL4MicEverywhere training |
-
-### Inference (`jupyter/inference/`)
-
-| Notebook | Description |
-|----------|-------------|
-| `omero-test_model-microsam.ipynb` | Run a fine-tuned micro-SAM model on OMERO images for inference |
-
-### Utilities (`jupyter/other/`)
-
-| Notebook | Description |
-|----------|-------------|
-| `cleanup_annotation.ipynb` | List, delete, and bulk-clean annotation tables from OMERO containers |
-
-## Developer Notebooks (`dev/`)
-
-Notebooks for package development and debugging. Not intended for end users.
-
-| Notebook | Description |
-|----------|-------------|
-| `omero-annotate-ai-annotation_dev.ipynb` | Development version with autoreload and widget reload helpers |
+| Notebook | What it does |
+|---|---|
+| `annotation/omero-annotate-ai-annotation-widget.ipynb` | The widget workflow: connect, create or open a training set, annotate with micro-SAM, add a session note |
+| `training/omero-training-export.ipynb` | Export a training set for BiaPy or DL4MicEverywhere |
+| `inference/omero-test_model-microsam.ipynb` | Run a fine-tuned micro-SAM model on OMERO images |
+| `export_annotations/omero-table-to-bioimage-archive.ipynb` | Build a BioImage Archive submission from a training set on OMERO |
+| `export_annotations/prepare_bioimage_archive.ipynb` | Build a BioImage Archive submission from a local training set (runs offline on demo data) |
+| `other/cleanup_annotations.ipynb` | Delete a training set from OMERO (dry run first) |
 
 ## Prerequisites
 
-- A running OMERO server (or use IDR for the demo notebook)
-- The `omero-annotate-ai` package installed: `pip install omero-annotate-ai`
-- For micro-SAM workflows: a GPU is recommended
-- For Jupyter notebooks: `jupyter notebook` or `jupyter lab`
-- For Marimo notebooks: `pip install marimo` then `marimo edit <notebook>.py`
+- An OMERO server, or OME-Zarr images for `annotate-from-yaml.py` with `source: zarr`
+- `pixi install` in this repository (or `pip install "omero-annotate-ai[microsam,notebooks]"`)
+- A GPU is recommended for micro-SAM

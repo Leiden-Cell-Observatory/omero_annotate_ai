@@ -183,15 +183,26 @@ cython_debug/
 .cursorindexingignore
 CLAUDE.md
 TODO_LIST.md
-TODO_LIST.md
-TODO_LIST.md
 .claude/settings.local.json
 AGENTS.md
 dev_notes/*
 .opencode/
 .envrc
 PLAN.md
-.envrc
 
 # Built documentation
 site/
+
+# Design notes and implementation plans are kept locally, not in git
+docs/superpowers/
+
+# Local work products: annotation runs, embeddings and notebook scratch
+annotations/
+zarr_annotations/
+*_training/
+**/embeddings*.zarr/
+sam_embeddings/
+Untitled*.ipynb
+
+# Editor settings are personal
+.vscode/

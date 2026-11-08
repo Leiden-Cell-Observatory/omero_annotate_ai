@@ -7,11 +7,6 @@ repo_name = "Leiden-Cell-Observatory/omero_annotate_ai"
 edit_uri = "edit/main/docs/"
 copyright = "Leiden Cell Observatory · NL-BioImaging"
 
-# Design notes and implementation plans live next to the docs but are not published.
-exclude_docs = """
-superpowers/
-"""
-
 extra_css = ["stylesheets/extra.css"]
 
 nav = [
@@ -19,6 +14,7 @@ nav = [
   { "Get started" = [
     { "Installation" = "installation.md" },
     { "How it works" = "concepts.md" },
+    { "What's new in 0.5" = "whats-new-0.5.md" },
     { "Try it on public data" = "tutorials/public-data-idr.md" },
   ] },
   { "Guides" = [
@@ -33,6 +29,7 @@ nav = [
     { "Configuration (YAML)" = "configuration.md" },
     { "Example notebooks" = "notebooks.md" },
     { "Troubleshooting" = "troubleshooting.md" },
+    { "Architecture" = "architecture.md" },
   ] },
   { "API" = [
     "api/index.md",

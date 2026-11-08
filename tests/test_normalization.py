@@ -8,7 +8,6 @@ from tifffile import imread, imwrite
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    ImageAnnotation,
     NormalizationConfig,
 )
 from omero_annotate_ai.processing.normalization import (
@@ -19,6 +18,7 @@ from omero_annotate_ai.processing.normalization import (
 from omero_annotate_ai.processing.training_functions import (
     reorganize_local_data_for_training,
 )
+from omero_annotate_ai.rows import Row, rows_to_frame
 
 
 @pytest.mark.unit
@@ -41,7 +41,9 @@ class TestPercentileNormalize:
         np.testing.assert_allclose(out8, out16, atol=1e-6)
 
     def test_per_channel_bounds(self):
-        image = np.stack([np.full((4, 4), 10.0), np.arange(16.0).reshape(4, 4)], axis=-1)
+        image = np.stack(
+            [np.full((4, 4), 10.0), np.arange(16.0).reshape(4, 4)], axis=-1
+        )
         out, bounds = percentile_normalize(image, 0.0, 100.0, channel_axis=-1)
         assert len(bounds) == 2
         assert np.all(out[..., 0] == 0)  # constant channel: no division by zero
@@ -55,23 +57,13 @@ class TestPercentileNormalize:
 
 @pytest.mark.unit
 class TestNormalizationConfig:
-    def test_legacy_spatial_coverage_fields_are_migrated(self):
-        config = AnnotationConfig.from_dict(
-            {
-                "name": "legacy",
-                "spatial_coverage": {
-                    "channels": [0],
-                    "timepoints": [0],
-                    "z_slices": [0],
-                    "normalization_method": "percentile",
-                    "percentile_low": 0.5,
-                    "percentile_high": 99.5,
-                },
-            }
-        )
-        assert config.normalization.percentile_low == 0.5
-        assert config.normalization.percentile_high == 99.5
-        assert not hasattr(config.spatial_coverage, "percentile_low")
+    def test_legacy_spatial_coverage_fields_are_refused(self):
+        from omero_annotate_ai.errors import RemovedConfigKey
+
+        with pytest.raises(RemovedConfigKey, match="normalization.method"):
+            AnnotationConfig.from_dict(
+                {"name": "legacy", "spatial_coverage": {"normalization_method": "none"}}
+            )
 
     def test_low_must_be_below_high(self):
         with pytest.raises(ValueError, match="percentile_low"):
@@ -87,9 +79,15 @@ class TestBiapyNormalization:
         assert block["PERC_CLIP"]["ENABLE"] is False
 
     def test_trainer_side_percentiles_avoid_bit_depth_guessing(self):
-        block = biapy_normalization(NormalizationConfig(percentile_low=2.0, percentile_high=99.0))
+        block = biapy_normalization(
+            NormalizationConfig(percentile_low=2.0, percentile_high=99.0)
+        )
         assert block["TYPE"] not in ("div", "scale_range")
-        assert block["PERC_CLIP"] == {"ENABLE": True, "LOWER_PERC": 2.0, "UPPER_PERC": 99.0}
+        assert block["PERC_CLIP"] == {
+            "ENABLE": True,
+            "LOWER_PERC": 2.0,
+            "UPPER_PERC": 99.0,
+        }
 
 
 def _local_annotation_set(tmp_path, apply_at_export):
@@ -98,18 +96,33 @@ def _local_annotation_set(tmp_path, apply_at_export):
     (annotation_dir / "annotation_output").mkdir()
     config = AnnotationConfig(
         name="norm",
-        normalization={"apply_at_export": apply_at_export, "percentile_low": 0.0, "percentile_high": 100.0},
+        normalization={
+            "apply_at_export": apply_at_export,
+            "percentile_low": 0.0,
+            "percentile_high": 100.0,
+        },
     )
+    rows = []
     for i, category in enumerate(["training", "validation"]):
         annotation_id = f"img{i}"
-        imwrite(annotation_dir / "annotation_input" / f"{annotation_id}.tif",
-                (np.arange(64).reshape(8, 8) * 50 + i).astype(np.uint16))
-        imwrite(annotation_dir / "annotation_output" / f"{annotation_id}_mask.tif",
-                np.ones((8, 8), dtype=np.uint16))
-        config.annotations.append(
-            ImageAnnotation(image_id=i, image_name=annotation_id, annotation_id=annotation_id,
-                            category=category, processed=True)
+        imwrite(
+            annotation_dir / "annotation_input" / f"{annotation_id}.tif",
+            (np.arange(64).reshape(8, 8) * 50 + i).astype(np.uint16),
         )
+        imwrite(
+            annotation_dir / "annotation_output" / f"{annotation_id}_mask.tif",
+            np.ones((8, 8), dtype=np.uint16),
+        )
+        rows.append(
+            Row(
+                image_id=i,
+                image_name=annotation_id,
+                annotation_id=annotation_id,
+                category=category,
+                processed=True,
+            )
+        )
+    rows_to_frame(rows).to_csv(annotation_dir / "tracking_table.csv", index=False)
     return config, annotation_dir
 
 
@@ -117,7 +130,9 @@ def _local_annotation_set(tmp_path, apply_at_export):
 class TestExportNormalization:
     def test_native_export_keeps_dtype_and_records_spec(self, tmp_path):
         config, annotation_dir = _local_annotation_set(tmp_path, apply_at_export=False)
-        result = reorganize_local_data_for_training(config, annotation_dir, tmp_path / "training")
+        result = reorganize_local_data_for_training(
+            config, annotation_dir, tmp_path / "training"
+        )
         image = imread(result["train_input"] / "img0.tif")
         assert image.dtype == np.uint16
         sidecar = json.loads((tmp_path / "training" / SIDECAR_NAME).read_text())
@@ -126,7 +141,9 @@ class TestExportNormalization:
 
     def test_export_normalisation_writes_float32_and_bounds(self, tmp_path):
         config, annotation_dir = _local_annotation_set(tmp_path, apply_at_export=True)
-        result = reorganize_local_data_for_training(config, annotation_dir, tmp_path / "training")
+        result = reorganize_local_data_for_training(
+            config, annotation_dir, tmp_path / "training"
+        )
         image = imread(result["train_input"] / "img0.tif")
         assert image.dtype == np.float32
         assert image.min() == 0.0 and image.max() == 1.0
@@ -145,7 +162,11 @@ class TestMicroSamRawTransform:
     def test_percentile_scales_16bit_to_8bit_range(self):
         from omero_annotate_ai.processing.normalization import microsam_raw_transform
 
-        image = np.linspace(0, 60000, 1000, dtype=np.float32).astype(np.uint16).reshape(20, 50)
+        image = (
+            np.linspace(0, 60000, 1000, dtype=np.float32)
+            .astype(np.uint16)
+            .reshape(20, 50)
+        )
         out = microsam_raw_transform(NormalizationConfig())(image)
         assert out.min() >= 0 and out.max() <= 255
         assert out.max() > 250
@@ -154,7 +175,9 @@ class TestMicroSamRawTransform:
         from omero_annotate_ai.processing.normalization import microsam_raw_transform
 
         spec = NormalizationConfig(apply_at_export=True)
-        out = microsam_raw_transform(spec)(np.array([[0.0, 0.5, 1.0]], dtype=np.float32))
+        out = microsam_raw_transform(spec)(
+            np.array([[0.0, 0.5, 1.0]], dtype=np.float32)
+        )
         assert np.allclose(out, [[0, 127.5, 255]])
 
     def test_none_rejects_values_above_255(self):
@@ -172,8 +195,10 @@ class TestMicroSamRawTransform:
         for name in ("train_input", "train_label", "val_input", "val_label"):
             (tmp_path / name).mkdir()
         write_native_sidecar(NormalizationConfig(percentile_high=99.0), tmp_path)
-        result = {name: tmp_path / name for name in
-                  ("train_input", "train_label", "val_input", "val_label")}
+        result = {
+            name: tmp_path / name
+            for name in ("train_input", "train_label", "val_input", "val_label")
+        }
         result["output_dir"] = tmp_path
 
         config = setup_training(result)

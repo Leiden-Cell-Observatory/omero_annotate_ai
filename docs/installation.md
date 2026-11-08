@@ -1,6 +1,6 @@
 # Installation
 
-OMERO Annotate AI is a Python package. It needs Python 3.10 or newer and works on Linux,
+OMERO Annotate AI is a Python package. It needs Python 3.11 or newer and works on Linux,
 macOS and Windows. micro-SAM and napari are installed alongside it.
 
 !!! tip "Never installed Python software before?"
@@ -16,7 +16,7 @@ Open a terminal and run:
 pixi init my-annotation-project
 cd my-annotation-project
 pixi add python=3.12 micro_sam jupyterlab
-pixi add --pypi omero-annotate-ai
+pixi add --pypi "omero-annotate-ai[notebooks]"
 ```
 
 This creates the folder `my-annotation-project` with everything inside it. To start
@@ -26,8 +26,8 @@ Jupyter in that environment:
 pixi run jupyter lab
 ```
 
-To use [marimo](https://marimo.io) notebooks instead, add it with `pixi add marimo` and
-start one with `pixi run marimo edit <notebook>.py`.
+The `notebooks` extra adds the Jupyter widgets, [marimo](https://marimo.io) and keychain
+support. Start a marimo notebook with `pixi run marimo edit <notebook>.py`.
 
 ## Install with conda and pip
 
@@ -36,19 +36,20 @@ If you already use conda (or mamba):
 ```bash
 conda create -n omero-annotate-ai -c conda-forge python=3.12 micro_sam jupyterlab
 conda activate omero-annotate-ai
-pip install omero-annotate-ai
+pip install "omero-annotate-ai[notebooks]"
 ```
 
 The OMERO libraries (`omero-py`, `zeroc-ice`) are pulled in automatically.
 
 ## Install with pip only
 
-micro-SAM is also [on PyPI](https://pypi.org/project/micro-sam/) (Python 3.11 or newer):
+micro-SAM is also [on PyPI](https://pypi.org/project/micro-sam/); the `microsam` extra installs it
+together with napari:
 
 ```bash
 python -m venv omero-annotate-ai
 source omero-annotate-ai/bin/activate      # Windows: omero-annotate-ai\Scripts\activate
-pip install micro-sam omero-annotate-ai jupyterlab
+pip install "omero-annotate-ai[microsam,notebooks]" jupyterlab
 ```
 
 With plain pip, `zeroc-ice` (needed by `omero-py`) may have no ready-made build for your
@@ -62,6 +63,7 @@ In a notebook cell or Python prompt:
 
 ```python
 from importlib.metadata import version
+
 print(version("omero-annotate-ai"))
 ```
 
@@ -88,6 +90,7 @@ Check whether a GPU is visible:
 
 ```python
 import torch
+
 print(torch.cuda.is_available())
 ```
 

@@ -9,12 +9,12 @@ never depend on what a handle is.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol, Tuple, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
 # (x, y, width, height) in pixels, as OMERO's getTile takes it.
-Region = Tuple[int, int, int, int]
+Region = tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def clamp_region(region: Region, size_y: int, size_x: int) -> Region:
 class ImageSource(Protocol):
     """Where the pipeline gets images from."""
 
-    def get_image(self, image_id: Any) -> Any:
+    def get_image(self, image_id: Any, /) -> Any:
         """Return the handle for ``image_id``; raise ``LookupError`` if it does not exist."""
         ...
 
@@ -58,7 +58,7 @@ class ImageSource(Protocol):
         ...
 
     def read_plane(
-        self, image: Any, *, t: int, c: int, z: int, region: Optional[Region] = None
+        self, image: Any, *, t: int, c: int, z: int, region: Region | None = None
     ) -> np.ndarray:
         """Return one plane as ``(y, x)``, cropped to ``region`` when given."""
         ...
@@ -71,7 +71,7 @@ class ImageSource(Protocol):
         c: int,
         z_start: int,
         z_end: int,
-        region: Optional[Region] = None,
+        region: Region | None = None,
     ) -> np.ndarray:
         """Return planes ``z_start..z_end`` (inclusive) as ``(z, y, x)``."""
         ...

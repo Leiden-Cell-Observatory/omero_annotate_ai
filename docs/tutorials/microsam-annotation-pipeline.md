@@ -18,9 +18,9 @@ Download it, or copy the code blocks into a new notebook.
 
 ```python
 from omero_annotate_ai import (
+    TrainingSet,
     create_omero_connection_widget,
     create_workflow_widget,
-    create_pipeline,
 )
 
 conn_widget = create_omero_connection_widget()
@@ -48,43 +48,30 @@ workflow_widget = create_workflow_widget(connection=conn)
 workflow_widget.display()
 ```
 
-The widget walks you through a few tabs. Use **Next** to move on.
+The widget has one screen, in cards:
 
-**Working directory.** Where local files go. Pick a folder with some free space; every
-run gets its own subfolder.
+**Data.** Choose the container type (project, dataset, plate, screen) and the container.
+A line below shows the number of images, a sample image's dimensions and its channel names.
 
-**Container.** Choose the type (project, dataset, plate, screen) and the container
-itself from the list.
-
-![Choosing an OMERO container](../images/widget_container.png)
-
-**Tables.** If annotations already exist for this container, they are listed here. For a
-first run, choose **Name New Table** and give the run a short, descriptive name such as
-`hela_nuclei_v1`. This name is used for the OMERO table and the files.
-
-**Configuration.** The scientific choices:
+**New training set** or **Open training set.** For a first run choose *New*:
 
 | Setting | What to choose |
 |---|---|
-| Training / validation / test images | How many images to annotate for each set. Start small, e.g. 5 training and 2 validation. |
+| Name | A short, descriptive name such as `hela_nuclei_v1`; used for the OMERO table and the local folder. |
 | Channel | The channel you will draw on, e.g. the DAPI channel for nuclei. Channel numbers start at 0. |
-| Timepoints, Z-slices | Which planes to annotate. For 2D images leave them at 0. |
-| 3D processing | Annotate whole z-stacks as volumes instead of single planes. |
-| Use patches | Annotate crops instead of whole images. Recommended for large images or a CPU-only computer. |
-| SAM model | `vit_b_lm` is a good default for light microscopy; `vit_b_em_organelles` for electron microscopy. |
-| Batch size | Units per napari session; progress is saved after each batch. 0 = all at once. |
-| Read-only mode | Save results only on your computer and write nothing to OMERO. |
+| Timepoint, Z-slice | Which plane to annotate. For 2D images leave them at 0. |
+| 3D | Annotate whole z-stacks as volumes instead of single planes. |
+| Patches | Annotate crops instead of whole images. Recommended for large images or a CPU-only computer. |
+| Training / Validation / Test | How many images to annotate for each split. Start small, e.g. 5 and 2. |
+| Seed | Empty picks one at random and stores it, so the selection can be repeated. |
+| Storage | *OMERO* uploads masks and keeps a tracking table; *Local folder only* writes nothing to OMERO. |
 
-**Save.** Shows the YAML configuration that will be used. Click **Save Configuration**
-to keep a copy.
+*Open* lists the training sets on the container (and local ones). Selecting one shows its
+progress per split and the notes of earlier sessions; you can add images per split.
 
-![Reviewing the generated YAML](../images/widget_config.png)
-
-Then collect the configuration:
-
-```python
-config = workflow_widget.get_config()
-```
+**Annotation.** The SAM model (`vit_b_lm` for light microscopy, `vit_b_em_organelles` for
+electron microscopy) and the batch size (images per napari session; progress is saved
+after each image; 0 = all). Click **Create** or **Open**.
 
 !!! tip "Not sure what a setting means?"
     [How it works](../concepts.md) explains annotation units, patches and the two modes.
@@ -93,15 +80,22 @@ config = workflow_widget.get_config()
 ## 3. Annotate in napari
 
 ```python
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+ts = workflow_widget.training_set()
+workflow_widget.annotate(note="nuclei only")  # the note is stored with this session
 ```
 
-The pipeline now:
+Progress appears in the widget's **Progress** card, and **Save note to last session**
+adds or changes the note afterwards. Without the widget, `TrainingSet.create(config, conn)`
+and `ts.annotate(...)` do the same.
 
-1. picks images at random and assigns them to training and validation,
-2. creates the tracking table in OMERO (not in read-only mode),
-3. downloads the first batch and opens it in napari with the micro-SAM annotator.
+Creating the set:
+
+1. picks images (reproducibly, from the stored seed) and assigns them to training and
+   validation,
+2. creates the tracking table in OMERO (not for `storage: local`) and the set's folder,
+
+and `annotate` downloads the first batch and opens it in napari with the micro-SAM annotator. To continue
+later, open the set again with `TrainingSet.open(ts.table_id, conn)`.
 
 The first time, micro-SAM downloads its model (a few hundred MB). For each image it then
 computes an *embedding*; this is what makes the clicks fast afterwards, and takes a few
@@ -137,18 +131,20 @@ for all annotator features and shortcuts.
 In the notebook:
 
 ```python
-print(config.get_progress_summary())
+done = sum(row.processed for row in ts.units())
+print(f"{done} of {len(ts.units())} units annotated; folder: {ts.bundle_dir}")
 ```
 
-In OMERO.web (upload mode):
+In OMERO.web (`storage: omero`):
 
 - Each annotated image now has **ROIs** (open it in OMERO.iviewer) and a **mask file**
   in its attachments.
 - The container has a **table** named after your run, listing every unit and whether it
   is done, plus the **configuration file** as an attachment.
 
-In read-only mode, the images and masks are in `annotation_input/` and
-`annotation_output/` in your working directory, with a `tracking_table.csv`.
+Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
+`annotation_input/` and `annotation_output/`, a `tracking_table.csv` and its
+`config.yaml`.
 
 ## 5. What next?
 
@@ -206,13 +202,13 @@ In read-only mode, the images and masks are in `annotation_input/` and
 ??? example "Without the widgets"
     ```python
     import getpass
-    from omero_annotate_ai import load_config_from_yaml, create_pipeline
+    from omero_annotate_ai import TrainingSet, load_config_from_yaml
     from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 
     conn = SimpleOMEROConnection().connect(
         host="omero.example.org", username="me", password=getpass.getpass()
     )
     config = load_config_from_yaml("annotation_config.yaml")
-    pipeline = create_pipeline(config, conn)
-    table_id, config = pipeline.run_full_micro_sam_workflow()
+    ts = TrainingSet.create(config, conn)
+    ts.annotate()
     ```

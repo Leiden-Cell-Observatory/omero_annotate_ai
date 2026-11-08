@@ -43,9 +43,14 @@ It waits until you close the last napari window of the batch. That is normal.
 Each image needs an embedding before you can click. Without a GPU this takes tens of
 seconds per image. Use `vit_b_lm`, switch on patches, and keep batches small.
 
-**Masks ended up on the wrong images after a restart.**
-In upload mode, empty the `annotations/` subfolder of your working directory before
-resuming. See [Resume or repeat a run](tutorials/resume-and-repeat.md).
+**An upload failed.**
+The run carries on with the next unit; the failed one stays unannotated and its error is
+in the `error` column of the set's `tracking_table.csv`. Resume the set to try again.
+
+**Resuming says a unit "needs review".**
+Its mask in your folder and its label file on OMERO differ. Delete the one that is wrong
+and resume again; see
+[Pixel checks](tutorials/resume-and-repeat.md#pixel-checks).
 
 **"Not enough images" when starting.**
 `train_n + validate_n + test_n` is larger than the number of images in the container
@@ -53,14 +58,14 @@ resuming. See [Resume or repeat a run](tutorials/resume-and-repeat.md).
 
 ## Config files
 
-**A setting I put in the YAML has no effect.**
-Unknown keys are ignored without a warning. Compare your key names with the
-[configuration reference](configuration.md) and print the loaded config.
+**Loading my YAML fails with "unknown key" or `RemovedConfigKey`.**
+Unknown keys are refused, so a typo never goes unnoticed; check the name against the
+[configuration reference](configuration.md). Keys from 0.4 that moved name their
+replacement in the error, see [migrating from 0.4](whats-new-0.5.md#migrating-from-04).
 
-**My YAML file was overwritten with a long list of annotations.**
-When you load a file and run the pipeline, progress is saved back to that file. Set
-`config.config_file_path = None` after loading to save progress in the working directory
-instead.
+**Does running a training set change my YAML file?**
+No. A loaded YAML is a template; the set keeps its own `config.yaml` (with sessions and
+progress) in its folder under `~/omero_annotate_ai/`.
 
 ## Still stuck?
 
@@ -69,5 +74,6 @@ with the error message, your config (without passwords) and the package version:
 
 ```python
 from importlib.metadata import version
+
 print(version("omero-annotate-ai"))
 ```

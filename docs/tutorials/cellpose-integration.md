@@ -12,8 +12,8 @@ flowchart LR
     C -->|3. collect| D[OMERO<br/>masks · ROIs · table]
 ```
 
-Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-cellpose.ipynb)
-· [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-cellpose.py)
+Notebook: [annotation (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-annotation.py), with
+*Annotation tool: Cellpose GUI*.
 
 Cellpose itself is not installed with this package. Add it to your environment with
 `pixi add cellpose` (or `pip install cellpose`), or use an existing Cellpose installation.
@@ -25,18 +25,19 @@ Connect and configure exactly as in the
 setting is ignored. Then export the images:
 
 ```python
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_cp_workflow()
+from omero_annotate_ai import TrainingSet
+
+ts = TrainingSet.create(config, conn)
+ts.prepare_external()
 ```
 
 This creates the tracking table in OMERO and writes one TIFF per annotation unit to
-`annotation_input/` in your working directory, named after the unit, for example
+`annotation_input/` in the training set's folder (`ts.bundle_dir`), named after the unit, for example
 `12345_0_0.tif`. No napari window opens and no display is needed.
 
 !!! note
-    Units are marked as *processed* as soon as their image is exported, so the progress
-    summary counts exported images, not finished masks. Use
-    `get_annotation_status_from_disk()` (below) to see which masks are still missing.
+    A unit counts as annotated only once its mask is collected (step 3), so the progress
+    summary shows which masks are still missing.
 
 ## 2. Annotate
 
@@ -56,19 +57,22 @@ annotation_input/12345_0_0.tif   →   annotation_output/12345_0_0_mask.tif
 You can annotate in several sittings. Check what is still missing with:
 
 ```python
-status = pipeline.get_annotation_status_from_disk()
-print(status)
+from omero_annotate_ai.trainingset import summarize
+
+print(summarize(ts.bundle_dir).progress)  # per split: (annotated, total)
 ```
 
 ## 3. Collect and upload
 
 ```python
-n_done, config = pipeline.collect_annotations_from_disk()
+n_done = ts.collect_masks()
 ```
 
 Each mask is matched to its unit by name and uploaded as a mask attachment plus ROIs,
-and the tracking table is updated. Running it again only handles new masks. In
-read-only mode the masks stay local and `tracking_table.csv` is updated instead.
+and the tracking table is updated; the collection is recorded as one session. Running it
+again only handles new masks. For local sets (`storage: local`) the masks stay local and
+`tracking_table.csv` is updated instead. In a later sitting, reopen the set with
+`TrainingSet.open(table_id, conn)` first.
 
 ## Next
 

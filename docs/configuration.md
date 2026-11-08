@@ -34,27 +34,25 @@ ai_model:
 
 workflow:
   batch_size: 4            # images per napari session
-  read_only_mode: false    # true = write nothing to OMERO
 
-output:
-  output_directory: ./annotations/hela_nuclei_v1
+storage: omero             # "local" = write nothing to OMERO
 ```
 
 Load and run it:
 
 ```python
-from omero_annotate_ai import load_config_from_yaml, create_pipeline
+from omero_annotate_ai import TrainingSet, load_config_from_yaml
 
-config = load_config_from_yaml("hela_nuclei_v1.yaml")
-config.config_file_path = None     # keep this file unchanged; progress is saved in output_directory
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+config = load_config_from_yaml("hela_nuclei_v1.yaml")  # this file is not changed
+ts = TrainingSet.create(config, conn)  # the set's own copy goes to its folder
+ts.annotate()
 ```
 
 A fully commented template is available from Python:
 
 ```python
 from omero_annotate_ai.core.annotation_config import get_config_template
+
 print(get_config_template())
 ```
 
@@ -244,15 +242,18 @@ types guess the bit depth from the image maximum, so exporting with
 
 | Key | Default | Meaning |
 |---|---|---|
-| `batch_size` | `0` | Units per napari session; progress is saved after each batch. `0` = all at once. |
-| `read_only_mode` | `false` | `true`: write nothing to OMERO; keep images, masks and `tracking_table.csv` locally. Use on public servers such as the IDR. |
-| `resume_from_table` | `false` | Not reliable in this version; to resume, reload the saved YAML instead. See [Resume or repeat a run](tutorials/resume-and-repeat.md). |
+| `batch_size` | `0` | Units per napari session; progress is saved after each unit. `0` = all at once. |
 
-## `output`
+## `storage`: where rows and masks are kept
 
-| Key | Default | Meaning |
-|---|---|---|
-| `output_directory` | `./annotations` | Working directory for this run. Progress is saved here as `annotation_config_<name>.yaml`. |
+| Value | Meaning |
+|---|---|
+| `omero` (default) | A tracking table on OMERO (its ID identifies the set), masks uploaded as ROIs and label files, plus a local copy in the set's folder. |
+| `local` | Nothing is written to OMERO; images, masks and `tracking_table.csv` stay in the set's folder. Use on public servers such as the IDR. OME-Zarr sets (`source: zarr`) are always `local`. |
+
+Fixed when the set is created. Each set has its own folder:
+`<home>/<server>/<table id>_<name>/` (or `<home>/local/<id>_<name>/` for local sets),
+where `<home>` is `home=`, else `$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`.
 
 ## Metadata for sharing
 
@@ -308,12 +309,17 @@ custom_metadata:
   objective: "10x"
 ```
 
-## Filled in by the pipeline
+## Filled in by omero-annotate-ai
 
-`schema_version`, `created`, `config_file_path` and the `annotations:` list are written
-by the pipeline. `annotations:` holds one entry per annotation unit with its split,
-position and `processed` flag; this is what makes a run resumable. Remove it when you
-reuse a config for a new run.
+`schema_version` (3), `created`, `training.seed`, `identity` (the set's table ID or local
+ID) and `sessions` (who annotated when, how many units, and the session note) are written
+when a set is created and annotated. The rows (one per annotation unit, with its split
+and state) live in `tracking_table.csv` and the OMERO table, not in the config. To start
+a new set from a saved config, remove `identity` and `sessions`.
+
+Configs from 0.4 and earlier are refused with a message naming each removed key's
+replacement (for example `workflow.read_only_mode` → `storage: local`,
+`omero.table_id` → `TrainingSet.open(table_id)`, `output.output_directory` → `home=`). The full list is in [migrating from 0.4](whats-new-0.5.md#migrating-from-04).
 
 ## Example recipes
 
@@ -358,11 +364,11 @@ reuse a config for a new run.
 ```python
 from omero_annotate_ai import load_config, create_default_config
 
-config = load_config("my_run.yaml")       # also accepts a dict
+config = load_config("my_run.yaml")  # also accepts a dict
 config.save_yaml("copy.yaml")
 print(config.to_yaml())
 
-config = create_default_config()          # start from defaults
+config = create_default_config()  # start from defaults
 config.name = "new_run"
 config.omero.container_id = 123
 ```

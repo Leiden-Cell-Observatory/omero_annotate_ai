@@ -30,11 +30,11 @@ flowchart LR
 ```
 
 - **Jupyter widgets** for connecting to OMERO and configuring a run step by step, no code needed.
-- **Resumable:** the tracking table records which images and patches are done, so an interrupted run continues where it stopped.
+- **Resumable and crash-safe:** each mask is saved locally, uploaded with a tag and then recorded in the tracking table, so an interrupted run continues where it stopped without duplicate uploads; pixel digests flag files that changed afterwards.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
 - **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).
-- **Read-only mode** for public servers such as the [IDR](https://idr.openmicroscopy.org).
+- **Local-only storage** (`storage: local`) for public servers such as the [IDR](https://idr.openmicroscopy.org).
 
 ## Jupyter widgets
 
@@ -47,10 +47,6 @@ flowchart LR
     <td><sub>Connect to any OMERO server, here the public IDR.</sub></td>
     <td><sub>Choose a project, dataset, plate or screen.</sub></td>
   </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="docs/images/widget_config.png" alt="Reviewing the generated YAML configuration" width="65%"><br>
-    <sub>Set the parameters and review the YAML config the run will use.</sub></td>
-  </tr>
 </table>
 
 ## Installation
@@ -58,12 +54,15 @@ flowchart LR
 ```bash
 # Recommended: pixi
 pixi init myproject && cd myproject
-pixi add micro_sam
-pixi add --pypi omero-annotate-ai
+pixi add micro_sam jupyterlab
+pixi add --pypi "omero-annotate-ai[notebooks]"
 
 # Or: conda + pip
-conda install -c conda-forge micro_sam
-pip install omero-annotate-ai
+conda install -c conda-forge micro_sam jupyterlab
+pip install "omero-annotate-ai[notebooks]"
+
+# Or: pip only (micro-SAM and napari from PyPI)
+pip install "omero-annotate-ai[microsam,notebooks]" jupyterlab
 ```
 
 See the [installation guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation/) for details and troubleshooting.
@@ -73,29 +72,44 @@ See the [installation guide](https://leiden-cell-observatory.github.io/omero_ann
 **With widgets** (in Jupyter):
 
 ```python
-from omero_annotate_ai import create_omero_connection_widget, create_workflow_widget, create_pipeline
+from omero_annotate_ai import create_omero_connection_widget, create_workflow_widget
 
 conn_widget = create_omero_connection_widget()
 conn_widget.display()
 conn = conn_widget.get_connection()
 
 workflow_widget = create_workflow_widget(connection=conn)
-workflow_widget.display()
+workflow_widget.display()  # New training set, or Open one to continue
 
-config = workflow_widget.get_config()
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+ts = workflow_widget.training_set()
+workflow_widget.annotate(note="nuclei only, small debris skipped")
 ```
 
 **From a YAML config** (scripts, batch runs, or repeating a run):
 
 ```python
-from omero_annotate_ai import load_config, create_pipeline
+from omero_annotate_ai import TrainingSet, load_config
 
 config = load_config("annotation_config.yaml")
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+ts = TrainingSet.create(config, conn)
+ts.annotate()
 ```
+
+**Continue later** (after closing napari, or a crash): open the set by its table ID and
+annotate what is left; anything a crash left half-done is repaired first.
+
+```python
+ts = TrainingSet.open(12345, conn)
+ts.extend(train_n=10)  # optional: add images to the same table
+ts.annotate(note="second round")
+```
+
+Each training set keeps its files in one folder: images, masks, `config.yaml` (with the
+sessions and their notes) and a local copy of the tracking table. By default that is
+`~/omero_annotate_ai/<server>/<table id>_<name>/`; set `OMERO_ANNOTATE_AI_HOME` (or pass
+`home=` to `TrainingSet.create` / `open`) to keep the sets elsewhere.
+`create_pipeline(config, conn).run_full_micro_sam_workflow()` from 0.4 still works but
+is deprecated.
 
 The [configuration guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/configuration/) lists every option.
 
@@ -103,14 +117,16 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 
 | | Jupyter | marimo |
 |---|---|---|
-| Annotate with micro-SAM | [widget workflow](notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb) | [annotation](notebooks/marimo/omero-annotate-ai-annotation.py) |
-| Prepare for Cellpose | [cellpose](notebooks/jupyter/annotation/omero-annotate-ai-cellpose.ipynb) | [cellpose](notebooks/marimo/omero-annotate-ai-cellpose.py) |
-| Run from YAML | [from YAML](notebooks/jupyter/annotation/omero-annotate-ai-from-yaml.ipynb) | [from YAML](notebooks/marimo/omero-annotate-ai-from-yaml.py) |
-| Train | [micro-SAM](notebooks/jupyter/training/omero-training-microsam.ipynb) · [BiaPy](notebooks/jupyter/training/omero-training_biapy.ipynb) · [DL4MicEverywhere](notebooks/jupyter/training/omero-training_DL4mic.ipynb) | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
+| Annotate with micro-SAM or Cellpose | [widget workflow](notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb) | [annotation](notebooks/marimo/omero-annotate-ai-annotation.py) |
+| Run from YAML (OMERO or OME-Zarr) | | [from YAML](notebooks/marimo/annotate-from-yaml.py) |
+| Train micro-SAM | | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
+| Export for BiaPy / DL4MicEverywhere | [export](notebooks/jupyter/training/omero-training-export.ipynb) | |
 | Export to the BioImage Archive | [BIA export](notebooks/jupyter/export_annotations/omero-table-to-bioimage-archive.ipynb) | |
-| Try it on public IDR data | | [IDR demo](notebooks/marimo/omero-idr-demo.py) |
+| Try it on public data | | [IDR demo](notebooks/marimo/omero-idr-demo.py) |
 
 ## Documentation
+
+Upgrading from 0.4? See [What's new in 0.5](https://leiden-cell-observatory.github.io/omero_annotate_ai/whats-new-0.5/) for the changes and a migration table.
 
 Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_ai/**
 ([micro-SAM tutorial](https://leiden-cell-observatory.github.io/omero_annotate_ai/tutorials/microsam-annotation-pipeline/),
@@ -121,8 +137,9 @@ Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_a
 ```bash
 git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
 cd omero_annotate_ai
-pixi install
-pixi run -e dev pytest tests/
+pixi install                         # default env: everything to run the notebooks
+pixi run -e dev install-hooks        # once per clone: ruff + notebook-output hooks
+pixi run -e dev pytest tests/        # dev env adds test, lint and type-check tools
 ```
 
 Issues and pull requests are welcome on [GitHub](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/issues).

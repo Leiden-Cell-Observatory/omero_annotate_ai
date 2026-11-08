@@ -1,20 +1,23 @@
 """Image processing functions for annotation workflows."""
 
+import logging
 import random as rnd
-from typing import List, Tuple
 
 # Optional dependencies for ROI functionality
 import cv2
 import ezomero.rois
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 
 def generate_patch_coordinates(
-    image_shape: Tuple[int, int],
-    patch_size: List[int],
+    image_shape: tuple[int, int],
+    patch_size: list[int],
     n_patches: int,
     random_patch: bool = True,
-) -> Tuple[List[Tuple[int, int]], Tuple[int, int]]:
+    rng: rnd.Random | None = None,
+) -> tuple[list[tuple[int, int]], tuple[int, int]]:
     """Generate non-overlapping patch coordinates for an image.
 
     CRUCIAL: Ensures patches do not overlap when generating multiple patches.
@@ -24,6 +27,7 @@ def generate_patch_coordinates(
         patch_size: (height, width) of patches
         n_patches: Number of patches to generate
         random_patch: Whether to generate random patches or grid-based patches
+        rng: Random stream for random patches; the ``random`` module when omitted.
 
     Returns:
         Tuple containing:
@@ -36,13 +40,13 @@ def generate_patch_coordinates(
     # Check if image is smaller than patch
     if width < patch_w or height < patch_h:
         # Image smaller than patch, return image size as patch size
-        print("Image smaller than patch size, using full image")
+        logger.info("Image smaller than patch size, using full image")
         actual_patch_size = (height, width)
         return [(0, 0)], actual_patch_size
 
     # Image is large enough for requested patch size
     actual_patch_size = (patch_h, patch_w)
-    
+
     # Ensure patches fit within image
     max_x = max(0, width - patch_w)
     max_y = max(0, height - patch_h)
@@ -50,6 +54,7 @@ def generate_patch_coordinates(
     coordinates = []
 
     if random_patch:
+        draw = rng if rng is not None else rnd.Random()
         # Generate random non-overlapping coordinates
         used_areas = []  # Track used rectangular areas
         max_attempts = n_patches * 20  # Limit attempts to avoid infinite loops
@@ -57,8 +62,8 @@ def generate_patch_coordinates(
 
         while len(coordinates) < n_patches and attempts < max_attempts:
             attempts += 1
-            x = rnd.randint(0, max_x)
-            y = rnd.randint(0, max_y)
+            x = draw.randint(0, max_x)
+            y = draw.randint(0, max_y)
 
             # Check if this patch overlaps with any existing patch
             new_rect = (x, y, x + patch_w, y + patch_h)
@@ -74,8 +79,9 @@ def generate_patch_coordinates(
                 used_areas.append(new_rect)
 
         if len(coordinates) < n_patches:
-            print(
-                f"Could only place {len(coordinates)} non-overlapping patches out of {n_patches} requested"
+            logger.warning(
+                f"Could only place {len(coordinates)} non-overlapping patches "
+                f"out of {n_patches} requested"
             )
 
     else:
@@ -86,21 +92,15 @@ def generate_patch_coordinates(
         max_grid_patches = patches_x * patches_y
 
         if n_patches > max_grid_patches:
-            print(
-                f"Requested {n_patches} patches, but only {max_grid_patches} non-overlapping patches fit"
+            logger.warning(
+                f"Requested {n_patches} patches, but only {max_grid_patches} "
+                "non-overlapping patches fit"
             )
             n_patches = max_grid_patches
 
         # Calculate spacing to distribute patches evenly
-        if patches_x > 1:
-            step_x = (width - patch_w) // (patches_x - 1)
-        else:
-            step_x = 0
-
-        if patches_y > 1:
-            step_y = (height - patch_h) // (patches_y - 1)
-        else:
-            step_y = 0
+        step_x = (width - patch_w) // (patches_x - 1) if patches_x > 1 else 0
+        step_y = (height - patch_h) // (patches_y - 1) if patches_y > 1 else 0
 
         # Generate grid coordinates
         patch_count = 0
@@ -121,7 +121,7 @@ def generate_patch_coordinates(
 
 
 def _rectangles_overlap(
-    rect1: Tuple[int, int, int, int], rect2: Tuple[int, int, int, int]
+    rect1: tuple[int, int, int, int], rect2: tuple[int, int, int, int]
 ) -> bool:
     """Check if two rectangles overlap.
 
@@ -135,12 +135,8 @@ def _rectangles_overlap(
     x1_1, y1_1, x2_1, y2_1 = rect1
     x1_2, y1_2, x2_2, y2_2 = rect2
 
-    # Check if rectangles do NOT overlap (then return False)
-    if x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1:
-        return False
-
-    # If not non-overlapping, they must overlap
-    return True
+    # They overlap unless one lies entirely to one side of the other.
+    return not (x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1)
 
 
 def mask_to_contour(mask):
@@ -195,10 +191,15 @@ def process_label_plane(
                 contour = contour + np.array([x_offset, y_offset])
 
             # Create polygon without text parameter
-            segmentation_type = "volumetric" if isinstance(z_slice, (list, range)) or z_slice > 0 else "manual"
+            segmentation_type = (
+                "volumetric"
+                if isinstance(z_slice, (list, range)) or z_slice > 0
+                else "manual"
+            )
             poly = ezomero.rois.Polygon(
                 points=contour,  # explicitly name the points parameter
-                z=z_slice,
+                # Volumetric shapes pass a z range; ezomero types z as int.
+                z=z_slice,  # pyright: ignore[reportArgumentType]
                 c=channel,
                 t=timepoint,
                 label=f"micro_sam.{segmentation_type}_instance_segmentation",
@@ -246,7 +247,7 @@ def label_to_rois(
             else:
                 actual_z = z_slice + z_index  # Assume z_slice is the starting index
 
-            print(f"Processing volumetric ROIs for z-slice {actual_z}")
+            logger.debug(f"Processing volumetric ROIs for z-slice {actual_z}")
             shapes.extend(
                 process_label_plane(
                     z_plane,

@@ -24,9 +24,14 @@ def _(mo):
     The IDR is a public repository of reference image datasets from published scientific studies,
     hosted on an OMERO server. Anyone can connect and browse the data.
 
-    **Read-only mode:**
-    Since IDR is a public server, you cannot upload annotations or tables. The pipeline runs in
-    **read-only mode**, saving all progress locally to CSV files instead of OMERO tables.
+    **Local storage:**
+    IDR is a public server, so nothing can be uploaded to it. This demo creates a training
+    set with `storage: local`: the masks and the tracking table stay in the set's folder under
+    `~/omero_annotate_ai/local/`.
+
+    **If the connection fails:** the IDR's OMERO API is not always available. The same IDR
+    and BioImage Archive images can be annotated as OME-Zarr without OMERO, using
+    `annotate-from-yaml.py` with `source: zarr`.
 
     **Workflow Steps:**
     1. Connect to IDR (pre-configured)
@@ -54,24 +59,36 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    omero_host = mo.ui.text(value="ws://idr.openmicroscopy.org/omero-ws", label="OMERO Host")
+    omero_host = mo.ui.text(
+        value="ws://idr.openmicroscopy.org/omero-ws", label="OMERO Host"
+    )
     omero_username = mo.ui.text(value="public", label="Username")
     omero_password = mo.ui.text(value="public", label="Password", kind="password")
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect to IDR")
 
-    mo.vstack([
-        omero_host,
-        omero_username,
-        omero_password,
-        omero_secure,
-        connect_button,
-    ])
+    mo.vstack(
+        [
+            omero_host,
+            omero_username,
+            omero_password,
+            omero_secure,
+            connect_button,
+        ]
+    )
     return omero_host, omero_username, omero_password, omero_secure, connect_button
 
 
 @app.cell
-def _(connect_button, omero_host, omero_username, omero_password, omero_secure, establish_connection, mo):
+def _(
+    connect_button,
+    omero_host,
+    omero_username,
+    omero_password,
+    omero_secure,
+    establish_connection,
+    mo,
+):
     conn = None
     connection_status = "Not connected"
 
@@ -87,7 +104,9 @@ def _(connect_button, omero_host, omero_username, omero_password, omero_secure, 
                 if conn and conn.isConnected():
                     user = conn.getUser().getName()
                     group_name = conn.getGroupFromContext().getName()
-                    connection_status = f"Connected as **{user}** to group **{group_name}**"
+                    connection_status = (
+                        f"Connected as **{user}** to group **{group_name}**"
+                    )
                 else:
                     connection_status = "Connection failed"
             except Exception as e:
@@ -135,7 +154,9 @@ def _(conn, container_id, container_type, mo):
     container_info = None
     if conn and conn.isConnected() and container_id.value > 0:
         try:
-            _container = conn.getObject(container_type.value.capitalize(), container_id.value)
+            _container = conn.getObject(
+                container_type.value.capitalize(), container_id.value
+            )
             if _container:
                 container_info = f"Found: **{_container.getName()}**"
             else:
@@ -164,11 +185,17 @@ def _(mo):
     validate_n = mo.ui.slider(start=0, stop=50, value=2, label="Validation images")
     test_n = mo.ui.slider(start=0, stop=50, value=0, label="Test images")
 
-    mo.vstack([
-        segment_all,
-        mo.md("**Image split** (ignored if 'Annotate all' is checked):") if not segment_all.value else mo.md(""),
-        mo.hstack([train_n, validate_n, test_n], justify="start", gap=2) if not segment_all.value else mo.md(""),
-    ])
+    mo.vstack(
+        [
+            segment_all,
+            mo.md("**Image split** (ignored if 'Annotate all' is checked):")
+            if not segment_all.value
+            else mo.md(""),
+            mo.hstack([train_n, validate_n, test_n], justify="start", gap=2)
+            if not segment_all.value
+            else mo.md(""),
+        ]
+    )
     return segment_all, test_n, train_n, validate_n
 
 
@@ -188,11 +215,13 @@ def _(mo):
     )
     z_slices = mo.ui.text(value="0", label="Z-slices (comma-separated)")
 
-    mo.vstack([
-        mo.hstack([channel], justify="start"),
-        mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
-        mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
-    ])
+    mo.vstack(
+        [
+            mo.hstack([channel], justify="start"),
+            mo.hstack([timepoint_mode, timepoints], justify="start", gap=2),
+            mo.hstack([z_slice_mode, z_slices], justify="start", gap=2),
+        ]
+    )
     return channel, timepoint_mode, timepoints, z_slice_mode, z_slices
 
 
@@ -207,54 +236,69 @@ def _(mo):
 @app.cell
 def _(mo):
     use_patches = mo.ui.checkbox(value=False, label="Use patches")
-    patches_per_image = mo.ui.slider(start=1, stop=20, value=1, label="Patches per image")
+    patches_per_image = mo.ui.slider(
+        start=1, stop=20, value=1, label="Patches per image"
+    )
     patch_size = mo.ui.text(value="512, 512", label="Patch size (width, height)")
 
-    mo.vstack([
-        use_patches,
-        mo.hstack([patches_per_image, patch_size], justify="start", gap=2) if use_patches.value else mo.md(""),
-    ])
+    mo.vstack(
+        [
+            use_patches,
+            mo.hstack([patches_per_image, patch_size], justify="start", gap=2)
+            if use_patches.value
+            else mo.md(""),
+        ]
+    )
     return patch_size, patches_per_image, use_patches
 
 
 @app.cell
 def _(mo):
-    batch_size = mo.ui.slider(start=0, stop=10, value=0, label="Batch size (0 = all at once)")
+    batch_size = mo.ui.slider(
+        start=0, stop=10, value=0, label="Batch size (0 = all at once)"
+    )
     model_type = mo.ui.dropdown(
         options=["vit_b_lm", "vit_b", "vit_l", "vit_h"],
         value="vit_b_lm",
         label="SAM Model",
     )
 
-    mo.vstack([
-        mo.hstack([batch_size, model_type], justify="start", gap=2),
-        mo.md("**Read-only mode is enabled automatically** since IDR is a public server. "
-               "Annotations will be saved locally."),
-    ])
+    mo.vstack(
+        [
+            mo.hstack([batch_size, model_type], justify="start", gap=2),
+            mo.md(
+                "**Read-only mode is enabled automatically** since IDR is a public server. "
+                "Annotations will be saved locally."
+            ),
+        ]
+    )
     return batch_size, model_type
 
 
 @app.cell
 def _(mo):
     mo.md("""
-    ## 5. Output Settings
+    ## 5. Training set name
     """)
     return
 
 
 @app.cell
-def _(Path, datetime, mo):
-    output_directory = mo.ui.text(
-        value=str(Path.home() / "omero_annotate_ai" / "idr_annotations"),
-        label="Output Directory",
-        full_width=True,
-    )
+def _(datetime, mo):
     workflow_name = mo.ui.text(
         value=f"idr_annotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        label="Workflow Name",
+        label="Training set name",
     )
-    mo.vstack([output_directory, workflow_name])
-    return output_directory, workflow_name
+    mo.vstack(
+        [
+            workflow_name,
+            mo.md(
+                "IDR is read-only, so this is a **local** training set: masks and the "
+                "tracking table stay in its folder under `~/omero_annotate_ai/local/`."
+            ),
+        ]
+    )
+    return (workflow_name,)
 
 
 @app.cell
@@ -274,7 +318,6 @@ def _(
     container_type,
     mo,
     model_type,
-    output_directory,
     patch_size,
     patches_per_image,
     segment_all,
@@ -292,7 +335,6 @@ def _(
         name=workflow_name.value,
         container_type=container_type.value,
         container_id=int(container_id.value),
-        output_dir=output_directory.value,
         segment_all=segment_all.value,
         train_n=train_n.value,
         validate_n=validate_n.value,
@@ -308,7 +350,6 @@ def _(
         patch_size=patch_size.value,
         batch_size=batch_size.value,
         model_type=model_type.value,
-        read_only_mode=True,
     )
 
     mo.md(f"""
@@ -318,13 +359,12 @@ def _(
     |---------|-------|
     | Workflow Name | {config.name} |
     | Container | {config.omero.container_type} (ID: {config.omero.container_id}) |
-    | Output Directory | {config.output.output_directory} |
-    | Model | {config.ai_model.model_type} |
+    | Model | {config.ai_model.pretrained_from} |
     | Channel | {config.spatial_coverage.channels} |
     | Segment All | {config.training.segment_all} |
     | Train/Val/Test | {config.training.train_n}/{config.training.validate_n}/{config.training.test_n} |
-    | Use Patches | {config.processing.use_patches} |
-    | **Read-only Mode** | **True** (IDR is public) |
+    | Use Patches | {config.spatial_coverage.use_patches} |
+    | **Storage** | **local** (IDR is public) |
     """)
     return (config,)
 
@@ -347,7 +387,7 @@ def _(mo):
 
 
 @app.cell
-def _(config, conn, container_id, create_pipeline, mo, run_button):
+def _(TrainingSet, config, conn, container_id, mo, run_button):
     mo.stop(not run_button.value, mo.md("Click 'Run Annotation Pipeline' to start"))
 
     if not conn or not conn.isConnected():
@@ -355,23 +395,18 @@ def _(config, conn, container_id, create_pipeline, mo, run_button):
     elif container_id.value <= 0:
         mo.output.replace(mo.md("**Error:** Please select a valid container ID"))
     else:
-        try:
-            pipeline = create_pipeline(config, conn)
-            mo.output.replace(mo.md("**Starting annotation pipeline...** Napari will open for interactive annotation."))
+        ts = TrainingSet.create(config, conn)
+        mo.output.replace(mo.md("**napari opens for annotation...**"))
+        _saved = ts.annotate()
+        mo.output.replace(
+            mo.md(f"""
+        **Annotation finished: {_saved} units saved.**
 
-            table_id, updated_config = pipeline.run_full_micro_sam_workflow()
-
-            result_md = f"""
-            **Annotation pipeline completed!**
-
-            - Total images processed: {len(updated_config.get_processed())}
-            - Annotations saved locally to: `{updated_config.output.output_directory}`
-            - Local tracking CSV used (read-only mode)
-            """
-            mo.output.replace(mo.md(result_md))
-        except Exception as e:
-            mo.output.replace(mo.md(f"**Error during pipeline execution:** {str(e)}"))
-    return
+        - Local training set folder: `{ts.bundle_dir}`
+        - Open it again later with `TrainingSet.open("{ts.bundle_dir}")`
+        """)
+        )
+    return (ts,)
 
 
 @app.cell
@@ -386,82 +421,89 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    train_epochs = mo.ui.slider(start=1, stop=200, value=10, label="Training epochs (use 50+ for real training)")
+    train_epochs = mo.ui.slider(
+        start=1, stop=200, value=10, label="Training epochs (use 50+ for real training)"
+    )
     train_batch_size = mo.ui.slider(start=1, stop=8, value=1, label="Batch size")
-    train_patch_shape = mo.ui.text(value="512, 512", label="Patch shape (width, height)")
+    train_patch_shape = mo.ui.text(
+        value="512, 512", label="Patch shape (width, height)"
+    )
     train_button = mo.ui.run_button(label="Prepare Data & Train", kind="success")
 
-    mo.vstack([
-        mo.hstack([train_epochs, train_batch_size], justify="start", gap=2),
-        train_patch_shape,
-        train_button,
-    ])
+    mo.vstack(
+        [
+            mo.hstack([train_epochs, train_batch_size], justify="start", gap=2),
+            train_patch_shape,
+            train_button,
+        ]
+    )
     return train_epochs, train_batch_size, train_patch_shape, train_button
 
 
 @app.cell
 def _(
-    Path,
-    config,
-    conn,
     datetime,
     mo,
     parse_patch_size,
-    prepare_training_data_from_table,
+    reorganize_local_data_for_training,
     run_training,
     setup_training,
     train_batch_size,
     train_button,
     train_epochs,
     train_patch_shape,
+    ts,
 ):
-    mo.stop(not train_button.value, mo.md("Click 'Prepare Data & Train' after completing annotation"))
+    mo.stop(
+        not train_button.value,
+        mo.md("Click 'Prepare Data & Train' after completing annotation"),
+    )
 
-    if not conn or not conn.isConnected():
-        mo.output.replace(mo.md("**Error:** Please connect to IDR first"))
+    if not any(r.processed for r in ts.units()):
+        mo.output.replace(
+            mo.md("**Error:** No annotations yet. Run the annotation step first.")
+        )
     else:
         try:
             _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            _output_dir = Path(config.output.output_directory) / f"micro_sam_training_{_timestamp}"
-            _output_dir.mkdir(parents=True, exist_ok=True)
+            mo.output.replace(mo.md("**Preparing training data...**"))
 
-            _table_id = config.omero.table_id
-            if _table_id is None or _table_id <= 0:
-                mo.output.replace(mo.md("**Error:** No annotation table found. Run annotation first."))
-            else:
-                mo.output.replace(mo.md("**Preparing training data...**"))
+            # Read-only mode keeps everything local (there is no OMERO table), so
+            # reorganise the local annotation folders into the training layout.
+            # It is written next to the annotation folder, never inside it.
+            _training_result = reorganize_local_data_for_training(
+                ts.config, annotation_dir=ts.bundle_dir
+            )
 
-                _training_result = prepare_training_data_from_table(
-                    conn=conn,
-                    table_id=_table_id,
-                    training_name=f"idr_training_{_timestamp}",
-                    output_dir=_output_dir,
-                    clean_existing=True,
+            _patch = parse_patch_size(train_patch_shape.value)
+            _training_config = setup_training(
+                _training_result,
+                model_name=f"idr_microsam_{_timestamp}",
+                epochs=train_epochs.value,
+                batch_size=train_batch_size.value,
+                learning_rate=1e-5,
+                patch_shape=tuple(_patch),
+                model_type="vit_b_lm",
+                n_objects_per_batch=25,
+            )
+
+            mo.output.replace(
+                mo.md(
+                    f"**Training started...** {train_epochs.value} epochs, {_training_config['n_iterations']} iterations"
                 )
+            )
 
-                _patch = parse_patch_size(train_patch_shape.value)
-                _training_config = setup_training(
-                    _training_result,
-                    model_name=f"idr_microsam_{_timestamp}",
-                    epochs=train_epochs.value,
-                    batch_size=train_batch_size.value,
-                    learning_rate=1e-5,
-                    patch_shape=tuple(_patch),
-                    model_type="vit_b_lm",
-                    n_objects_per_batch=25,
-                )
+            _results = run_training(_training_config, framework="microsam")
 
-                mo.output.replace(mo.md(f"**Training started...** {train_epochs.value} epochs, {_training_config['n_iterations']} iterations"))
+            mo.output.replace(
+                mo.md(f"""
+            **Training completed!**
 
-                _results = run_training(_training_config, framework="microsam")
-
-                mo.output.replace(mo.md(f"""
-                **Training completed!**
-
-                - Model: `{_results['model_name']}`
-                - Final model: `{_results.get('final_model_path', 'N/A')}`
-                - Output: `{_results['output_dir']}`
-                """))
+            - Model: `{_results["model_name"]}`
+            - Final model: `{_results.get("final_model_path", "N/A")}`
+            - Output: `{_results["output_dir"]}`
+            """)
+            )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error:** {str(e)}"))
     return
@@ -470,65 +512,40 @@ def _(
 @app.cell
 def _(mo):
     mo.md("""
-    ## 9. Save Configuration
+    The set's configuration is saved as `config.yaml` in its folder; load it with
+    `load_config_from_yaml(...)` to repeat the selection elsewhere.
     """)
-    return
-
-
-@app.cell
-def _(mo):
-    save_button = mo.ui.run_button(label="Save Configuration to YAML")
-    save_button
-    return (save_button,)
-
-
-@app.cell
-def _(Path, config, mo, save_button):
-    mo.stop(not save_button.value, mo.md("Click 'Save Configuration' to export your settings"))
-
-    _result = None
-    try:
-        config_path = Path(config.output.output_directory) / f"annotation_config_{config.name}.yaml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config.save_yaml(config_path)
-        _result = mo.md(f"""
-        **Configuration saved!**
-
-        File: `{config_path}`
-
-        To reuse: `config = load_config_from_yaml('{config_path}')`
-        """)
-    except Exception as e:
-        _result = mo.md(f"**Error saving configuration:** {str(e)}")
-    _result
     return
 
 
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
 @app.cell
 def _():
-    from pathlib import Path
     from datetime import datetime
+    from pathlib import Path
+
     return Path, datetime
 
 
 @app.cell
 def _():
     from omero_annotate_ai import (
+        TrainingSet,
         create_default_config,
-        create_pipeline,
-        prepare_training_data_from_table,
-        setup_training,
+        reorganize_local_data_for_training,
         run_training,
+        setup_training,
     )
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
         OMERO_AVAILABLE = True
     except ImportError:
         OMERO_AVAILABLE = False
@@ -536,8 +553,8 @@ def _():
         OMERO_AVAILABLE,
         SimpleOMEROConnection,
         create_default_config,
-        create_pipeline,
-        prepare_training_data_from_table,
+        TrainingSet,
+        reorganize_local_data_for_training,
         setup_training,
         run_training,
     )
@@ -547,7 +564,9 @@ def _():
 def _(OMERO_AVAILABLE, SimpleOMEROConnection):
     def establish_connection(host, username, password, group=None, secure=True):
         if not OMERO_AVAILABLE:
-            raise ImportError("OMERO functionality not available. Install with: pip install -e .[omero]")
+            raise ImportError(
+                "OMERO functionality not available. Install with: pip install -e .[omero]"
+            )
 
         connection = SimpleOMEROConnection()
         config = {
@@ -563,6 +582,7 @@ def _(OMERO_AVAILABLE, SimpleOMEROConnection):
         if conn:
             conn.c.enableKeepAlive(60)
         return conn
+
     return (establish_connection,)
 
 
@@ -584,16 +604,16 @@ def _():
             return [512, 512]
         except ValueError:
             return [512, 512]
+
     return parse_int_list, parse_patch_size
 
 
 @app.cell
-def _(Path, create_default_config, parse_int_list, parse_patch_size):
+def _(create_default_config, parse_int_list, parse_patch_size):
     def build_config(
         name,
         container_type,
         container_id,
-        output_dir,
         segment_all,
         train_n,
         validate_n,
@@ -609,14 +629,13 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
         patch_size,
         batch_size,
         model_type,
-        read_only_mode,
     ):
         config = create_default_config()
 
         config.name = name
         config.omero.container_type = container_type
         config.omero.container_id = container_id
-        config.output.output_directory = Path(output_dir)
+        config.storage = "local"  # IDR is read-only
 
         config.training.segment_all = segment_all
         config.training.train_n = train_n
@@ -637,9 +656,8 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
 
         config.ai_model.pretrained_from = model_type
 
-        config.workflow.read_only_mode = read_only_mode
-
         return config
+
     return (build_config,)
 
 

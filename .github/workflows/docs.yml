@@ -3,8 +3,7 @@ name: Documentation
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  pull_request:  # build on every PR; deploy only from main
 
 permissions:
   contents: read

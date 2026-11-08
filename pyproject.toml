@@ -10,17 +10,16 @@ readme = "README.md"
 license = "GPL-2.0-or-later"
 license-files = ["LICENSE"]
 authors = [
-    {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
+    {name = "Maarten Paul", email = "m.w.paul@lacdr.leidenuniv.nl"},
 ]
 maintainers = [
-    {name = "Maarten Paul", email = "m.w.paul@lumc.nl"},
+    {name = "Maarten Paul", email = "m.w.paul@lacdr.leidenuniv.nl"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -32,7 +31,7 @@ classifiers = [
     "Environment :: Other Environment",
 ]
 keywords = ["omero", "microscopy", "segmentation", "ai", "annotation", "sam", "micro-sam"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.21.0",
     "pandas>=1.3.0",
@@ -55,15 +54,13 @@ notebooks = [
     "keyring>=23.0.0",
 ]
 microsam = [
-    "napari>=0.4.15",
-    # Note: micro-sam is conda-only, install with: conda install -c conda-forge micro-sam
+    "micro-sam>=1.8",  # brings napari; pixi takes micro_sam from conda-forge instead
 ]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
-    "black>=22.0",
-    "isort>=5.0",
-    "flake8>=4.0",
+    "ruff>=0.17",
+    "pyright>=1.1.414",
 ]
 docs = [
     "zensical>=0.0.73",
@@ -87,20 +84,69 @@ Changelog = "https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releas
 where = ["src"]
 include = ["omero_annotate_ai*"]
 
-[tool.black]
-line-length = 88
-target-version = ['py310']
+[tool.setuptools.package-data]
+omero_annotate_ai = ["py.typed"]
 
-[tool.isort]
-profile = "black"
-line_length = 88
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "T20", "BLE", "PTH", "RET"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps code at 88; E501 only flags what it cannot wrap (long strings,
+# docstrings, comments) beyond 100.
+max-line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and notebooks may print and use broad patterns.
+"tests/**" = ["T20", "BLE", "PTH"]
+"notebooks/**" = ["T20", "BLE", "PTH", "E501", "B018", "RET504"]
+# Widgets show status by printing into ipywidgets Output areas; CLI scripts print.
+"src/omero_annotate_ai/widgets/**" = ["T201"]
+".github/scripts/**" = ["T201"]
+# legacy, rewritten in 0.5.0 core PRs
+"src/omero_annotate_ai/omero/omero_functions.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
+
+[tool.pyright]
+include = ["src/omero_annotate_ai"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportMissingModuleSource = "none"
+# legacy, rewritten in 0.5.0 core PRs: analysed for imports, diagnostics not reported.
+ignore = [
+    "src/omero_annotate_ai/omero/omero_functions.py",
+]
+# New core modules (0.5.0 core PRs) are checked strictly from their first commit.
+strict = [
+    "src/omero_annotate_ai/planning.py",
+    "src/omero_annotate_ai/annotators.py",
+    "src/omero_annotate_ai/bundle.py",
+    "src/omero_annotate_ai/errors.py",
+    "src/omero_annotate_ai/events.py",
+    "src/omero_annotate_ai/session.py",
+    "src/omero_annotate_ai/reconcile.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=omero_annotate_ai --cov-report=html --cov-report=term-missing"
+markers = [
+    "unit: fast unit tests with mocked dependencies",
+    "omero: needs an OMERO server",
+    "integration: integration tests",
+    "docker: needs the Docker test OMERO (tests/docker-compose.yml)",
+    "slow: takes longer than a few seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::FutureWarning",
+]
 
 # Pixi configuration
 [tool.pixi.workspace]
@@ -113,7 +159,7 @@ platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
 # Default environment - minimal user installation
 [tool.pixi.dependencies]
 python = "3.11.*"
-micro_sam = ">=1.7.0,<2"
+micro_sam = ">=1.8,<2"
 jupyter = ">=1.1.1,<2"
 napari = ">=0.6.2,<0.7"
 zeroc-ice = ">=3.6.4,<3.7"
@@ -130,9 +176,9 @@ hf-xet = "<1.1.9"
 pytest = ">=8.4.1,<9"
 pytest-cov = ">=6.2.1,<7"
 pytest-mock = ">=3.14.1,<4"
-flake8 = ">=7.3.0,<8"
-black = ">=25.1.0,<26"
-isort = ">=6.0.1,<7"
+pre-commit = ">=4.7.0,<5"
+ruff = ">=0.17.4,<0.18"
+pyright = ">=1.1.414,<2"
 
 # Documentation feature
 [tool.pixi.feature.docs.dependencies]
@@ -158,8 +204,8 @@ ome-zarr = ">=0.16"
 
 # Environment definitions
 [tool.pixi.environments]
-default = ["zarr"]
-dev = ["dev","all","mifa","zarr"]
+default = ["all", "zarr"]
+dev = ["dev", "all", "mifa", "zarr"]
 docs = ["docs"]
 dev-docs = ["dev", "docs"]
 mifa = ["mifa"]
@@ -173,17 +219,22 @@ test = {cmd = "pytest tests/ -v"}
 test-unit = {cmd = "pytest tests/ -v -m \"not (omero or integration or docker)\""}
 test-cov = { cmd = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml" }
 
+# Git hooks: strip notebook outputs on commit (run once per clone)
+install-hooks = { cmd = "pre-commit install" }
+
 # Code quality
-lint = { cmd = "flake8 src/omero_annotate_ai && black --check src/omero_annotate_ai && isort --check-only src/omero_annotate_ai" }
-format = { cmd = "black src/omero_annotate_ai && isort src/omero_annotate_ai" }
+lint = { cmd = "ruff check . && ruff format --check ." }
+format = { cmd = "ruff check --fix . && ruff format ." }
+typecheck = { cmd = "pyright" }
 
 # Documentation
 docs-serve = {cmd = "zensical serve"}
 docs-build = {cmd = "zensical build --clean"}
 
 # Development
-start-omero = {cmd = "cd tests && docker-compose up -d"}
-stop-omero = {cmd = "cd tests && docker-compose down -v"}
+start-omero = {cmd = "docker compose -p oai-test -f tests/docker-compose.yml up -d --wait"}
+stop-omero = {cmd = "docker compose -p oai-test -f tests/docker-compose.yml down -v"}
+test-omero = {cmd = "pytest tests/ -m docker -v --no-cov"}
 build = { cmd = "python -m build" }
 clean = {cmd = "rm -rf build/ dist/ *.egg-info/ && find . -type d -name __pycache__ -exec rm -rf {} + && find . -type f -name \"*.pyc\" -delete"}
 
@@ -193,6 +244,3 @@ upload-test = { cmd = "python -m twine upload --repository testpypi dist/*" }
 upload-prod = { cmd = "python -m twine upload dist/*" }
 verify-build = { cmd = "python -m zipfile -l dist/*.whl && tar -tzf dist/*.tar.gz" }
 
-[dependency-groups]
-docs = ["mkdocs-glightbox>=0.5.1,<0.6"]
-dev = ["ty>=0.0.12,<0.0.13", "aiohttp>=3.14.3,<4", "requests"]

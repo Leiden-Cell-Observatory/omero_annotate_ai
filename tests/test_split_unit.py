@@ -5,20 +5,18 @@ annotation of one unit lands in the same split. It is recorded in the config,
 enforced by the pipeline, checked by validation and reported at export.
 """
 
-import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    ImageAnnotation,
     TrainingConfig,
     create_default_config,
-    validate_annotations_against_config,
 )
-from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
+from omero_annotate_ai.rows import Row, split_report, split_summary
 from omero_annotate_ai.sources import ImageMeta
 from omero_annotate_ai.sources.uri import omero_uri
+from omero_annotate_ai.trainingset import TrainingSet
 
 pytestmark = pytest.mark.unit
 
@@ -39,19 +37,20 @@ class FakeImageSource:
         return FakeImage(image_id)
 
     def metadata(self, image):
-        return ImageMeta(omero_uri(image.image_id), image.name, 1, 1, 1, 16, 16, "uint16")
+        return ImageMeta(
+            omero_uri(image.image_id), image.name, 1, 1, 1, 16, 16, "uint16"
+        )
 
 
 def _plate_pipeline(tmp_path, wells, **training):
     """Pipeline over a fake plate; ``wells`` maps well name -> list of image ids."""
     config = create_default_config()
-    config.workflow.read_only_mode = True
-    config.output.output_directory = tmp_path
+    config.storage = "local"
     for key, value in training.items():
         setattr(config.training, key, value)
     ids = [i for ids in wells.values() for i in ids]
     source = FakeImageSource(ids)
-    pipeline = AnnotationPipeline(config, conn=None, image_source=source)
+    pipeline = TrainingSet(config, None, image_source=source, home=tmp_path)
     for well, well_ids in wells.items():
         for field, image_id in enumerate(well_ids):
             pipeline._omero_wells[omero_uri(image_id)] = {
@@ -63,7 +62,7 @@ def _plate_pipeline(tmp_path, wells, **training):
 
 
 def _ann(image_id, well, category, t=0):
-    return ImageAnnotation(
+    return Row(
         image_uri=omero_uri(image_id),
         image_id=image_id,
         image_name=f"img{image_id}",
@@ -74,13 +73,32 @@ def _ann(image_id, well, category, t=0):
     )
 
 
+def _plan(training_set, images):
+    """Plan a new set's rows from ``images`` (what TrainingSet.create does)."""
+    by_uri = {training_set.image_source.metadata(i).image_uri: i for i in images}
+    plan = training_set._plan_split(list(by_uri))
+    training_set.rows = [
+        row
+        for uri, category in plan.items()
+        for row in training_set._units_for_image(by_uri[uri], category)
+    ]
+
+
+def _report(rows, training):
+    return split_report(
+        rows, training.split_unit, training.stratify_by, training.split_rationale
+    )
+
+
 class TestSplitUnitConfig:
     def test_default_is_image(self):
         assert TrainingConfig().split_unit == "image"
         assert TrainingConfig().split_rationale is None
 
     def test_well_is_accepted(self):
-        training = TrainingConfig(split_unit="well", split_rationale="wells independent")
+        training = TrainingConfig(
+            split_unit="well", split_rationale="wells independent"
+        )
         assert training.split_unit == "well"
 
     def test_unknown_unit_is_rejected(self):
@@ -103,9 +121,9 @@ class TestWellSplit:
         pipeline, images = _plate_pipeline(
             tmp_path, self.WELLS, split_unit="well", train_n=2, validate_n=1, test_n=1
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
 
-        anns = pipeline.config.annotations
+        anns = pipeline.rows
         assert len(anns) == 8
         by_well = {}
         for a in anns:
@@ -118,20 +136,25 @@ class TestWellSplit:
         pipeline, images = _plate_pipeline(
             tmp_path, self.WELLS, split_unit="well", train_n=1, validate_n=1, test_n=0
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
 
-        wells = {a.well for a in pipeline.config.annotations}
+        wells = {a.well for a in pipeline.rows}
         assert len(wells) == 2
-        assert len(pipeline.config.annotations) == 4
+        assert len(pipeline.rows) == 4
 
     def test_fraction_mode_splits_wells(self, tmp_path):
         pipeline, images = _plate_pipeline(
-            tmp_path, self.WELLS, split_unit="well", segment_all=True,
-            train_fraction=0.5, validation_fraction=0.25, test_fraction=0.25,
+            tmp_path,
+            self.WELLS,
+            split_unit="well",
+            segment_all=True,
+            train_fraction=0.5,
+            validation_fraction=0.25,
+            test_fraction=0.25,
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
 
-        report = pipeline.config.split_report()
+        report = _report(pipeline.rows, pipeline.config.training)
         assert report["wells"]["spanning_splits"] == []
         counts = report["wells"]["per_split"]
         assert counts == {"training": 2, "validation": 1, "test": 1}
@@ -141,7 +164,7 @@ class TestWellSplit:
             tmp_path, self.WELLS, split_unit="well", train_n=4, validate_n=1
         )
         with pytest.raises(ValueError, match="only 4 wells available"):
-            pipeline._prepare_processing_units(images)
+            _plan(pipeline, images)
 
     def test_well_unit_needs_well_information(self, tmp_path):
         pipeline, images = _plate_pipeline(
@@ -149,7 +172,7 @@ class TestWellSplit:
         )
         pipeline._omero_wells.clear()
         with pytest.raises(ValueError, match="split_unit='well'"):
-            pipeline._prepare_processing_units(images)
+            _plan(pipeline, images)
 
     def test_plan_split_returns_every_image_of_selected_wells(self, tmp_path):
         pipeline, images = _plate_pipeline(
@@ -165,10 +188,14 @@ class TestWellSplit:
         pipeline, images = _plate_pipeline(
             tmp_path, self.WELLS, train_n=3, validate_n=2, test_n=1
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
 
-        cats = [a.category for a in pipeline.config.annotations]
-        assert (cats.count("training"), cats.count("validation"), cats.count("test")) == (3, 2, 1)
+        cats = [a.category for a in pipeline.rows]
+        assert (
+            cats.count("training"),
+            cats.count("validation"),
+            cats.count("test"),
+        ) == (3, 2, 1)
 
 
 class TestSplitReport:
@@ -176,15 +203,19 @@ class TestSplitReport:
         config = create_default_config()
         config.training.split_unit = unit
         config.training.split_rationale = rationale
-        config.annotations.extend(anns)
+        self.rows = list(anns)
         return config
 
     def test_reports_wells_spanning_splits(self):
-        config = self._config([
-            _ann(1, "B2", "training"), _ann(2, "B2", "validation"),
-            _ann(3, "B3", "test"), _ann(4, "B3", "test"),
-        ])
-        report = config.split_report()
+        config = self._config(
+            [
+                _ann(1, "B2", "training"),
+                _ann(2, "B2", "validation"),
+                _ann(3, "B3", "test"),
+                _ann(4, "B3", "test"),
+            ]
+        )
+        report = _report(self.rows, config.training)
         assert report["split_unit"] == "image"
         assert report["images"] == {
             "total": 4,
@@ -195,56 +226,34 @@ class TestSplitReport:
         assert report["wells"]["spanning_splits"] == ["B2"]
 
     def test_image_spanning_splits_is_detected(self):
-        config = self._config([
-            _ann(1, "B2", "training", t=0), _ann(1, "B2", "validation", t=1),
-        ])
-        assert config.split_report()["images"]["spanning_splits"] == ["omero:image:1"]
+        config = self._config(
+            [
+                _ann(1, "B2", "training", t=0),
+                _ann(1, "B2", "validation", t=1),
+            ]
+        )
+        assert _report(self.rows, config.training)["images"]["spanning_splits"] == [
+            "omero:image:1"
+        ]
 
     def test_no_wells_section_without_well_information(self):
         config = self._config([_ann(1, "", "training")])
-        assert "wells" not in config.split_report()
+        assert "wells" not in _report(self.rows, config.training)
 
     def test_summary_sentence(self):
         config = self._config(
-            [_ann(1, "B2", "training"), _ann(2, "B2", "validation"), _ann(3, "B3", "test")],
+            [
+                _ann(1, "B2", "training"),
+                _ann(2, "B2", "validation"),
+                _ann(3, "B3", "test"),
+            ],
             rationale="Fields do not overlap.",
         )
-        summary = config.split_summary()
+        summary = split_summary(_report(self.rows, config.training))
         assert "Split unit: image" in summary
         assert "1 of 2 wells" in summary
         assert "B2" in summary
         assert "Fields do not overlap." in summary
-
-
-class TestSplitValidation:
-    def _config(self, anns, unit):
-        config = create_default_config()
-        config.training.split_unit = unit
-        config.training.segment_all = True
-        config.annotations.extend(anns)
-        return config
-
-    def test_well_unit_violated_is_an_error(self):
-        config = self._config(
-            [_ann(1, "B2", "training"), _ann(2, "B2", "validation")], unit="well"
-        )
-        result = validate_annotations_against_config(config)
-        assert not result.is_valid
-        assert any(e.field == "split_unit" for e in result.errors)
-
-    def test_image_unit_with_well_spanning_is_valid(self):
-        config = self._config(
-            [_ann(1, "B2", "training"), _ann(2, "B2", "validation")], unit="image"
-        )
-        result = validate_annotations_against_config(config)
-        assert not any(e.field == "split_unit" for e in result.errors)
-
-    def test_image_unit_violated_is_an_error(self):
-        config = self._config(
-            [_ann(1, "B2", "training", t=0), _ann(1, "B2", "validation", t=1)], unit="image"
-        )
-        result = validate_annotations_against_config(config)
-        assert any(e.field == "split_unit" for e in result.errors)
 
 
 def test_mifa_method_text_states_split_unit():
@@ -253,8 +262,8 @@ def test_mifa_method_text_states_split_unit():
     config = create_default_config()
     config.training.split_unit = "well"
     config.training.split_rationale = "Wells are the experimental unit."
-    config.annotations.extend([_ann(1, "B2", "training"), _ann(2, "B3", "test")])
-    method = compose_method(config)
+    rows = [_ann(1, "B2", "training"), _ann(2, "B3", "test")]
+    method = compose_method(config, rows)
     assert "Split unit: well" in method
     assert "Wells are the experimental unit." in method
 
@@ -262,15 +271,17 @@ def test_mifa_method_text_states_split_unit():
 def _condition_pipeline(tmp_path, n_fields=4, **training):
     """2 cell lines x 2 treatments, one well each, ``n_fields`` fields per well."""
     config = create_default_config()
-    config.workflow.read_only_mode = True
-    config.output.output_directory = tmp_path
+    config.storage = "local"
     for key, value in training.items():
         setattr(config.training, key, value)
-    pipeline = AnnotationPipeline(config, conn=None, image_source=FakeImageSource([]))
+    pipeline = TrainingSet(
+        config, None, image_source=FakeImageSource([]), home=tmp_path
+    )
     images, image_id = [], 0
     for well, (line, drug) in zip(
         ["B2", "B3", "C2", "C3"],
         [("MDA", "DMSO"), ("MDA", "drug"), ("HCC", "DMSO"), ("HCC", "drug")],
+        strict=True,
     ):
         for field in range(n_fields):
             image_id += 1
@@ -285,45 +296,56 @@ def _condition_pipeline(tmp_path, n_fields=4, **training):
 
 def _categories_per_well(pipeline):
     per_well = {}
-    for a in pipeline.config.annotations:
+    for a in pipeline.rows:
         per_well.setdefault(a.well, []).append(a.category)
     return per_well
 
 
 class TestFractionShuffle:
     def test_fraction_mode_is_not_in_list_order(self, tmp_path):
-        import random
-
-        random.seed(1)
         pipeline, images = _condition_pipeline(
-            tmp_path, segment_all=True,
-            train_fraction=0.5, validation_fraction=0.25, test_fraction=0.25,
+            tmp_path,
+            segment_all=True,
+            train_fraction=0.5,
+            validation_fraction=0.25,
+            test_fraction=0.25,
         )
         orders = set()
-        for _ in range(5):
-            pipeline._prepare_processing_units(images)
-            orders.add(tuple(a.category for a in sorted(
-                pipeline.config.annotations, key=lambda a: a.image_id)))
+        for seed in range(5):  # the order is random per seed, fixed for one seed
+            pipeline._config.training.seed = seed
+            _plan(pipeline, images)
+            orders.add(
+                tuple(
+                    a.category for a in sorted(pipeline.rows, key=lambda a: a.image_id)
+                )
+            )
         assert len(orders) > 1
 
 
 class TestStratifiedSplit:
     def test_fraction_mode_covers_every_condition(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, segment_all=True, stratify_by=["cell_line", "treatment"],
-            train_fraction=0.6, validation_fraction=0.2, test_fraction=0.2,
+            tmp_path,
+            segment_all=True,
+            stratify_by=["cell_line", "treatment"],
+            train_fraction=0.6,
+            validation_fraction=0.2,
+            test_fraction=0.2,
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
 
         for cats in _categories_per_well(pipeline).values():
             assert sorted(cats) == ["test", "training", "training", "validation"]
 
     def test_count_mode_spreads_over_conditions(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, stratify_by=["cell_line", "treatment"],
-            train_n=8, validate_n=4, test_n=4,
+            tmp_path,
+            stratify_by=["cell_line", "treatment"],
+            train_n=8,
+            validate_n=4,
+            test_n=4,
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
 
         for cats in _categories_per_well(pipeline).values():
             assert cats.count("validation") == 1
@@ -332,49 +354,70 @@ class TestStratifiedSplit:
 
     def test_well_can_be_a_stratum(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, segment_all=True, stratify_by=["well"],
-            train_fraction=0.5, validation_fraction=0.25, test_fraction=0.25,
+            tmp_path,
+            segment_all=True,
+            stratify_by=["well"],
+            train_fraction=0.5,
+            validation_fraction=0.25,
+            test_fraction=0.25,
         )
-        pipeline._prepare_processing_units(images)
+        _plan(pipeline, images)
         for cats in _categories_per_well(pipeline).values():
             assert set(cats) == {"training", "validation", "test"}
 
     def test_impossible_coverage_warns_but_splits(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, n_fields=1, split_unit="well", segment_all=True,
+            tmp_path,
+            n_fields=1,
+            split_unit="well",
+            segment_all=True,
             stratify_by=["cell_line", "treatment"],
-            train_fraction=0.6, validation_fraction=0.2, test_fraction=0.2,
+            train_fraction=0.6,
+            validation_fraction=0.2,
+            test_fraction=0.2,
         )
         with pytest.warns(UserWarning, match="not in every split"):
-            pipeline._prepare_processing_units(images)
-        assert len(pipeline.config.annotations) == 4
+            _plan(pipeline, images)
+        assert len(pipeline.rows) == 4
 
     def test_unknown_key_is_an_error(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, segment_all=True, stratify_by=["celline"],
+            tmp_path,
+            segment_all=True,
+            stratify_by=["celline"],
         )
         with pytest.raises(ValueError, match="celline"):
-            pipeline._prepare_processing_units(images)
+            _plan(pipeline, images)
 
     def test_key_missing_on_some_images_is_its_own_stratum(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, segment_all=True, stratify_by=["treatment"],
-            train_fraction=0.5, validation_fraction=0.25, test_fraction=0.25,
+            tmp_path,
+            segment_all=True,
+            stratify_by=["treatment"],
+            train_fraction=0.5,
+            validation_fraction=0.25,
+            test_fraction=0.25,
         )
-        for uri, well in pipeline._omero_wells.items():
+        for well in pipeline._omero_wells.values():
             if well["well"] == "B2":
                 well["well_metadata"] = {}
-        pipeline._prepare_processing_units(images)
-        assert len(pipeline.config.annotations) == 16
+        _plan(pipeline, images)
+        assert len(pipeline.rows) == 16
 
     def test_report_lists_strata_coverage(self, tmp_path):
         pipeline, images = _condition_pipeline(
-            tmp_path, segment_all=True, stratify_by=["cell_line"],
-            train_fraction=0.5, validation_fraction=0.25, test_fraction=0.25,
+            tmp_path,
+            segment_all=True,
+            stratify_by=["cell_line"],
+            train_fraction=0.5,
+            validation_fraction=0.25,
+            test_fraction=0.25,
         )
-        pipeline._prepare_processing_units(images)
-        report = pipeline.config.split_report()
+        _plan(pipeline, images)
+        report = _report(pipeline.rows, pipeline.config.training)
         assert report["stratify_by"] == ["cell_line"]
         assert set(report["strata"]) == {"cell_line=MDA", "cell_line=HCC"}
         assert report["strata_missing_splits"] == {}
-        assert "every stratum" in pipeline.config.split_summary()
+        assert "every stratum" in split_summary(
+            _report(pipeline.rows, pipeline.config.training)
+        )

@@ -11,6 +11,13 @@ from omero_annotate_ai.sources import (
     OmeroImageSource,
     clamp_region,
 )
+from omero_annotate_ai.sources.uri import (
+    annotation_id,
+    normalize_zarr_uri,
+    omero_uri,
+    parse_omero_uri,
+    uri_key,
+)
 
 
 def make_omero_image(planes, image_id=7, name="img.tif", pixels_type="uint16"):
@@ -27,9 +34,9 @@ def make_omero_image(planes, image_id=7, name="img.tif", pixels_type="uint16"):
     image.getPixelsType.return_value = pixels_type
     pixels = Mock()
     pixels.getPlane.side_effect = lambda z, c, t: planes[t, c, z]
-    pixels.getTile.side_effect = (
-        lambda z, c, t, tile: planes[t, c, z, tile[1]:tile[1] + tile[3], tile[0]:tile[0] + tile[2]]
-    )
+    pixels.getTile.side_effect = lambda z, c, t, tile: planes[
+        t, c, z, tile[1] : tile[1] + tile[3], tile[0] : tile[0] + tile[2]
+    ]
     image.getPrimaryPixels.return_value = pixels
     return image
 
@@ -83,13 +90,24 @@ class TestOmeroImageSource:
 
     def test_metadata(self):
         assert self.source.metadata(self.image) == ImageMeta(
-            image_uri="omero:image:7", name="img.tif", size_t=2, size_c=3, size_z=4,
-            size_y=10, size_x=12, dtype="uint16",
+            image_uri="omero:image:7",
+            name="img.tif",
+            size_t=2,
+            size_c=3,
+            size_z=4,
+            size_y=10,
+            size_x=12,
+            dtype="uint16",
         )
 
     @pytest.mark.parametrize(
         "omero_type, numpy_name",
-        [("uint8", "uint8"), ("uint16", "uint16"), ("float", "float32"), ("double", "float64")],
+        [
+            ("uint8", "uint8"),
+            ("uint16", "uint16"),
+            ("float", "float32"),
+            ("double", "float64"),
+        ],
     )
     def test_metadata_dtype_is_a_numpy_name(self, omero_type, numpy_name):
         image = make_omero_image(self.planes, pixels_type=omero_type)
@@ -102,7 +120,9 @@ class TestOmeroImageSource:
     def test_read_plane_region_uses_get_tile(self):
         plane = self.source.read_plane(self.image, t=0, c=1, z=2, region=(2, 3, 4, 5))
         np.testing.assert_array_equal(plane, self.planes[0, 1, 2, 3:8, 2:6])
-        self.image.getPrimaryPixels().getTile.assert_called_once_with(2, 1, 0, (2, 3, 4, 5))
+        self.image.getPrimaryPixels().getTile.assert_called_once_with(
+            2, 1, 0, (2, 3, 4, 5)
+        )
 
     def test_read_plane_region_past_edge_is_clipped(self):
         plane = self.source.read_plane(self.image, t=0, c=0, z=0, region=(8, 6, 10, 10))
@@ -115,7 +135,9 @@ class TestOmeroImageSource:
         np.testing.assert_array_equal(vol, self.planes[1, 0, 1:4])
 
     def test_read_volume_region(self):
-        vol = self.source.read_volume(self.image, t=0, c=0, z_start=0, z_end=1, region=(0, 0, 5, 6))
+        vol = self.source.read_volume(
+            self.image, t=0, c=0, z_start=0, z_end=1, region=(0, 0, 5, 6)
+        )
         assert vol.shape == (2, 6, 5)
 
     def test_float_pixels_keep_dtype(self):
@@ -128,15 +150,6 @@ class TestOmeroImageSource:
         self.image.getPrimaryPixels().getPlane.side_effect = RuntimeError("ice down")
         with pytest.raises(RuntimeError, match="ice down"):
             self.source.read_plane(self.image, t=0, c=0, z=0)
-
-
-from omero_annotate_ai.sources.uri import (
-    annotation_id,
-    normalize_zarr_uri,
-    omero_uri,
-    parse_omero_uri,
-    uri_key,
-)
 
 
 @pytest.mark.unit
@@ -163,9 +176,11 @@ class TestUri:
         import ntpath
         import types
 
-        import omero_annotate_ai.sources.uri as uri_module
+        from omero_annotate_ai.sources import uri as uri_module
 
-        monkeypatch.setattr(uri_module, "os", types.SimpleNamespace(path=ntpath, sep="\\"))
+        monkeypatch.setattr(
+            uri_module, "os", types.SimpleNamespace(path=ntpath, sep="\\")
+        )
         assert normalize_zarr_uri("C:\\data\\p.zarr\\B\\2\\") == "C:/data/p.zarr/B/2"
 
     def test_uri_key_is_stable_sha1_prefix(self):
@@ -198,29 +213,48 @@ class TestZarrImageSource:
 
     def test_metadata_cyx_fills_missing_axes_with_one(self):
         meta = self.source.metadata(self.source.get_image(self.s["img04"]))
-        assert meta == ImageMeta(image_uri=self.s["img04"], name="img04.zarr", size_t=1,
-                                 size_c=2, size_z=1, size_y=64, size_x=80, dtype="uint16")
+        assert meta == ImageMeta(
+            image_uri=self.s["img04"],
+            name="img04.zarr",
+            size_t=1,
+            size_c=2,
+            size_z=1,
+            size_y=64,
+            size_x=80,
+            dtype="uint16",
+        )
 
     def test_metadata_tczyx_v05(self):
         meta = self.source.metadata(self.source.get_image(self.s["img05"]))
-        assert (meta.size_t, meta.size_c, meta.size_z, meta.size_y, meta.size_x) == (2, 2, 3, 32, 40)
+        assert (meta.size_t, meta.size_c, meta.size_z, meta.size_y, meta.size_x) == (
+            2,
+            2,
+            3,
+            32,
+            40,
+        )
 
     def test_read_plane_cyx(self):
         image = self.source.get_image(self.s["img04"])
-        np.testing.assert_array_equal(self.source.read_plane(image, t=0, c=1, z=0),
-                                      self.s["arr04"][1])
+        np.testing.assert_array_equal(
+            self.source.read_plane(image, t=0, c=1, z=0), self.s["arr04"][1]
+        )
 
     def test_read_plane_region_and_clip(self):
         image = self.source.get_image(self.s["img04"])
         np.testing.assert_array_equal(
             self.source.read_plane(image, t=0, c=0, z=0, region=(10, 5, 8, 4)),
-            self.s["arr04"][0, 5:9, 10:18])
-        assert self.source.read_plane(image, t=0, c=0, z=0, region=(70, 60, 20, 20)).shape == (4, 10)
+            self.s["arr04"][0, 5:9, 10:18],
+        )
+        assert self.source.read_plane(
+            image, t=0, c=0, z=0, region=(70, 60, 20, 20)
+        ).shape == (4, 10)
 
     def test_read_plane_tczyx(self):
         image = self.source.get_image(self.s["img05"])
-        np.testing.assert_array_equal(self.source.read_plane(image, t=1, c=1, z=2),
-                                      self.s["arr05"][1, 1, 2])
+        np.testing.assert_array_equal(
+            self.source.read_plane(image, t=1, c=1, z=2), self.s["arr05"][1, 1, 2]
+        )
 
     def test_read_volume_tczyx(self):
         image = self.source.get_image(self.s["img05"])
@@ -229,10 +263,16 @@ class TestZarrImageSource:
 
     def test_read_volume_without_z_axis(self):
         image = self.source.get_image(self.s["img04"])
-        assert self.source.read_volume(image, t=0, c=0, z_start=0, z_end=0).shape == (1, 64, 80)
+        assert self.source.read_volume(image, t=0, c=0, z_start=0, z_end=0).shape == (
+            1,
+            64,
+            80,
+        )
 
     def test_level_one(self):
-        meta = self.Source(level=1).metadata(self.Source(level=1).get_image(self.s["img04"]))
+        meta = self.Source(level=1).metadata(
+            self.Source(level=1).get_image(self.s["img04"])
+        )
         assert (meta.size_y, meta.size_x) == (32, 40)
 
     def test_level_too_high(self):
@@ -253,11 +293,15 @@ class TestZarrImageSource:
             self.source.get_image(self.s["plate"])
 
     def test_handles_are_cached(self):
-        assert self.source.get_image(self.s["img04"]) is self.source.get_image(self.s["img04"] + "/")
+        assert self.source.get_image(self.s["img04"]) is self.source.get_image(
+            self.s["img04"] + "/"
+        )
 
 
-S_BIAD855 = ("https://livingobjects.ebi.ac.uk/bioimaging-integrator-data/S-BIAD855/"
-             "781ac3d7-673f-47be-a4d2-3fdf3f477047/781ac3d7-673f-47be-a4d2-3fdf3f477047.zarr")
+S_BIAD855 = (
+    "https://livingobjects.ebi.ac.uk/bioimaging-integrator-data/S-BIAD855/"
+    "781ac3d7-673f-47be-a4d2-3fdf3f477047/781ac3d7-673f-47be-a4d2-3fdf3f477047.zarr"
+)
 
 
 @pytest.mark.slow

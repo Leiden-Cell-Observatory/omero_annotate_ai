@@ -7,9 +7,9 @@ layout is defined exactly once.
 """
 
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Union
 
 import numpy as np
 from tifffile import imwrite
@@ -35,7 +35,7 @@ def layout_folders(
     layout: str = "split",
     uses_separate_channels: bool = False,
     include_test: bool = False,
-) -> List[str]:
+) -> list[str]:
     """
     Return every folder name a layout writes, relative to the output directory.
 
@@ -201,7 +201,7 @@ class ArraySource:
         return "write"
 
 
-Source = object  # FileSource | ArraySource
+Source = FileSource | ArraySource
 
 
 @dataclass
@@ -214,13 +214,13 @@ class AnnotationRecord:
     rather than written, which is what keeps the pairing honest.
     """
 
-    # ImageAnnotation.annotation_id is a str (e.g. "img_001"); the OMERO table may
+    # Row.annotation_id is a str (e.g. "img_001"); the OMERO table may
     # yield an int. Both are accepted and stringified into the filename.
-    annotation_id: Union[int, str]
+    annotation_id: int | str
     category: str
     image: Source
     label: Source
-    annotation_image: Optional[Source] = None
+    annotation_image: Source | None = None
 
     def __post_init__(self):
         if self.category not in CATEGORIES:
@@ -246,7 +246,7 @@ _STATS_PREFIX = {"training": "training", "validation": "val", "test": "test"}
 
 
 def write_training_layout(
-    records: List[AnnotationRecord],
+    records: list[AnnotationRecord],
     output_dir: Path,
     layout: str = "split",
     file_mode: str = "copy",
@@ -296,7 +296,9 @@ def write_training_layout(
             stats["n_skipped"] += 1
             continue
 
-        image_folder, label_folder, annotation_folder = split_folders_for(record.category)
+        image_folder, label_folder, annotation_folder = split_folders_for(
+            record.category
+        )
         prefix = _STATS_PREFIX[record.category]
         filename = f"{record.annotation_id}.tif"
         mapping = {}
@@ -322,6 +324,8 @@ def write_training_layout(
         stats["file_mapping"][str(record.annotation_id)] = mapping
 
         if logger:
-            logger.debug(f"Wrote annotation {record.annotation_id} to {record.category}")
+            logger.debug(
+                f"Wrote annotation {record.annotation_id} to {record.category}"
+            )
 
     return created_dirs, stats

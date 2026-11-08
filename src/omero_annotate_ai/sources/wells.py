@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List
 
 _WELL = re.compile(r"^\s*([A-Za-z]{1,2})\s*[/_\- ]?\s*0*(\d+)\s*$")
 
@@ -16,9 +15,6 @@ def normalize_well(name: str) -> str:
     return f"{match.group(1).upper()}{int(match.group(2))}"
 
 
-def match_well_filter(kv: Dict[str, str], filters: Dict[str, List[str]]) -> bool:
+def match_well_filter(kv: dict[str, str], filters: dict[str, list[str]]) -> bool:
     """True when ``kv`` meets ALL filter conditions (key present, value accepted)."""
-    for key, accepted in filters.items():
-        if key not in kv or kv[key] not in accepted:
-            return False
-    return True
+    return all(key in kv and kv[key] in accepted for key, accepted in filters.items())

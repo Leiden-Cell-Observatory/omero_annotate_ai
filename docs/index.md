@@ -55,7 +55,7 @@ flowchart LR
 ```
 
 [Read more about the main ideas](concepts.md) (annotation units, patches, the tracking
-table, read-only mode) before your first run.
+table, OMERO or local storage) before your first run.
 
 ## Where to start
 

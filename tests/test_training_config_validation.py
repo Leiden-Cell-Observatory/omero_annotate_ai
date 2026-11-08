@@ -6,6 +6,7 @@ segment_all flag, catching invalid configurations that would cause runtime error
 
 import pytest
 from pydantic import ValidationError
+
 from omero_annotate_ai.core.annotation_config import TrainingConfig
 
 
@@ -63,7 +64,9 @@ class TestFractionModeValidation:
             validation_fraction=0.3,
             test_fraction=0.1,
         )
-        total = config.train_fraction + config.validation_fraction + config.test_fraction
+        total = (
+            config.train_fraction + config.validation_fraction + config.test_fraction
+        )
         assert abs(total - 1.0) < 0.001
 
     def test_fractions_less_than_one_allowed(self):
@@ -74,7 +77,9 @@ class TestFractionModeValidation:
             validation_fraction=0.3,
             test_fraction=0.0,
         )
-        total = config.train_fraction + config.validation_fraction + config.test_fraction
+        total = (
+            config.train_fraction + config.validation_fraction + config.test_fraction
+        )
         assert total < 1.0
 
     def test_inference_only_workflow_allowed(self):
@@ -124,7 +129,9 @@ class TestCountModeValidation:
         should not cause validation errors. A warning is expected because
         non-default fractions are set while in count mode.
         """
-        with pytest.warns(UserWarning, match="train_fraction.*ignored.*segment_all=False"):
+        with pytest.warns(
+            UserWarning, match="train_fraction.*ignored.*segment_all=False"
+        ):
             config = TrainingConfig(
                 segment_all=False,
                 train_n=3,
@@ -161,12 +168,19 @@ class TestModeSwitch:
         """Fraction validation only runs when segment_all=True."""
         # Invalid fractions should fail in fraction mode
         with pytest.raises(ValueError, match="must sum to <= 1.0"):
-            TrainingConfig(segment_all=True, train_fraction=0.8, validation_fraction=0.8)
+            TrainingConfig(
+                segment_all=True, train_fraction=0.8, validation_fraction=0.8
+            )
 
         # Same invalid fractions should pass in count mode (ignored, with warning)
-        with pytest.warns(UserWarning, match="train_fraction.*ignored.*segment_all=False"):
+        with pytest.warns(
+            UserWarning, match="train_fraction.*ignored.*segment_all=False"
+        ):
             config = TrainingConfig(
-                segment_all=False, train_n=5, train_fraction=0.8, validation_fraction=0.8
+                segment_all=False,
+                train_n=5,
+                train_fraction=0.8,
+                validation_fraction=0.8,
             )
         assert config.train_n == 5
 
