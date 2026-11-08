@@ -2,6 +2,10 @@
 
 import contextlib
 import os
+
+# Qt widget tests (napari plugin) run without a display.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import subprocess
 import tempfile
 import time

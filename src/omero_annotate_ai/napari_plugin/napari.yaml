@@ -1,0 +1,12 @@
+name: omero-annotate-ai
+display_name: OMERO Annotate AI
+visibility: public
+categories: ["Annotation", "Segmentation"]
+contributions:
+  commands:
+    - id: omero-annotate-ai.annotate
+      title: Annotate a training set with micro-SAM
+      python_name: omero_annotate_ai.napari_plugin._widget:OMEROAnnotateDock
+  widgets:
+    - command: omero-annotate-ai.annotate
+      display_name: Annotate training set

@@ -23,6 +23,7 @@ nav = [
     { "Resume or repeat a run" = "tutorials/resume-and-repeat.md" },
     { "Prepare training data" = "tutorials/training-data-prep.md" },
     { "Share via the BioImage Archive" = "tutorials/bioimage-archive-export.md" },
+    { "napari plugin (experimental)" = "napari-plugin.md" },
   ] },
   { "Reference" = [
     { "Configuration (YAML)" = "configuration.md" },
