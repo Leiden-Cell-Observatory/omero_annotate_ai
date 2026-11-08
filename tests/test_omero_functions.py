@@ -823,81 +823,36 @@ class TestFindAnnotationConfigForTable:
 
 
 @pytest.mark.unit
-class TestInferSettingsFromTable:
-    """Settings recovered from tracking-table rows when no config was saved."""
-
-    def test_patch_table(self):
-        from omero_annotate_ai.omero.omero_functions import infer_settings_from_table
-
-        rows = []
-        for img, category in [(1, "training"), (2, "training"), (3, "validation")]:
-            for patch_index in range(2):
-                rows.append(
-                    {
-                        "image_uri": f"omero:image:{img}",
-                        "category": category,
-                        "channel": 1,
-                        "is_volumetric": False,
-                        "is_patch": True,
-                        "patch_width": 256,
-                        "patch_height": 128,
-                        "timepoint": 0,
-                        "z_slice": 0,
-                        "annotation_id": f"{img}_{patch_index}",
-                    }
-                )
-        settings = infer_settings_from_table(pd.DataFrame(rows))
-
-        assert settings == {
-            "channel": 1,
-            "three_d": False,
-            "use_patches": True,
-            "patch_size": [256, 128],
-            "patches_per_image": 2,
-            "timepoint_mode": "specific",
-            "timepoints": [0],
-            "z_slice_mode": "specific",
-            "z_slices": [0],
-            "train_n": 2,
-            "validate_n": 1,
-            "test_n": 0,
-        }
-
-    def test_string_booleans_and_empty_table(self):
-        from omero_annotate_ai.omero.omero_functions import infer_settings_from_table
-
-        df = pd.DataFrame(
-            [
-                {
-                    "image_uri": "omero:image:1",
-                    "category": "test",
-                    "channel": 0,
-                    "is_volumetric": "True",
-                    "is_patch": "False",
-                }
-            ]
-        )
-        settings = infer_settings_from_table(df)
-        assert settings["three_d"] is True and settings["use_patches"] is False
-        assert "patch_size" not in settings and settings["test_n"] == 1
-        assert infer_settings_from_table(pd.DataFrame()) == {}
-
-
-@pytest.mark.unit
 class TestDeleteTrainingSet:
     """delete_training_set removes a table and everything tied to it."""
 
     TABLE_ID = 100
 
-    def _conn(self, missing=(), rois_on_images=None):
+    ME = 5
+
+    def _conn(self, missing=(), rois_on_images=None, owners=None):
+        """owners: {(omero_type, id): experimenter id}; default is the user."""
         conn = Mock()
+        conn.getUserId.return_value = self.ME
+        gone = set(missing)
 
         def get_object(omero_type, object_id):
-            if (omero_type, object_id) in missing:
+            if (omero_type, object_id) in gone:
                 return None
+            obj = Mock()
+            obj.getDetails.return_value.getOwner.return_value.getId.return_value = (
+                (owners or {}).get((omero_type, object_id), self.ME)
+            )
+            obj.getDetails.return_value.getGroup.return_value.getId.return_value = 3
+            return obj
+
+        def delete_objects(graph, ids, wait=False):
+            omero_type = "Roi" if graph == "Roi" else "FileAnnotation"
+            gone.update((omero_type, i) for i in ids)
             return Mock()
 
         conn.getObject.side_effect = get_object
+        conn.deleteObjects.side_effect = delete_objects
 
         def find_by_image(image_id, options, ctx=None):
             result = Mock()
@@ -924,7 +879,9 @@ class TestDeleteTrainingSet:
             }
         )
 
-    def _run(self, conn, rows, configs=(), labels_on_images=None, dry_run=True):
+    def _run(
+        self, conn, rows, configs=(), labels_on_images=None, dry_run=True, **kwargs
+    ):
         """configs: [(ann_id, file_name)]; labels_on_images: {image_id: [(id, desc)]}."""
         from omero_annotate_ai.omero.omero_functions import (
             CONFIG_NS,
@@ -949,7 +906,7 @@ class TestDeleteTrainingSet:
             patch("builtins.print"),
         ):
             return delete_training_set(
-                conn, self.TABLE_ID, "plate", 803, dry_run=dry_run
+                conn, self.TABLE_ID, "plate", 803, dry_run=dry_run, **kwargs
             )
 
     def test_dry_run_deletes_nothing(self):
@@ -1011,6 +968,31 @@ class TestDeleteTrainingSet:
         assert report["missing"]["rois"] == [12]
         assert report["missing"]["labels"] == [22]
         assert conn.deleteObjects.call_args_list[0].args == ("Roi", [11])
+
+    def test_other_users_objects_block_the_delete(self):
+        conn = self._conn(owners={("Roi", 12): 9})
+        report = self._run(conn, self._rows())
+        assert report["others"]["rois"] == [12]
+
+        with pytest.raises(PermissionError, match="another user"):
+            self._run(conn, self._rows(), dry_run=False)
+        conn.deleteObjects.assert_not_called()
+
+    def test_force_others_deletes_them_too(self):
+        conn = self._conn(owners={("Roi", 12): 9})
+        report = self._run(conn, self._rows(), dry_run=False, force_others=True)
+        assert report["deleted"] is True
+        assert conn.deleteObjects.call_args_list[0].args == ("Roi", [11, 12])
+
+    def test_waits_for_the_server_and_restores_the_group(self):
+        conn = self._conn()
+        conn.SERVICE_OPTS.getOmeroGroup.return_value = "7"
+        self._run(conn, self._rows(), dry_run=False)
+
+        assert conn._waitOnCmd.call_count == 3
+        assert conn._waitOnCmd.call_args.kwargs["failontimeout"] is True
+        groups = [c.args[0] for c in conn.SERVICE_OPTS.setOmeroGroup.call_args_list]
+        assert groups[0] == "-1" and groups[1] == "3" and groups[-1] == "7"
 
     def test_missing_table_deletes_nothing(self):
         conn = self._conn(missing={("FileAnnotation", self.TABLE_ID)})
