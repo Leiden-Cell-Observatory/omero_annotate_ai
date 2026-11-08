@@ -20,16 +20,40 @@ adding images, notes) is a method on it.
         - reconcile
         - prepare_external
         - collect_masks
+        - write_ro_crate
 
 ::: omero_annotate_ai.trainingset.list_training_sets
 
 ::: omero_annotate_ai.trainingset.summarize
+
+::: omero_annotate_ai.trainingset.training_set_choices
+
+::: omero_annotate_ai.trainingset.read_set_config
 
 ## Annotation sessions
 
 ::: omero_annotate_ai.session.AnnotationSession
 
 ::: omero_annotate_ai.session.BatchReport
+
+## Content codes (provenance extra)
+
+::: omero_annotate_ai.provenance
+    options:
+      members:
+        - available
+        - image_code
+        - file_code
+        - distance
+        - describe_change
+
+## RO-Crate
+
+::: omero_annotate_ai.crate
+    options:
+      members:
+        - build_ro_crate
+        - write_ro_crate
 
 ## Several computers (claims)
 

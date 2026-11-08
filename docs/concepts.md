@@ -59,7 +59,7 @@ units: one image with four patches gives four units.
 |---|---|---|
 | Writes to OMERO | yes: masks, ROIs, tracking table, config | nothing |
 | Local folder | images, masks and `tracking_table.csv` | the same; it is the only copy |
-| Typical use | your own data on your institute's server | public servers such as the IDR, OME-Zarr data, or a trial run |
+| Typical use | your own data on your institute's server | OME-Zarr data (e.g. public IDR studies), servers you cannot write to, or a trial run |
 
 Set it with `storage` in the config or the **Storage** choice in the widget. It is fixed
 when the training set is created; OME-Zarr sets are always local.
@@ -80,7 +80,10 @@ set as a whole:
 
 The tracking table is updated in place, so its ID never changes: that ID *is* the
 training set's identity. The checksums let a resume or an export notice when a local
-mask no longer matches the one on OMERO.
+mask no longer matches the one on OMERO. With the `provenance` extra each unit also
+gets an [ISCC](https://iscc.codes) Image-Code of image and mask, which tells *how much*
+a file changed: a touched-up mask is reported as a near-duplicate, a replaced one as
+different content.
 
 ## Batches
 
@@ -121,6 +124,7 @@ Each training set has one folder on your disk, with the same layout in every mod
     ├── annotation_output/            accepted masks: <unit id>_mask.tif
     ├── external_output/              masks from Cellpose or other tools, until collected
     ├── model_input/                  training channel(s), if different from the annotated one
+    ├── ro-crate-metadata.json        RO-Crate description, written by ts.write_ro_crate()
     └── .scratch/                     micro-SAM's files for the current batch only
 ```
 

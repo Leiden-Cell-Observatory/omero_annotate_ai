@@ -37,10 +37,12 @@ flowchart LR
 | `annotators.py` | The `Annotator` protocol and its two implementations: `MicroSamAnnotator` (napari, interactive; a review passes the saved masks as micro-SAM's `initial_segmentations`) and `ScriptedAnnotator` (draws masks with a function; for scripts and tests). |
 | `sources/` | Reading pixels and image sizes from OMERO or OME-Zarr behind one `ImageSource` protocol. |
 | `omero/` | OMERO access: the tracking table (updated in place, so its ID identifies the training set), uploads of ROIs and labels, connections (`ConnectionFailed`), and `delete_training_set` (by table ID and tag, dry run first, refuses other users' objects). |
-| `processing/` | Training data export (`prepare_training_data_from_table`, by each row's category), normalisation for micro-SAM/BiaPy, and training helpers. |
+| `processing/` | Training data export (`export_training_set`: OMERO set via `prepare_training_data_from_table`, local set via `reorganize_local_data_for_training`, by each row's category), normalisation for micro-SAM/BiaPy, and training helpers. |
 | `core/mifa_export.py`, `processing/bia_data.py` | MIFA metadata and BioImage Archive bundles from a config plus rows. |
 | `widgets/` | ipywidgets front-ends: OMERO connection (keychain, history), the workflow widget (New / Open training set, annotate or review, progress from events, session notes) and table selection for exports. |
 | `bundle.py` | Where a training set's files live: one folder per set under the home folder (`$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`), atomic writes, a fresh scratch folder per batch, `annotation_output/` for accepted masks only, masks matched to units by exact file name, and pixel digests. |
+| `provenance.py` | Optional ISCC Image-Codes (`provenance` extra, `iscc-lib`) of each unit's image and mask, stored next to the pixel digests; repair and export messages use them to say whether a changed file is a near-duplicate or different content. Without the extra nothing is computed. |
+| `crate.py` | `TrainingSet.write_ro_crate()`: the set's folder described as an RO-Crate 1.1 (`ro-crate-metadata.json`): files with digests and ISCC codes, source images by URI, sessions as actions with agent, model and note. Written on request, not per commit. |
 | `errors.py` | The package's exceptions; all derive from `OmeroAnnotateAIError`. |
 
 **Rules of thumb**

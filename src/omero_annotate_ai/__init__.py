@@ -17,6 +17,7 @@ from .omero import omero_utils
 # Processing functions
 from .processing.bia_data import prepare_bia_data_from_table
 from .processing.training_functions import (
+    export_training_set,
     prepare_training_data_from_table,
     reorganize_local_data_for_training,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "create_workflow_widget",
     "create_training_data_widget",
     "prepare_training_data_from_table",
+    "export_training_set",
     "prepare_bia_data_from_table",
     "setup_training",
     "run_training",

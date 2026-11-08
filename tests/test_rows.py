@@ -68,7 +68,14 @@ class TestRow:
 @pytest.mark.unit
 class TestCodec:
     def test_round_trip_keeps_identity_state_and_category(self):
-        row = _zarr_row(category="test", processed=True, session=2, mask_digest="d")
+        row = _zarr_row(
+            category="test",
+            processed=True,
+            session=2,
+            mask_digest="d",
+            input_iscc="ISCC:EEA4XSZUGQ2MXS6B",
+            mask_iscc="ISCC:EEA6IF2FC2OREY73",
+        )
         row.label_id, row.roi_id = 11, 12
         frame = rows_to_frame([row])
         assert frame.loc[0, "image_id"] == OMERO_ID_UNSET

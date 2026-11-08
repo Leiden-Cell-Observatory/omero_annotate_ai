@@ -1,6 +1,7 @@
 # Widgets
 
-Jupyter (ipywidgets) interfaces. They do not work in marimo.
+Jupyter (ipywidgets) interfaces. They do not work in marimo; the marimo notebooks build
+the same choices from `mo.ui` elements on the same core functions.
 
 ::: omero_annotate_ai.widgets.omero_connection_widget.create_omero_connection_widget
 
@@ -24,4 +25,4 @@ Jupyter (ipywidgets) interfaces. They do not work in marimo.
 
 ::: omero_annotate_ai.widgets.training_data_widget.TrainingDataWidget
     options:
-      members: [display, get_selected_table_id, get_selected_table_info]
+      members: [display, selected, get_selected_table_id, selected_config, export, set_connection]

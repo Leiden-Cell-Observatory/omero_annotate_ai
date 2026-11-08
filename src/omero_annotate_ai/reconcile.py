@@ -37,6 +37,8 @@ import tifffile
 from .bundle import atomic_write, file_digest, input_path, mask_path, pixel_digest
 from .claims import is_live
 from .events import Progress, ReconcileAction, RepairKind
+from .provenance import describe_change, file_code, image_code
+from .rows import keep_local_codes
 from .session import NEEDS_REVIEW, check_cancel, upload_unit
 
 if TYPE_CHECKING:
@@ -88,6 +90,15 @@ def _record(annotation: Row | None) -> Record | None:
 DIVERGENT = NEEDS_REVIEW + "the local mask differs from the uploaded label file"
 
 
+def _read(path: Path) -> np.ndarray:
+    return np.asarray(tifffile.imread(path))
+
+
+def _with_change(message: str, change: str) -> str:
+    """``message``, plus how much the content changed when ISCC codes tell."""
+    return f"{message} ({change})" if change else message
+
+
 @dataclass(slots=True)
 class _Reconciler:
     training_set: TrainingSet
@@ -107,7 +118,10 @@ class _Reconciler:
             self.event(
                 unit.annotation_id,
                 "divergent",
-                "the local mask differs from the one uploaded to OMERO; kept OMERO's",
+                _with_change(
+                    "the local mask differs from the one uploaded to OMERO; kept OMERO's",
+                    describe_change(unit.mask_iscc, _read(mask), mask=True),
+                ),
             )
         image = input_path(self.training_set.bundle_dir, unit.annotation_id)
         if (
@@ -118,7 +132,10 @@ class _Reconciler:
             self.event(
                 unit.annotation_id,
                 "divergent",
-                "the local input image differs from the one annotated",
+                _with_change(
+                    "the local input image differs from the one annotated",
+                    describe_change(unit.input_iscc, _read(image), mask=False),
+                ),
             )
 
     def _newer_label(self, unit: Row, mask: Path) -> int | None:
@@ -183,6 +200,7 @@ class _Reconciler:
             unit.roi_id = self._keep_first(unit, "Roi", rois)
         unit.session = local.session
         unit.input_digest = local.input_digest or unit.input_digest
+        unit.input_iscc = local.input_iscc or unit.input_iscc
         unit.annotation_created_at = local.annotation_created_at
         self._accept(unit, mask, "adopted", f"label {unit.label_id}")
 
@@ -224,8 +242,11 @@ class _Reconciler:
             atomic_write(mask, lambda tmp: tifffile.imwrite(tmp, pixels))
             return True
         if pixel_digest(pixels) != file_digest(mask):
-            unit.error = DIVERGENT
-            self.event(unit.annotation_id, "divergent", DIVERGENT)
+            unit.error = _with_change(
+                DIVERGENT,
+                describe_change(image_code(pixels, mask=True), _read(mask), mask=True),
+            )
+            self.event(unit.annotation_id, "divergent", unit.error)
             return False
         return True
 
@@ -235,6 +256,7 @@ class _Reconciler:
         """Mark the unit done and upload whatever is still missing."""
         unit.processed = True
         unit.mask_digest = file_digest(mask)
+        unit.mask_iscc = file_code(mask, mask=True)
         self.training_set.save_local_table()
         if upload_unit(self.training_set, unit, mask):
             self.changed = True
@@ -275,6 +297,7 @@ def reconcile(
         if not unit.processed and is_live(unit.claimed_by, unit.claimed_at, hours):
             continue  # another session is annotating it right now
         local = local_rows.get(unit.annotation_id)
+        keep_local_codes(unit, local)
         mask = mask_path(training_set.bundle_dir, unit.annotation_id)
         step = decide(
             remote_flags[unit.annotation_id], _record(local), mask.exists(), local_known

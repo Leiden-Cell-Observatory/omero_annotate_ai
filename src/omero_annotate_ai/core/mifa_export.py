@@ -459,6 +459,9 @@ def to_mifa_dicts(
 
 # BIA file-list columns that are always kept (never dropped as "constant").
 _BIA_REQUIRED_COLUMNS = ("Files", "source_image")
+# Per-file provenance columns: kept whenever any row has a value, since a value is
+# per file and meaningful even for a single file.
+_BIA_PROVENANCE_COLUMNS = ("pixel_sha256", "iscc")
 
 # Folder names inside the submission bundle. See _bundle_paths().
 BUNDLE_IMAGE_DIR = "images"
@@ -466,9 +469,15 @@ BUNDLE_ANNOTATION_DIR = "annotations"
 
 
 def _drop_constant_optional_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop optional BIA columns with < 2 distinct values (BIA guidance)."""
+    """Drop optional BIA columns with < 2 distinct values (BIA guidance).
+
+    Provenance columns are dropped only when no row has a value.
+    """
     for col in [c for c in df.columns if c not in _BIA_REQUIRED_COLUMNS]:
-        if df[col].nunique(dropna=False) < 2:
+        if col in _BIA_PROVENANCE_COLUMNS:
+            if not df[col].astype(str).str.len().any():
+                df = df.drop(columns=col)
+        elif df[col].nunique(dropna=False) < 2:
             df = df.drop(columns=col)
     return df
 
@@ -479,7 +488,10 @@ def build_bia_file_lists(rows: Sequence[Row]) -> tuple[pd.DataFrame, pd.DataFram
     The annotation list has ``Files`` (the mask path) as the first column and a required
     ``source_image`` column linking each annotation to its raw image. Optional columns
     (Channel/Timepoint/Z/Category) are dropped when they carry fewer than two distinct
-    values. Paths are local, matching the pipeline's on-disk layout.
+    values. ``pixel_sha256`` and ``iscc`` (the ISCC Image-Code, with the
+    ``provenance`` extra) let anyone check a downloaded file against what was
+    annotated; they are left out when no row has them. Paths are local, matching
+    the pipeline's on-disk layout.
     """
     ann_rows: list[dict[str, Any]] = []
     img_rows: list[dict[str, Any]] = []
@@ -494,17 +506,36 @@ def build_bia_file_lists(rows: Sequence[Row]) -> tuple[pd.DataFrame, pd.DataFram
                 "Timepoint": img.timepoint,
                 "Z": img.z_slice,
                 "Category": img.category,
+                "pixel_sha256": img.mask_digest or "",
+                "iscc": img.mask_iscc or "",
             }
         )
         if source_image_id not in seen:
             seen.add(source_image_id)
-            img_rows.append({"Files": source_image_id, "Channel": img.channel})
+            img_rows.append(
+                {
+                    "Files": source_image_id,
+                    "Channel": img.channel,
+                    "pixel_sha256": img.input_digest or "",
+                    "iscc": img.input_iscc or "",
+                }
+            )
 
     annotations_df = pd.DataFrame(
         ann_rows,
-        columns=["Files", "source_image", "Channel", "Timepoint", "Z", "Category"],
+        columns=[
+            "Files",
+            "source_image",
+            "Channel",
+            "Timepoint",
+            "Z",
+            "Category",
+            *_BIA_PROVENANCE_COLUMNS,
+        ],
     )
-    images_df = pd.DataFrame(img_rows, columns=["Files", "Channel"])
+    images_df = pd.DataFrame(
+        img_rows, columns=["Files", "Channel", *_BIA_PROVENANCE_COLUMNS]
+    )
     return (
         _drop_constant_optional_columns(images_df),
         _drop_constant_optional_columns(annotations_df),
@@ -536,7 +567,8 @@ def save_bia_package(
 
     Args:
         config: The annotation config describing the submission.
-        rows: The rows to submit (e.g. ``TrainingSet.units()``).
+        rows: The rows to submit (e.g. ``TrainingSet.units()``); units not annotated
+            yet are left out.
         data_dir: The folder holding the files (``TrainingSet.bundle_dir``).
         dest_dir: Where to build the bundle.
         accession: Accession used in the MIFA filenames.
@@ -548,6 +580,7 @@ def save_bia_package(
             It is destructive against a real annotation run's output directory, which is
             why it defaults to copying.
     """
+    rows = [row for row in rows if row.processed]  # only units with a mask
     dest = Path(dest_dir)
     metadata_dir = dest / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)

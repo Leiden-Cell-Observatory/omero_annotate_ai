@@ -589,7 +589,7 @@ class TestTrainingData:
             training_channels=[0],
         )
 
-    def test_training_data_widget_finds_the_set(
+    def test_training_data_widget_exports_the_set(
         self, omero_conn, omero_seed, finished_set, tmp_path
     ):
         from omero_annotate_ai.widgets.training_data_widget import (
@@ -597,17 +597,21 @@ class TestTrainingData:
         )
 
         table_id, config = finished_set
-        widget = create_training_data_widget(omero_conn)
-        widget.container_type_dropdown.value = "dataset"
-        widget._load_containers()
-        widget.container_dropdown.value = omero_seed.dataset_id
-        widget.scan_button.click()
-        assert table_id in [value for _, value in widget.table_dropdown.options]
-        widget.table_dropdown.value = table_id
-
+        widget = create_training_data_widget(omero_conn, home=tmp_path / "home")
+        widget.container_type.value = "dataset"
+        widget.container.value = omero_seed.dataset_id
+        assert table_id in [value for _, value in widget.sets.options]
+        widget.sets.value = table_id
+        assert "annotated" in widget.summary.value
         assert widget.get_selected_table_id() == table_id
-        result = self._export(omero_conn, table_id, config, tmp_path / "out")
-        assert result["stats"]["n_training_images"] > 0
+        assert widget.label_channel.value == config.spatial_coverage.get_label_channel()
+
+        widget.output_dir.value = str(tmp_path / "out")
+        widget.export_button.click()
+        assert "Exported to" in widget.status.value, widget.status.value
+        assert widget.result is not None
+        assert widget.result["stats"]["n_training_images"] > 0
+        assert (tmp_path / "out" / "normalization.json").exists()
 
     def test_layout_dtype_pairing_and_normalisation(
         self, omero_conn, finished_set, tmp_path
@@ -703,6 +707,39 @@ class TestTrainingData:
         assert Path(outcome["final_model_path"]).exists() or outcome.get(
             "checkpoint_folder"
         )
+
+
+class TestBioImageArchiveExport:
+    def test_finished_set_becomes_a_complete_bundle(
+        self, omero_conn, omero_seed, finished_set, tmp_path
+    ):
+        pytest.importorskip("bia_mifa_models")
+        from omero_annotate_ai.core.mifa_export import save_bia_package
+        from omero_annotate_ai.processing.bia_data import prepare_bia_data_from_table
+
+        table_id, config = finished_set
+        staging, bundle = tmp_path / "staging", tmp_path / "bundle"
+        stats = prepare_bia_data_from_table(omero_conn, table_id, staging)
+        rows = table_rows(omero_conn, table_id)
+        assert stats["n_images"] == stats["n_masks"] == len(rows) == 4
+
+        result = save_bia_package(
+            config, stats["rows"], staging, bundle, accession="S-BIADTEST"
+        )
+        assert result["missing"] == 0
+        assert result["n_annotations"] == 4
+        for name in ("study", "annotations", "version"):
+            assert result["metadata"][name].exists()
+        listed = pd.read_csv(result["file_list_annotations"], sep="\t")
+        for _, entry in listed.iterrows():
+            mask = tifffile.imread(bundle / entry["Files"])
+            image = tifffile.imread(bundle / entry["source_image"])
+            assert image.dtype == np.uint16  # native bit depth, no rescaling
+            assert mask.shape == image.shape
+            row = rows.set_index("annotation_id").loc[Path(entry["Files"]).stem[:-5]]
+            np.testing.assert_array_equal(
+                mask, download_label(omero_conn, row["label_id"])
+            )
 
 
 # ---------------------------------------------------------------------------

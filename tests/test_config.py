@@ -1275,6 +1275,7 @@ class TestBIAExport:
                 z_slice=0,
                 channel=0,
                 annotation_type="segmentation_mask",
+                processed=True,
             )
             for i in (1, 2, 3)
         ]
@@ -1431,6 +1432,17 @@ class TestZarrConfig:
         assert config.source == "zarr"
         assert config.zarr.level == 1
         assert config.storage == "local"
+
+    def test_idr_example_yaml_loads(self):
+        root = Path(__file__).resolve().parents[1]
+        config = load_config_from_yaml(
+            str(root / "notebooks/marimo/configs/idr0013-mitocheck-zarr.yaml")
+        )
+        assert config.source == "zarr" and config.storage == "local"
+        assert config.zarr.uris[0].startswith(
+            "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/"
+        )
+        assert config.spatial_coverage.timepoint_mode == "random"
 
 
 @pytest.mark.unit

@@ -41,7 +41,7 @@ flowchart LR
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
 - **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).
-- **Local-only storage** (`storage: local`) for public servers such as the [IDR](https://idr.openmicroscopy.org).
+- **Local-only storage** (`storage: local`) for data you cannot write to, such as public [IDR](https://idr.openmicroscopy.org) OME-Zarr.
 
 ## Jupyter widgets
 
@@ -51,7 +51,7 @@ flowchart LR
     <td width="55%"><img src="docs/images/widget_container.png" alt="Choosing an OMERO container in the workflow widget"></td>
   </tr>
   <tr>
-    <td><sub>Connect to any OMERO server, here the public IDR.</sub></td>
+    <td><sub>Connect to any OMERO server.</sub></td>
     <td><sub>Choose a project, dataset, plate or screen.</sub></td>
   </tr>
 </table>
@@ -141,7 +141,7 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 | Train micro-SAM | | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
 | Export for BiaPy / DL4MicEverywhere | [export](notebooks/jupyter/training/omero-training-export.ipynb) | |
 | Export to the BioImage Archive | [BIA export](notebooks/jupyter/export_annotations/omero-table-to-bioimage-archive.ipynb) | |
-| Try it on public data | | [IDR demo](notebooks/marimo/omero-idr-demo.py) |
+| Try it on public data | | [IDR OME-Zarr demo](notebooks/marimo/idr-zarr-demo.py) |
 
 ## Documentation
 

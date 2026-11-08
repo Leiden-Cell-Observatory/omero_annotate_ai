@@ -1,337 +1,252 @@
-"""Simple training data selection widget for OMERO annotation tables."""
+"""Jupyter widget to pick a training set and export it for training.
+
+The widget holds form state only: it lists the sets on a container (and the local
+sets), shows the picked set's progress, and calls
+:func:`~omero_annotate_ai.processing.training_functions.export_training_set` with the
+chosen output folder, channels and normalisation.
+"""
+
+from __future__ import annotations
+
+import html
+from pathlib import Path
+from typing import Any
 
 import ipywidgets as widgets
-from IPython.display import clear_output, display
+from IPython.display import display
 
-from ..omero.omero_functions import list_annotation_tables
+from ..bundle import home_dir
+from ..core.annotation_config import AnnotationConfig
+from ..errors import OmeroAnnotateAIError
+from ..planning import parse_indices
+from ..processing.training_functions import default_export_dir, export_training_set
+from ..trainingset import read_set_config, summarize, training_set_choices
+from .workflow_widget import (
+    _LABEL,
+    _STYLE,
+    CONTAINER_TYPES,
+    _card,
+    _wide,
+    container_options,
+    render_summary,
+)
+
+NORMALIZATION = (
+    ("Keep native bit depth (record the normalisation)", False),
+    ("Apply the normalisation at export (float32)", True),
+)
 
 
 class TrainingDataWidget:
-    """Simple widget for selecting existing annotation tables for training."""
+    """Pick a training set (OMERO or local) and export it into the training layout."""
 
-    def __init__(self, connection=None):
-        """Initialize the training data widget.
-
-        Args:
-            connection: OMERO connection object. If provided, enables container selection.
-        """
+    def __init__(
+        self,
+        connection: Any = None,
+        *,
+        home: str | Path | None = None,
+        show_export: bool = True,
+    ):
         self.connection = connection
-        self.selected_table_id = None
-        self.annotation_tables = []
-        self._create_widgets()
-        self._setup_observers()
+        self.show_export = show_export
+        self.home = home_dir(home)
+        self.result: dict[str, Any] | None = None
+        self._config: AnnotationConfig | None = None
+        self._build()
+        self._load_containers()
 
-        # Enable widgets if connection is provided
-        if self.connection is not None:
-            self._enable_widgets()
+    # --- layout -------------------------------------------------------------------
 
-    def _create_widgets(self):
-        """Create all widget components."""
-
-        # Header
-        self.header = widgets.HTML(
-            value="<h3>🎯 Training Data Selection</h3>",
-            layout=widgets.Layout(margin="0 0 20px 0"),
+    def _build(self) -> None:
+        self.container_type = widgets.Dropdown(
+            options=CONTAINER_TYPES, description="Container", style=_LABEL
         )
+        self.container = widgets.Dropdown(options=[], layout=_wide())
+        self.container_type.observe(lambda _: self._load_containers(), names="value")
+        self.container.observe(lambda _: self._load_sets(), names="value")
+        self.sets = widgets.Select(options=[], rows=5, layout=_wide())
+        self.sets.observe(lambda _: self._on_set(), names="value")
+        self.summary = widgets.HTML()
 
-        # Container type selection
-        self.container_type_dropdown = widgets.Dropdown(
-            options=[
-                ("Project", "project"),
-                ("Dataset", "dataset"),
-                ("Plate", "plate"),
-                ("Screen", "screen"),
-            ],
-            value="project",
-            description="Container Type:",
-            style={"description_width": "initial"},
-            disabled=True,
+        self.output_dir = widgets.Text(
+            description="Output folder",
+            style=_LABEL,
+            layout=widgets.Layout(width="620px"),
         )
-
-        # Container selection
-        self.container_dropdown = widgets.Dropdown(
-            options=[("Connect to OMERO first", None)],
-            value=None,
-            description="Container:",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(width="400px"),
-            disabled=True,
+        self.training_channels = widgets.Text(
+            description="Training channels", placeholder="0, 1", style=_LABEL
         )
-
-        # Refresh containers button
-        self.refresh_button = widgets.Button(
-            description="Refresh",
-            button_style="info",
-            icon="refresh",
-            layout=widgets.Layout(width="100px"),
-            disabled=True,
+        self.label_channel = widgets.BoundedIntText(
+            description="Label channel", min=0, max=99, style=_LABEL
         )
-
-        # Scan for tables button
-        self.scan_button = widgets.Button(
-            description="Scan for Tables",
-            button_style="primary",
-            icon="search",
-            layout=widgets.Layout(width="150px"),
-            disabled=True,
+        self.normalization = widgets.Dropdown(
+            options=NORMALIZATION,
+            value=False,
+            description="Normalisation",
+            style=_LABEL,
+            layout=_wide(),
         )
-
-        # Tables display
-        self.tables_output = widgets.Output()
-
-        # Table selection dropdown
-        self.table_dropdown = widgets.Dropdown(
-            options=[("No tables found", None)],
-            value=None,
-            description="Training Table:",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(width="400px"),
-            disabled=True,
+        self.export_button = widgets.Button(
+            description="Export", button_style="primary", icon="download"
         )
+        self.export_button.on_click(lambda _: self._on_export())
+        self.status = widgets.HTML()
 
-        # Status output
-        self.status_output = widgets.Output()
-
-        # Main container
-        self.main_widget = widgets.VBox(
+        export_card = _card(
+            "Export",
+            self.output_dir,
+            widgets.HBox([self.training_channels, self.label_channel]),
+            self.normalization,
+            self.export_button,
+        )
+        export_card.layout.display = None if self.show_export else "none"
+        self.main = widgets.VBox(
             [
-                self.header,
-                widgets.HTML("<b>Step 1: Select Container</b>"),
-                self.container_type_dropdown,
-                widgets.HBox([self.container_dropdown, self.refresh_button]),
-                widgets.HTML("<br><b>Step 2: Find Training Tables</b>"),
-                self.scan_button,
-                self.tables_output,
-                widgets.HTML("<br><b>Step 3: Select Table</b>"),
-                self.table_dropdown,
-                self.status_output,
+                widgets.HTML(_STYLE),
+                _card(
+                    "Training set",
+                    widgets.HBox([self.container_type, self.container]),
+                    self.sets,
+                    self.summary,
+                ),
+                export_card,
+                self.status,
             ]
         )
 
-    def _setup_observers(self):
-        """Setup widget observers."""
-        self.container_type_dropdown.observe(
-            self._on_container_type_change, names="value"
+    # --- data ---------------------------------------------------------------------
+
+    def _load_containers(self) -> None:
+        if self.connection is None:
+            self.container.options = []
+            self._load_sets()  # local sets need no connection
+            return
+        self.container.options = container_options(
+            self.connection, self.container_type.value, self._error
         )
-        self.container_dropdown.observe(self._on_container_change, names="value")
-        self.table_dropdown.observe(self._on_table_change, names="value")
-        self.refresh_button.on_click(self._on_refresh_containers)
-        self.scan_button.on_click(self._on_scan_tables)
 
-    def _enable_widgets(self):
-        """Enable widgets when connection is available."""
-        if self.connection and self.connection.isConnected():
-            self.container_type_dropdown.disabled = False
-            self.container_dropdown.disabled = False
-            self.refresh_button.disabled = False
-            self.scan_button.disabled = False
-            self._load_containers()
-
-    def _on_container_type_change(self, change):
-        """Handle container type change."""
-        if self.connection:
-            self._load_containers()
-
-    def _on_container_change(self, change):
-        """Handle container selection change."""
-        # Reset table selection when container changes
-        self.table_dropdown.options = [("Scan for tables first", None)]
-        self.table_dropdown.value = None
-        self.selected_table_id = None
-
-    def _on_table_change(self, change):
-        """Handle table selection change."""
-        self.selected_table_id = change["new"]
-        if self.selected_table_id:
-            with self.status_output:
-                clear_output()
-                # Find table name for confirmation
-                table_name = "Unknown"
-                for table in self.annotation_tables:
-                    if table.get("id") == self.selected_table_id:
-                        table_name = table.get("name", "Unknown")
-                        break
-                print(f"✅ Selected table: {table_name} (ID: {self.selected_table_id})")
-
-    def _on_refresh_containers(self, button):
-        """Handle refresh containers button."""
-        self._load_containers()
-
-    def _on_scan_tables(self, button):
-        """Handle scan tables button."""
-        try:
-            container_id = self.container_dropdown.value
-            container_type = self.container_type_dropdown.value
-
-            if not container_id:
-                with self.status_output:
-                    clear_output()
-                    print("❌ Please select a container first")
-                return
-
-            with self.status_output:
-                clear_output()
-                print("🔍 Scanning for annotation tables...")
-
-            # Get annotation tables
-            self.annotation_tables = list_annotation_tables(
-                self.connection, container_type, container_id
+    def _load_sets(self) -> None:
+        self.sets.options = training_set_choices(
+            self.connection,
+            str(self.container_type.value),
+            self.container.value,
+            home=self.home,
+            on_error=self._error,
+        )
+        if not self.sets.options:
+            self.summary.value = (
+                "<span class='oai-muted'>No training sets here yet.</span>"
             )
 
-            with self.tables_output:
-                clear_output()
-                if self.annotation_tables:
-                    print(f"📋 Found {len(self.annotation_tables)} annotation tables:")
-                    for i, table in enumerate(self.annotation_tables):
-                        name = table.get("name", "Unknown")
-                        table_id = table.get("id", "Unknown")
-                        created = table.get("created", "Unknown")
-                        print(
-                            f"  {i + 1}. {name} (ID: {table_id}) - Created: {created}"
-                        )
-                else:
-                    print("❌ No annotation tables found in this container")
-
-            # Update table dropdown options outside the output context
-            if self.annotation_tables:
-                options = [("Select a table...", None)]
-                for table in self.annotation_tables:
-                    table_name = table.get("name", "Unknown")
-                    table_id = table.get("id")
-                    options.append((f"{table_name} (ID: {table_id})", table_id))
-                self.table_dropdown.options = options
-                self.table_dropdown.disabled = False
-            else:
-                self.table_dropdown.options = [("No tables found", None)]
-                self.table_dropdown.disabled = True
-
-            with self.status_output:
-                clear_output()
-                if self.annotation_tables:
-                    print(f"✅ Found {len(self.annotation_tables)} annotation tables")
-                else:
-                    print("ℹ️ No annotation tables found")
-
-        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
-            with self.status_output:
-                clear_output()
-                print(f"❌ Error scanning tables: {e}")
-
-    def _load_containers(self):
-        """Load containers from OMERO."""
-        if not self.connection:
+    def _on_set(self) -> None:
+        self._config = None
+        self.summary.value = self.status.value = ""
+        ref = self.sets.value
+        if ref is None:
             return
-
         try:
-            container_type = self.container_type_dropdown.value
-
-            if container_type == "project":
-                containers = list(self.connection.getObjects("Project"))
-            elif container_type == "dataset":
-                containers = list(self.connection.getObjects("Dataset"))
-            elif container_type == "plate":
-                containers = list(self.connection.getObjects("Plate"))
-            elif container_type == "screen":
-                containers = list(self.connection.getObjects("Screen"))
-            else:
-                containers = []
-
-            options = [("Select container...", None)]
-            for container in containers:
-                options.append(
-                    (
-                        f"{container.getName()} (ID: {container.getId()})",
-                        container.getId(),
-                    )
-                )
-
-            self.container_dropdown.options = options
-
-        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
-            with self.status_output:
-                clear_output()
-                print(f"❌ Error loading containers: {e}")
-
-    def set_connection(self, connection):
-        """Set OMERO connection and enable widgets.
-
-        Args:
-            connection: OMERO BlitzGateway connection object
-        """
-        self.connection = connection
-        if connection and connection.isConnected():
-            self._enable_widgets()
-            with self.status_output:
-                clear_output()
-                user = connection.getUser()
-                user_name = user.getName() if user else "Unknown"
-                print(f"✅ Connected as {user_name}")
-        else:
-            with self.status_output:
-                clear_output()
-                print("❌ No OMERO connection")
-
-    def display(self):
-        """Display the widget."""
-        display(self.main_widget)
-
-    def get_selected_table_id(self):
-        """Get the selected annotation table ID.
-
-        Returns:
-            Selected table ID, or None if no table selected
-        """
-        return self.selected_table_id
-
-    def get_selected_table_info(self):
-        """Get complete information about the selected table.
-
-        Returns:
-            Table information including name, ID, creation date, etc.
-        """
-        if not self.selected_table_id:
-            return None
-
-        for table in self.annotation_tables:
-            if table.get("id") == self.selected_table_id:
-                return table
-        return None
-
-    def get_selected_container(self):
-        """Get the container the selected table was scanned from.
-
-        Returns:
-            Dict with 'type' and 'id' of the selected container, or None if no
-            container is selected. Needed to locate the annotation config YAML
-            attached to that container.
-        """
-        container_id = self.container_dropdown.value
-        if not container_id:
-            return None
-        return {
-            "type": self.container_type_dropdown.value,
-            "id": container_id,
-        }
-
-
-def create_training_data_widget(connection=None):
-    """Create a training data selection widget.
-
-    Args:
-        connection: Optional OMERO connection object. If provided,
-                   the widget will be enabled immediately.
-
-    Returns:
-        TrainingDataWidget instance
-
-    Raises:
-        ValueError: If the provided connection is not active
-    """
-    if connection is not None and (
-        not hasattr(connection, "isConnected") or not connection.isConnected()
-    ):
-        raise ValueError(
-            "Provided OMERO connection is not active. Please establish a valid connection first."
+            self.summary.value = render_summary(summarize(ref, self.connection))
+            config = read_set_config(ref, self.connection)
+        except (OmeroAnnotateAIError, OSError, ValueError) as error:
+            self._error(str(error))
+            return
+        except Exception as error:  # noqa: BLE001 - UI boundary: e.g. a dropped connection
+            self._error(f"Could not read the set: {error}")
+            return
+        self._config = config
+        coverage = config.spatial_coverage
+        self.output_dir.value = str(default_export_dir(ref, config.name, self.home))
+        self.training_channels.value = ", ".join(
+            map(str, coverage.get_training_channels())
         )
+        self.label_channel.value = coverage.get_label_channel()
+        self.normalization.value = bool(config.normalization.apply_at_export)
+        # A local set exports the channels its folder holds.
+        local = not isinstance(ref, int)
+        self.training_channels.disabled = self.label_channel.disabled = local
 
-    return TrainingDataWidget(connection=connection)
+    # --- selection and export -----------------------------------------------------
+
+    @property
+    def selected(self) -> int | Path | None:
+        """The picked set: a table ID (OMERO) or a folder (local); None if none."""
+        return self.sets.value
+
+    def get_selected_table_id(self) -> int | None:
+        """The picked set's table ID; None for a local set or no selection."""
+        return self.selected if isinstance(self.selected, int) else None
+
+    def selected_config(self) -> AnnotationConfig | None:
+        """The picked set's config (read-only copy); None if none is picked."""
+        return None if self._config is None else self._config.model_copy(deep=True)
+
+    def export(self) -> dict[str, Any]:
+        """Export the picked set with the form's options; returns the export result."""
+        ref = self.selected
+        if ref is None or self._config is None:
+            raise ValueError("Pick a training set first")
+        if not self.output_dir.value.strip():
+            raise ValueError("Choose an output folder")
+        self.result = export_training_set(
+            ref,
+            Path(self.output_dir.value.strip()).expanduser(),
+            self.connection,
+            training_channels=parse_indices(
+                self.training_channels.value, "Training channels"
+            ),
+            label_channel=int(self.label_channel.value),
+            apply_normalization=bool(self.normalization.value),
+            home=self.home,
+        )
+        return self.result
+
+    def _on_export(self) -> None:
+        self.export_button.disabled = True
+        self.status.value = "<span class='oai-muted'>Exporting…</span>"
+        try:
+            result = self.export()
+        except (OmeroAnnotateAIError, OSError, ValueError) as error:
+            self._error(str(error))
+        except Exception as error:  # noqa: BLE001 - UI boundary: never leave it "Exporting…"
+            self._error(f"Export failed: {error}")
+        else:
+            stats = result.get("stats", {})
+            counts = ", ".join(
+                f"{key.removeprefix('n_').replace('_', ' ')}: {value}"
+                for key, value in stats.items()
+                if key.startswith("n_") and isinstance(value, int)
+            )
+            self.status.value = (
+                f"✅ Exported to <code>{html.escape(str(result['base_dir']))}</code>"
+                f"<br><span class='oai-muted'>{html.escape(counts)}</span>"
+            )
+        finally:
+            self.export_button.disabled = False
+
+    def _error(self, text: str) -> None:
+        self.status.value = f"<span class='oai-error'>{html.escape(text)}</span>"
+
+    # --- display ------------------------------------------------------------------
+
+    def set_connection(self, connection: Any) -> None:
+        """Use another OMERO connection (reloads the containers)."""
+        self.connection = connection
+        self._load_containers()
+
+    def display(self) -> None:
+        """Show the widget in the notebook."""
+        display(self.main)
+
+
+def create_training_data_widget(
+    connection: Any = None,
+    *,
+    home: str | Path | None = None,
+    show_export: bool = True,
+) -> TrainingDataWidget:
+    """Create the training-data widget (call ``.display()`` to show it).
+
+    ``show_export=False`` keeps only the set picker, for notebooks that export
+    differently (e.g. a BioImage Archive submission).
+    """
+    return TrainingDataWidget(connection, home=home, show_export=show_export)

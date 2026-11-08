@@ -12,7 +12,9 @@ so the user gets a clear error instead of a server exception.
 
 Tables carry the marker :data:`TABLE_MARKER` in their FileAnnotation
 description. Tables without it (written by versions before 0.5.0) are refused:
-old tables are not supported.
+old tables are not supported. Writes follow the table's own columns, so a table
+made before a column was added (the ISCC codes, 0.5.1) keeps working; it simply
+does not store that column.
 """
 
 from collections.abc import Callable, Iterable
@@ -42,6 +44,8 @@ STRING_WIDTHS: dict[str, int] = {
     "well_metadata": 4096,
     "input_digest": 64,
     "mask_digest": 64,
+    "input_iscc": 64,
+    "mask_iscc": 64,
     "claimed_by": 160,
     "claimed_at": 40,
 }
