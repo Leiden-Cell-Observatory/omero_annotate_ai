@@ -21,6 +21,8 @@ from .processing.training_functions import (
     reorganize_local_data_for_training,
 )
 from .processing.training_utils import run_training, setup_training
+from .rows import Row
+from .trainingset import OmeroWrites, TrainingSet
 from .widgets.omero_connection_widget import create_omero_connection_widget
 from .widgets.training_data_widget import create_training_data_widget
 from .widgets.workflow_widget import create_workflow_widget
@@ -33,6 +35,9 @@ __author__ = "Maarten Paul"
 __email__ = "m.w.paul@lacdr.leidenuniv.nl"
 
 __all__ = [
+    "TrainingSet",
+    "OmeroWrites",
+    "Row",
     "AnnotationConfig",
     "load_config",
     "load_config_from_yaml",

@@ -18,9 +18,9 @@ Download it, or copy the code blocks into a new notebook.
 
 ```python
 from omero_annotate_ai import (
+    TrainingSet,
     create_omero_connection_widget,
     create_workflow_widget,
-    create_pipeline,
 )
 
 conn_widget = create_omero_connection_widget()
@@ -93,15 +93,18 @@ config = workflow_widget.get_config()
 ## 3. Annotate in napari
 
 ```python
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+ts = TrainingSet.create(config, conn)
+ts.annotate(note="nuclei only")  # the note is stored with this session
 ```
 
-The pipeline now:
+`TrainingSet.create`:
 
-1. picks images at random and assigns them to training and validation,
-2. creates the tracking table in OMERO (not in read-only mode),
-3. downloads the first batch and opens it in napari with the micro-SAM annotator.
+1. picks images (reproducibly, from the stored seed) and assigns them to training and
+   validation,
+2. creates the tracking table in OMERO (not for `storage: local`) and the set's folder,
+
+and `annotate` downloads the first batch and opens it in napari with the micro-SAM annotator. To continue
+later, open the set again with `TrainingSet.open(ts.table_id, conn)`.
 
 The first time, micro-SAM downloads its model (a few hundred MB). For each image it then
 computes an *embedding*; this is what makes the clicks fast afterwards, and takes a few
@@ -206,13 +209,13 @@ In read-only mode, the images and masks are in `annotation_input/` and
 ??? example "Without the widgets"
     ```python
     import getpass
-    from omero_annotate_ai import load_config_from_yaml, create_pipeline
+    from omero_annotate_ai import TrainingSet, load_config_from_yaml
     from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 
     conn = SimpleOMEROConnection().connect(
         host="omero.example.org", username="me", password=getpass.getpass()
     )
     config = load_config_from_yaml("annotation_config.yaml")
-    pipeline = create_pipeline(config, conn)
-    table_id, config = pipeline.run_full_micro_sam_workflow()
+    ts = TrainingSet.create(config, conn)
+    ts.annotate()
     ```

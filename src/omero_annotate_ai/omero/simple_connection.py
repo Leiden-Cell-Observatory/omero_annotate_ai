@@ -13,6 +13,8 @@ from typing import Any
 from dotenv import dotenv_values
 from omero.gateway import BlitzGateway
 
+from ..errors import ConnectionFailed
+
 try:
     import keyring
 
@@ -372,7 +374,7 @@ class SimpleOMEROConnection:
         secure: bool = True,
         verbose: bool = True,
         port: int | None = None,
-    ) -> Any | None:
+    ) -> Any:
         """Create OMERO connection.
 
         Args:
@@ -387,7 +389,10 @@ class SimpleOMEROConnection:
             port: OMERO server port. Ignored for URL hosts, which carry their own.
 
         Returns:
-            BlitzGateway connection object if successful, None otherwise
+            The connected BlitzGateway.
+
+        Raises:
+            ConnectionFailed: The server cannot be reached or the login failed.
         """
         if is_url_host(host):
             secure = True
@@ -426,14 +431,41 @@ class SimpleOMEROConnection:
 
                 self.last_connection = conn
                 return conn
-            logger.error("Connection to OMERO Server Failed")
+        except Exception as e:  # noqa: BLE001 - any gateway/Ice failure is a failed connection
             self._close_quietly(conn)
-            return None
+            raise ConnectionFailed(f"Could not connect to OMERO: {e}") from e
+        self._close_quietly(conn)
+        raise ConnectionFailed(
+            "Could not log in to OMERO: check the server, username and password"
+        )
 
-        except Exception as e:  # noqa: BLE001 - report any gateway/Ice failure as a failed connection
-            logger.error(f"Error connecting to OMERO: {e}")
+    def join_session(
+        self, host: str, session_key: str, port: int | None = None, secure: bool = True
+    ) -> Any:
+        """Join an existing OMERO session by its key (e.g. from OMERO.web or a token).
+
+        Raises:
+            ConnectionFailed: The session does not exist (any more) or the server
+                cannot be reached.
+        """
+        if is_url_host(host):
+            secure, port = True, None
+        kwargs: dict[str, Any] = {"host": host, "secure": secure}
+        if port is not None:
+            kwargs["port"] = port
+        conn = None
+        try:
+            conn = BlitzGateway(**kwargs)
+            if conn.connect(sUuid=session_key):
+                if conn.c is not None:
+                    conn.c.enableKeepAlive(60)
+                self.last_connection = conn
+                return conn
+        except Exception as e:  # noqa: BLE001 - any gateway/Ice failure is a failed join
             self._close_quietly(conn)
-            return None
+            raise ConnectionFailed(f"Could not join the OMERO session: {e}") from e
+        self._close_quietly(conn)
+        raise ConnectionFailed("Could not join the OMERO session: it may have expired")
 
     @staticmethod
     def _close_quietly(conn: Any | None) -> None:
@@ -469,17 +501,12 @@ class SimpleOMEROConnection:
         """
         try:
             conn = self.connect(host, username, password, group, secure, port=port)
-            if conn:
-                # Close test connection
-                conn.close()
-                return True, "Connection successful"
-            return False, "Connection failed"
-        except Exception as e:  # noqa: BLE001 - report any gateway/Ice failure as a failed connection
-            return False, f"Connection error: {str(e)}"
+        except ConnectionFailed as e:
+            return False, str(e)
+        conn.close()
+        return True, "Connection successful"
 
-    def create_connection_from_config(
-        self, widget_config: dict[str, Any]
-    ) -> Any | None:
+    def create_connection_from_config(self, widget_config: dict[str, Any]) -> Any:
         """Create connection from widget configuration.
 
         The password is never persisted here. Callers that want to store it
@@ -490,7 +517,10 @@ class SimpleOMEROConnection:
             widget_config: Configuration dictionary from widget
 
         Returns:
-            BlitzGateway connection object if successful, None otherwise
+            The connected BlitzGateway.
+
+        Raises:
+            ConnectionFailed: A field is missing, or connecting failed.
         """
         host = (widget_config.get("host") or "").strip()
         username = (widget_config.get("username") or "").strip()
@@ -502,8 +532,7 @@ class SimpleOMEROConnection:
 
         # Validate required fields
         if not host or not username or not password:
-            logger.warning("Host, username, and password are required")
-            return None
+            raise ConnectionFailed("Host, username and password are required")
 
         # Create connection first to validate it works
         connection = self.connect(
@@ -516,9 +545,8 @@ class SimpleOMEROConnection:
             port=port,
         )
 
-        if connection:
-            # Remember host/username/group/port (never the password) for next time
-            self.save_connection_details(host, username, group, port, verbose=False)
+        # Remember host/username/group/port (never the password) for next time
+        self.save_connection_details(host, username, group, port, verbose=False)
 
         return connection
 

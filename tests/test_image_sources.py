@@ -176,7 +176,7 @@ class TestUri:
         import ntpath
         import types
 
-        import omero_annotate_ai.sources.uri as uri_module
+        from omero_annotate_ai.sources import uri as uri_module
 
         monkeypatch.setattr(
             uri_module, "os", types.SimpleNamespace(path=ntpath, sep="\\")

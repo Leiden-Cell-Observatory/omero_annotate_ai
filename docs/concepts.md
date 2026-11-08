@@ -47,15 +47,16 @@ Images are picked **at random** from the container and assigned to a **training*
 `validate_n: 3`) or annotate everything and give fractions. Counts are in images, not
 units: one image with four patches gives four units.
 
-## The two modes: upload or read-only
+## The two storage modes: OMERO or local
 
-| | Upload mode (default) | Read-only mode |
+| | `storage: omero` (default) | `storage: local` (read-only) |
 |---|---|---|
 | Writes to OMERO | yes: masks, ROIs, tracking table, config | nothing |
 | Local files | working files only | images, masks and a CSV table you can use directly |
 | Typical use | your own data on your institute's server | public servers such as the IDR, or a trial run |
 
-Set it with `workflow.read_only_mode` in the config or the checkbox in the widget.
+Set it with `storage` in the config or the read-only checkbox in the widget. It is fixed
+when the training set is created.
 
 ## What ends up in OMERO
 
@@ -74,24 +75,32 @@ the pipeline keeps track of the current one for you.
 
 ## Batches
 
-`workflow.batch_size` sets how many units napari shows in one session. After each batch,
-progress is saved to OMERO and to the local YAML. With `0` everything is opened in one go.
-Small batches (5 to 20) mean less work is lost if something crashes.
+`workflow.batch_size` sets how many units napari shows at once. Each mask is saved to
+the set's folder and uploaded as soon as the batch is closed; the OMERO table is updated
+once per batch. With `0` everything is opened in one go. If something crashes, resuming
+the set repairs what was half done (see
+[Resume or repeat a run](tutorials/resume-and-repeat.md#what-resuming-repairs)).
 
 ## Local folders
 
-Everything local goes into the output folder (`output.output_directory`):
+Each training set has one folder on your disk, with the same layout in every mode:
 
 ```text
-annotations/                      ← output folder
-├── annotation_config_<name>.yaml   progress, used to resume
-├── annotation_input/               images as annotated (read-only mode, Cellpose)
-├── annotation_output/              masks: <unit id>_mask.tif (read-only mode, Cellpose)
-├── model_input/                    training channel(s), if different from the annotated one
-├── tracking_table.csv              local copy of the progress table (read-only mode)
-├── annotations/                    micro-SAM's own working files
-└── sam_embeddings/                 micro-SAM cache, cleared at every start
+~/omero_annotate_ai/                  ← home folder
+├── <server>/<table id>_<name>/       a set tracked in an OMERO table
+└── local/<id>_<name>/                a read-only or OME-Zarr set
+    ├── config.yaml                   the config and progress, used to resume
+    ├── tracking_table.csv            local copy of the progress table
+    ├── annotation_input/             images as annotated: <unit id>.tif
+    ├── annotation_output/            masks: <unit id>_mask.tif
+    ├── model_input/                  training channel(s), if different from the annotated one
+    └── .scratch/                     micro-SAM's files for the current batch only
 ```
+
+Choose another home folder with the `OMERO_ANNOTATE_AI_HOME` environment variable or
+`home=` on `TrainingSet.create` / `TrainingSet.open`. Files are written atomically (a crash never
+leaves half a file), and micro-SAM works in a fresh folder for every batch, so masks
+always land on the image they were drawn on.
 
 Training data is written to a separate folder; see
 [Prepare training data](tutorials/training-data-prep.md).

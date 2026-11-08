@@ -16,8 +16,11 @@ import numpy as np
 import pandas as pd
 from tifffile import imread
 
+from ..bundle import file_digest
 from ..core.annotation_config import NormalizationConfig
+from ..errors import IntegrityError
 from ..omero._untyped import ezomero
+from ..rows import rows_from_frame
 from ..utils.logging import create_training_logger
 from .normalization import NormalizationRecorder, write_native_sidecar
 from .training_layout import (
@@ -629,11 +632,16 @@ def _records_from_table(
     fetched lazily (ArraySource), so dropping the record costs nothing - and nothing
     is written for it.
 
+    Raises:
+        IntegrityError: A label file's pixels no longer match the ``mask_digest``
+            recorded when it was annotated.
+
     Returns:
         (records, n_missing)
     """
     records = []
     n_missing = 0
+    changed: list[str] = []
 
     for _, row in df.iterrows():
         annotation_id = str(row["annotation_id"])
@@ -645,6 +653,9 @@ def _records_from_table(
             if logger:
                 logger.warning(f"Skipping annotation {annotation_id}: no label")
             continue
+        recorded = str(row.get("mask_digest") or "")
+        if recorded and recorded != "nan" and file_digest(label_path) != recorded:
+            changed.append(annotation_id)
 
         category = "training" if bool(row["train"]) else "validation"
 
@@ -675,6 +686,12 @@ def _records_from_table(
             )
         )
 
+    if changed:
+        raise IntegrityError(
+            f"{len(changed)} label file(s) on OMERO no longer match the masks recorded "
+            f"when they were annotated: {', '.join(changed[:5])}"
+            + (" ..." if len(changed) > 5 else "")
+        )
     return records, n_missing
 
 
@@ -695,8 +712,9 @@ def reorganize_local_data_for_training(
     layout (train_input/, train_label/, val_input/, val_label/).
 
     Args:
-        config: AnnotationConfig with populated annotations (carries the category)
-        annotation_dir: Directory containing the annotation phase's output
+        config: The training set's config (channels, normalisation)
+        annotation_dir: The training set's folder (``TrainingSet.bundle_dir``); its
+            ``tracking_table.csv`` says which units are annotated and their split
         output_dir: Target directory. Must NOT be inside annotation_dir - cleaning the
             training layout there would delete the source images. Defaults to the sibling
             <annotation_dir>_training/.
@@ -732,9 +750,13 @@ def reorganize_local_data_for_training(
     logger = create_training_logger(output_dir, verbose=verbose)
     logger.info("Reorganizing local annotation data for training")
 
-    processed_annotations = [ann for ann in config.annotations if ann.processed]
+    table_file = annotation_dir / "tracking_table.csv"
+    if not table_file.exists():
+        raise FileNotFoundError(f"No tracking_table.csv in: {annotation_dir}")
+    rows = rows_from_frame(pd.read_csv(table_file, keep_default_na=False))
+    processed_annotations = [row for row in rows if row.processed]
     if not processed_annotations:
-        raise ValueError("No processed annotations found in config")
+        raise ValueError(f"No annotated units in {table_file}")
 
     uses_separate_channels = config.spatial_coverage.uses_separate_channels()
 

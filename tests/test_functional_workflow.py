@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import tifffile
 
@@ -34,8 +35,6 @@ from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.core.annotation_pipeline import OmeroWrites
 
 pytestmark = [pytest.mark.docker, pytest.mark.integration]
-
-PR3_WRITE_ORDER = "PR 3: masks paired by position / write order and reconcile"
 
 
 # ---------------------------------------------------------------------------
@@ -87,30 +86,30 @@ class SpyWrites(OmeroWrites):
     def __init__(self) -> None:
         self.table_ids: list[int] = []
 
-    def write_config_to_table(self, conn, table_id, config):
+    def write_rows(self, conn, table_id, rows):
         self.table_ids.append(table_id)
-        return super().write_config_to_table(conn, table_id, config)
+        return super().write_rows(conn, table_id, rows)
 
 
 class FlakyWrites(OmeroWrites):
-    """Fails the n-th upload and/or the first table write."""
+    """Fails the n-th label upload and/or the first table write."""
 
     def __init__(self, fail_upload: int | None = None, fail_table_once: bool = False):
         self.fail_upload = fail_upload
         self.fail_table_once = fail_table_once
         self.uploads = 0
 
-    def upload_rois_and_labels(self, **kwargs):
+    def upload_label(self, conn, image_id, label_img, **fields):
         self.uploads += 1
         if self.uploads == self.fail_upload:
             raise ConnectionError("simulated upload failure")
-        return super().upload_rois_and_labels(**kwargs)
+        return super().upload_label(conn, image_id, label_img, **fields)
 
-    def write_config_to_table(self, conn, table_id, config):
+    def write_rows(self, conn, table_id, rows):
         if self.fail_table_once:
             self.fail_table_once = False
             raise ConnectionError("simulated table update failure")
-        return super().write_config_to_table(conn, table_id, config)
+        return super().write_rows(conn, table_id, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +119,6 @@ class FlakyWrites(OmeroWrites):
 
 def make_config(
     seed,
-    out_dir: Path,
     name: str,
     *,
     container="dataset",
@@ -134,7 +132,6 @@ def make_config(
 
     config = create_default_config()
     config.name = f"{seed.tag}_{name}"
-    config.output.output_directory = str(out_dir)
     config.omero.container_type = container
     config.omero.container_id = (
         seed.dataset_id if container == "dataset" else seed.plate_id
@@ -149,24 +146,40 @@ def make_config(
     return config
 
 
-def run_microsam(
-    config, conn, annotators: Annotators, writes: OmeroWrites | None = None
+def make_pipeline(
+    config,
+    conn,
+    annotators: Annotators,
+    writes: OmeroWrites | None = None,
+    events: list | None = None,
 ):
-    from omero_annotate_ai.core.annotation_pipeline import create_pipeline
+    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 
-    pipeline = create_pipeline(
-        config, conn, annotator=annotators.current, omero_writes=writes
+    return AnnotationPipeline(
+        config,
+        conn,
+        annotator=annotators.current,
+        omero_writes=writes,
+        events=None if events is None else events.append,
     )
+
+
+def run_microsam(
+    config,
+    conn,
+    annotators: Annotators,
+    writes: OmeroWrites | None = None,
+    events: list | None = None,
+):
+    pipeline = make_pipeline(config, conn, annotators, writes, events)
     table_id, config = pipeline.run_full_micro_sam_workflow()
     return pipeline, table_id, config
 
 
 def resume_config(config, table_id: int, **training):
-    """The same set again, as a resumed run (fresh annotations, loaded from the table)."""
+    """The same set again, opened by its table ID (rows come from the table)."""
     resumed = config.model_copy(deep=True)
-    resumed.annotations = []
-    resumed.workflow.resume_from_table = True
-    resumed.omero.table_id = table_id
+    resumed.identity.table_id = table_id
     for key, value in training.items():
         setattr(resumed.training, key, value)
     return resumed
@@ -233,7 +246,7 @@ def assert_labels_on_right_images(conn, seed, rows):
 
 class TestNewTrainingSet:
     def test_single_batch_dataset_2d(self, omero_conn, omero_seed, annotator, tmp_path):
-        config = make_config(omero_seed, tmp_path, "new2d")
+        config = make_config(omero_seed, "new2d")
         pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
 
         rows = table_rows(omero_conn, table_id)
@@ -266,7 +279,7 @@ class TestNewTrainingSet:
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
         spy = SpyWrites()
-        config = make_config(omero_seed, tmp_path, "batches", batch_size=2)
+        config = make_config(omero_seed, "batches", batch_size=2)
         _, table_id, config = run_microsam(config, omero_conn, annotator, spy)
 
         assert spy.table_ids == [table_id, table_id]
@@ -275,13 +288,10 @@ class TestNewTrainingSet:
         assert rows["processed"].all() and len(rows) == 4
         assert len(config_annotations(omero_conn, table_id)) == 1
 
-    @pytest.mark.xfail(
-        strict=True, reason=PR3_WRITE_ORDER + " (batch 2 reuses batch 1's seg_*.tif)"
-    )
     def test_multi_batch_masks_on_right_images(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(omero_seed, tmp_path, "batchmasks", batch_size=2)
+        config = make_config(omero_seed, "batchmasks", batch_size=2)
         _, table_id, _ = run_microsam(config, omero_conn, annotator)
         assert_labels_on_right_images(
             omero_conn, omero_seed, table_rows(omero_conn, table_id)
@@ -300,7 +310,6 @@ class TestSources:
         annotator(value=7)  # fake plate pixels carry no image index
         config = make_config(
             omero_seed,
-            tmp_path,
             "plate",
             container="plate",
             train_n=2,
@@ -320,7 +329,6 @@ class TestSources:
     def test_patches(self, omero_conn, omero_seed, annotator, tmp_path):
         config = make_config(
             omero_seed,
-            tmp_path,
             "patches",
             train_n=2,
             validate_n=1,
@@ -341,7 +349,6 @@ class TestSources:
     def test_volumetric(self, omero_conn, omero_seed, annotator, tmp_path):
         config = make_config(
             omero_seed,
-            tmp_path,
             "vol3d",
             train_n=1,
             validate_n=1,
@@ -369,7 +376,7 @@ class TestSources:
 class TestResume:
     def _early_close_then_resume(self, conn, seed, annotator, tmp_path, name):
         annotator(limit=1)  # user closes napari after one image
-        config = make_config(seed, tmp_path, name)
+        config = make_config(seed, name)
         _, table_id, config = run_microsam(config, conn, annotator)
         first = table_rows(conn, table_id)
         done_first = first[first["processed"]]
@@ -399,9 +406,6 @@ class TestResume:
         rois = tagged_rois(omero_conn, table_id, rows["image_id"])
         assert all(len(v) == 1 for v in rois.values()) and len(rois) == 4
 
-    @pytest.mark.xfail(
-        strict=True, reason=PR3_WRITE_ORDER + " (stale seg_00000.tif from session 1)"
-    )
     def test_resume_after_early_close_masks_on_right_images(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
@@ -413,9 +417,7 @@ class TestResume:
     def test_resume_with_raised_counts_extends_same_table(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(
-            omero_seed, tmp_path, "extend", train_n=2, validate_n=1, test_n=0
-        )
+        config = make_config(omero_seed, "extend", train_n=2, validate_n=1, test_n=0)
         _, table_id, config = run_microsam(config, omero_conn, annotator)
         assert len(table_rows(omero_conn, table_id)) == 3
 
@@ -442,48 +444,39 @@ class TestResume:
 
 
 class TestCrashes:
-    @pytest.mark.xfail(
-        strict=True, reason="PR 3: a failed upload must leave the row unprocessed"
-    )
     def test_failed_upload_leaves_row_unprocessed(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(omero_seed, tmp_path, "uploadfail")
-        _, table_id, _ = run_microsam(
-            config, omero_conn, annotator, FlakyWrites(fail_upload=2)
+        config = make_config(omero_seed, "uploadfail")
+        events: list = []
+        pipeline, table_id, _ = run_microsam(
+            config, omero_conn, annotator, FlakyWrites(fail_upload=2), events
         )
 
         rows = table_rows(omero_conn, table_id)
         broken = rows[rows["roi_id"].isna() | (rows["roi_id"] <= 0)]
         assert len(broken) == 1
         assert not broken["processed"].any()
-
-    def test_failed_upload_current_behaviour(
-        self, omero_conn, omero_seed, annotator, tmp_path
-    ):
-        """Documents today's behaviour: the row is marked done without IDs."""
-        config = make_config(omero_seed, tmp_path, "uploadfailnow")
-        _, table_id, _ = run_microsam(
-            config, omero_conn, annotator, FlakyWrites(fail_upload=2)
-        )
-
-        rows = table_rows(omero_conn, table_id)
-        assert rows["processed"].all()
-        no_ids = rows[rows["roi_id"].isna() | (rows["roi_id"] <= 0)]
-        assert len(no_ids) == 1
+        local = pd.read_csv(pipeline.bundle_dir / "tracking_table.csv")
+        failed = local[local["annotation_id"] == broken.iloc[0]["annotation_id"]]
+        assert "simulated upload failure" in failed.iloc[0]["error"]
+        assert [type(e).__name__ for e in events].count("UploadFailed") == 1
 
     def test_failed_table_update_stops_run_and_uploads_stay_traceable(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
+        from omero_annotate_ai.errors import TableWriteError
         from omero_annotate_ai.omero.omero_functions import delete_training_set
 
-        config = make_config(omero_seed, tmp_path, "tablefail")
-        with pytest.raises(ConnectionError):
-            run_microsam(
-                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
-            )
+        config = make_config(omero_seed, "tablefail")
+        pipeline = make_pipeline(
+            config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+        )
+        with pytest.raises(TableWriteError) as raised:
+            pipeline.run_full_micro_sam_workflow()
+        assert isinstance(raised.value.__cause__, ConnectionError)
 
-        table_id = config.omero.table_id
+        table_id = pipeline.table_id
         rows = table_rows(omero_conn, table_id)
         assert not rows["processed"].any()  # the update never reached the table
         rois = tagged_rois(omero_conn, table_id, omero_seed.image_ids)
@@ -491,25 +484,80 @@ class TestCrashes:
         report = delete_training_set(omero_conn, table_id, dry_run=True)
         assert sorted(report["rois"]) == sorted(r for v in rois.values() for r in v)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="PR 3: reconcile must not upload again after a failed table update",
-    )
     def test_resume_after_failed_table_update_has_no_duplicates(
         self, omero_conn, omero_seed, annotator, tmp_path
     ):
-        config = make_config(omero_seed, tmp_path, "tablefailresume")
-        with pytest.raises(ConnectionError):
-            run_microsam(
-                config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
-            )
-        table_id = config.omero.table_id
+        from omero_annotate_ai.errors import TableWriteError
+
+        config = make_config(omero_seed, "tablefailresume")
+        pipeline = make_pipeline(
+            config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+        )
+        with pytest.raises(TableWriteError):
+            pipeline.run_full_micro_sam_workflow()
+        table_id = pipeline.table_id
 
         run_microsam(resume_config(config, table_id), omero_conn, annotator)
         rows = table_rows(omero_conn, table_id)
         rois = tagged_rois(omero_conn, table_id, rows["image_id"])
         assert rows["processed"].all()
         assert all(len(v) == 1 for v in rois.values())
+
+    def test_resume_adopts_uploads_the_local_copy_lost(
+        self, omero_conn, omero_seed, annotator, tmp_path
+    ):
+        """Table update failed and the local CSV is gone: the tags find the uploads."""
+        from omero_annotate_ai.errors import TableWriteError
+
+        config = make_config(omero_seed, "orphans")
+        pipeline = make_pipeline(
+            config, omero_conn, annotator, FlakyWrites(fail_table_once=True)
+        )
+        with pytest.raises(TableWriteError):
+            pipeline.run_full_micro_sam_workflow()
+        table_id = pipeline.table_id
+        (pipeline.bundle_dir / "tracking_table.csv").unlink()
+        before = tagged_rois(omero_conn, table_id, omero_seed.image_ids)
+
+        events: list = []
+        annotator(limit=0)  # nothing left to annotate by hand
+        run_microsam(
+            resume_config(config, table_id), omero_conn, annotator, events=events
+        )
+
+        rows = table_rows(omero_conn, table_id)
+        assert rows["processed"].all()
+        assert tagged_rois(omero_conn, table_id, rows["image_id"]) == before
+        adopted = [e for e in events if type(e).__name__ == "ReconcileAction"]
+        assert {e.action for e in adopted} == {"adopted"} and len(adopted) == 4
+        assert_labels_on_right_images(omero_conn, omero_seed, rows)
+
+    def test_edited_local_mask_is_reported_not_uploaded(
+        self, omero_conn, omero_seed, annotator, tmp_path
+    ):
+        config = make_config(omero_seed, "divergent")
+        pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
+        rows = table_rows(omero_conn, table_id)
+        edited = rows.iloc[0]["annotation_id"]
+        mask = pipeline.bundle_dir / "annotation_output" / f"{edited}_mask.tif"
+        tifffile.imwrite(mask, tifffile.imread(mask) * 0 + 7)
+
+        events: list = []
+        run_microsam(
+            resume_config(config, table_id), omero_conn, annotator, events=events
+        )
+
+        divergent = [
+            e
+            for e in events
+            if type(e).__name__ == "ReconcileAction" and e.action == "divergent"
+        ]
+        assert [e.annotation_id for e in divergent] == [edited]
+        after = table_rows(omero_conn, table_id)
+        assert (
+            after.set_index("annotation_id").loc[edited, "label_id"]
+            == (rows.set_index("annotation_id").loc[edited, "label_id"])
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +568,7 @@ class TestCrashes:
 @pytest.fixture
 def finished_set(omero_conn, omero_seed, annotator, tmp_path):
     """A completed 2/1/1 training set and its config."""
-    config = make_config(omero_seed, tmp_path / "annotate", "export")
+    config = make_config(omero_seed, "export")
     _, table_id, config = run_microsam(config, omero_conn, annotator)
     return table_id, config
 
@@ -653,20 +701,19 @@ class TestOtherPaths:
     def test_cellpose_prepare_then_collect(self, omero_conn, omero_seed, tmp_path):
         from omero_annotate_ai.core.annotation_pipeline import create_pipeline
 
-        config = make_config(
-            omero_seed, tmp_path, "cellpose", train_n=2, validate_n=1, test_n=0
-        )
+        config = make_config(omero_seed, "cellpose", train_n=2, validate_n=1, test_n=0)
         config.ai_model.framework = "cellpose"
         pipeline = create_pipeline(config, omero_conn)
         table_id, config = pipeline.run_cp_workflow()
 
         # The user segments the exported images with Cellpose: masks from the images.
-        inputs = sorted((tmp_path / "annotation_input").glob("*.tif"))
+        bundle = pipeline.bundle_dir
+        inputs = sorted((bundle / "annotation_input").glob("*.tif"))
         assert len(inputs) == 3
-        (tmp_path / "annotation_output").mkdir(exist_ok=True)
+        (bundle / "annotation_output").mkdir(exist_ok=True)
         for path in inputs:
             tifffile.imwrite(
-                tmp_path / "annotation_output" / f"{path.stem}_mask.tif",
+                bundle / "annotation_output" / f"{path.stem}_mask.tif",
                 mask_for(tifffile.imread(path)),
             )
         n, _ = pipeline.collect_annotations_from_disk()
@@ -682,17 +729,19 @@ class TestOtherPaths:
             i: len(omero_conn.getRoiService().findByImage(i, None).rois)
             for i in omero_seed.image_ids
         }
-        config = make_config(omero_seed, tmp_path, "readonly", test_n=0)
-        config.workflow.read_only_mode = True
-        _, table_id, config = run_microsam(config, omero_conn, annotator)
+        config = make_config(omero_seed, "readonly", test_n=0)
+        config.storage = "local"
+        pipeline, table_id, config = run_microsam(config, omero_conn, annotator)
 
         assert table_id == -1
-        masks = sorted((tmp_path / "annotation_output").glob("*_mask.tif"))
-        inputs = sorted((tmp_path / "annotation_input").glob("*.tif"))
+        bundle = pipeline.bundle_dir
+        assert bundle.parent.name == "local"
+        masks = sorted((bundle / "annotation_output").glob("*_mask.tif"))
+        inputs = sorted((bundle / "annotation_input").glob("*.tif"))
         assert len(masks) == 3 and len(inputs) == 3
         for mask_path in masks:
             image = tifffile.imread(
-                tmp_path / "annotation_input" / mask_path.name.replace("_mask", "")
+                bundle / "annotation_input" / mask_path.name.replace("_mask", "")
             )
             assert set(np.unique(tifffile.imread(mask_path))) - {0} == {
                 mask_value_for(image)
@@ -715,25 +764,30 @@ class TestZarr:
         config = AnnotationConfig(
             name="zarr_functional",
             source="zarr",
+            storage="local",
             zarr={"uris": [ngff_stores["img04"], ngff_stores["img05"]]},
         )
-        config.output.output_directory = str(tmp_path)
         config.training.train_n, config.training.validate_n, config.training.test_n = (
             1,
             1,
             0,
         )
         scripted = annotator(value=3)
-        table_id, config = create_pipeline(
-            config, annotator=scripted
-        ).run_full_micro_sam_workflow()
+        pipeline = create_pipeline(config, annotator=scripted, home=tmp_path)
+        table_id, config = pipeline.run_full_micro_sam_workflow()
 
         assert table_id == -1
-        assert all(a.processed for a in config.annotations)
+        assert all(a.processed for a in pipeline.training_set.units())
         assert len(scripted.calls) == 1 and scripted.calls[0].n_images == 2
-        masks = sorted((tmp_path / "annotation_output").glob("*_mask.tif"))
+        bundle = pipeline.bundle_dir
+        assert bundle.parent == tmp_path / "local"
+        masks = sorted((bundle / "annotation_output").glob("*_mask.tif"))
         assert len(masks) == 2
-        assert (tmp_path / "tracking_table.csv").exists()
+        assert (bundle / "tracking_table.csv").exists()
+        assert (bundle / "config.yaml").exists()
+        assert not (bundle / ".scratch").exists() or not any(
+            (bundle / ".scratch").iterdir()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -747,9 +801,7 @@ class TestDelete:
     ):
         from omero_annotate_ai.omero.omero_functions import delete_training_set
 
-        config = make_config(
-            omero_seed, tmp_path, "delete", train_n=1, validate_n=1, test_n=0
-        )
+        config = make_config(omero_seed, "delete", train_n=1, validate_n=1, test_n=0)
         _, table_id, _ = run_microsam(config, omero_conn, annotator)
         rows = table_rows(omero_conn, table_id)
         roi_ids = [int(i) for i in rows["roi_id"]]

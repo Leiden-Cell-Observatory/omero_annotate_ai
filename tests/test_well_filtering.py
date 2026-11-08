@@ -6,10 +6,10 @@ import pandas as pd
 import pytest
 
 from omero_annotate_ai.core.annotation_config import AnnotationConfig, ZarrConfig
-from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
 from omero_annotate_ai.sources import ImageMeta
 from omero_annotate_ai.sources.wells import match_well_filter, normalize_well
 from omero_annotate_ai.sources.zarr_discovery import discover_zarr_images
+from omero_annotate_ai.trainingset import TrainingSet
 
 
 def _map_annotation(kv):
@@ -60,7 +60,7 @@ class TestWellFiltering:
             },
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         # Test matching case - all criteria met
         well_kv = {"cellline": "U2OS", "treatment": "Control"}
@@ -84,7 +84,7 @@ class TestWellFiltering:
             },
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         # Test non-matching cellline
         well_kv = {"cellline": "MCF7", "treatment": "Control"}
@@ -107,7 +107,7 @@ class TestWellFiltering:
             name="test", omero={"container_type": "plate", "container_id": 1}
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         # Mock well object with map annotations
         mock_well = Mock()
@@ -139,7 +139,7 @@ class TestWellFiltering:
             name="test", omero={"container_type": "plate", "container_id": 1}
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         # Mock well object with no annotations
         mock_well = Mock()
@@ -156,7 +156,7 @@ class TestWellFiltering:
         )
         mock_conn = Mock()
         mock_conn.getObject.return_value = None
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         result = pipeline._get_well_map_annotations(999)
         assert result == {}
@@ -212,11 +212,9 @@ class TestWellFilteringIntegration:
                 103: (1, 2, [5, 6], {"cellline": "U2OS"}),
             }
         )
-        pipeline = AnnotationPipeline(config, conn=conn)
+        pipeline = TrainingSet(config, conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
             mock_ezomero.get_well_ids.return_value = [101, 102, 103]
             image_ids = pipeline.get_image_ids_from_container()
 
@@ -234,11 +232,9 @@ class TestWellFilteringIntegration:
                 102: (0, 1, [3], {}),
             }
         )
-        pipeline = AnnotationPipeline(config, conn=conn)
+        pipeline = TrainingSet(config, conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
             mock_ezomero.get_well_ids.return_value = [101, 102]
             image_ids = pipeline.get_image_ids_from_container()
 
@@ -256,11 +252,9 @@ class TestWellFilteringIntegration:
                 102: (27, 11, [9], {}),
             }
         )
-        pipeline = AnnotationPipeline(config, conn=conn)
+        pipeline = TrainingSet(config, conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
             mock_ezomero.get_well_ids.return_value = [101, 102]
             pipeline.get_image_ids_from_container()
 
@@ -283,7 +277,7 @@ class TestWellFilteringIntegration:
             name="test",
             omero={"container_type": "dataset", "container_id": 1},
         )
-        pipeline = AnnotationPipeline(config, conn=Mock())
+        pipeline = TrainingSet(config, Mock())
         meta = ImageMeta("omero:image:5", "img5", 1, 1, 1, 8, 8, "uint16")
         assert "well" not in pipeline._identity_fields(meta)
 
@@ -298,11 +292,9 @@ class TestMultiContainerImageRetrieval:
             name="test", omero={"container_type": "dataset", "container_ids": [1, 2]}
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
 
             def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
                 if dataset == 1:
@@ -324,11 +316,9 @@ class TestMultiContainerImageRetrieval:
             name="test", omero={"container_type": "dataset", "container_ids": [1, 2]}
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
 
             def mock_get_image_ids(conn, dataset=None, plate=None, well=None):
                 if dataset == 1:
@@ -353,11 +343,9 @@ class TestMultiContainerImageRetrieval:
             name="test", omero={"container_type": "dataset", "container_id": 123}
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
             mock_ezomero.get_image_ids.return_value = [1001, 1002, 1003]
 
             image_ids = pipeline.get_image_ids_from_container()
@@ -371,7 +359,7 @@ class TestMultiContainerImageRetrieval:
             name="test", omero={"container_type": "dataset", "container_id": 0}
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         with pytest.raises(ValueError, match="No container IDs configured"):
             pipeline.get_image_ids_from_container()
@@ -395,11 +383,9 @@ class TestMultiContainerImageRetrieval:
                 202: (0, 1, [2002], {"cellline": "HeLa"}),
             }
         )
-        pipeline = AnnotationPipeline(config, conn=conn)
+        pipeline = TrainingSet(config, conn)
 
-        with patch(
-            "omero_annotate_ai.core.annotation_pipeline.ezomero"
-        ) as mock_ezomero:
+        with patch("omero_annotate_ai.trainingset.ezomero") as mock_ezomero:
             mock_ezomero.get_well_ids.side_effect = lambda conn, plate=None: {
                 1: [101, 102],
                 2: [201, 202],
@@ -420,7 +406,7 @@ class TestMultiContainerTableTitle:
             omero={"container_type": "dataset", "container_id": 123},
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         title = pipeline._get_table_title()
 
@@ -433,7 +419,7 @@ class TestMultiContainerTableTitle:
             omero={"container_type": "plate", "container_ids": [1, 2, 3]},
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         title = pipeline._get_table_title()
 
@@ -446,7 +432,7 @@ class TestMultiContainerTableTitle:
             omero={"container_type": "plate", "container_ids": [1, 2, 3]},
         )
         mock_conn = Mock()
-        pipeline = AnnotationPipeline(config, conn=mock_conn)
+        pipeline = TrainingSet(config, mock_conn)
 
         title = pipeline._get_table_title()
 

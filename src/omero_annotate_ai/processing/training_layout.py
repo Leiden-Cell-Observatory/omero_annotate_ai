@@ -214,7 +214,7 @@ class AnnotationRecord:
     rather than written, which is what keeps the pairing honest.
     """
 
-    # ImageAnnotation.annotation_id is a str (e.g. "img_001"); the OMERO table may
+    # Row.annotation_id is a str (e.g. "img_001"); the OMERO table may
     # yield an int. Both are accepted and stringified into the filename.
     annotation_id: int | str
     category: str

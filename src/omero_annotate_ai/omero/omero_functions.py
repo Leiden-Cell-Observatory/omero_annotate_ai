@@ -1,7 +1,9 @@
 """OMERO integration functions for micro-SAM workflows."""
 
+import logging
 import os
 import tempfile
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,8 +14,9 @@ import omero.model as omero_model
 import pandas as pd
 import tifffile
 
-from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
+from ..core.annotation_config import AnnotationConfig
 from ..processing.image_functions import label_to_rois
+from ..rows import Row, rows_from_frame, rows_to_frame
 from . import tracking_table
 from .omero_utils import (
     list_annotations_by_namespace,
@@ -29,73 +32,7 @@ LABELS_NS = "openmicroscopy.org/omero/annotate/labels"
 # Helper Functions
 # =============================================================================
 
-
-def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare DataFrame with proper types for OMERO table storage.
-
-    Args:
-        df: DataFrame to prepare
-
-    Returns:
-        DataFrame with properly typed columns for OMERO
-    """
-    df = df.copy()
-
-    numeric_columns = [
-        "image_id",
-        "patch_x",
-        "patch_y",
-        "patch_width",
-        "patch_height",
-        "z_slice",
-        "timepoint",
-        "z_start",
-        "z_end",
-        "z_length",
-        "channel",
-        "level",
-        "session",
-    ]
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-1).astype(int)
-
-    boolean_columns = ["train", "validate", "processed", "is_patch", "is_volumetric"]
-    for col in boolean_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna(False).astype(bool)
-
-    # Link ids reach OMERO as typed, non-nullable integer columns (see
-    # _build_omero_columns). 0 means "not set yet"; a legacy "None" string
-    # coerces to it via to_numeric.
-    link_id_columns = ["label_id", "roi_id", "annotation_input_id"]
-    for col in link_id_columns:
-        if col in df.columns:
-            df[col] = (
-                pd.to_numeric(df[col], errors="coerce")
-                .fillna(OMERO_ID_UNSET)
-                .astype(int)
-            )
-
-    id_columns = ["schema_attachment_id"]
-    for col in id_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("None").astype(str)
-
-    string_columns = ["annotation_type"]
-    for col in string_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("segmentation_mask").astype(str)
-
-    if "category" in df.columns:
-        df["category"] = df["category"].fillna("training").astype(str)
-
-    datetime_columns = ["annotation_created_at", "annotation_updated_at"]
-    for col in datetime_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("None").astype(str)
-
-    return df
+logger = logging.getLogger(__name__)
 
 
 def _normalize_omero_table_df(df: Any) -> Any:
@@ -186,50 +123,47 @@ def _read_any_table(conn, table_id: int) -> Any:
 
 def create_tracking_table(
     conn,
-    config,
+    rows: Sequence[Row],
     table_title: str,
     container_type: str,
     container_ids: list[int],
 ) -> int:
-    """Create the tracking table for a training set from config.annotations.
+    """Create the tracking table for a training set's rows.
 
     The table is linked to every container in ``container_ids`` once, here.
-    From then on it is only updated in place (:func:`write_config_to_table`),
+    From then on it is only updated in place (:func:`write_rows_to_table`),
     so its ID identifies the training set.
 
     Returns:
         The table ID.
     """
-    df = config.to_dataframe()
-    if df.empty:
-        raise ValueError("No annotations in the config; define the schema first")
+    if not rows:
+        raise ValueError("No rows to track; plan the training set first")
     table_id = tracking_table.create_table(
-        conn,
-        _prepare_dataframe_for_omero(df),
-        table_title,
-        container_type,
-        container_ids,
+        conn, rows_to_frame(rows), table_title, container_type, container_ids
     )
-    print(
-        f"Created tracking table '{table_title}' with {len(df)} units (ID: {table_id})"
+    logger.info(
+        "Created tracking table '%s' with %d units (ID: %d)",
+        table_title,
+        len(rows),
+        table_id,
     )
     return table_id
 
 
-def write_config_to_table(conn, table_id: int, config) -> dict[str, int]:
-    """Write config.annotations to an existing tracking table, in place.
+def write_rows_to_table(conn, table_id: int, rows: Sequence[Row]) -> dict[str, int]:
+    """Write rows to an existing tracking table, in place.
 
     Rows are matched on annotation_id: existing rows are updated, new rows
     appended, and the table keeps its ID.
     """
-    df = config.to_dataframe()
-    if df.empty:
+    if not rows:
         return {"updated": 0, "added": 0}
-    return tracking_table.write_rows(conn, table_id, _prepare_dataframe_for_omero(df))
+    return tracking_table.write_rows(conn, table_id, rows_to_frame(rows))
 
 
-def sync_omero_table_to_config(conn, table_id: int, config) -> None:
-    """Load a tracking table's rows into config.annotations.
+def read_table_rows(conn, table_id: int) -> list[Row]:
+    """A tracking table's rows.
 
     Raises instead of returning quietly: a resume that cannot read its table
     must stop, never carry on as if the table were empty.
@@ -237,8 +171,7 @@ def sync_omero_table_to_config(conn, table_id: int, config) -> None:
     df = read_tracking_table(conn, table_id)
     if df is None or df.empty:
         raise ValueError(f"Tracking table {table_id} has no rows")
-    config.from_dataframe(df)
-    print(f"Loaded {len(config.annotations)} annotations from table {table_id}")
+    return rows_from_frame(df)
 
 
 def replace_table_config(
@@ -361,29 +294,36 @@ def _table_containers(conn, table_id: int) -> list[tuple[str, int]]:
     return containers
 
 
+def _tagged_on_image(
+    conn, image_id: int
+) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """``(label files, ROIs)`` on an image as ``(id, tag)``, for tagged uploads only."""
+    rois: list[tuple[int, str]] = []
+    labels: list[tuple[int, str]] = []
+    try:
+        result = conn.getRoiService().findByImage(image_id, None, conn.SERVICE_OPTS)
+    except Exception:  # noqa: BLE001 - an unreadable image has no uploads to find
+        return labels, rois
+    for roi in result.rois:
+        description = roi.getDescription().getValue() if roi.getDescription() else ""
+        if tag := _description_tag(description):
+            rois.append((roi.getId().getValue(), tag))
+    for ann in list_annotations_by_namespace(conn, "Image", image_id, LABELS_NS):
+        if tag := _description_tag(ann.get("description") or ""):
+            labels.append((ann["id"], tag))
+    return labels, rois
+
+
 def _tagged_objects(
     conn, image_ids: list[int], table_id: int
 ) -> tuple[list[int], list[int]]:
     """ROIs and label files on the images whose description carries the set's tag."""
     prefix = tracking_table.tag_prefix(table_id)
     rois, labels = [], []
-    roi_service = conn.getRoiService()
     for image_id in image_ids:
-        try:
-            result = roi_service.findByImage(int(image_id), None, conn.SERVICE_OPTS)
-        except Exception:
-            continue
-        for roi in result.rois:
-            description = (
-                roi.getDescription().getValue() if roi.getDescription() else ""
-            )
-            if description.startswith(prefix):
-                rois.append(roi.getId().getValue())
-        for ann in list_annotations_by_namespace(
-            conn, "Image", int(image_id), LABELS_NS
-        ):
-            if (ann.get("description") or "").startswith(prefix):
-                labels.append(ann["id"])
+        image_labels, image_rois = _tagged_on_image(conn, int(image_id))
+        rois.extend(i for i, tag in image_rois if tag.startswith(prefix))
+        labels.extend(i for i, tag in image_labels if tag.startswith(prefix))
     return rois, labels
 
 
@@ -573,6 +513,102 @@ def _label_file_name(
     return safe(prefix + stem) + ".tif"
 
 
+def _label_description(
+    tag: str | None,
+    trainingset_description: str | None,
+    timepoint: int | None,
+    z: int | None,
+    channel: int | None,
+    patch_offset: tuple[int, int] | None,
+) -> str:
+    """``<tag> | <training set> | t=.. | z=.. | c=.. | Patch offset: (x, y)``.
+
+    The set's tag comes first, so an upload can be traced to its table.
+    """
+    parts = [tag] if tag else []
+    if trainingset_description:
+        parts.append(trainingset_description)
+    for key, value in (("t", timepoint), ("z", z), ("c", channel)):
+        if value is not None:
+            parts.append(f"{key}={value}")
+    if patch_offset:
+        parts.append(f"Patch offset: ({patch_offset[0]}, {patch_offset[1]})")
+    return " | ".join(parts)
+
+
+def upload_label_file(
+    conn,
+    image_id: int,
+    label_img: np.ndarray,
+    *,
+    tag: str | None = None,
+    trainingset_name: str | None = None,
+    trainingset_description: str | None = None,
+    timepoint: int | None = None,
+    z: int | None = None,
+    channel: int | None = None,
+    patch_offset: tuple[int, int] | None = None,
+    local_name: str = "mask.tif",
+) -> int:
+    """Attach a label image to an OMERO image as a file; returns its FileAnnotation ID.
+
+    The file is written losslessly compressed (zlib) and named after the training
+    set and annotation, so label files of different sets on one image stay apart.
+    """
+    description = _label_description(
+        tag, trainingset_description, timepoint, z, channel, patch_offset
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        upload_path = os.path.join(
+            tmp, _label_file_name(local_name, trainingset_name, tag)
+        )
+        tifffile.imwrite(upload_path, label_img, compression="zlib")
+        return ezomero.post_file_annotation(
+            conn,
+            file_path=upload_path,
+            description=description,
+            ns=LABELS_NS,
+            object_type="Image",
+            object_id=image_id,
+        )
+
+
+def upload_label_rois(
+    conn,
+    image_id: int,
+    label_img: np.ndarray,
+    *,
+    tag: str | None = None,
+    trainingset_name: str | None = None,
+    trainingset_description: str | None = None,
+    timepoint: int | None = None,
+    z: int | None = None,
+    channel: int | None = None,
+    is_volumetric: bool = False,
+    patch_offset: tuple[int, int] | None = None,
+) -> int | None:
+    """Post one ROI holding a shape per label; returns its ID, or None for an empty mask."""
+    shapes = label_to_rois(
+        label_img=label_img,
+        z_slice=z,
+        channel=channel,
+        timepoint=timepoint,
+        is_volumetric=is_volumetric,
+        patch_offset=patch_offset,
+    )
+    if not shapes:
+        return None
+    return ezomero.post_roi(
+        conn,
+        image_id,
+        shapes,
+        name=f"{trainingset_name}_ROIs" if trainingset_name else "ROIs",
+        description=_label_description(
+            tag, trainingset_description, timepoint, z, channel, patch_offset
+        ),
+    )
+
+
 def upload_rois_and_labels(
     conn,
     image_id: int,
@@ -587,108 +623,63 @@ def upload_rois_and_labels(
     z_start: int | None = 0,
     tag: str | None = None,
 ):
-    """Upload ROIs and labels to OMERO image.
+    """Upload a mask file as a label file plus ROIs (:func:`upload_label_file`, then
+    :func:`upload_label_rois`).
 
-    Args:
-        conn: OMERO connection
-        image_id: ID of OMERO image
-        annotation_file: Path to annotation file (TIFF with labels)
-        patch_offset: Optional (x,y) offset for patch placement
-        trainingset_name: Optional training set name for custom annotation naming
-        trainingset_description: Optional training set description for annotation
-        timepoint: Optional timepoint for positioning the roi properly in OMERO
-        z_slice: Optional z_slice for positioning the roi properly in OMERO
-        channel: Optional channel for positioning the roi properly in OMERO
-        is_volumetric: check if we need to handle roi as 3D
-        z_start: use for volumetric to use z_start as offset in the stack
-        tag: Training-set tag (``tracking_table.tag_for``) written first in the
-            ROI and label descriptions, so the upload can be traced back to its
-            table even if the table never recorded it.
+    For volumes, ``z_start`` is the first plane; otherwise ``z_slice`` is the plane.
 
     Returns:
-        tuple: (label_id, roi_id) - IDs of uploaded label file and ROI collection
+        tuple: (label_id, roi_id); roi_id is None for an empty mask.
     """
-    # Load label image
-    print(f"Step 1: Loading label image from {annotation_file}")
     label_img = imageio.imread(annotation_file)
-    print(f"Label image loaded: {label_img.shape}, dtype: {label_img.dtype}")
-    unique_labels = np.unique(label_img)
-    print(f"Found {len(unique_labels)} unique labels: {unique_labels[:10]}...")
-
-    # Create ROI shapes from label image
-    print("Step 2: Converting labels to ROI shapes...")
-    effective_z = z_start if is_volumetric else z_slice
-    shapes = label_to_rois(
-        label_img=label_img,
-        z_slice=effective_z,
-        channel=channel,
-        timepoint=timepoint,
-        is_volumetric=is_volumetric,
-        patch_offset=patch_offset,
+    common = {
+        "tag": tag,
+        "trainingset_name": trainingset_name,
+        "trainingset_description": trainingset_description,
+        "timepoint": timepoint,
+        "z": z_start if is_volumetric else z_slice,
+        "channel": channel,
+        "patch_offset": patch_offset,
+    }
+    label_id = upload_label_file(
+        conn,
+        image_id,
+        label_img,
+        local_name=os.path.basename(annotation_file),
+        **common,
     )
-    print(f"Created {len(shapes)} ROI shapes from labels")
+    roi_id = upload_label_rois(
+        conn, image_id, label_img, is_volumetric=bool(is_volumetric), **common
+    )
+    return label_id, roi_id
 
-    # Upload label file as attachment
-    print("Step 3: Uploading label file as attachment")
 
-    # Description: the set's tag first (so the upload can be traced to its
-    # table), then the training set and the plane the labels belong to.
-    desc_parts = [tag] if tag else []
-    if trainingset_description:
-        desc_parts.append(trainingset_description)
-    for key, value in (
-        ("t", timepoint),
-        ("z", z_start if is_volumetric else z_slice),
-        ("c", channel),
-    ):
-        if value is not None:
-            desc_parts.append(f"{key}={value}")
-    if patch_offset:
-        desc_parts.append(f"Patch offset: ({patch_offset[0]}, {patch_offset[1]})")
-    label_desc = " | ".join(desc_parts)
+def _description_tag(description: str) -> str:
+    """The tag an upload's description starts with ("" if none)."""
+    return description.split(" | ", 1)[0].strip()
 
-    # The uploaded file is written losslessly compressed (label images compress
-    # well) and named after the training set and annotation, so label files of
-    # different sets on the same image can be told apart in OMERO.
+
+def find_tagged(conn, image_id: int, tag: str) -> tuple[list[int], list[int]]:
+    """Label files and ROIs on an image whose description carries exactly ``tag``.
+
+    Returns:
+        ``(label_ids, roi_ids)``, each sorted.
+    """
+    labels, rois = _tagged_on_image(conn, int(image_id))
+    return (
+        sorted(i for i, t in labels if t == tag),
+        sorted(i for i, t in rois if t == tag),
+    )
+
+
+def download_label(conn, label_id: int) -> np.ndarray | None:
+    """Pixels of an uploaded label file, or None if it no longer exists."""
+    if conn.getObject("FileAnnotation", int(label_id)) is None:
+        return None
     with tempfile.TemporaryDirectory() as tmp:
-        upload_path = os.path.join(
-            tmp, _label_file_name(annotation_file, trainingset_name, tag)
+        return np.asarray(
+            tifffile.imread(ezomero.get_file_annotation(conn, int(label_id), tmp))
         )
-        tifffile.imwrite(upload_path, label_img, compression="zlib")
-        file_ann_id = ezomero.post_file_annotation(
-            conn,
-            file_path=upload_path,
-            description=label_desc,
-            ns=LABELS_NS,
-            object_type="Image",
-            object_id=image_id,
-        )
-    print(f"File annotation uploaded with ID: {file_ann_id}")
-
-    # Upload ROI shapes if any were created
-    print("Step 4: Uploading ROI shapes")
-    roi_id = None
-    if shapes:
-        roi_name = f"{trainingset_name}_ROIs" if trainingset_name else "ROIs"
-        roi_description = label_desc  # Use same description as label file
-
-        roi_id = ezomero.post_roi(
-            conn, image_id, shapes, name=roi_name, description=roi_description
-        )
-        print(
-            f"Created {len(shapes)} ROI shapes for image {image_id} with ID: {roi_id}"
-        )
-    else:
-        print(f"No ROI shapes created from {annotation_file}")
-
-    print(f"Uploaded annotations from {annotation_file} to image {image_id}")
-    if patch_offset:
-        print(f"   Patch offset: {patch_offset}")
-    print(f"   File annotation ID: {file_ann_id}")
-    if roi_id:
-        print(f"   ROI ID: {roi_id}")
-
-    return file_ann_id, roi_id
 
 
 def upload_annotation_input_image(

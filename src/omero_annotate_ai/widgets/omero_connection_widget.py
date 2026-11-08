@@ -5,6 +5,7 @@ from typing import Any
 import ipywidgets as widgets
 from IPython.display import clear_output, display
 
+from ..errors import ConnectionFailed
 from ..omero.simple_connection import SimpleOMEROConnection, is_url_host
 
 
@@ -433,17 +434,21 @@ class OMEROConnectionWidget:
                 self._close_existing_connection()
 
                 print("🔌 Creating connection...")
-                self.connection = self.connection_manager.create_connection_from_config(
-                    config
-                )
-
-                if not self.connection:
-                    print("❌ Failed to create connection")
+                try:
+                    self.connection = (
+                        self.connection_manager.create_connection_from_config(config)
+                    )
+                except ConnectionFailed as error:
+                    self.connection = None
+                    print(f"❌ {error}")
                     if config.get("password_from_keychain"):
                         print(
                             "💡 The password came from the keychain and may be "
                             "out of date. Type the current one and connect again."
                         )
+                    return
+                if not self.connection:  # a stand-in manager may return None
+                    print("❌ Failed to create connection")
                     return
 
                 print("✅ Connection created and ready to use!")

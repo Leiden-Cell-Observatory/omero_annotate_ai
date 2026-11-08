@@ -6,7 +6,7 @@ Most people only need the functions below, all importable from the top-level pac
 from omero_annotate_ai import (
     load_config_from_yaml,
     create_default_config,  # configuration
-    create_pipeline,  # run annotation
+    TrainingSet,  # create or open a training set, annotate it
     create_omero_connection_widget,  # Jupyter widgets
     create_workflow_widget,
     create_training_data_widget,
@@ -21,7 +21,7 @@ from omero_annotate_ai import (
 | Page | Contents |
 |---|---|
 | [Configuration](config.md) | `AnnotationConfig` and its sections, loading and saving YAML |
-| [Pipeline](pipeline.md) | `create_pipeline`, `AnnotationPipeline` and its workflow methods |
+| [Training sets](pipeline.md) | `TrainingSet`, sessions, rows, and the deprecated `create_pipeline` |
 | [Widgets](widgets.md) | Jupyter widgets for connecting, configuring and selecting tables |
 | [Training data](training.md) | Preparing training folders, micro-SAM training, BioImage Archive export |
 | [OMERO helpers](omero.md) | Connections, tracking tables, downloading configs |

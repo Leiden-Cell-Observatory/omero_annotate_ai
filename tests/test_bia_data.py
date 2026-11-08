@@ -11,11 +11,11 @@ import pytest
 from tifffile import imread, imwrite
 
 from omero_annotate_ai.core.annotation_config import (
-    ImageAnnotation,
     create_default_config,
 )
-from omero_annotate_ai.core.mifa_export import build_bia_file_lists
+from omero_annotate_ai.core.mifa_export import build_bia_file_lists, save_bia_package
 from omero_annotate_ai.processing.bia_data import prepare_bia_data_from_table
+from omero_annotate_ai.rows import Row, rows_to_frame
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -93,11 +93,9 @@ def mock_ezomero(plane):
         yield ez
 
 
-def build_table(annotations, config=None):
-    """OMERO table DataFrame for the given ImageAnnotations (via to_dataframe)."""
-    source = config or create_default_config()
-    source.annotations = list(annotations)
-    return source.to_dataframe()
+def build_table(annotations):
+    """OMERO table DataFrame for the given Rows."""
+    return rows_to_frame(list(annotations))
 
 
 def annotation(**overrides):
@@ -112,7 +110,11 @@ def annotation(**overrides):
         label_id=555,
     )
     fields.update(overrides)
-    return ImageAnnotation(**fields)
+    fields.setdefault(
+        "annotation_id",
+        f"{fields['image_id']}_{fields['timepoint']}_{fields['z_slice']}",
+    )
+    return Row(**fields)
 
 
 # --------------------------------------------------------------------------- #
@@ -132,12 +134,11 @@ def test_writes_input_and_mask_with_annotation_id_names(
     )
     mock_ezomero.get_table.return_value = table
 
-    config = create_default_config()
-    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     mock_ezomero.get_table.assert_called_once_with(mock_conn, 42)
 
-    ids = [ann.annotation_id for ann in config.annotations]
+    ids = [ann.annotation_id for ann in stats["rows"]]
     assert ids == ["101_0_0", "102_0_3"]  # pipeline scheme: {image}_{t}_{z}
     for annotation_id in ids:
         assert (tmp_path / "annotation_input" / f"{annotation_id}.tif").exists()
@@ -164,9 +165,9 @@ def test_separate_channels_still_write_the_annotated_channel(
 
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
-    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
-    annotation_id = config.annotations[0].annotation_id
+    annotation_id = stats["rows"][0].annotation_id
     assert (tmp_path / "annotation_input" / f"{annotation_id}.tif").exists()
     assert not (tmp_path / "model_input").exists()
     assert (tmp_path / "annotation_output" / f"{annotation_id}_mask.tif").exists()
@@ -187,13 +188,10 @@ def test_uint16_image_is_written_at_native_dtype(
 
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
-    config = create_default_config()
-    prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     written = imread(
-        str(
-            tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif"
-        )
+        str(tmp_path / "annotation_input" / f"{stats['rows'][0].annotation_id}.tif")
     )
     assert written.dtype == np.uint16
     assert written.max() == plane.max()
@@ -218,9 +216,8 @@ def test_unprocessed_and_maskless_rows_are_skipped_and_counted(
     )
     mock_ezomero.get_table.return_value = table
 
-    config = create_default_config()
     with pytest.warns(UserWarning):
-        stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+        stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     assert stats["n_images"] == 1
     assert stats["n_masks"] == 1
@@ -251,16 +248,16 @@ def test_skipped_rows_are_pruned_from_the_config(mock_conn, mock_ezomero, tmp_pa
 
     config = create_default_config()
     with pytest.warns(UserWarning):
-        prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+        stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
-    assert [ann.annotation_id for ann in config.annotations] == ["101_0_0"]
+    rows = stats["rows"]
+    assert [ann.annotation_id for ann in rows] == ["101_0_0"]
 
     # Package it: every path the file lists reference must exist inside the bundle.
-    config.output.output_directory = tmp_path
     bundle = tmp_path / "submission"
-    result = config.save_bia_package(bundle, accession="S-BIAD999")
+    result = save_bia_package(config, rows, tmp_path, bundle, accession="S-BIAD999")
 
-    images_df, annotations_df = build_bia_file_lists(config)
+    images_df, annotations_df = build_bia_file_lists(rows)
     referenced = (
         set(images_df["Files"])
         | set(annotations_df["Files"])
@@ -277,12 +274,11 @@ def test_stats_dict_keys_and_counts(mock_conn, mock_ezomero, tmp_path):
         [annotation(image_id=101, label_id=555), annotation(image_id=102, label_id=556)]
     )
 
-    stats = prepare_bia_data_from_table(
-        mock_conn, 42, tmp_path, config=create_default_config()
-    )
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     assert set(stats) == {
         "output_dir",
+        "rows",
         "n_images",
         "n_masks",
         "skipped_unprocessed",
@@ -325,8 +321,7 @@ def test_patch_row_requests_patch_coords_from_ezomero(
     )
     mock_ezomero.get_table.return_value = build_table([patch_row])
 
-    config = create_default_config()
-    prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     # Only the pixel fetch; a patch needs no no_pixels dimension lookup.
     assert mock_ezomero.get_image.call_count == 1
@@ -336,9 +331,7 @@ def test_patch_row_requests_patch_coords_from_ezomero(
     assert kwargs["xyzct"] is True
 
     written = imread(
-        str(
-            tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif"
-        )
+        str(tmp_path / "annotation_input" / f"{stats['rows'][0].annotation_id}.tif")
     )
     assert written.shape == (3, 4)  # (height, width)
     assert written.dtype == np.uint16
@@ -347,8 +340,7 @@ def test_patch_row_requests_patch_coords_from_ezomero(
 def test_full_plane_row_requests_image_size(mock_conn, mock_ezomero, tmp_path):
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
-    config = create_default_config()
-    prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     # First call resolves the size (no_pixels), second fetches the plane.
     assert mock_ezomero.get_image.call_count == 2
@@ -357,9 +349,7 @@ def test_full_plane_row_requests_image_size(mock_conn, mock_ezomero, tmp_path):
     assert kwargs["axis_lengths"] == (SIZE_X, SIZE_Y, 1, 1, 1)
 
     written = imread(
-        str(
-            tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif"
-        )
+        str(tmp_path / "annotation_input" / f"{stats['rows'][0].annotation_id}.tif")
     )
     assert written.shape == (SIZE_Y, SIZE_X)
 
@@ -370,11 +360,9 @@ def test_volumetric_row_writes_a_stack(mock_conn, mock_ezomero, tmp_path):
     )
     mock_ezomero.get_table.return_value = build_table([volume])
 
-    config = create_default_config()
-    prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
-    annotation_id = config.annotations[0].annotation_id
-    assert annotation_id == "101_0_3d"
+    annotation_id = stats["rows"][0].annotation_id
     written = imread(str(tmp_path / "annotation_input" / f"{annotation_id}.tif"))
     assert written.shape == (3, SIZE_Y, SIZE_X)  # (z, y, x)
     assert written.dtype == np.uint16
@@ -383,8 +371,7 @@ def test_volumetric_row_writes_a_stack(mock_conn, mock_ezomero, tmp_path):
 def test_mask_is_downloaded_from_the_row_label_id(mock_conn, mock_ezomero, tmp_path):
     mock_ezomero.get_table.return_value = build_table([annotation(label_id=777)])
 
-    config = create_default_config()
-    prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=config)
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     args, _ = mock_ezomero.get_file_annotation.call_args
     assert args[0] is mock_conn
@@ -394,7 +381,7 @@ def test_mask_is_downloaded_from_the_row_label_id(mock_conn, mock_ezomero, tmp_p
         str(
             tmp_path
             / "annotation_output"
-            / f"{config.annotations[0].annotation_id}_mask.tif"
+            / f"{stats['rows'][0].annotation_id}_mask.tif"
         )
     )
     assert mask.dtype == np.uint16
@@ -415,15 +402,12 @@ def test_clean_existing_clears_previous_data_dirs(mock_conn, mock_ezomero, tmp_p
 
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
-    config = create_default_config()
-    prepare_bia_data_from_table(
-        mock_conn, 42, tmp_path, config=config, clean_existing=True
-    )
+    stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path, clean_existing=True)
 
     assert not (tmp_path / "annotation_input" / "stale.tif").exists()
     assert not (tmp_path / "annotation_output" / "stale.tif").exists()
     assert (
-        tmp_path / "annotation_input" / f"{config.annotations[0].annotation_id}.tif"
+        tmp_path / "annotation_input" / f"{stats['rows'][0].annotation_id}.tif"
     ).exists()
 
 
@@ -436,6 +420,6 @@ def test_without_clean_existing_previous_files_survive(
 
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
-    prepare_bia_data_from_table(mock_conn, 42, tmp_path, config=create_default_config())
+    prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     assert stale.exists()

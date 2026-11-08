@@ -6,55 +6,74 @@ set.
 
 ## Resume an interrupted run
 
-After every batch the pipeline saves its progress to
-
-```text
-<working directory>/annotation_config_<name>.yaml
-```
-
-This copy contains the config **and** the list of annotation units with a `processed`
-flag for each. Load it and start the same workflow again; only the unfinished units are
-opened, with the same images and patches as before:
+A training set tracked in OMERO is identified by its tracking table's ID, which never
+changes. To continue it, open it by that ID:
 
 ```python
-from omero_annotate_ai import load_config_from_yaml, create_pipeline
+from omero_annotate_ai import TrainingSet
 
-config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()  # or run_cp_workflow()
+ts = TrainingSet.open(12345, conn)  # the table ID, shown in OMERO.web on the container
+ts.annotate(note="second session")
 ```
 
-!!! warning "Upload mode: clear micro-SAM's working folder first"
-    Before resuming in upload mode, empty the `annotations/` subfolder inside your
-    working directory. micro-SAM skips images whose `seg_*.tif` file already exists, so
-    leftovers from an earlier session can end up attached to the wrong images.
+The units are read back from the table and only the unfinished ones are opened, with
+the same images and patches as before. A local set (`storage: local`) is opened by its
+folder: `TrainingSet.open("~/omero_annotate_ai/local/<id>_<name>")`. In the widget,
+choose *Continue Existing* on the table instead.
 
-!!! note "Use the saved file, not the 'resume from table' switch"
-    The *Resume from existing table* option in the widget and `resume_from_table: true`
-    in the YAML do not reliably find the existing table in this version; you may get a
-    fresh random selection and a second table with the same name. Reloading the saved
-    YAML is the dependable way to continue.
+On an opened set you can change only what does not alter the existing rows:
 
-### Resume on another computer
+- more images: `ts.extend(train_n=10, validate_n=4)` adds images to the same table
+  (counts can only be raised);
+- the model and batch size of a session: `ts.annotate(model="vit_l_lm", batch_size=4)`.
 
-The YAML is also attached to the OMERO container, one per tracking table. To continue
-elsewhere, fetch it by the table's ID and sync the progress from the tracking table:
+### Session notes
+
+Every session is recorded in the set's `config.yaml` (and its copy on OMERO): who
+annotated, when, how many units, and a free-text note.
 
 ```python
-from omero_annotate_ai.omero.omero_functions import (
-    find_annotation_config_for_table,
-    sync_omero_table_to_config,
-)
-
-config = find_annotation_config_for_table(conn, table_id)
-config.config_file_path = None  # save progress in the working directory instead
-pipeline = create_pipeline(config, conn)
-sync_omero_table_to_config(conn, table_id, pipeline.config)
-pipeline.set_table_id(table_id)
-pipeline.run_full_micro_sam_workflow()
+ts.annotate(note="nuclei only; small debris skipped")
+ts.set_session_note(2, "image 14 needs another look")  # add or change a note later
+print(ts.config.sessions)
 ```
 
-The table ID is shown in OMERO.web on the container's attachments.
+A session that stopped without finishing (napari closed, kernel died) is marked
+`interrupted` the next time the set is opened.
+
+### What resuming repairs
+
+Each mask is saved in a fixed order: moved into the set's folder, recorded in the local
+`tracking_table.csv`, then uploaded (label file, then ROI) with a tag naming the table
+and unit, and finally written to the OMERO table. If a run stops halfway - napari
+closed, kernel killed, network gone - resuming compares the OMERO table, the local copy
+and the mask files for every unit and finishes the job:
+
+- uploads the table never recorded are found by their tag and adopted, never uploaded
+  a second time;
+- masks saved locally but not uploaded are uploaded;
+- a unit whose upload failed is tried again (the error is kept in the local
+  `tracking_table.csv`, column `error`).
+
+The local folder can even be lost: the uploads carry their tag, so resuming still
+finds them.
+
+### Pixel checks
+
+Every unit records a SHA-256 digest of its pixels: `input_digest` for the image you
+annotated and `mask_digest` for your mask. Resuming warns when a local file no longer
+matches (for example a mask edited after upload), and
+`prepare_training_data_from_table` stops with an `IntegrityError` if a label file on
+OMERO changed after it was annotated. Nothing is overwritten silently.
+
+If a mask in your folder and its upload on OMERO differ, the unit is marked
+`needs review` and left out of new sessions. Decide which one is right:
+
+- delete the local mask (`annotation_output/<unit id>_mask.tif`) to accept the one on
+  OMERO, or
+- delete the label file on OMERO to keep your local mask,
+
+then resume the set again.
 
 ## Repeat a run from a YAML file
 
@@ -68,25 +87,21 @@ from omero_annotate_ai.core.annotation_config import get_config_template
 print(get_config_template())
 ```
 
-Remove the `annotations:` section if you copy a saved progress file, change `name` and
-the `omero` container, then:
+If you copy a set's `config.yaml`, remove its `identity` and `sessions` sections, change
+`name` and the `omero` container, then:
 
 ```python
-config = load_config_from_yaml("my_run.yaml")
-config.config_file_path = (
-    None  # keep my_run.yaml unchanged; progress goes to the working directory
-)
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+from omero_annotate_ai import TrainingSet, load_config_from_yaml
+
+config = load_config_from_yaml("my_run.yaml")  # the file itself is not changed
+ts = TrainingSet.create(config, conn)
+ts.annotate()
 ```
 
-!!! tip "Check what was read"
-    Keys that the package does not know are silently ignored, so a typo means a setting
-    is not applied. After loading, print what matters:
-    ```python
-    print(config.spatial_coverage)
-    print(config.training)
-    ```
+!!! tip "Typos are errors"
+    Unknown keys are refused when the file is loaded, and keys from older versions name
+    their replacement (for example `workflow.read_only_mode` → `storage: local`), so a
+    misspelt setting never goes unnoticed.
 
 Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-from-yaml.ipynb)
 · [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-from-yaml.py)

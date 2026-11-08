@@ -62,25 +62,12 @@ def test_processing_functions_import():
     assert hasattr(image_functions, "label_to_rois")
 
 
-def test_pipeline_creation():
-    """
-    Tests that the AnnotationPipeline can be created with a mock connection.
-    This test ensures that the `AnnotationPipeline` can be instantiated correctly
-    with a mock OMERO connection.
-    """
-    from unittest.mock import Mock
+def test_public_api():
+    """The core is importable from the package top level."""
+    import omero_annotate_ai
 
-    from omero_annotate_ai.core.annotation_config import create_default_config
-    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-
-    config = create_default_config()
-    config.omero.container_id = 123  # Set required field
-
-    # Create pipeline with mock connection (pipeline requires non-None connection)
-    mock_conn = Mock()
-    pipeline = AnnotationPipeline(config, conn=mock_conn)
-    assert pipeline.config == config
-    assert pipeline.conn == mock_conn
+    for name in ("TrainingSet", "Row", "AnnotationConfig", "create_pipeline"):
+        assert hasattr(omero_annotate_ai, name), name
 
 
 def test_optional_dependencies():

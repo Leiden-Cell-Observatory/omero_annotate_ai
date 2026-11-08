@@ -117,8 +117,6 @@ max-line-length = 100
 "src/omero_annotate_ai/widgets/**" = ["T201"]
 ".github/scripts/**" = ["T201"]
 # legacy, rewritten in 0.5.0 core PRs
-"src/omero_annotate_ai/core/annotation_pipeline.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
-"src/omero_annotate_ai/core/annotation_config.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 "src/omero_annotate_ai/widgets/workflow_widget.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 "src/omero_annotate_ai/omero/omero_functions.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 
@@ -130,8 +128,6 @@ reportMissingImports = "warning"
 reportMissingModuleSource = "none"
 # legacy, rewritten in 0.5.0 core PRs: analysed for imports, diagnostics not reported.
 ignore = [
-    "src/omero_annotate_ai/core/annotation_pipeline.py",
-    "src/omero_annotate_ai/core/annotation_config.py",
     "src/omero_annotate_ai/widgets/workflow_widget.py",
     "src/omero_annotate_ai/omero/omero_functions.py",
 ]
@@ -139,9 +135,11 @@ ignore = [
 strict = [
     "src/omero_annotate_ai/planning.py",
     "src/omero_annotate_ai/annotators.py",
+    "src/omero_annotate_ai/bundle.py",
     "src/omero_annotate_ai/errors.py",
-    # The rest of the napari plugin is basic: Qt (qtpy) and micro-SAM ship no types.
-    "src/omero_annotate_ai/napari_plugin/_core.py",
+    "src/omero_annotate_ai/events.py",
+    "src/omero_annotate_ai/session.py",
+    "src/omero_annotate_ai/reconcile.py",
 ]
 
 [tool.pytest.ini_options]
