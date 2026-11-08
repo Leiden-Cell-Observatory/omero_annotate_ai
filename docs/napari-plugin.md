@@ -1,10 +1,9 @@
 # napari plugin (experimental)
 
 !!! warning "Experimental"
-    The plugin works today only with a built-in **demo training set** of synthetic
-    images. Opening training sets on OMERO or from a local folder arrives with the
-    0.5.0 core (the step-by-step training-set API). Until then, create and annotate
-    real training sets with the [notebooks](notebooks.md).
+    The plugin opens and annotates existing training sets (on OMERO or in a local
+    folder). Create a new training set with the [notebooks](notebooks.md) or
+    `TrainingSet.create` first; the plugin cannot create sets yet.
 
 The plugin lets you annotate a training set with [micro-SAM](https://github.com/computational-cell-analytics/micro-sam)
 inside your own napari window, one image at a time, without leaving napari.
@@ -23,12 +22,15 @@ micro-SAM's annotator directly.
 
 ## Use
 
-1. **Connect** (optional for the demo): host, user and password. Tick *Remember
-   password in keychain* to store it in your system keychain. The connection runs in
-   the background, so napari stays responsive.
-2. **Pick a training set.** *Open demo set* adds a small set of synthetic images. The
-   summary shows progress per split and the last sessions with their notes.
-3. **Annotate.** Click *Annotate*. The image appears with micro-SAM's annotator docked
+1. **Pick a training set.** Sets that have a folder in your home folder
+   (`~/omero_annotate_ai`, or `$OMERO_ANNOTATE_AI_HOME`) are listed straight away;
+   *Open folder…* opens any other set folder. For sets on OMERO, **connect** first
+   (host, user, password; tick *Remember password in keychain* to store it), choose
+   the container type and ID, and click *List sets*. Connecting runs in the
+   background, so napari stays responsive. The summary shows progress per split and
+   the last sessions with their notes; listing never changes anything.
+2. **Annotate.** Click *Annotate*. The set is opened, and repaired first if an earlier
+   run was interrupted (*Cancel* stops that). The image appears with micro-SAM's annotator docked
    next to it; the image embedding is computed in the background first (a progress
    bar shows while it runs). Segment with micro-SAM's usual keys, commit the objects,
    then:
@@ -37,15 +39,20 @@ micro-SAM's annotator directly.
       purpose only.
     - **Skip** (`Shift-N`) leaves the image for a later session.
     - **Prev** goes back to an earlier image of the current batch that is not saved yet.
-4. **Finish.** Add a short note about the session (for example *"nuclei only, skipped
+3. **Finish.** Add a short note about the session (for example *"nuclei only, skipped
    small debris"*) and click *Finish session*. The note is stored with the session.
 
-Each accepted image is saved straight away; closing napari loses at most the image you
-are working on.
+Each accepted image is saved straight away (and, for OMERO sets, uploaded with its
+ROIs, tagged with the set); the OMERO config is updated once, when you finish.
+Quitting napari mid-session records the session as *interrupted*; skipped and
+unsaved images stay pending for the next session.
 
 ## Known limits
 
-- 2D only. 3D, creating a new training set and adding images to a set come later.
+- 2D only: the plugin refuses 3D sets. Creating a set and adding images to a set come
+  later (use `TrainingSet.create` / `extend`).
+- Images that need review (their local and uploaded masks differ) are skipped; resolve
+  them as described in [Resume and repeat](tutorials/resume-and-repeat.md).
 - micro-SAM's own annotator widgets share one state per napari window. Do not open
   micro-SAM's annotators from the Plugins menu while this plugin is annotating.
 - The plugin uses the layer names `image` and `committed_objects`; it refuses to start
