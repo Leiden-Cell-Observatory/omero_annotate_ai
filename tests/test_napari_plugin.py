@@ -19,19 +19,31 @@ pytestmark = pytest.mark.napari
 
 
 class FakeController:
-    """Stands in for micro-SAM's annotator: the test sets the mask the user 'drew'."""
+    """Stands in for micro-SAM's annotator: the test edits the mask the user 'drew'.
+
+    Like the real viewer it keeps the array it is given (no copy) and the test edits
+    it in place, so a widget that hands over its saved mask would see it change.
+    """
 
     def __init__(self) -> None:
         self.shown: list[np.ndarray] = []
         self.initial: list[np.ndarray | None] = []
         self.mask = np.zeros((16, 16), np.uint32)
         self.torn_down = False
+        self.conflict: str | None = None
+
+    def check_layers(self) -> None:
+        # A fresh exception each time: a stored one keeps its traceback (and with it
+        # the widget) in a reference cycle that the GC may free off the GUI thread.
+        if self.conflict is not None:
+            from omero_annotate_ai.napari_plugin._controller import LayerConflict
+
+            raise LayerConflict(self.conflict)
 
     def show(self, pixels, embedding, model_type, mask=None) -> None:
         self.shown.append(pixels)
-        self.initial.append(mask)
-        if mask is not None:  # micro-SAM shows the saved objects to correct
-            self.mask = mask.copy()
+        self.initial.append(None if mask is None else mask.copy())
+        self.mask = mask if mask is not None else np.zeros(pixels.shape, np.uint32)
 
     def current_mask(self) -> np.ndarray:
         return self.mask.copy()
@@ -256,6 +268,153 @@ class TestDock:
         assert summarize(ts.bundle_dir).sessions[-1].status == "interrupted"
         assert (omero.tables[ts.table_id]["claimed_by"].fillna("") == "").all()
 
+    def test_finish_stops_accepting_and_handing_out_batches(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, viewer = make_dock(home, source)
+        _start(widget, qtbot)
+        controller.mask[2:6, 2:6] = 1
+        widget.finish_button.click()
+        assert "N" not in {str(k) for k in viewer.keymap}  # unbound at once
+        widget._accept()  # a late key press or click does nothing
+        widget._skip()
+        widget._advance()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
+
+        summary = summarize(ts.bundle_dir)
+        assert summary.progress["training"] == (0, 3)
+        assert summary.sessions[-1].status == "finished"
+        assert not list((ts.bundle_dir / "annotation_output").glob("*_mask.tif"))
+
+    def test_a_failing_first_batch_interrupts_the_session(
+        self, tmp_path, make_dock, qtbot, monkeypatch
+    ):
+        from omero_annotate_ai.session import AnnotationSession
+
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        widget, _, _ = make_dock(home, source, omero, conn=omero.conn())
+
+        def broken(self):
+            raise OSError("image server unreachable")
+
+        monkeypatch.setattr(AnnotationSession, "next_batch", broken)
+        widget.open_button.click()
+        assert not widget.folder_button.isEnabled()  # nothing else starts meanwhile
+        assert not widget.review.isEnabled()
+        qtbot.waitUntil(lambda: "unreachable" in widget.status.text(), timeout=5000)
+
+        assert summarize(ts.bundle_dir).sessions[-1].status == "interrupted"
+        assert widget.open_button.isEnabled() and widget.folder_button.isEnabled()
+        assert widget.review.isEnabled() and widget._session is None
+
+    def test_a_layer_conflict_is_reported_before_anything_is_claimed(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        widget, controller, _ = make_dock(home, source, omero, conn=omero.conn())
+        controller.conflict = "Rename or remove the layers 'image'"
+        widget.open_button.click()
+
+        assert "Rename or remove" in widget.status.text()
+        assert summarize(ts.bundle_dir).sessions == ()
+        assert (omero.tables[ts.table_id]["claimed_by"].fillna("") == "").all()
+
+    def test_review_edits_never_change_the_saved_mask(self, tmp_path, make_dock, qtbot):
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        annotate(ts)
+        widget, controller, _ = make_dock(home, source, omero, conn=omero.conn())
+        widget.review.setChecked(True)
+        _start(widget, qtbot)
+        saved = controller.initial[-1]
+        assert saved is not None
+        controller.mask[:] = 0  # edits in the viewer, not accepted
+        widget.skip_button.click()
+        qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+        widget.prev_button.click()  # back to the first image: its saved mask again
+        qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+        np.testing.assert_array_equal(controller.initial[-1], saved)
+        widget.accept_button.click()  # unchanged: the upload stays
+        widget.finish_button.click()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
+        assert summarize(ts.bundle_dir).sessions[-1].n_annotated == 0
+
+    def test_an_image_that_fails_to_show_can_be_skipped(
+        self, tmp_path, make_dock, qtbot
+    ):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("embedding failed")
+
+        controller.show = broken
+        widget.open_button.click()
+        qtbot.waitUntil(
+            lambda: "embedding failed" in widget.status.text(), timeout=5000
+        )
+        assert widget.skip_button.isEnabled() and not widget.accept_button.isEnabled()
+        widget.skip_button.click()
+        assert widget._cursor == 1
+
+    def test_closing_the_window_is_ignored_when_the_close_is_cancelled(
+        self, tmp_path, make_dock, qtbot
+    ):
+        from qtpy.QtWidgets import QMainWindow
+
+        class AskingWindow(QMainWindow):  # napari asks; here the user says "no"
+            def closeEvent(self, event):
+                event.ignore()
+
+        ts, source, _, home = _make_set(tmp_path, "local")
+        widget, _, _ = make_dock(home, source)
+        window = AskingWindow()
+        window.setCentralWidget(widget)
+        window.show()
+        _start(widget, qtbot)
+        window.close()
+        qtbot.wait(50)  # the deferred check runs
+        assert widget._session is not None
+        assert summarize(ts.bundle_dir).sessions[-1].status == "open"
+
+    def test_removing_the_dock_ends_the_session(self, tmp_path, make_dock, qtbot):
+        from qtpy.QtWidgets import QWidget
+
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        widget, controller, viewer = make_dock(home, source, omero, conn=omero.conn())
+        holder = QWidget()  # napari's dock widget
+        widget.setParent(holder)
+        _start(widget, qtbot)
+        widget.setParent(None)  # napari removes the dock
+        assert summarize(ts.bundle_dir).sessions[-1].status == "interrupted"
+        assert (omero.tables[ts.table_id]["claimed_by"].fillna("") == "").all()
+        assert controller.torn_down
+        assert "N" not in {str(k) for k in viewer.keymap}
+
+    def test_deleting_the_dock_ends_the_session(self, tmp_path, qtbot):
+        from napari.components import ViewerModel
+        from qtpy.QtWidgets import QWidget
+
+        from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
+
+        ts, source, _, home = _make_set(tmp_path, "local")
+        holder = QWidget()
+        widget = OMEROAnnotateDock(
+            ViewerModel(),
+            home=home,
+            core_options={"image_source": source},
+            controller=FakeController(),  # type: ignore[arg-type]
+            embedder=InstantEmbedder(),  # type: ignore[arg-type]
+        )
+        widget.setParent(holder)
+        qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=5000)
+        _start(widget, qtbot)
+        holder.deleteLater()  # napari deletes the dock with the widget in it
+        qtbot.waitUntil(
+            lambda: summarize(ts.bundle_dir).sessions[-1].status == "interrupted",
+            timeout=5000,
+        )
+
     def test_failed_connection_is_reported(
         self, tmp_path, make_dock, qtbot, monkeypatch
     ):
@@ -386,13 +545,47 @@ class TestMicroSamContract:
             "decoder",
         ):
             assert name in params, f"AnnotatorState.initialize_predictor lost '{name}'"
+        for name in ("skip_load", "use_cli"):
+            assert name in params, f"AnnotatorState.initialize_predictor lost '{name}'"
         for name in ("image_shape", "amg", "annotator"):
             assert hasattr(AnnotatorState(), name), f"AnnotatorState lost '{name}'"
+        from micro_sam.instance_segmentation import (
+            AMGBase,
+            InstanceSegmentationWithDecoder,
+        )
+
+        assert callable(AMGBase.clear_state)
+        assert callable(InstanceSegmentationWithDecoder.clear_state)
         assert "reset_state" in inspect.signature(Annotator2d.__init__).parameters
         assert (
             "segmentation_result"
             in inspect.signature(_AnnotatorBase._update_image).parameters
         )
+
+    def test_other_micro_sam_versions_are_refused(self, monkeypatch):
+        import micro_sam
+
+        from omero_annotate_ai.napari_plugin._controller import (
+            check_micro_sam_version,
+        )
+
+        check_micro_sam_version()  # the installed one is supported
+        monkeypatch.setattr(micro_sam, "__version__", "1.9.0")
+        with pytest.raises(RuntimeError, match="needs micro-SAM 1.8"):
+            check_micro_sam_version()
+
+    def test_layer_names_already_in_the_viewer_are_a_conflict(self):
+        from napari.components import ViewerModel
+
+        from omero_annotate_ai.napari_plugin._controller import (
+            LayerConflict,
+            MicroSamController,
+        )
+
+        viewer = ViewerModel()
+        viewer.add_labels(np.zeros((8, 8), np.uint32), name="committed_objects")
+        with pytest.raises(LayerConflict):
+            MicroSamController(viewer).check_layers()
 
     @pytest.mark.slow
     def test_controller_shows_an_image_and_reads_the_mask(
@@ -417,10 +610,27 @@ class TestMicroSamContract:
             embedder.compute(image, path, "vit_b_lm", results.append, pytest.fail)
         qtbot.waitUntil(lambda: len(results) == 2, timeout=600_000)
 
+        # A saved embedding is loaded, never computed again.
+        predictor = results[0].predictor
+
+        def no_recompute():
+            raise AssertionError("embedding computed again")
+
+        reset, predictor.reset_image = predictor.reset_image, no_recompute
+        util.precompute_image_embeddings(
+            predictor=predictor,
+            input_=images[0],
+            save_path=str(results[0].path),
+            ndim=2,
+            verbose=False,
+        )
+        predictor.reset_image = reset
+
         viewer.add_image(images[1], name="mine")  # the user's own layer
         controller = MicroSamController(viewer)
         controller.show(images[0], results[0], "vit_b_lm")
-        assert MASK_LAYER in viewer.layers
+        assert MASK_LAYER in viewer.layers and "image" in viewer.layers
+        viewer.add_image(images[0], name="added mid-session")
         viewer.layers[MASK_LAYER].data[5:9, 5:9] = 3
         assert controller.current_mask().max() == 3
         controller.show(images[1], results[1], "vit_b_lm")  # fresh empty mask
@@ -430,7 +640,7 @@ class TestMicroSamContract:
         controller.show(images[0], results[0], "vit_b_lm", saved)  # a review
         np.testing.assert_array_equal(controller.current_mask(), saved)
         controller.teardown()
-        assert [layer.name for layer in viewer.layers] == ["mine"]
+        assert [layer.name for layer in viewer.layers] == ["mine", "added mid-session"]
         controller.show(images[1], results[1], "vit_b_lm")  # a next session starts
         controller.teardown()
 

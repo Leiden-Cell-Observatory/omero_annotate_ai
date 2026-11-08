@@ -18,7 +18,8 @@ With pixi, the default environment of this repository already contains napari an
 micro-SAM. Open napari and choose **Plugins → OMERO Annotate AI → Annotate training set**.
 
 The `napari` extra pins micro-SAM to `>=1.8,<1.9`, because the plugin drives
-micro-SAM's annotator directly.
+micro-SAM's annotator directly; with another micro-SAM version the plugin stops with a
+message naming the one it needs.
 
 ## Use
 
@@ -41,8 +42,12 @@ micro-SAM's annotator directly.
     - **Skip** (`Shift-N`) leaves the image for a later session.
     - **Prev** goes back to an earlier image of the current batch that is not saved yet.
 
+    If an image cannot be shown (for example its embedding fails), the error is shown
+    and **Skip** / **Prev** still work.
+
     **2b. Review.** With *Review annotated images* ticked, the annotated images come
-    back one by one with their saved objects already committed. Correct them and
+    back one by one with their saved objects already committed (going back with
+    **Prev** shows the saved mask again, not unaccepted edits). Correct them and
     press **Accept**: a changed mask replaces the label file and ROI on OMERO (the new
     ones are uploaded before the old ones are deleted); an image accepted unchanged
     keeps its upload. The progress line counts the revised images.
@@ -51,9 +56,10 @@ micro-SAM's annotator directly.
 
 Each accepted image is saved straight away (and, for OMERO sets, uploaded with its
 ROIs, tagged with the set); the OMERO config is updated once, when you finish.
-Closing the napari window (or quitting napari) mid-session records the session as
-*interrupted* and releases its images; skipped and unsaved images stay pending for the
-next session.
+Closing the napari window (once you confirm), quitting napari or closing the plugin's
+dock mid-session records the session as *interrupted* and releases its images; skipped
+and unsaved images stay pending for the next session. Once you click *Finish session*,
+no further image is shown or saved.
 
 **Several computers.** While a batch is shown its images are claimed on the OMERO
 table, so another computer annotating the same set skips them; the plugin says how
@@ -71,5 +77,6 @@ uploaded again: your mask is kept in the set folder and the plugin names the fil
 - micro-SAM's own annotator widgets share one state per napari window. Do not open
   micro-SAM's annotators from the Plugins menu while this plugin is annotating.
 - The plugin uses the layer names `image` and `committed_objects`; it refuses to start
-  if your viewer already has layers with those names. Finishing a session removes the
-  layers it added (your masks are saved by then); your own layers stay.
+  if your viewer already has layers with those names, before anything is claimed.
+  Finishing a session removes the layers the plugin and micro-SAM added (your masks
+  are saved by then); layers you added, also during the session, stay.

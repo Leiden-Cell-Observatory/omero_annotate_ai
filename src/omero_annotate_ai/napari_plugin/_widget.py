@@ -9,6 +9,8 @@ No ``from __future__ import annotations`` here: npe2 reads the ``napari.Viewer``
 annotation of ``__init__`` at runtime to inject the viewer.
 """
 
+import contextlib
+import functools
 import html
 import logging
 from collections.abc import Mapping
@@ -18,7 +20,7 @@ from typing import Any
 import napari
 import numpy as np
 import tifffile
-from qtpy.QtCore import QEvent, QObject
+from qtpy.QtCore import QEvent, QObject, QTimer
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -58,7 +60,7 @@ from ..trainingset import (
     list_training_sets,
     summarize,
 )
-from ._controller import MicroSamController
+from ._controller import LayerConflict, MicroSamController
 from ._workers import Embedder, Embedding, EventBridge, Worker
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,48 @@ def _local_sets(home: Path) -> list[tuple[Ref, TrainingSetSummary]]:
     return found
 
 
+class _Live:
+    """State that outlives the Qt widget, so a destroyed dock still ends its session."""
+
+    def __init__(self) -> None:
+        self.session: AnnotationSession | None = None
+        self.closed = False
+
+
+def _close_dock(
+    live: _Live,
+    io: Worker,
+    compute: Worker,
+    viewer: Any,
+    controller: Any,
+    *_: Any,
+) -> None:
+    """End an open session as interrupted (releasing its claims), unbind the keys,
+    remove micro-SAM's layers and stop the threads. Safe to call more than once and
+    after the widget itself is gone (it touches no widget)."""
+    if live.closed:
+        return
+    live.closed = True
+    session, live.session = live.session, None
+    if session is not None:
+        future = io.run(
+            lambda: session.finish(status="interrupted"), lambda _: None, lambda _: None
+        )
+        try:
+            future.result(timeout=30)
+        except Exception:  # noqa: BLE001 - closing; the next open closes it anyway
+            logger.warning("Could not record the session as interrupted")
+    for key in (ACCEPT_KEY, SKIP_KEY):
+        with contextlib.suppress(Exception):  # the viewer may be closing too
+            viewer.bind_key(key, None, overwrite=True)
+    try:
+        controller.teardown()
+    except Exception:  # noqa: BLE001 - the viewer may be closing too
+        logger.debug("micro-SAM teardown after close failed", exc_info=True)
+    io.shutdown()
+    compute.shutdown()
+
+
 class OMEROAnnotateDock(QWidget):
     """Annotate an omero-annotate-ai training set with micro-SAM in this viewer."""
 
@@ -143,7 +187,7 @@ class OMEROAnnotateDock(QWidget):
         self._sets: list[tuple[Ref, TrainingSetSummary]] = []
         self._cancel_requested = False
 
-        self._session: AnnotationSession | None = None
+        self._live = _Live()
         self._batch: Batch | None = None
         self._cursor = 0
         self._committed: set[int] = set()
@@ -152,6 +196,8 @@ class OMEROAnnotateDock(QWidget):
         self._confirm_empty = False
         self._ready = False
         self._revised = 0
+        self._finishing = False  # no Accept/next batch once Finish was pressed
+        self._docked = False
         self._window: QWidget | None = None  # napari's window, watched for closing
 
         self._pages = QStackedWidget()
@@ -166,7 +212,26 @@ class OMEROAnnotateDock(QWidget):
         app = QApplication.instance()
         if app is not None:  # quitting napari mid-session records it as interrupted
             app.aboutToQuit.connect(self._interrupt)
+        # Closing or removing the dock (napari deletes it) ends the session too.
+        self.destroyed.connect(
+            functools.partial(
+                _close_dock,
+                self._live,
+                self._io,
+                self._compute,
+                napari_viewer,
+                self._controller,
+            )
+        )
         self._refresh()
+
+    @property
+    def _session(self) -> AnnotationSession | None:
+        return self._live.session
+
+    @_session.setter
+    def _session(self, session: AnnotationSession | None) -> None:
+        self._live.session = session
 
     # --- layout -------------------------------------------------------------------
 
@@ -351,7 +416,13 @@ class OMEROAnnotateDock(QWidget):
     def _open(self, ref: Ref, name: str) -> None:
         conn, home, options = self._conn, self._home, self._core_options
         review = self.review.isChecked()
+        try:
+            self._controller.check_layers()  # before anything is claimed
+        except LayerConflict as exc:
+            self._say(str(exc), error=True)
+            return
         self._cancel_requested = False
+        self._finishing = False
         self.notice.clear()  # events from opening (claims held elsewhere) add to it
 
         def open_set() -> Opened:
@@ -370,11 +441,17 @@ class OMEROAnnotateDock(QWidget):
                 done[row.category][0] += int(row.processed)
                 flagged += (row.error or "").startswith(NEEDS_REVIEW)
             session = ts.start_session(review=review)
-            return session, session.next_batch(), done, flagged
+            try:
+                batch = session.next_batch()
+            except BaseException:  # incl. Cancelled: record it, release its claims
+                session.finish(status="interrupted")
+                raise
+            return session, batch, done, flagged
 
         def opened(result: Opened) -> None:
             self._session, batch, self._done, flagged = result
             self._revised = 0
+            self._set_start_controls(True)
             self.cancel_button.setVisible(False)
             self._skipped.clear()
             self._bind_keys(True)
@@ -386,7 +463,7 @@ class OMEROAnnotateDock(QWidget):
                     "one on OMERO, so they are skipped (see Troubleshooting)."
                 )
 
-        self.open_button.setEnabled(False)
+        self._set_start_controls(False)
         self.cancel_button.setVisible(True)
         self._say(f"Opening {name} (repairing it if a run was interrupted)…")
         self._io.run(open_set, opened, self._on_error)
@@ -398,6 +475,8 @@ class OMEROAnnotateDock(QWidget):
     # --- annotate page ------------------------------------------------------------
 
     def _start_batch(self, batch: Batch | None) -> None:
+        if self._finishing:
+            return  # Finish ends every open batch (and releases its claims)
         session = self._session
         if batch is not None and (
             batch.is_volumetric
@@ -453,15 +532,20 @@ class OMEROAnnotateDock(QWidget):
         path = embeddings / f"embedding_{index:05}.zarr"
 
         def ready(embedding: Embedding) -> None:
-            if self._batch is not batch or self._cursor != index:
-                return  # the user moved on meanwhile
+            if self._finishing or self._batch is not batch or self._cursor != index:
+                return  # the user moved on (or finished) meanwhile
             self.busy.setVisible(False)
             try:
-                self._controller.show(
-                    item.pixels, embedding, batch.model_type, item.initial_mask
+                # A copy: the viewer's edits never touch the saved mask, which
+                # stays the reference for "unchanged" and for Prev.
+                start = (
+                    None
+                    if item.initial_mask is None
+                    else item.initial_mask.astype(np.uint32)
                 )
+                self._controller.show(item.pixels, embedding, batch.model_type, start)
             except Exception as exc:  # noqa: BLE001 - shown to the user, logged
-                self._on_error(exc)
+                self._on_image_error(exc)
                 return
             self._ready = True
             self._set_buttons(True)
@@ -472,12 +556,12 @@ class OMEROAnnotateDock(QWidget):
             )
 
         self._embedder.compute(
-            item.pixels, path, batch.model_type, ready, self._on_error
+            item.pixels, path, batch.model_type, ready, self._on_image_error
         )
 
     def _accept(self) -> None:
         batch, session = self._batch, self._session
-        if batch is None or session is None or not self._ready:
+        if batch is None or session is None or not self._ready or self._finishing:
             return
         mask = self._controller.current_mask()
         if not mask.any() and not self._confirm_empty:
@@ -507,13 +591,14 @@ class OMEROAnnotateDock(QWidget):
         self._advance()
 
     def _skip(self) -> None:
-        if self._batch is None or not self._ready:
+        # Also without a shown image: an image whose embedding failed can be skipped.
+        if self._batch is None or self._finishing:
             return
         self._skipped.add(self._batch.items[self._cursor].annotation_id)
         self._advance()
 
     def _prev(self) -> None:
-        if self._batch is None:
+        if self._batch is None or self._finishing:
             return
         earlier = [i for i in range(self._cursor) if i not in self._committed]
         if earlier:
@@ -521,7 +606,7 @@ class OMEROAnnotateDock(QWidget):
 
     def _advance(self) -> None:
         batch, session = self._batch, self._session
-        if batch is None or session is None:
+        if batch is None or session is None or self._finishing:
             return
         todo = [
             i
@@ -547,6 +632,8 @@ class OMEROAnnotateDock(QWidget):
             return
         note = self.note.text().strip() or None
         batch = self._batch
+        self._finishing, self._ready = True, False
+        self._bind_keys(False)
 
         def finish() -> int:
             if batch is not None:
@@ -555,6 +642,7 @@ class OMEROAnnotateDock(QWidget):
 
         def finished(annotated: int) -> None:
             reviewed = self._reviewing
+            self._finishing = False
             self._session = self._batch = None
             self._bind_keys(False)
             self._controller.teardown()
@@ -564,9 +652,14 @@ class OMEROAnnotateDock(QWidget):
             self._say(f"Session finished: {annotated} image(s) {done}.")
             self._refresh()
 
+        def failed(exc: BaseException) -> None:
+            self._finishing = False  # let the user try Finish again
+            self._bind_keys(True)
+            self._on_error(exc)
+
         self._set_buttons(False)
         self.finish_button.setEnabled(False)
-        self._io.run(finish, finished, self._on_error)
+        self._io.run(finish, finished, failed)
 
     def showEvent(self, event: Any) -> None:  # noqa: N802 - Qt's name
         """Once docked, watch napari's window: closing it interrupts the session."""
@@ -577,11 +670,32 @@ class OMEROAnnotateDock(QWidget):
         super().showEvent(event)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        """Closing the viewer window (napari keeps running, e.g. from Jupyter) or
-        quitting records the session as interrupted and releases its claims."""
-        if watched is self._window and event.type() == QEvent.Type.Close:
-            self._interrupt()
+        """Closing the viewer window (napari keeps running, e.g. from Jupyter)
+        records the session as interrupted and releases its claims - once the close
+        really happened: napari may ask for confirmation, and the user may cancel."""
+        if watched is self._window:
+            kind = event.type()
+            if kind == QEvent.Type.Close:
+                QTimer.singleShot(0, self._interrupt_if_window_closed)
+            elif kind == QEvent.Type.Hide and not event.spontaneous():
+                self._interrupt_if_window_closed()  # hidden by close(), not minimised
         return super().eventFilter(watched, event)
+
+    def _interrupt_if_window_closed(self) -> None:
+        if self._window is not None and not self._window.isVisible():
+            self._interrupt()
+
+    def event(self, event: QEvent) -> bool:
+        """Taken out of napari (dock removed): end the session and stop."""
+        if event.type() == QEvent.Type.ParentChange:
+            if self.parent() is not None:
+                self._docked = True
+            elif self._docked:
+                self._shutdown()
+        return super().event(event)
+
+    def _shutdown(self) -> None:
+        _close_dock(self._live, self._io, self._compute, self._viewer, self._controller)
 
     def _interrupt(self) -> None:
         """Record a session still open when napari closes as interrupted.
@@ -605,9 +719,7 @@ class OMEROAnnotateDock(QWidget):
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802 - Qt's name
         """Record an open session as interrupted, then stop the background threads."""
-        self._interrupt()
-        self._io.shutdown()
-        self._compute.shutdown()
+        self._shutdown()
         super().closeEvent(event)
 
     # --- helpers ------------------------------------------------------------------
@@ -675,9 +787,21 @@ class OMEROAnnotateDock(QWidget):
         self.busy.setVisible(False)
         self.cancel_button.setVisible(False)
         self.connect_button.setEnabled(True)
-        self.open_button.setEnabled(bool(self._sets))
+        self._set_start_controls(True)
         self._set_buttons(self._ready)
         self._say(f"{type(exc).__name__}: {exc}", error=True)
+
+    def _on_image_error(self, exc: BaseException) -> None:
+        """The image could not be shown: Skip moves on, Prev goes back."""
+        self._on_error(exc)
+        if self._batch is not None and not self._finishing:
+            self.skip_button.setEnabled(True)
+            self.prev_button.setEnabled(True)
+
+    def _set_start_controls(self, enabled: bool) -> None:
+        self.open_button.setEnabled(enabled and bool(self._sets))
+        self.folder_button.setEnabled(enabled)
+        self.review.setEnabled(enabled)
 
     def _notify(self, text: str) -> None:
         """Add a lasting warning to the annotate page (status messages get replaced)."""

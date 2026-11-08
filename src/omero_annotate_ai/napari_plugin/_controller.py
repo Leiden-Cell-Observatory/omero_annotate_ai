@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 IMAGE_LAYER = "image"
 MASK_LAYER = "committed_objects"
+SUPPORTED_MICRO_SAM = (1, 8)
+"""The micro-SAM minor version whose internals this controller drives."""
 
 
 class LayerConflict(RuntimeError):
@@ -37,7 +39,21 @@ class MicroSamController:
         self._viewer = viewer
         self._annotator: Any = None
         self._dock: Any = None
-        self._before: set[str] = set()  # the user's layers, left alone at teardown
+        self._created: list[Any] = []  # layers this controller or micro-SAM added
+
+    def check_layers(self) -> None:
+        """Raise :class:`LayerConflict` if the viewer holds layers micro-SAM needs.
+
+        Called before a session claims anything; layers of an earlier session of
+        this controller are not a conflict (teardown removes them).
+        """
+        own = {id(layer) for layer in self._created}
+        for name in (IMAGE_LAYER, MASK_LAYER):
+            if name in self._viewer.layers and id(self._viewer.layers[name]) not in own:
+                raise LayerConflict(
+                    f"Rename or remove the layers '{IMAGE_LAYER}' and '{MASK_LAYER}' "
+                    "first: micro-SAM uses these names."
+                )
 
     def show(
         self,
@@ -55,13 +71,9 @@ class MicroSamController:
 
         state = AnnotatorState()
         if self._annotator is None:
-            if IMAGE_LAYER in self._viewer.layers or MASK_LAYER in self._viewer.layers:
-                raise LayerConflict(
-                    f"Rename or remove the layers '{IMAGE_LAYER}' and '{MASK_LAYER}' first: "
-                    "micro-SAM uses these names."
-                )
-            self._before = {layer.name for layer in self._viewer.layers}
-            self._viewer.add_image(pixels, name=IMAGE_LAYER)
+            check_micro_sam_version()
+            self.check_layers()
+            self._created = [self._viewer.add_image(pixels, name=IMAGE_LAYER)]
         else:
             self._viewer.layers[IMAGE_LAYER].data = pixels
             if state.amg is not None:
@@ -81,7 +93,10 @@ class MicroSamController:
         state.image_shape = pixels.shape[:2]
 
         if self._annotator is None:
+            existing = {id(layer) for layer in self._viewer.layers}
             self._annotator = Annotator2d(self._viewer, reset_state=False)
+            # micro-SAM's layers (prompts, current object, committed objects...).
+            self._created += [x for x in self._viewer.layers if id(x) not in existing]
             self._dock = self._viewer.window.add_dock_widget(
                 self._annotator, name="micro-SAM", area="right"
             )
@@ -92,14 +107,29 @@ class MicroSamController:
         return np.asarray(self._viewer.layers[MASK_LAYER].data).copy()
 
     def teardown(self) -> None:
-        """Remove micro-SAM's dock and the layers this session added.
+        """Remove micro-SAM's dock and the layers this controller and micro-SAM added.
 
-        The masks are saved by then; the user's own layers stay. A next session in
-        the same viewer starts clean.
+        The masks are saved by then. Layers the user added (also mid-session) stay. A
+        next session in the same viewer starts clean.
         """
         if self._dock is not None:
             self._viewer.window.remove_dock_widget(self._dock)
-        for layer in list(self._viewer.layers):
-            if layer.name not in self._before:
+        for layer in self._created:
+            if layer in self._viewer.layers:
                 self._viewer.layers.remove(layer)
         self._annotator = self._dock = None
+        self._created = []
+
+
+def check_micro_sam_version() -> None:
+    """Refuse a micro-SAM release whose internals the controller was not built for."""
+    import micro_sam
+
+    version = str(getattr(micro_sam, "__version__", "0.0"))
+    major_minor = tuple(int(p) for p in version.split(".")[:2] if p.isdigit())
+    if major_minor != SUPPORTED_MICRO_SAM:
+        wanted = ".".join(map(str, SUPPORTED_MICRO_SAM))
+        raise RuntimeError(
+            f"The napari plugin needs micro-SAM {wanted}.x (found {version}); install "
+            f'it with pip install "omero-annotate-ai[napari]" or "micro-sam=={wanted}.*".'
+        )
