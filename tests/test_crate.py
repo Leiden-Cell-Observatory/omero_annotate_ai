@@ -4,8 +4,14 @@ import json
 
 import pytest
 
-from omero_annotate_ai.core.annotation_config import AuthorInfo
-from omero_annotate_ai.crate import METADATA_FILE, SOFTWARE_ID, SPEC
+from omero_annotate_ai import provenance
+from omero_annotate_ai.core.annotation_config import (
+    AuthorInfo,
+    SessionRecord,
+    create_default_config,
+)
+from omero_annotate_ai.crate import METADATA_FILE, SOFTWARE_ID, SPEC, build_ro_crate
+from omero_annotate_ai.rows import Row
 from tests.fakes import annotate, create_set, omero_set
 
 
@@ -16,8 +22,16 @@ def _crate(tmp_path, *, n_images=3, limit=2, note="nuclei only", storage="omero"
     ts = create_set(config, source, omero, tmp_path / "home")
     annotate(ts, limit=limit, note=note)
     path = ts.write_ro_crate()
-    crate = json.loads(path.read_text())
+    crate = json.loads(path.read_text(encoding="utf-8"))
     return ts, path, crate, {e["@id"]: e for e in crate["@graph"]}
+
+
+def _identifiers(by_id, entity):
+    """``{propertyID: value}`` of a file's identifier PropertyValues."""
+    return {
+        by_id[i["@id"]]["propertyID"]: by_id[i["@id"]]["value"]
+        for i in _many(entity["identifier"])
+    }
 
 
 def _many(value):
@@ -76,15 +90,12 @@ class TestRoCrate:
         assert len(done) == 2
         for row in done:
             mask = by_id[f"annotation_output/{row.annotation_id}_mask.tif"]
-            based_on = [ref["@id"] for ref in mask["isBasedOn"]]
+            based_on = [ref["@id"] for ref in _many(mask["isBasedOn"])]
             assert based_on == [
                 f"annotation_input/{row.annotation_id}.tif",
                 row.image_uri,
             ]
-            values = {
-                by_id[i["@id"]]["propertyID"]: by_id[i["@id"]]["value"]
-                for i in mask["identifier"]
-            }
+            values = _identifiers(by_id, mask)
             assert values["pixel-sha256"] == row.mask_digest
             if row.mask_iscc:
                 assert values["iscc"] == row.mask_iscc
@@ -109,4 +120,49 @@ class TestRoCrate:
 
         assert ts.is_local and len(by_id["./"]["hasPart"]) == 2 + 2 * 3
         ts.write_ro_crate()  # writing again replaces the file
-        assert json.loads(path.read_text())["@graph"][1]["@id"] == "./"
+        assert json.loads(path.read_text(encoding="utf-8"))["@graph"][1]["@id"] == "./"
+
+    def test_without_the_provenance_extra_files_carry_only_the_digest(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(provenance, "_iscc_lib", lambda: None)
+        ts, _, _, by_id = _crate(tmp_path)
+
+        row = next(r for r in ts.rows if r.processed)
+        assert row.mask_iscc is None
+        mask = by_id[f"annotation_output/{row.annotation_id}_mask.tif"]
+        assert _identifiers(by_id, mask) == {"pixel-sha256": row.mask_digest}
+
+    def test_non_ascii_note_is_written_as_utf8(self, tmp_path):
+        note = "Zellkerne – 5 µm, rand ✓"
+        _, path, _, by_id = _crate(tmp_path, note=note)
+
+        assert note in path.read_bytes().decode("utf-8")
+        assert any(e.get("description") == note for e in by_id.values())
+
+    def test_local_paths_never_enter_the_crate(self, tmp_path):
+        local = "/home/someone/data/plate.zarr/A/1/0"
+        url = "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/6001240.zarr"
+        rows = [
+            Row(image_uri=local, image_name="0", annotation_id="a_0_0"),
+            Row(image_uri=url, image_name="6001240.zarr", annotation_id="b_0_0"),
+        ]
+        crate = build_ro_crate(create_default_config(), rows, tmp_path)
+
+        text = json.dumps(crate)
+        assert "/home/someone" not in text
+        ids = {e["@id"] for e in crate["@graph"]}
+        assert url in ids
+        assert any(i.startswith("#source-") for i in ids)
+
+    def test_similar_names_get_separate_entities(self, tmp_path):
+        config = create_default_config()
+        started = config.created
+        config.sessions = [
+            SessionRecord(id=1, started=started, user="a b"),
+            SessionRecord(id=2, started=started, user="a-b"),
+        ]
+        crate = build_ro_crate(config, [], tmp_path)
+
+        people = [e for e in crate["@graph"] if e.get("@type") == "Person"]
+        assert sorted(p["name"] for p in people) == ["a b", "a-b"]

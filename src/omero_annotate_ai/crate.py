@@ -9,7 +9,8 @@ workflow tools read. For a training set it lists:
   ``annotation_input/`` and each mask in ``annotation_output/``, with the pixel
   SHA-256 digest and, with the ``provenance`` extra, the ISCC code of each,
 - the source images by URI (``omero:image:<id>`` or an OME-Zarr URL), which the
-  local images are based on,
+  local images are based on; a local OME-Zarr store gets a ``#source-<key>`` id
+  and its name only, so no local path (which may hold a user name) is shared,
 - every annotation session as an action: who, when, which model, its note, and
   the masks it produced (an annotate session is a ``CreateAction``, a review an
   ``UpdateAction``).
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from .bundle import atomic_write, input_path, mask_path
+from .sources.uri import parse_omero_uri, uri_key
 
 if TYPE_CHECKING:
     from .core.annotation_config import AnnotationConfig, SessionRecord
@@ -45,8 +47,18 @@ def _ref(entity_id: str) -> dict[str, str]:
     return {"@id": entity_id}
 
 
-def _slug(text: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-") or "x"
+def _local_id(kind: str, text: str) -> str:
+    """A stable, unique ``#kind-...`` id for ``text`` (readable part plus a hash)."""
+    readable = re.sub(r"[^A-Za-z0-9_.-]+", "-", text).strip("-")[:40] or "x"
+    return f"#{kind}-{readable}-{uri_key(text)}"
+
+
+def _source_id(uri: str) -> str:
+    """The id of a source image: its URI if it is one (OMERO, a URL), otherwise a
+    local id, so no local path (which may hold a user name) enters the crate."""
+    if parse_omero_uri(uri) is not None or re.match(r"^[a-z][a-z0-9+.-]*://", uri):
+        return uri
+    return f"#source-{uri_key(uri)}"
 
 
 def _license(text: str) -> Entity:
@@ -84,7 +96,7 @@ class _Graph:
             found.append(
                 self.add(
                     {
-                        "@id": f"#{_slug(owner)}-pixel-sha256",
+                        "@id": f"#{owner}-pixel-sha256",
                         "@type": "PropertyValue",
                         "propertyID": "pixel-sha256",
                         "name": "SHA-256 of the pixels (dtype, shape and values)",
@@ -96,7 +108,7 @@ class _Graph:
             found.append(
                 self.add(
                     {
-                        "@id": f"#{_slug(owner)}-iscc",
+                        "@id": f"#{owner}-iscc",
                         "@type": "PropertyValue",
                         "propertyID": "iscc",
                         "name": "ISCC Image-Code (ISO 24138)",
@@ -143,7 +155,7 @@ def _session_action(
     if record.user:
         action["agent"] = graph.add(
             {
-                "@id": f"#user-{_slug(record.user)}",
+                "@id": _local_id("user", record.user),
                 "@type": "Person",
                 "name": record.user,
             }
@@ -152,7 +164,7 @@ def _session_action(
         action["instrument"].append(
             graph.add(
                 {
-                    "@id": f"#model-{_slug(record.model)}",
+                    "@id": _local_id("model", record.model),
                     "@type": "SoftwareApplication",
                     "name": record.model,
                 }
@@ -193,7 +205,11 @@ def build_ro_crate(
     masks_by_session: dict[int, list[dict[str, str]]] = {}
     for row in rows:
         source = graph.add(
-            {"@id": row.image_uri, "@type": "ImageObject", "name": row.image_name}
+            {
+                "@id": _source_id(row.image_uri),
+                "@type": "ImageObject",
+                "name": row.image_name,
+            }
         )
         image = input_path(bundle_dir, row.annotation_id)
         based_on = [source]
@@ -239,7 +255,7 @@ def build_ro_crate(
                     {
                         "affiliation": graph.add(
                             {
-                                "@id": f"#org-{_slug(a.affiliation)}",
+                                "@id": _local_id("org", a.affiliation),
                                 "@type": "Organization",
                                 "name": a.affiliation,
                             }
@@ -300,6 +316,8 @@ def write_ro_crate(
     target = bundle_dir / METADATA_FILE
     atomic_write(
         target,
-        lambda tmp: tmp.write_text(json.dumps(crate, indent=2, ensure_ascii=False)),
+        lambda tmp: tmp.write_text(
+            json.dumps(crate, indent=2, ensure_ascii=False), encoding="utf-8"
+        ),
     )
     return target
