@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    ValidationError,
+    model_validator,
+)
 
 from ..errors import ConfigError, RemovedConfigKey
 
@@ -664,6 +671,17 @@ class AnnotationConfig(BaseModel):
     schema_version: int = Field(
         default=SCHEMA_VERSION, description="Configuration schema version"
     )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # pydantic runs the model checks after storing the new value, so a rejected
+        # assignment would otherwise leave the config invalid; put the old value back.
+        previous = self.__dict__.get(name)
+        try:
+            super().__setattr__(name, value)
+        except ValidationError:
+            if name in self.__dict__:
+                object.__setattr__(self, name, previous)
+            raise
 
     # Core identification (both schemas)
     name: str = Field(description="Annotation workflow name")

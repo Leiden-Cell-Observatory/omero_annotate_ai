@@ -73,7 +73,6 @@ def prepare_training_data_from_table(
     table_id: int,
     output_dir: str | Path,
     training_name: str = "micro_sam_training",
-    validation_split: float = 0.2,
     clean_existing: bool = True,
     tmp_dir: str | Path | None = None,
     verbose: bool = False,
@@ -85,17 +84,15 @@ def prepare_training_data_from_table(
     """
     Prepare training data from OMERO annotation table.
 
-    Downloads images and labels from OMERO based on annotation table data,
-    splits into training/validation sets, and organizes into directory structure
-    suitable for micro-SAM training.
+    Downloads images and labels from OMERO based on annotation table data and
+    organizes them by each row's ``category`` (training, validation, test) into a
+    directory structure suitable for micro-SAM training.
 
     Args:
         conn: OMERO connection object
         table_id: ID of the annotation table in OMERO
         output_dir: Directory to store training data
         training_name: Name for the training session (used in directory naming)
-        validation_split: Fraction of data to use for validation (0.0-1.0) when the
-            table does not define the split
         clean_existing: Whether to clean existing output directories
         tmp_dir: Temporary directory for downloads (optional)
         verbose: If True, show detailed debug information in console output
@@ -123,6 +120,8 @@ def prepare_training_data_from_table(
             'val_label': Path to validation labels (segmentation masks),
             'val_annotation_input': Path to annotation-channel validation images
                 (separate channels only),
+            'test_input', 'test_label': Test images and labels (only when the table
+                has test rows),
             'stats': Statistics about the prepared data
         }
 
@@ -130,10 +129,6 @@ def prepare_training_data_from_table(
         ValueError: If table not found or invalid parameters
         ImportError: If required dependencies missing
     """
-    # Validate parameters
-    if not 0.0 <= validation_split <= 1.0:
-        raise ValueError("validation_split must be between 0.0 and 1.0")
-
     # Convert paths
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -142,8 +137,7 @@ def prepare_training_data_from_table(
     logger = create_training_logger(output_dir, verbose=verbose)
     logger.info(f"Starting training data preparation from table {table_id}")
     logger.debug(
-        f"Parameters: output_dir={output_dir}, validation_split={validation_split}, "
-        f"clean_existing={clean_existing}"
+        f"Parameters: output_dir={output_dir}, clean_existing={clean_existing}"
     )
 
     if tmp_dir is None:
@@ -217,27 +211,13 @@ def prepare_training_data_from_table(
     # Determine the effective training channel to use
     effective_train_channel = training_channels[0] if training_channels else None
 
-    # Split: make sure the table carries a boolean train/validate split, then let
-    # _records_from_table read the category straight off each row.
-    if "train" in table.columns and "validate" in table.columns:
-        logger.info("Using existing train/validate split from table")
-    else:
-        n_val = int(len(table) * validation_split)
-        shuffled_indices = np.random.permutation(len(table))
-        val_indices = shuffled_indices[:n_val]
-
-        table = table.copy()
-        table["train"] = True
-        table.iloc[val_indices, table.columns.get_loc("train")] = False
-        table["validate"] = ~table["train"]
-        logger.info(f"Applied automatic split with validation_split={validation_split}")
-
-    table = table.loc[
-        table["train"].astype(bool) | table["validate"].astype(bool)
-    ].copy()
-    n_train = int(table["train"].sum())
-    n_val_rows = int(table["validate"].sum())
-    logger.info(f"Using {n_train} training images and {n_val_rows} validation images")
+    # The split was planned when the training set was created; each row carries it.
+    counts = table["category"].value_counts()
+    include_test = bool(counts.get("test", 0))
+    logger.info(
+        f"Using {counts.get('training', 0)} training, {counts.get('validation', 0)} "
+        f"validation and {counts.get('test', 0)} test rows"
+    )
 
     # Build records. A row whose label cannot be downloaded is dropped whole: writing
     # the image without its label would leave an orphan, and consumers pair images to
@@ -269,6 +249,7 @@ def prepare_training_data_from_table(
         output_dir,
         layout="split",
         clean_existing=clean_existing,
+        include_test=include_test,
         uses_separate_channels=uses_separate_channels,
         logger=logger,
     )
@@ -301,7 +282,7 @@ def prepare_training_data_from_table(
 
                     file_ann_id = upload_annotation_input_image(
                         conn,
-                        image_id=int(row["image_id"]),
+                        image_id=int(str(row["image_id"])),
                         annotation_input_file=str(tif_file),
                         trainingset_name=training_name,
                         channel=label_channel,
@@ -657,7 +638,7 @@ def _records_from_table(
         if recorded and recorded != "nan" and file_digest(label_path) != recorded:
             changed.append(annotation_id)
 
-        category = "training" if bool(row["train"]) else "validation"
+        category = str(row["category"])
 
         image_channel = (
             train_channel if train_channel is not None else _channel_from_row(row)

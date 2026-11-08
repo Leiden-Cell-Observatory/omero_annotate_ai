@@ -605,10 +605,6 @@ class TestTrainingData:
             assert set(np.unique(label)) - {0} == {mask_value_for(image)}
         assert (tmp_path / "train" / "normalization.json").exists()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="prepare_training_data_from_table reads only train/validate, not category",
-    )
     def test_test_split_is_exported(self, omero_conn, finished_set, tmp_path):
         table_id, config = finished_set
         result = self._export(omero_conn, table_id, config, tmp_path / "train")
@@ -619,13 +615,13 @@ class TestTrainingData:
         from omero_annotate_ai.processing.training_utils import setup_training
 
         result = self._export(conn, table_id, config, out)
-        # run_training ignores n_iterations (it passes n_epochs only), so one epoch
-        # is the shortest run possible.
+        # Two iterations keep a real training run short enough for CPU.
         return setup_training(
             result,
             model_name="functional_test",
             model_type="vit_b_lm",
             epochs=1,
+            n_iterations=2,
             batch_size=1,
             patch_shape=(64, 64),
             n_objects_per_batch=1,
@@ -669,10 +665,6 @@ class TestTrainingData:
             assert label_max > 0, name
 
     @pytest.mark.slow
-    @pytest.mark.skipif(
-        os.environ.get("OAI_FULL_TRAINING") != "1",
-        reason="Full micro-SAM training on CPU takes >30 min; set OAI_FULL_TRAINING=1",
-    )
     def test_microsam_training_runs(self, omero_conn, finished_set, tmp_path):
         cache = Path(
             os.environ.get("MICROSAM_CACHEDIR", Path.home() / ".cache" / "micro_sam")

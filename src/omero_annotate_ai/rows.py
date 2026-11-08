@@ -150,8 +150,6 @@ COLUMNS: tuple[str, ...] = (
     "image_name",
     "annotation_id",
     "category",
-    "train",
-    "validate",
     "channel",
     "z_slice",
     "timepoint",
@@ -193,7 +191,7 @@ _INT_COLUMNS = (
     "level",
     "session",
 )
-_BOOL_COLUMNS = ("train", "validate", "processed", "is_patch", "is_volumetric")
+_BOOL_COLUMNS = ("processed", "is_patch", "is_volumetric")
 
 
 def _omero_id(value: int | None) -> int:
@@ -252,8 +250,6 @@ def rows_to_frame(rows: Sequence[Row], *, local: bool = False) -> pd.DataFrame:
             "image_name": r.image_name,
             "annotation_id": r.annotation_id,
             "category": r.category,
-            "train": r.category == "training",
-            "validate": r.category == "validation",
             "channel": r.channel,
             "z_slice": r.z_slice,
             "timepoint": r.timepoint,
