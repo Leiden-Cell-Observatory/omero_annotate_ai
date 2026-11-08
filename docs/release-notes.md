@@ -3,8 +3,13 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
-## Unreleased
+## 0.5.1
 
+- **napari plugin** (experimental, `pip install "omero-annotate-ai[napari]"`): a dock in
+  your own napari viewer to open a training set, annotate with micro-SAM image by image
+  (Accept / Skip / Prev), review earlier annotations with their saved masks, and finish
+  with a note. Closing the window or the dock ends the session and frees its claims; see
+  [napari plugin](napari-plugin.md).
 - **Review** counts a mask with the same labels in a wider data type (micro-SAM writes
   uint32) as unchanged, so it is not uploaded again. A batch that fails to load (or is
   cancelled while loading) releases its claims at once.
