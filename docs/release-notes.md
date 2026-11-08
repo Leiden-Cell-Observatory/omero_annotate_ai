@@ -13,6 +13,12 @@ Newest first. The full list of pull requests per version is on
 - **RO-Crate**: `ts.write_ro_crate()` describes a training set's folder as an RO-Crate
   1.1 (`ro-crate-metadata.json`): files with digests and codes, source images, and the
   sessions with their notes.
+- **Training-data widget** rebuilt on the 0.5 API: pick an OMERO or local training set,
+  see its progress, choose output folder, channels and normalisation, and export.
+  The marimo training notebook offers the same choices; both call the new
+  `export_training_set` (`get_selected_table_info` is gone; use `selected_config()`).
+- **BioImage Archive export** from an OMERO training set works again (the rows had no
+  image IDs), and a bundle holds only annotated units.
 - **Public IDR data via OME-Zarr.** The IDR's OMERO API is no longer open for
   logins, so the [public-data tutorial](tutorials/public-data-idr.md) and the new
   `idr-zarr-demo.py` notebook (replacing `omero-idr-demo.py`) read IDR studies as

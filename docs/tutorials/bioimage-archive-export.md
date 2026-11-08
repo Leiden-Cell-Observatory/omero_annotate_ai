@@ -41,9 +41,9 @@ annotation_methodology:
 ```python
 from omero_annotate_ai import prepare_bia_data_from_table
 from omero_annotate_ai.core.mifa_export import save_bia_package
-from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
+from omero_annotate_ai.trainingset import read_set_config
 
-config = find_annotation_config_for_table(conn, table_id)  # the set's config
+config = read_set_config(table_id, conn)  # the set's config, with the study metadata
 stats = prepare_bia_data_from_table(conn, table_id, "bia_staging")
 
 summary = save_bia_package(
@@ -61,8 +61,9 @@ from omero_annotate_ai import TrainingSet
 from omero_annotate_ai.core.mifa_export import save_bia_package
 
 ts = TrainingSet.open("~/omero_annotate_ai/local/<id>_hela_nuclei_v1")
-done = [row for row in ts.units() if row.processed]  # leave out unfinished units
-save_bia_package(ts.config, done, ts.bundle_dir, "bia_bundle")
+save_bia_package(
+    ts.config, ts.units(), ts.bundle_dir, "bia_bundle"
+)  # annotated units only
 ```
 
 ## What is in the bundle

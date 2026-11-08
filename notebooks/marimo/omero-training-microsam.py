@@ -21,8 +21,8 @@ def _(mo):
 
     **Workflow Steps:**
     1. Connect to your OMERO server
-    2. Select an annotation table with training data
-    3. Download and organize training data
+    2. Pick a training set (OMERO or local)
+    3. Export it into the training layout
     4. Configure and run micro-SAM training
     5. Optionally export to BioImage.IO format
     """)
@@ -116,9 +116,10 @@ def _(
 @app.cell
 def _(mo):
     mo.md("""
-    ## 2. Training Data Selection
+    ## 2. Training Set
 
-    Select the OMERO container and annotation table to use for training.
+    Pick the container, then the training set (local sets are listed too). Its
+    progress per split is shown below.
     """)
     return
 
@@ -140,71 +141,48 @@ def _(mo):
 
 
 @app.cell
-def _(conn, container_id, container_type, list_training_sets, mo, summarize):
-    tables_info = ""
-
-    if conn and conn.isConnected() and container_id.value > 0:
-        try:
-            _sets = list_training_sets(conn, container_type.value, container_id.value)
-            if _sets:
-                _lines = []
-                for _info in _sets:
-                    _progress = summarize(_info.table_id, conn).progress
-                    _split = " · ".join(
-                        f"{name} {done}/{total}"
-                        for name, (done, total) in _progress.items()
-                        if total
-                    )
-                    _lines.append(f"    | {_info.table_id} | {_info.name} | {_split} |")
-                rows = "\n".join(_lines)
-                tables_info = f"""
-    Found **{len(_sets)}** training sets:
-
-    | Table ID | Name | Annotated per split |
-    |----------|------|---------------------|
-    {rows}
-                """
-            else:
-                tables_info = "No training sets found in this container."
-        except Exception as e:
-            tables_info = f"Error: {str(e)}"
-
-    mo.md(tables_info) if tables_info else mo.md("")
-    return
+def _(conn, container_id, container_type, mo, training_set_choices):
+    _connected = conn is not None and conn.isConnected()
+    _notes = []  # an OMERO error is shown; the local sets are still listed
+    _choices = training_set_choices(
+        conn if _connected else None,
+        container_type.value,
+        int(container_id.value) if container_id.value else None,
+        on_error=_notes.append,
+    )
+    training_set = mo.ui.dropdown(
+        options=dict(_choices), label="Training set", full_width=True
+    )
+    mo.vstack(
+        [
+            training_set if _choices else mo.md("No training sets found yet."),
+            mo.md("\n\n".join(_notes)),
+        ]
+    )
+    return (training_set,)
 
 
 @app.cell
-def _(mo):
-    table_id = mo.ui.number(value=0, label="Table ID to use for training", start=0)
-    table_id
-    return (table_id,)
-
-
-@app.cell
-def _(
-    conn,
-    container_id,
-    container_type,
-    find_annotation_config_for_table,
-    mo,
-    table_id,
-):
-    annotation_config = None
-    _config_info = ""
-    if conn and conn.isConnected() and table_id.value > 0 and container_id.value > 0:
-        try:
-            annotation_config = find_annotation_config_for_table(
-                conn, int(table_id.value)
-            )
-            if annotation_config:
-                _config_info = f"Loaded config **{annotation_config.name}** (model: `{annotation_config.ai_model.pretrained_from}`)"
-            else:
-                _config_info = (
-                    "No annotation config found for this table — using defaults."
-                )
-        except Exception as e:
-            _config_info = f"Could not load config: {e}"
-    mo.md(_config_info) if _config_info else mo.md("")
+def _(conn, mo, read_set_config, summarize, training_set):
+    mo.stop(training_set.value is None, mo.md("Pick a training set above."))
+    annotation_config = read_set_config(training_set.value, conn)
+    _summary = summarize(training_set.value, conn)
+    _where = f"table {_summary.table_id}" if _summary.table_id else "local"
+    mo.md(
+        "\n".join(
+            [
+                f"**{_summary.name}** ({_where})",
+                "",
+                "| Split | Annotated |",
+                "|---|---|",
+                *(
+                    f"| {_split} | {_done} / {_total} |"
+                    for _split, (_done, _total) in _summary.progress.items()
+                    if _total
+                ),
+            ]
+        )
+    )
     return (annotation_config,)
 
 
@@ -217,33 +195,16 @@ def _(mo):
 
 
 @app.cell
-def _(Path, annotation_config, datetime, mo):
-    _timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    _default_name = (
-        annotation_config.name
-        if annotation_config
-        else f"micro_sam_training_{_timestamp}"
-    )
-    _default_model = (
-        annotation_config.ai_model.pretrained_from if annotation_config else "vit_b_lm"
-    ) or "vit_b_lm"
+def _(annotation_config, mo):
+    _coverage = annotation_config.spatial_coverage
+    _default_model = annotation_config.ai_model.pretrained_from or "vit_b_lm"
     _default_patch = (
-        f"{annotation_config.spatial_coverage.patch_size[0]}, {annotation_config.spatial_coverage.patch_size[1]}"
-        if annotation_config and annotation_config.spatial_coverage.patch_size
+        f"{_coverage.patch_size[0]}, {_coverage.patch_size[1]}"
+        if _coverage.patch_size
         else "512, 512"
     )
+    _default_name = annotation_config.name
 
-    output_directory = mo.ui.text(
-        value=str(
-            Path.home()
-            / "omero-annotate-ai"
-            / "micro-sam_models"
-            / f"micro-sam-{_timestamp}"
-        ),
-        label="Output Directory",
-        full_width=True,
-    )
     model_name = mo.ui.text(value=_default_name, label="Model Name")
     model_type = mo.ui.dropdown(
         options=["vit_b_lm", "vit_b", "vit_l", "vit_h"],
@@ -261,7 +222,6 @@ def _(Path, annotation_config, datetime, mo):
 
     mo.vstack(
         [
-            output_directory,
             mo.hstack([model_name, model_type], justify="start", gap=2),
             mo.hstack([epochs, batch_size], justify="start", gap=2),
             mo.hstack([patch_shape, n_iterations], justify="start", gap=2),
@@ -273,7 +233,6 @@ def _(Path, annotation_config, datetime, mo):
         model_name,
         model_type,
         n_iterations,
-        output_directory,
         patch_shape,
     )
 
@@ -283,74 +242,104 @@ def _(mo):
     mo.md("""
     ## 4. Prepare Training Data
 
-    Download and organize training data from OMERO.
+    Export the training set's annotated units into `train_*`, `val_*` and `test_*`
+    folders: from OMERO for an OMERO set, from its folder for a local set.
     """)
     return
 
 
 @app.cell
-def _(mo):
+def _(annotation_config, default_export_dir, mo, training_set):
+    _coverage = annotation_config.spatial_coverage
+    _local = not isinstance(training_set.value, int)  # a local set keeps its channels
+    export_directory = mo.ui.text(
+        value=str(default_export_dir(training_set.value, annotation_config.name)),
+        label="Export folder",
+        full_width=True,
+    )
+    training_channels = mo.ui.text(
+        value=", ".join(map(str, _coverage.get_training_channels())),
+        label="Training channels",
+        disabled=_local,
+    )
+    label_channel = mo.ui.number(
+        value=_coverage.get_label_channel(),
+        start=0,
+        label="Label channel",
+        disabled=_local,
+    )
+    apply_normalization = mo.ui.checkbox(
+        value=bool(annotation_config.normalization.apply_at_export),
+        label="Apply the normalisation at export (float32; default keeps native bit depth)",
+    )
     prepare_button = mo.ui.run_button(label="Prepare Training Data", kind="success")
-    prepare_button
-    return (prepare_button,)
+    mo.vstack(
+        [
+            export_directory,
+            mo.hstack([training_channels, label_channel], justify="start", gap=2),
+            apply_normalization,
+            prepare_button,
+        ]
+    )
+    return (
+        apply_normalization,
+        export_directory,
+        label_channel,
+        prepare_button,
+        training_channels,
+    )
 
 
 @app.cell
 def _(
     Path,
+    apply_normalization,
     conn,
+    export_directory,
+    export_training_set,
+    label_channel,
     mo,
-    model_name,
-    output_directory,
+    parse_indices,
     prepare_button,
-    prepare_training_data_from_table,
-    table_id,
+    training_channels,
+    training_set,
 ):
     training_result = None
     mo.stop(
         not prepare_button.value,
-        mo.md("Click 'Prepare Training Data' to download from OMERO"),
+        mo.md("Click 'Prepare Training Data' to export the training set"),
     )
-
-    if not conn or not conn.isConnected():
-        mo.output.replace(mo.md("**Error:** Please connect to OMERO first"))
-    elif table_id.value <= 0:
-        mo.output.replace(mo.md("**Error:** Please enter a valid table ID"))
-    else:
-        try:
-            _out_dir = Path(output_directory.value)
-            _out_dir.mkdir(parents=True, exist_ok=True)
-
-            training_result = prepare_training_data_from_table(
-                conn=conn,
-                table_id=int(table_id.value),
-                training_name=model_name.value,
-                output_dir=_out_dir,
-                clean_existing=True,
+    try:
+        training_result = export_training_set(
+            training_set.value,
+            Path(export_directory.value).expanduser(),
+            conn,
+            training_channels=parse_indices(
+                training_channels.value, "Training channels"
+            ),
+            label_channel=int(label_channel.value),
+            apply_normalization=apply_normalization.value,
+        )
+        mo.output.replace(
+            mo.md(
+                "\n".join(
+                    [
+                        f"**Training data prepared** in `{training_result['base_dir']}`",
+                        "",
+                        "| Statistic | Value |",
+                        "|-----------|-------|",
+                        *(
+                            f"| {_key} | {_value} |"
+                            for _key, _value in training_result["stats"].items()
+                        ),
+                        "",
+                        "The splits come from the training set (each unit's category).",
+                    ]
+                )
             )
-
-            stats_rows = "\n".join(
-                f"    | {k} | {v} |" for k, v in training_result["stats"].items()
-            )
-            mo.output.replace(
-                mo.md(f"""
-            **Training data prepared!**
-
-            | Statistic | Value |
-            |-----------|-------|
-    {stats_rows}
-
-            - Training images: `{training_result["train_input"]}`
-            - Training labels: `{training_result["train_label"]}`
-            - Validation images: `{training_result["val_input"]}`
-            - Validation labels: `{training_result["val_label"]}`
-            - Test images: `{training_result.get("test_input", "none")}`
-
-            The splits come from the training set (each unit's category).
-            """)
-            )
-        except Exception as e:
-            mo.output.replace(mo.md(f"**Error:** {str(e)}"))
+        )
+    except Exception as _error:
+        mo.output.replace(mo.md(f"**Error:** {_error}"))
     return (training_result,)
 
 
@@ -504,23 +493,25 @@ def _():
 
 @app.cell
 def _():
-    from datetime import datetime
     from pathlib import Path
 
-    return Path, datetime
+    return (Path,)
 
 
 @app.cell
 def _():
     from omero_annotate_ai import (
-        prepare_training_data_from_table,
+        export_training_set,
         run_training,
         setup_training,
     )
-    from omero_annotate_ai.omero.omero_functions import (
-        find_annotation_config_for_table,
+    from omero_annotate_ai.planning import parse_indices
+    from omero_annotate_ai.processing.training_functions import default_export_dir
+    from omero_annotate_ai.trainingset import (
+        read_set_config,
+        summarize,
+        training_set_choices,
     )
-    from omero_annotate_ai.trainingset import list_training_sets, summarize
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
@@ -531,12 +522,14 @@ def _():
     return (
         OMERO_AVAILABLE,
         SimpleOMEROConnection,
-        find_annotation_config_for_table,
-        list_training_sets,
-        prepare_training_data_from_table,
+        default_export_dir,
+        export_training_set,
+        parse_indices,
+        read_set_config,
         run_training,
         setup_training,
         summarize,
+        training_set_choices,
     )
 
 

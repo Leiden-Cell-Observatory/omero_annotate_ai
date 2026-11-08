@@ -2,6 +2,10 @@
 
 ## Preparing training folders
 
+::: omero_annotate_ai.processing.training_functions.export_training_set
+
+::: omero_annotate_ai.processing.training_functions.default_export_dir
+
 ::: omero_annotate_ai.processing.training_functions.prepare_training_data_from_table
 
 ::: omero_annotate_ai.processing.training_functions.reorganize_local_data_for_training

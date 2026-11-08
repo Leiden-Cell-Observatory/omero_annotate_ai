@@ -16,16 +16,36 @@ my_training_data/
 
 Labels are instance masks: 0 is background, and each object has its own number.
 
-## From OMERO (`storage: omero`)
+## Export a training set
 
-Use this when your annotations are stored in OMERO. It works from any computer that can
-reach the server, and needs no display.
+One call exports any training set: by table ID for a set on OMERO (the data is
+downloaded, from any computer that can reach the server, no display needed), or by
+folder for a local set (offline).
+
+```python
+from omero_annotate_ai import export_training_set
+
+result = export_training_set(table_id, "my_training_data", conn)  # OMERO set
+result = export_training_set(ts.bundle_dir, "my_training_data")  # local set
+print(result["stats"])
+```
+
+Only finished units with a mask are used. Each unit goes to the split recorded in the
+table's `category` column (training, validation or test), the split chosen when the
+training set was created. The output folder must be outside the set's folder.
+
+Channels and normalisation come from the set's config. For an OMERO set you can train on
+another channel than the annotated one with `training_channels=[c]` (one channel) and
+`label_channel=`; a local set exports the channels it was annotated with. An output
+folder inside the set's own folder is refused. `apply_normalization=True` writes
+normalised float32 images instead of the native bit depth.
+
+### In Jupyter: the training-data widget
 
 ```python
 from omero_annotate_ai import (
     create_omero_connection_widget,
     create_training_data_widget,
-    prepare_training_data_from_table,
 )
 
 conn_widget = create_omero_connection_widget()
@@ -33,53 +53,26 @@ conn_widget.display()
 conn = conn_widget.get_connection()
 
 training_widget = create_training_data_widget(connection=conn)
-training_widget.display()  # pick the container and the annotation table
+training_widget.display()
 ```
 
-```python
-table_id = training_widget.get_selected_table_id()
-
-result = prepare_training_data_from_table(
-    conn=conn,
-    table_id=table_id,
-    output_dir="my_training_data",
-)
-print(result["stats"])
-```
-
-Only finished units with a mask are used. Each unit goes to the split recorded in the
-table's `category` column (training, validation or test), the split chosen when the
-training set was created. A copy of the tracking table is saved alongside
-(`table_<id>.csv`).
+Pick the container and the training set (local sets are listed too); its progress per
+split is shown. Check the output folder (default `~/omero_annotate_ai/exports/<name>_<table id>`, or
+the set's folder name for a local set),
+the channels and the normalisation, then click **Export**. The result is in
+`training_widget.result`. The marimo training notebook offers the same choices.
 
 !!! note "Things to know"
-    - Images keep their original bit depth. `normalization.json` records how to scale
-      them; micro-SAM training applies it when loading (see
+    - Images keep their original bit depth unless you apply the normalisation at
+      export. `normalization.json` records how to scale them; micro-SAM training applies
+      it when loading (see
       [normalisation settings](../configuration.md#normalization-intensity-scaling-of-model-input)).
     - A label that no longer matches its recorded pixel digest stops the export, so a
       mask changed after upload is never trained on unnoticed.
-    - If you annotated one channel but want to train on another, pass
-      `label_channel=` and `training_channels=`.
-
-## From a local training set
-
-When the images and masks are on your disk (`annotation_input/` and
-`annotation_output/`), reorganise them without contacting OMERO:
-
-```python
-from omero_annotate_ai import TrainingSet, reorganize_local_data_for_training
-
-ts = TrainingSet.open("~/omero_annotate_ai/local/<id>_hela_nuclei_v1")
-result = reorganize_local_data_for_training(
-    ts.config,
-    annotation_dir=ts.bundle_dir,  # its tracking_table.csv says what is annotated
-    include_test=True,
-)
-```
-
-By default the data is copied to a folder next to the set's folder, named
-`<set folder>_training`. Images keep their original bit depth, and
-`include_test=True` also writes `test_input/` and `test_label/`.
+    - For an OMERO set a copy of the tracking table is saved alongside (`table_<id>.csv`).
+    - `export_training_set` calls `prepare_training_data_from_table` (OMERO) or
+      `reorganize_local_data_for_training` (local); use those directly for more options,
+      such as copying, moving or symlinking local files.
 
 ## Train a model
 
@@ -92,7 +85,7 @@ CUDA GPU is strongly recommended.
 from omero_annotate_ai import setup_training, run_training
 
 training_config = setup_training(
-    result,  # from prepare_training_data_from_table
+    result,  # from export_training_set
     model_name="hela_nuclei_v1",
     model_type="vit_b_lm",  # start from this pretrained model
     epochs=50,
