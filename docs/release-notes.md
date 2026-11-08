@@ -16,6 +16,10 @@ Newest first. The full list of pull requests per version is on
   keychain; it is asked for at each connect and the field is cleared straight away.
 - **napari plugin:** the dock can be made as short as the annotate page, so micro-SAM's
   dock below it gets the room (it kept the height of the start page).
+- **napari plugin: Prev** goes back through every image of the session, also saved
+  ones: they open with their objects, and Accept replaces the saved mask and upload
+  (`AnnotationSession.revise`). The next image's embedding is computed while you
+  annotate the current one.
 - **One pixel reader.** The training export and the BioImage Archive export read
   planes, patches and volumes through the same image source as annotation
   (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.

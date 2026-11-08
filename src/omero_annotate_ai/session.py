@@ -41,7 +41,14 @@ import tifffile
 
 from . import claims
 from .annotators import Batch, BatchItem
-from .bundle import conflict_path, file_digest, fresh_scratch, mask_path, pixel_digest
+from .bundle import (
+    conflict_path,
+    file_digest,
+    fresh_scratch,
+    input_path,
+    mask_path,
+    pixel_digest,
+)
 from .errors import Cancelled
 from .events import (
     BatchPrepared,
@@ -212,7 +219,7 @@ def review_unit(
     previous = target.with_name(f"{target.stem}.previous.tif")
     if target.exists():
         target.replace(previous)
-    Path(mask_source).replace(target)
+    shutil.move(mask_source, target)  # may come from another filesystem
     old = (("FileAnnotation", annotation.label_id), ("Roi", annotation.roi_id))
     before = annotation.model_copy()
     annotation.mask_digest = digest
@@ -308,6 +315,7 @@ class AnnotationSession:
         self._open: dict[int, set[str]] = {}
         self._scratch: dict[int, Path] = {}
         self._handed_out: set[str] = set()  # each unit at most once per session
+        self._counted: set[str] = set()  # units counted in ``annotated``
         self._finished = False
         self.session = training_set.begin_session(
             model, batch_size, kind="review" if review else "annotate"
@@ -418,7 +426,8 @@ class AnnotationSession:
             waiting.discard(annotation_id)
             self._set.events(Progress("upload", done, len(todo)))
         committed = outcome["revised"]
-        self.annotated += len(committed)
+        self.annotated += len(set(committed) - self._counted)
+        self._counted.update(committed)
         self._unclaim({*outcome["unchanged"], *outcome["failed"], *outcome["conflict"]})
 
         if committed and not self._set.is_local:
@@ -448,6 +457,12 @@ class AnnotationSession:
             return False
         if self.review and theirs.label_id == row.label_id:
             return False  # nobody else changed it since it was handed out
+        self._take_theirs(theirs, mask_source)
+        return True
+
+    def _take_theirs(self, theirs: Row, mask_source: Path) -> None:
+        """Adopt another session's save of a unit; keep ours as a conflict file."""
+        annotation_id = theirs.annotation_id
         keep = conflict_path(self._set.bundle_dir, annotation_id, self.session)
         keep.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(mask_source, keep)
@@ -455,7 +470,66 @@ class AnnotationSession:
         rows[[r.annotation_id for r in rows].index(annotation_id)] = theirs
         self._set.save_local_table()
         self._set.events(UnitConflict(annotation_id, str(keep)))
-        return True
+
+    @property
+    def scratch(self) -> Path:
+        """A folder of this session inside the set's folder (the same filesystem as
+        the masks, so files move into place), removed at :meth:`finish`."""
+        path = self._set.bundle_dir / ".scratch" / f"s{self.session}-revise"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _saved_row(self, annotation_id: str) -> Row:
+        row = next(
+            (a for a in self._set.rows if a.annotation_id == annotation_id), None
+        )
+        if row is None or not row.processed or annotation_id not in self._handed_out:
+            raise ValueError(f"{annotation_id} was not saved in this session")
+        return row
+
+    def saved_unit(self, annotation_id: str) -> tuple[np.ndarray, np.ndarray]:
+        """The image and the saved mask of a unit saved in this session, from the
+        set's folder, e.g. to show it again.
+
+        Raises:
+            ValueError: The unit was not handed out and saved in this session.
+        """
+        self._saved_row(annotation_id)
+        bundle = self._set.bundle_dir
+        return (
+            np.asarray(tifffile.imread(input_path(bundle, annotation_id))),
+            np.asarray(tifffile.imread(mask_path(bundle, annotation_id))),
+        )
+
+    def revise(
+        self, annotation_id: str, mask: Path, *, publish_config: bool = True
+    ) -> Literal["revised", "unchanged", "failed", "conflict"]:
+        """Replace the saved mask of a unit saved in this session (the annotator
+        went back to it), as a review would: an unchanged mask keeps its upload.
+
+        On OMERO sets the row is read again first: if another session changed the
+        unit since, theirs is kept and ``mask`` is kept as a conflict file.
+
+        Raises:
+            ValueError: The unit was not handed out and saved in this session.
+        """
+        row = self._saved_row(annotation_id)
+        if not self._set.is_local:
+            theirs = self._set.current_rows([annotation_id]).get(annotation_id)
+            if theirs is not None and theirs.label_id != row.label_id:
+                self._take_theirs(theirs, Path(mask))
+                return "conflict"
+        outcome = review_unit(self._set, row, Path(mask), self.session)
+        if outcome == "revised":
+            if annotation_id not in self._counted:  # a review first left unchanged
+                self._counted.add(annotation_id)
+                self.annotated += 1
+            if not self._set.is_local:
+                self._set.write_table([row])
+                if publish_config:
+                    self._set.publish_config()
+        self._set.save_config()
+        return outcome
 
     def release(self, batch: Batch) -> None:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
@@ -491,6 +565,10 @@ class AnnotationSession:
             self._unclaim(self._open.pop(index, set()))
             shutil.rmtree(scratch, ignore_errors=True)
         self._scratch.clear()
+        shutil.rmtree(
+            self._set.bundle_dir / ".scratch" / f"s{self.session}-revise",
+            ignore_errors=True,
+        )
         self._set.end_session(self.session, self.annotated, note, status)
         self._set.events(SessionFinished(self.session, self.annotated, note))
         return self.annotated
