@@ -60,6 +60,7 @@ from .planning import (
     units_for_image,
 )
 from .processing.image_functions import generate_patch_coordinates
+from .provenance import image_code
 from .reconcile import reconcile
 from .rows import Category, Row, rows_from_frame, rows_to_frame
 from .session import AnnotationSession, commit_unit
@@ -467,6 +468,7 @@ class TrainingSet:
         pixels = self._load_image_data(image_obj, meta)
         self._save_inputs(image_obj, meta, annotation.annotation_id, pixels)
         annotation.input_digest = pixel_digest(pixels)
+        annotation.input_iscc = image_code(pixels)
         return BatchItem(
             annotation_id=annotation.annotation_id,
             pixels=pixels,

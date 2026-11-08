@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 import tifffile
 
+from omero_annotate_ai import provenance
 from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.bundle import file_digest, mask_path
 from omero_annotate_ai.errors import Cancelled
@@ -97,6 +98,9 @@ class TestAnnotationSession:
         row = local.set_index("annotation_id").loc[unit_id]
         assert mask.exists() and row["mask_digest"] == file_digest(mask)
         assert row["input_digest"]  # recorded when the batch was prepared
+        if provenance.available():  # the ISCC codes come with the provenance extra
+            assert row["mask_iscc"] == provenance.file_code(mask, mask=True)
+            assert str(row["input_iscc"]).startswith("ISCC:")
 
     def test_failed_upload_is_recorded_and_the_session_goes_on(self, tmp_path):
         events = []

@@ -423,3 +423,27 @@ def test_without_clean_existing_previous_files_survive(
     prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     assert stale.exists()
+
+
+def test_file_lists_carry_pixel_digests_and_iscc_codes_when_recorded():
+    rows = [
+        Row(
+            image_id=101,
+            image_name="a",
+            annotation_id="a_0",
+            processed=True,
+            label_id=5,
+            input_digest="in-sha",
+            mask_digest="mask-sha",
+            input_iscc="ISCC:EEA4XSZUGQ2MXS6B",
+            mask_iscc="ISCC:EEA6IF2FC2OREY73",
+        )
+    ]
+    images_df, annotations_df = build_bia_file_lists(rows)
+    assert annotations_df.loc[0, "pixel_sha256"] == "mask-sha"
+    assert annotations_df.loc[0, "iscc"] == "ISCC:EEA6IF2FC2OREY73"
+    assert images_df.loc[0, "iscc"] == "ISCC:EEA4XSZUGQ2MXS6B"
+
+    plain = [Row(image_id=101, image_name="a", annotation_id="a_0", label_id=5)]
+    images_df, annotations_df = build_bia_file_lists(plain)
+    assert "iscc" not in annotations_df.columns and "iscc" not in images_df.columns

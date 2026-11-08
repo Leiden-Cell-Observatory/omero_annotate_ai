@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 import tifffile
 
+from omero_annotate_ai import provenance
 from omero_annotate_ai import session as session_module
 from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.bundle import file_digest
@@ -144,6 +145,8 @@ class TestRepairs:
         divergent = [e for e in events if getattr(e, "action", "") == "divergent"]
         assert [e.annotation_id for e in divergent] == [unit.annotation_id]
         assert len(omero.labels) == 2
+        if provenance.available():  # the ISCC codes tell how much it changed
+            assert "ISCC" in divergent[0].detail
 
     def test_upload_that_differs_from_the_local_mask_is_not_adopted(self, tmp_path):
         first, source, omero = run_first(tmp_path, crash={"table": 1})

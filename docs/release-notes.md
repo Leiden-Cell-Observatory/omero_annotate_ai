@@ -3,6 +3,14 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## Unreleased
+
+- **ISCC content codes** (optional `provenance` extra, `iscc-lib`): each unit records an
+  ISCC Image-Code of its image and mask next to the SHA-256 digests. Resume and export
+  warnings say whether a changed file is a near-duplicate or different content, and the
+  BioImage Archive file lists carry `pixel_sha256` and `iscc` per file. Tables made by
+  0.5.0 keep working without the new columns.
+
 ## 0.5.0
 
 0.5.0 makes annotation runs reliable and traceable, adds OME-Zarr as an image source, and

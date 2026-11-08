@@ -80,7 +80,10 @@ set as a whole:
 
 The tracking table is updated in place, so its ID never changes: that ID *is* the
 training set's identity. The checksums let a resume or an export notice when a local
-mask no longer matches the one on OMERO.
+mask no longer matches the one on OMERO. With the `provenance` extra each unit also
+gets an [ISCC](https://iscc.codes) Image-Code of image and mask, which tells *how much*
+a file changed: a touched-up mask is reported as a near-duplicate, a replaced one as
+different content.
 
 ## Batches
 

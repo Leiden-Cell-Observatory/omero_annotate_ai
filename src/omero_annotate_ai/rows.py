@@ -65,6 +65,12 @@ class Row(BaseModel):
     annotation_input_id: int | None = None
     input_digest: str | None = Field(default=None, description="Pixel SHA-256 of input")
     mask_digest: str | None = Field(default=None, description="Pixel SHA-256 of mask")
+    input_iscc: str | None = Field(
+        default=None, description="ISCC Image-Code of input (provenance extra)"
+    )
+    mask_iscc: str | None = Field(
+        default=None, description="ISCC Image-Code of mask (provenance extra)"
+    )
     claimed_by: str = Field(
         default="",
         description="Session holding the unit (see omero_annotate_ai.claims)",
@@ -181,6 +187,8 @@ COLUMNS: tuple[str, ...] = (
     "well_metadata",
     "input_digest",
     "mask_digest",
+    "input_iscc",
+    "mask_iscc",
     "claimed_by",
     "claimed_at",
 )
@@ -283,6 +291,8 @@ def rows_to_frame(rows: Sequence[Row], *, local: bool = False) -> pd.DataFrame:
             "well_metadata": json.dumps(r.well_metadata, sort_keys=True),
             "input_digest": r.input_digest or "",
             "mask_digest": r.mask_digest or "",
+            "input_iscc": r.input_iscc or "",
+            "mask_iscc": r.mask_iscc or "",
             "claimed_by": r.claimed_by,
             "claimed_at": r.claimed_at,
             **({"error": r.error or ""} if local else {}),
@@ -349,6 +359,8 @@ def rows_from_frame(frame: pd.DataFrame | None) -> list[Row]:
                 annotation_input_id=_id(row.get("annotation_input_id")),
                 input_digest=_str(row, "input_digest") or None,
                 mask_digest=_str(row, "mask_digest") or None,
+                input_iscc=_str(row, "input_iscc") or None,
+                mask_iscc=_str(row, "mask_iscc") or None,
                 claimed_by=_str(row, "claimed_by"),
                 claimed_at=_str(row, "claimed_at"),
                 error=_str(row, "error") or None,
