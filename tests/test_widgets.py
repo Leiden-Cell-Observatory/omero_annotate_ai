@@ -659,7 +659,7 @@ class TestWorkflowWidget:
         widget = WorkflowWidget(self._conn(), home=tmp_path)
         widget.note.value = "looks good"
         widget._save_note()
-        assert "Annotate a session first" in widget.status.value
+        assert "Pick a set with a session" in widget.status.value
 
     def test_new_set_annotate_and_note_on_the_real_core(self, tmp_path):
         config, source, omero = omero_set(tmp_path, n_images=2)
@@ -676,6 +676,7 @@ class TestWorkflowWidget:
         )
         saved = widget.annotate(ScriptedAnnotator(image_mask), note="first pass")
         assert widget.note.value == "first pass"  # prefilled to edit
+        assert widget.note_session.value == ts.config.sessions[-1].id
         widget.note.value = "second look: fine"
         widget._save_note()
 

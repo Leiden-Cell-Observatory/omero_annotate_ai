@@ -228,7 +228,7 @@ class WorkflowWidget:
         self.connection = connection
         self.home = home_dir(home)
         self._training_set: TrainingSet | None = None
-        self._last_session: int | None = None
+        self._notes: dict[int, str] = {}  # session ID -> note, for the note editor
         self._log: list[str] = []
         self._build()
         self._load_containers()
@@ -358,9 +358,13 @@ class WorkflowWidget:
             placeholder="How did it go? e.g. 'nuclei only, skipped small objects'",
             layout=widgets.Layout(width="420px", height="60px"),
         )
+        self.note_session = widgets.Dropdown(
+            options=[], description="Session", style=_LABEL, layout=_narrow()
+        )
+        self.note_session.observe(lambda _: self._show_note(), names="value")
         self.save_note = widgets.Button(
             description="Save session note",
-            tooltip="One note per session: saving replaces the last session's note",
+            tooltip="One note per session: saving replaces that session's note",
         )
         self.save_note.on_click(lambda _: self._save_note())
 
@@ -381,7 +385,13 @@ class WorkflowWidget:
                     self.go,
                     self.status,
                 ),
-                _card("Progress", self.progress, self.log, self.note, self.save_note),
+                _card(
+                    "Progress",
+                    self.progress,
+                    self.log,
+                    widgets.HBox([self.note_session, self.save_note]),
+                    self.note,
+                ),
             ]
         )
         self._show_mode()
@@ -484,6 +494,8 @@ class WorkflowWidget:
 
     def _on_set(self) -> None:
         self._training_set = None
+        self._notes = {}
+        self.note_session.options = []
         self._refresh_summary()
 
     def _refresh_summary(self) -> None:
@@ -498,6 +510,8 @@ class WorkflowWidget:
             )
             return
         self.summary.value = render_summary(info)
+        for record in info.sessions:
+            self._remember_session(record.id, record.note or "")
 
     # --- requests -----------------------------------------------------------------
 
@@ -596,7 +610,7 @@ class WorkflowWidget:
         """Event sink: annotation progress is shown in the Progress card."""
         match event:
             case SessionStarted(session=session, pending=pending):
-                self._last_session = session
+                self._remember_session(session, "")
                 self.progress.max = max(1, pending)
                 self.progress.value = 0
                 self._add_log(f"Session {session}: {pending} units")
@@ -624,9 +638,8 @@ class WorkflowWidget:
             case RunCancelled(stage=stage):
                 self._add_log(f"Cancelled during {stage}", error=True)
             case SessionFinished(session=session, annotated=annotated):
-                self._last_session = session
                 self._add_log(f"Session {session} finished: {annotated} saved")
-                self.note.value = self._session_note(session)
+                self._remember_session(session, self._session_note(session))
             case _:
                 pass
 
@@ -635,13 +648,33 @@ class WorkflowWidget:
         self._log = [*self._log, f"<div{css}>{html.escape(text)}</div>"][-LOG_LINES:]
         self.log.value = "".join(self._log)
 
+    def _remember_session(self, session: int, note: str) -> None:
+        """Offer ``session`` in the note editor and select it (the latest one)."""
+        self._notes[session] = note
+        self.note_session.options = [(str(s), s) for s in sorted(self._notes)]
+        self.note_session.value = max(self._notes)
+        self._show_note()
+
+    def _show_note(self) -> None:
+        session = self.note_session.value
+        self.note.value = "" if session is None else self._notes.get(session, "")
+
     def _save_note(self) -> None:
         note = self.note.value.strip()
-        if self._training_set is None or self._last_session is None or not note:
-            self._error("Annotate a session first, then write a note")
+        session = self.note_session.value
+        if session is None or not note:
+            self._error(
+                "Pick a set with a session (or annotate one), then write a note"
+            )
             return
-        self._training_set.set_session_note(self._last_session, note)
-        self._add_log(f"Note saved to session {self._last_session}")
+        try:
+            ts = self.training_set()  # opens the picked set if needed
+            ts.set_session_note(session, note)
+        except (OmeroAnnotateAIError, OSError, ValueError) as error:
+            self._error(str(error))
+            return
+        self._notes[session] = note
+        self._add_log(f"Note saved to session {session}")
         if self.mode.value == "open":
             self._refresh_summary()
 

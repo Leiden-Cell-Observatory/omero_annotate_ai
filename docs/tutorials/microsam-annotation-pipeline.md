@@ -88,7 +88,8 @@ workflow_widget.annotate(note="nuclei only")  # the note is stored with this ses
 
 Progress appears in the widget's **Progress** card. After the session the note box shows
 the session's note; edit it and click **Save session note** to replace it (one note per
-session). Without the widget, `TrainingSet.create(config, conn)`
+session). To change an earlier session's note, open the set and pick the session next to
+the note box. Without the widget, `TrainingSet.create(config, conn)`
 and `ts.annotate(...)` do the same.
 
 Creating the set:

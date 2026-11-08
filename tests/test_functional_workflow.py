@@ -1132,6 +1132,16 @@ class TestFrontEndRoutes:
         assert "checked" in reopened.summary.value
         assert "session 1" not in reopened.summary.value
 
+        # A fresh widget edits an earlier session's note via the session picker.
+        session = reopened.note_session.value
+        assert session is not None and reopened.note.value == "checked"
+        reopened.note.value = "checked again"
+        reopened.save_note.click()
+        assert "checked again" in reopened.summary.value
+        remote = OmeroWrites().read_config(omero_conn, table_id)
+        assert remote is not None
+        assert [r.note for r in remote.sessions if r.id == session] == ["checked again"]
+
         reopened.add["training"].value = 1
         reopened.go.click()
         assert "1 units to annotate" in reopened.status.value, reopened.status.value
