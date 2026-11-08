@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -203,6 +204,8 @@ class OMEROAnnotateDock(QWidget):
         self._pages = QStackedWidget()
         self._pages.addWidget(self._build_start_page())
         self._pages.addWidget(self._build_annotate_page())
+        self._pages.currentChanged.connect(self._fit_page)
+        self._fit_page(0)
         layout = QVBoxLayout(self)
         layout.addWidget(self._pages)
         self.status = QLabel()
@@ -332,6 +335,19 @@ class OMEROAnnotateDock(QWidget):
         layout.addWidget(self.finish_button)
         layout.addStretch()
         return page
+
+    def _fit_page(self, index: int) -> None:
+        """Size the dock to the shown page only: a stacked widget otherwise keeps
+        the minimum height of its tallest page, so the short annotate page could not
+        be shrunk to make room for micro-SAM's dock below it."""
+        for i in range(self._pages.count()):
+            policy = (
+                QSizePolicy.Policy.Preferred
+                if i == index
+                else QSizePolicy.Policy.Ignored
+            )
+            self._pages.widget(i).setSizePolicy(policy, policy)
+        self._pages.updateGeometry()
 
     # --- start page ---------------------------------------------------------------
 

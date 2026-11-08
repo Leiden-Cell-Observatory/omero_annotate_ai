@@ -14,6 +14,8 @@ Newest first. The full list of pull requests per version is on
   contrast limits; the opacity you set on the image layer is kept.
 - **The napari plugin no longer offers to store the OMERO password** in the system
   keychain; it is asked for at each connect and the field is cleared straight away.
+- **napari plugin:** the dock can be made as short as the annotate page, so micro-SAM's
+  dock below it gets the room (it kept the height of the start page).
 - **One pixel reader.** The training export and the BioImage Archive export read
   planes, patches and volumes through the same image source as annotation
   (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.
