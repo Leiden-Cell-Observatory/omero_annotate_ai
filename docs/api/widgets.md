@@ -12,7 +12,7 @@ Jupyter (ipywidgets) interfaces. They do not work in marimo.
 
 ::: omero_annotate_ai.widgets.workflow_widget.WorkflowWidget
     options:
-      members: [display, get_config, request, training_set, annotate, events]
+      members: [display, get_config, request, training_set, annotate, events, set_connection]
 
 ::: omero_annotate_ai.widgets.workflow_widget.open_or_create
 

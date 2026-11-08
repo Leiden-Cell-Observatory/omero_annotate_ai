@@ -15,3 +15,7 @@
 ::: omero_annotate_ai.omero.omero_functions.read_table_rows
 
 ::: omero_annotate_ai.omero.omero_functions.find_annotation_config_for_table
+
+## Deleting a training set
+
+::: omero_annotate_ai.omero.omero_functions.delete_training_set

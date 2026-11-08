@@ -1,10 +1,3 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
-    <img src="docs/images/logo.svg" alt="OMERO Annotate.AI logo" width="140">
-  </picture>
-</p>
-
 # OMERO Annotate.AI
 
 [![PyPI version](https://img.shields.io/pypi/v/omero-annotate-ai)](https://pypi.org/project/omero-annotate-ai/)
@@ -15,12 +8,18 @@
 [![Pixi Badge](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
 [![License](https://img.shields.io/github/license/Leiden-Cell-Observatory/omero_annotate_ai)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/LICENSE)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+  <img src="docs/images/logo.svg" alt="OMERO Annotate.AI logo" width="120" align="right">
+</picture>
+
 **Reproducible AI-assisted annotation of OMERO data, from image selection to training-ready datasets.**
 
 Pick images from an OMERO project, dataset, plate or screen. Annotate them in napari with
 [micro-SAM](https://github.com/computational-cell-analytics/micro-sam) or prepare them for
 [Cellpose](https://www.cellpose.org). The masks, ROIs and a tracking table go back to OMERO.
 Every run is described by one YAML file, so you can resume it, repeat it or share it.
+<br clear="right">
 
 ![micro-SAM segmentation of a Cell Painting field in napari](docs/images/napari_microsam.jpg)
 <sub>micro-SAM (`vit_b_lm`) instance segmentation of nuclei in a Cell Painting field from the BioImage Archive (S-BIAD855), shown in napari.</sub>
@@ -36,8 +35,9 @@ flowchart LR
     D --> F[BioImage Archive<br/>MIFA export]
 ```
 
-- **Jupyter widgets** for connecting to OMERO and configuring a run step by step, no code needed.
+- **Jupyter widgets** to connect to OMERO and create a training set or open one to continue, no code needed.
 - **Resumable and crash-safe:** each mask is saved locally, uploaded with a tag and then recorded in the tracking table, so an interrupted run continues where it stopped without duplicate uploads; pixel digests flag files that changed afterwards.
+- **Review and correct** earlier annotations with their saved masks; record a note per session.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
 - **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).
@@ -117,7 +117,8 @@ sessions and their notes) and a local copy of the tracking table. By default tha
 `home=` to `TrainingSet.create` / `open`) to keep the sets elsewhere.
 `ts.review()` reopens annotated images with their masks to correct them.
 Open the same set on another computer to carry on there; two people can even annotate
-it at the same time, because each session claims the images it shows.
+it at the same time, because each session claims the images it shows (your own claims,
+e.g. after a dropped connection, never block you).
 `create_pipeline(config, conn).run_full_micro_sam_workflow()` from 0.4 still works but
 is deprecated.
 
@@ -136,7 +137,7 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 
 ## Documentation
 
-Upgrading from 0.4? See [What's new in 0.5](https://leiden-cell-observatory.github.io/omero_annotate_ai/whats-new-0.5/) for the changes and a migration table.
+Upgrading from 0.4? The [release notes](https://leiden-cell-observatory.github.io/omero_annotate_ai/release-notes/) list the changes and how to migrate.
 
 Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_ai/**
 ([micro-SAM tutorial](https://leiden-cell-observatory.github.io/omero_annotate_ai/tutorials/microsam-annotation-pipeline/),

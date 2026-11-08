@@ -1,10 +1,15 @@
-# What's new in 0.5.0
+# Release notes
+
+Newest first. The full list of pull requests per version is on
+[GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
+
+## 0.5.0
 
 0.5.0 makes annotation runs reliable and traceable, adds OME-Zarr as an image source, and
-reorganises the package around **training sets**. It is a breaking release; the
-[migration notes](#migrating-from-04) below list what to change.
+reorganises the package around **training sets**. It is a breaking release; see
+[migrating from 0.4](#migrating-from-04).
 
-## Highlights
+### Highlights
 
 - **Training sets.** `TrainingSet.create(config, conn)` selects the images and starts
   tracking; `TrainingSet.open(table_id)` (or a folder) continues it. The tracking table
@@ -16,8 +21,9 @@ reorganises the package around **training sets**. It is a breaking release; the
 - **Integrity checks.** Pixel checksums of every image and mask are stored in the table;
   a resume or an export reports a mask that changed after upload.
 - **Several computers, one set.** Sessions claim the units they show, so two people can
-  annotate the same OMERO set at the same time without doing an image twice; claims
-  expire if a computer goes quiet, and a unit saved elsewhere is never uploaded again.
+  annotate the same OMERO set at the same time without doing an image twice. Your own
+  claims (e.g. left by a dropped connection) never block you; other computers' claims
+  expire after `workflow.claim_hours`, and a unit saved elsewhere is never uploaded again.
 - **Review and correct.** `ts.review()` (widget: *Review annotated*) opens annotated
   units with their saved masks in napari; changed masks replace the uploads on OMERO.
 - **Sessions and notes.** Every annotation session is recorded (who, when, model, how
@@ -30,12 +36,15 @@ reorganises the package around **training sets**. It is a breaking release; the
   splits can keep wells together (`split_unit: well`) and be stratified by well metadata.
 - **Training export** keeps native bit depth, includes the test split, records the
   normalisation in `normalization.json`, and micro-SAM training normalises at load.
-- **New workflow widget**: *New training set* or *Open training set* with a summary of
-  progress and earlier sessions, progress bar and session-note box.
+- **New workflow widget**: *New training set* (timepoints and z-slices: specific, all or
+  random) or *Open training set* with a summary of progress and earlier sessions, a
+  progress bar and a note editor for any session.
 - **Safer delete**: `delete_training_set` finds everything by table ID and tag, runs as a
   dry run first, waits for the server, and refuses objects owned by other users.
+- **Cellpose route**: `ts.prepare_external()` exports images; masks saved in
+  `external_output/` are collected with `ts.collect_masks()`.
 
-## Migrating from 0.4
+### Migrating from 0.4
 
 **Python and licence.** Python 3.11 or newer. The package is now licensed GPL-2.0-or-later
 (it builds on omero-py and ezomero); 0.4.x releases stay Apache-2.0.
@@ -55,7 +64,7 @@ extended; finish them with 0.4 or start a new training set.
 | `version` | `schema_version` |
 | `spatial_coverage.normalization_method`, `percentile_*` | `normalization.*` |
 
-Unknown keys are refused instead of ignored.
+Unknown keys are refused, in every section, instead of ignored.
 
 **Code.**
 
@@ -63,7 +72,7 @@ Unknown keys are refused instead of ignored.
 |---|---|
 | `create_pipeline(config, conn).run_full_micro_sam_workflow()` | `TrainingSet.create(config, conn).annotate()` (the old call still works, deprecated) |
 | resume with `resume_from_table` | `TrainingSet.open(table_id, conn).annotate()` |
-| `run_cp_workflow()` / `collect_annotations_from_disk()` | `ts.prepare_external()` / `ts.collect_masks()`; Cellpose masks go to `external_output/` (was `annotation_output/`) |
+| `run_cp_workflow()` / `collect_annotations_from_disk()` | `ts.prepare_external()` / `ts.collect_masks()`; masks from Cellpose go to `external_output/` |
 | `config.get_processed()`, `config.annotations` | `[r for r in ts.units() if r.processed]` |
 | `config.save_bia_package(dest)` | `save_bia_package(ts.config, ts.units(), ts.bundle_dir, dest)` |
 | `cleanup_project_annotations(...)` | `delete_training_set(conn, table_id)` |
@@ -72,3 +81,19 @@ Unknown keys are refused instead of ignored.
 **Notebooks.** Cellpose is a tool choice in the marimo annotation notebook, OMERO and
 OME-Zarr YAML runs share `annotate-from-yaml.py`, and BiaPy/DL4MicEverywhere export is one
 notebook; see [example notebooks](notebooks.md).
+
+## 0.4.0
+
+- MIFA / BioImage Archive export (#49).
+- One folder layout for annotation and training (`annotation_input/`, `model_input/`,
+  `annotation_output/`) and typed OMERO table columns (#50).
+- numpy 2 support (#52); `__version__` matches the installed package (#57).
+
+## 0.3.3 – 0.3.1
+
+- Training folders cleaned correctly (#46).
+- Workflow widget states what it creates; safer credential handling in the connection
+  widget (#45, #44).
+- Masks and ROIs uploaded to the right OMERO images (file-ordering bug, #42).
+
+Older versions: see [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).

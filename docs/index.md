@@ -29,12 +29,14 @@ BioImage Archive (S-BIAD855), shown in napari.</small>
 -   :lucide-database: **Results stored in OMERO**
 
     Masks, ROIs and a table of what was annotated are attached to your images, so
-    colleagues can see them in OMERO.web.
+    colleagues can see them in OMERO.web. Interrupted runs resume without duplicates, and
+    earlier masks can be reviewed and corrected.
 
 -   :lucide-file-text: **A record of every run**
 
-    One YAML file holds the images, channels, patches and train/validation split you used.
-    Reload it to continue where you stopped, or share it so others can repeat the run.
+    One YAML file holds the images, channels, patches and train/validation/test split you
+    used, and every session is recorded with an optional note. Open the set again to
+    continue where you stopped, or share the YAML so others can repeat the run.
 
 -   :lucide-brain: **Ready for model training**
 
@@ -47,7 +49,7 @@ BioImage Archive (S-BIAD855), shown in napari.</small>
 
 ```mermaid
 flowchart LR
-    A[OMERO<br/>project · dataset · plate · screen] --> B[Select images<br/>train / validation split]
+    A[OMERO<br/>project · dataset · plate · screen] --> B[Select images<br/>train / val / test split]
     B --> C[Annotate in napari<br/>micro-SAM or Cellpose]
     C --> D[Back to OMERO<br/>masks · ROIs · tracking table]
     D --> E[Training data<br/>micro-SAM · BiaPy · DL4MicEverywhere]

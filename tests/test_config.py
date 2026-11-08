@@ -153,7 +153,7 @@ class TestAnnotationConfig:
         yaml_content = """
         name: test
         training:
-          trainingset_name: "test_set"
+          train_n: 4
         """
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -163,6 +163,7 @@ class TestAnnotationConfig:
             config = AnnotationConfig.from_yaml(f.name)
 
             assert config.name == "test"
+            assert config.training.train_n == 4
 
         # Clean up
         Path(f.name).unlink()
@@ -289,6 +290,10 @@ class TestConfigEdgeCases:
     def test_unknown_keys_and_assignments_are_rejected(self):
         with pytest.raises(ValueError):
             AnnotationConfig.from_dict({"name": "x", "colour": "red"})
+        with pytest.raises(ValueError, match="chanels"):  # a typo inside a section
+            AnnotationConfig.from_dict(
+                {"name": "x", "spatial_coverage": {"chanels": [1]}}
+            )
         config = create_default_config()
         with pytest.raises(ValueError):
             config.storage = "cloud"

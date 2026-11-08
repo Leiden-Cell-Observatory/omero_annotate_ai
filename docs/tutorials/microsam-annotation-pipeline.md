@@ -72,8 +72,8 @@ choose *Annotate pending* (the default) or *Review annotated* (see
 [Correct earlier annotations](#correct-earlier-annotations)).
 
 **Annotation.** The SAM model (`vit_b_lm` for light microscopy, `vit_b_em_organelles` for
-electron microscopy) and the batch size (images per napari session; progress is saved
-after each image; 0 = all). Click **Create** or **Open**.
+electron microscopy) and the batch size (images per napari session, 0 = all; the masks of a
+batch are saved and uploaded when you close its napari window). Click **Create** or **Open**.
 
 !!! tip "Not sure what a setting means?"
     [How it works](../concepts.md) explains annotation units, patches and the two modes.
@@ -94,8 +94,8 @@ and `ts.annotate(...)` do the same.
 
 Creating the set:
 
-1. picks images (reproducibly, from the stored seed) and assigns them to training and
-   validation,
+1. picks images (reproducibly, from the stored seed) and assigns them to training,
+   validation and test,
 2. creates the tracking table in OMERO (not for `storage: local`) and the set's folder,
 
 and `annotate` downloads the first batch and opens it in napari with the micro-SAM annotator. To continue
@@ -158,8 +158,8 @@ In OMERO.web (`storage: omero`):
 
 - Each annotated image now has **ROIs** (open it in OMERO.iviewer) and a **mask file**
   in its attachments.
-- The container has a **table** named after your run, listing every unit and whether it
-  is done, plus the **configuration file** as an attachment.
+- The container has a **table** named after your training set, listing every unit and
+  whether it is done, plus the set's **configuration file** as an attachment.
 
 Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
 `annotation_input/` and `annotation_output/`, a `tracking_table.csv` and its

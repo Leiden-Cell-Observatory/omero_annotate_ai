@@ -6,8 +6,8 @@ BiaPy, DL4MicEverywhere and most other segmentation tools.
 
 ```text
 my_training_data/
-├── train_input/    12345_0_0.tif   ← image
-├── train_label/    12345_0_0.tif   ← label mask with the same name
+├── train_input/    4ba674d4_0_0.tif   ← image
+├── train_label/    4ba674d4_0_0.tif   ← label mask with the same name
 ├── val_input/
 ├── val_label/
 ├── test_input/     ← only when the set has test units
@@ -16,7 +16,7 @@ my_training_data/
 
 Labels are instance masks: 0 is background, and each object has its own number.
 
-## From OMERO (after an upload-mode run)
+## From OMERO (`storage: omero`)
 
 Use this when your annotations are stored in OMERO. It works from any computer that can
 reach the server, and needs no display.

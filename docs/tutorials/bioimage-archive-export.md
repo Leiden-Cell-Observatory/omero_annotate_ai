@@ -54,7 +54,7 @@ summary = save_bia_package(
 `prepare_bia_data_from_table` downloads the finished units in their original bit depth;
 `save_bia_package` writes the bundle.
 
-## From a local read-only run
+## From a local training set
 
 ```python
 from omero_annotate_ai import TrainingSet

@@ -5,10 +5,10 @@ every option for when you want to read, edit or write one by hand.
 
 Only `name` is required. Everything else has a default.
 
-!!! warning "Misspelled keys are ignored without a warning"
-    If a key is not recognised, it is silently dropped and the default is used. After
-    loading a config, print the sections you changed to check that they were read:
-    `print(config.spatial_coverage)`.
+!!! tip "Typos are errors"
+    Unknown keys are refused when a config is loaded, in every section, so a misspelt
+    setting never falls back to a default unnoticed. Keys from older versions name their
+    replacement.
 
 ## A minimal example
 
@@ -61,12 +61,11 @@ print(get_config_template())
 | Key | Default | Meaning |
 |---|---|---|
 | `container_type` | `dataset` | `project`, `dataset`, `plate`, `screen` or `image` |
-| `container_id` | `0` | ID of the container. The config is attached here at the end of a run. |
+| `container_id` | `0` | ID of the container. The tracking table and the set's config are attached here. |
 | `container_ids` | – | List of several containers of the same type to draw images from. Set `container_id` too. |
 | `source_desc` | `""` | Free-text description of the source. |
 | `well_filters` | – | Plates only: keep wells by their key-value pairs, e.g. `{treatment: [DMSO]}`. Several keys must all match. |
 | `well_filter_mode` | `include` | `include` keeps matching wells, `exclude` drops them. |
-| `table_id` | – | Filled in by the pipeline: the current tracking table. |
 
 ```yaml
 omero:
@@ -77,6 +76,24 @@ omero:
     cell_line: [HeLa]
   well_filter_mode: include
 ```
+
+## `zarr`: OME-Zarr images instead of OMERO
+
+With `source: zarr` images are read from OME-Zarr files or URLs (for example the
+BioImage Archive) and no OMERO connection is needed; such sets are always
+`storage: local`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `uris` | `[]` | OME-Zarr plates, wells or images (http(s) URL or local path). |
+| `level` | `0` | Multiscale level to read. |
+| `fields` | `first` | Fields per well: `first` or `all`. |
+| `wells` | – | Only these wells, e.g. `[B2]`. |
+| `well_metadata` | – | CSV with a `well` column (optional `plate`) and metadata columns, for filters and stratified splits. |
+| `well_filters`, `well_filter_mode` | – , `include` | As for OMERO plates, on the `well_metadata` columns. |
+
+An example is in
+[`notebooks/marimo/configs/`](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/tree/main/notebooks/marimo/configs).
 
 ## `spatial_coverage`: what to annotate in each image
 
@@ -102,7 +119,7 @@ omero:
 | `z_slice_mode` | `specific` | `specific`, `all`, or `random`. |
 | `n_slices` | – | Number of random slices (with `random`). |
 | `three_d` | `false` | Annotate each timepoint as one 3D volume instead of separate planes. |
-| `z_range_start`, `z_range_end` | – | Volume range in 3D mode; filled from `z_slices` if not set. |
+| `z_range_start`, `z_range_end` | – | Optional volume range in 3D mode; filled from `z_slices` if not set. |
 
 **Patches**
 
@@ -145,6 +162,7 @@ effect.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `seed` | – | Seed for every random choice (split, timepoints, z-slices, patches). Empty: one is picked and stored when the set is created, so the selection can be repeated. |
 | `validation_strategy` | `random_split` | Recorded as metadata: `random_split`, `expert_review` or `cross_validation`. |
 | `quality_threshold` | – | Recorded as metadata. |
 
@@ -221,8 +239,7 @@ Training data is exported at native bit depth unless `apply_at_export` is set. W
 `apply_at_export: true` the model input images are written as float32 and the exact
 bounds used for each image are recorded in `normalization.json` next to the data;
 labels are never changed. Without it, `normalization.json` records what the trainer
-must apply. Configs that still carry `normalization_method` / `percentile_low` /
-`percentile_high` under `spatial_coverage` are migrated on load.
+must apply; micro-SAM training applies it when loading.
 
 `omero_annotate_ai.processing.normalization.biapy_normalization(config.normalization)`
 returns the matching BiaPy `DATA.NORMALIZATION` block. BiaPy's `div` and `scale_range`
@@ -242,8 +259,8 @@ types guess the bit depth from the image maximum, so exporting with
 
 | Key | Default | Meaning |
 |---|---|---|
-| `batch_size` | `0` | Units per napari session; progress is saved after each unit. `0` = all at once. |
-| `claim_hours` | `6` | OMERO sets: how long a session's claim on the units it shows lasts before another computer may take them over. |
+| `batch_size` | `0` | Units per napari session; a batch's masks are saved and uploaded when its napari window closes. `0` = all at once. |
+| `claim_hours` | `6` | OMERO sets: how long a session's claim on the units it shows lasts before another computer may take them over. Your own claims on the same computer never block you. |
 
 ## `storage`: where rows and masks are kept
 
@@ -295,8 +312,8 @@ annotation_methodology:
 tags: [segmentation, nuclei]
 ```
 
-Other top-level keys: `version` (your version of this config), `documentation` and
-`repository` (URLs), and `feature_types` (list of `name` and `color`).
+Other top-level keys: `documentation` and `repository` (URLs), and `feature_types`
+(list of `name` and `color`).
 
 ### Notes and Custom Metadata
 
@@ -312,15 +329,17 @@ custom_metadata:
 
 ## Filled in by omero-annotate-ai
 
-`schema_version` (3), `created`, `training.seed`, `identity` (the set's table ID or local
-ID) and `sessions` (who annotated when, how many units, and the session note) are written
+`schema_version` (3), `created`, `training.seed` (if you left it empty), `identity` (the set's table ID or local
+ID) and `sessions` (who annotated when, annotate or review, how many units, and the
+session note) are written
 when a set is created and annotated. The rows (one per annotation unit, with its split
 and state) live in `tracking_table.csv` and the OMERO table, not in the config. To start
 a new set from a saved config, remove `identity` and `sessions`.
 
-Configs from 0.4 and earlier are refused with a message naming each removed key's
-replacement (for example `workflow.read_only_mode` → `storage: local`,
-`omero.table_id` → `TrainingSet.open(table_id)`, `output.output_directory` → `home=`). The full list is in [migrating from 0.4](whats-new-0.5.md#migrating-from-04).
+Keys removed in schema version 3 are refused with a message naming the replacement (for
+example `workflow.read_only_mode` → `storage: local`, `omero.table_id` →
+`TrainingSet.open(table_id)`); the full list is in
+[migrating from 0.4](release-notes.md#migrating-from-04).
 
 ## Example recipes
 
