@@ -47,77 +47,53 @@ def generate_patch_coordinates(
     # Image is large enough for requested patch size
     actual_patch_size = (patch_h, patch_w)
 
-    # Ensure patches fit within image
-    max_x = max(0, width - patch_w)
-    max_y = max(0, height - patch_h)
-
-    coordinates = []
-
-    if random_patch:
-        draw = rng if rng is not None else rnd.Random()
-        # Generate random non-overlapping coordinates
-        used_areas = []  # Track used rectangular areas
-        max_attempts = n_patches * 20  # Limit attempts to avoid infinite loops
-        attempts = 0
-
-        while len(coordinates) < n_patches and attempts < max_attempts:
-            attempts += 1
-            x = draw.randint(0, max_x)
-            y = draw.randint(0, max_y)
-
-            # Check if this patch overlaps with any existing patch
-            new_rect = (x, y, x + patch_w, y + patch_h)
-            overlaps = False
-
-            for used_rect in used_areas:
-                if _rectangles_overlap(new_rect, used_rect):
-                    overlaps = True
-                    break
-
-            if not overlaps:
-                coordinates.append((x, y))
-                used_areas.append(new_rect)
-
-        if len(coordinates) < n_patches:
+    grid = _grid_origins(height, width, patch_h, patch_w)
+    if not random_patch:
+        if n_patches > len(grid):
             logger.warning(
-                f"Could only place {len(coordinates)} non-overlapping patches "
-                f"out of {n_patches} requested"
-            )
-
-    else:
-        # Generate grid-based non-overlapping patches
-        # Calculate how many patches fit in each dimension
-        patches_x = max(1, (width + patch_w - 1) // patch_w)  # Ceiling division
-        patches_y = max(1, (height + patch_h - 1) // patch_h)
-        max_grid_patches = patches_x * patches_y
-
-        if n_patches > max_grid_patches:
-            logger.warning(
-                f"Requested {n_patches} patches, but only {max_grid_patches} "
+                f"Requested {n_patches} patches, but only {len(grid)} "
                 "non-overlapping patches fit"
             )
-            n_patches = max_grid_patches
+        return grid[:n_patches], actual_patch_size
 
-        # Calculate spacing to distribute patches evenly
-        step_x = (width - patch_w) // (patches_x - 1) if patches_x > 1 else 0
-        step_y = (height - patch_h) // (patches_y - 1) if patches_y > 1 else 0
+    # Random: rejection sampling; if that leaves too few on a tight image, a random
+    # pick of grid slots, which always fits as many patches as the grid holds.
+    draw = rng if rng is not None else rnd.Random()
+    max_x, max_y = width - patch_w, height - patch_h
+    coordinates: list[tuple[int, int]] = []
+    for _ in range(n_patches * 50):
+        if len(coordinates) == n_patches:
+            break
+        x, y = draw.randint(0, max_x), draw.randint(0, max_y)
+        rect = (x, y, x + patch_w, y + patch_h)
+        if not any(
+            _rectangles_overlap(rect, (cx, cy, cx + patch_w, cy + patch_h))
+            for cx, cy in coordinates
+        ):
+            coordinates.append((x, y))
+    if len(coordinates) < min(n_patches, len(grid)):
+        coordinates = draw.sample(grid, min(n_patches, len(grid)))
 
-        # Generate grid coordinates
-        patch_count = 0
-        for row in range(patches_y):
-            for col in range(patches_x):
-                if patch_count >= n_patches:
-                    break
-
-                x = min(col * step_x, max_x)
-                y = min(row * step_y, max_y)
-                coordinates.append((x, y))
-                patch_count += 1
-
-            if patch_count >= n_patches:
-                break
-
+    if len(coordinates) < n_patches:
+        logger.warning(
+            f"Could only place {len(coordinates)} non-overlapping patches "
+            f"out of {n_patches} requested"
+        )
     return coordinates, actual_patch_size
+
+
+def _grid_origins(
+    height: int, width: int, patch_h: int, patch_w: int
+) -> list[tuple[int, int]]:
+    """Top-left corners of the most non-overlapping patches that fit, spread evenly."""
+
+    def axis(size: int, patch: int) -> list[int]:
+        count = size // patch
+        if count <= 1:
+            return [0]
+        return [round(i * (size - patch) / (count - 1)) for i in range(count)]
+
+    return [(x, y) for y in axis(height, patch_h) for x in axis(width, patch_w)]
 
 
 def _rectangles_overlap(
