@@ -13,7 +13,8 @@ import contextlib
 import functools
 import html
 import logging
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -192,6 +193,10 @@ class OMEROAnnotateDock(QWidget):
         self._batch: Batch | None = None
         self._cursor = 0
         self._committed: set[int] = set()
+        # Images saved in earlier batches of this session (for Prev), with their model.
+        self._history: list[tuple[BatchItem, str]] = []
+        self._revisit: BatchItem | None = None  # one of those, shown again
+        self._tmp: tempfile.TemporaryDirectory[str] | None = None
         self._skipped: set[str] = set()
         self._done: dict[str, list[int]] = {}
         self._confirm_empty = False
@@ -470,6 +475,7 @@ class OMEROAnnotateDock(QWidget):
             self._set_start_controls(True)
             self.cancel_button.setVisible(False)
             self._skipped.clear()
+            self._history, self._revisit = [], None
             self._bind_keys(True)
             self._pages.setCurrentIndex(1)
             self._start_batch(batch)
@@ -514,11 +520,7 @@ class OMEROAnnotateDock(QWidget):
             batch = None
         self._batch, self._committed = batch, set()
         if batch is None:
-            self._set_buttons(False)
-            self.current_label.setText("No images left in this session.")
-            self._say(
-                "All images are done or skipped. Add a note and finish the session."
-            )
+            self._no_images_left()
             return
         first = next(
             (
@@ -530,37 +532,73 @@ class OMEROAnnotateDock(QWidget):
         )
         self._show(first)
 
+    def _embedding_path(self, batch: Batch, index: int) -> Path:
+        embeddings = batch.embedding_dir or batch.mask_dir / "embeddings"
+        embeddings.mkdir(parents=True, exist_ok=True)
+        return embeddings / f"embedding_{index:05}.zarr"
+
+    def _scratch(self) -> Path:
+        """A folder for this session's revisited embeddings and corrected masks."""
+        if self._tmp is None:
+            self._tmp = tempfile.TemporaryDirectory(prefix="oai-napari-")
+        return Path(self._tmp.name)
+
     def _show(self, index: int) -> None:
+        """Show image ``index`` of the current batch; a saved one with its mask."""
         batch = self._batch
         if batch is None:
             return
-        self._cursor, self._confirm_empty, self._ready = index, False, False
+        self._cursor, self._revisit = index, None
         item = batch.items[index]
+        saved = index in self._committed
         self.current_label.setText(
             f"Image {index + 1}/{len(batch.items)}: {_describe(item)}"
+            + (" (saved)" if saved else "")
         )
+        self._present(
+            item,
+            self._embedding_path(batch, index),
+            batch.model_type,
+            saved,
+            lambda: (
+                self._batch is batch and self._cursor == index and self._revisit is None
+            ),
+        )
+        if not saved:
+            self._prefetch(batch, index)
+
+    def _show_saved(self, entry: tuple[BatchItem, str]) -> None:
+        """Show an image saved in an earlier batch of this session, with its mask."""
+        item, model_type = entry
+        self._revisit = item
+        self.current_label.setText(f"Saved earlier: {_describe(item)}")
+        path = self._scratch() / f"{item.annotation_id}.zarr"
+        self._present(item, path, model_type, True, lambda: self._revisit is item)
+
+    def _present(
+        self,
+        item: BatchItem,
+        path: Path,
+        model_type: str,
+        saved: bool,
+        current: Callable[[], bool],
+    ) -> None:
+        """Compute (or load) the embedding of ``item``, then hand it to micro-SAM;
+        ``current()`` says whether the user is still on this image by then."""
+        self._confirm_empty, self._ready = False, False
         self._update_progress()
         self._set_buttons(False)
         self._controller.hold(item.pixels)
         self.busy.setVisible(True)
         self._say("Computing the image embedding…")
-        embeddings = batch.embedding_dir or batch.mask_dir / "embeddings"
-        embeddings.mkdir(parents=True, exist_ok=True)
-        path = embeddings / f"embedding_{index:05}.zarr"
+        session = self._session
 
-        def ready(embedding: Embedding) -> None:
-            if self._finishing or self._batch is not batch or self._cursor != index:
+        def ready(embedding: Embedding, start: np.ndarray | None) -> None:
+            if self._finishing or not current():
                 return  # the user moved on (or finished) meanwhile
             self.busy.setVisible(False)
             try:
-                # A copy: the viewer's edits never touch the saved mask, which
-                # stays the reference for "unchanged" and for Prev.
-                start = (
-                    None
-                    if item.initial_mask is None
-                    else item.initial_mask.astype(np.uint32)
-                )
-                self._controller.show(item.pixels, embedding, batch.model_type, start)
+                self._controller.show(item.pixels, embedding, model_type, start)
             except Exception as exc:  # noqa: BLE001 - shown to the user, logged
                 self._on_image_error(exc)
                 return
@@ -568,17 +606,63 @@ class OMEROAnnotateDock(QWidget):
             self._set_buttons(True)
             self._say(
                 "Correct the saved objects, then Accept (unchanged masks stay as they are)."
-                if self._reviewing
+                if saved or self._reviewing
                 else "Segment with micro-SAM, commit objects, then Accept."
             )
 
-        self._embedder.compute(
-            item.pixels, path, batch.model_type, ready, self._on_image_error
-        )
+        def embed(start: np.ndarray | None) -> None:
+            self._embedder.compute(
+                item.pixels,
+                path,
+                model_type,
+                lambda embedding: ready(embedding, start),
+                self._on_image_error,
+            )
+
+        if saved and session is not None:
+            # Read on the IO thread, which runs jobs in order: after its commit.
+            self._io.run(
+                lambda: session.saved_mask(item.annotation_id).astype(np.uint32),
+                embed,
+                self._on_image_error,
+            )
+        else:
+            # A copy: the viewer's edits never touch the saved mask, which stays
+            # the reference for "unchanged".
+            embed(
+                None
+                if item.initial_mask is None
+                else item.initial_mask.astype(np.uint32)
+            )
+
+    def _prefetch(self, batch: Batch, index: int) -> None:
+        """Compute the next image's embedding while this one is annotated; showing it
+        then only loads it. Errors surface when it is shown."""
+        following = self._todo(batch, index)
+        if following:
+            nxt = following[0]
+            self._embedder.compute(
+                batch.items[nxt].pixels,
+                self._embedding_path(batch, nxt),
+                batch.model_type,
+                lambda _embedding: None,
+                lambda _exc: None,
+            )
+
+    def _todo(self, batch: Batch, after: int) -> list[int]:
+        """Images of ``batch`` after position ``after`` not yet saved or skipped."""
+        return [
+            i
+            for i in range(after + 1, len(batch.items))
+            if i not in self._committed
+            and batch.items[i].annotation_id not in self._skipped
+        ]
 
     def _accept(self) -> None:
         batch, session = self._batch, self._session
-        if batch is None or session is None or not self._ready or self._finishing:
+        if session is None or not self._ready or self._finishing:
+            return
+        if self._revisit is None and batch is None:
             return
         mask = self._controller.current_mask()
         if not mask.any() and not self._confirm_empty:
@@ -587,8 +671,17 @@ class OMEROAnnotateDock(QWidget):
                 "No objects committed. Press Accept again to save this image as empty."
             )
             return
+        if self._revisit is not None:
+            self._revise(session, self._revisit, mask)
+            self._resume()
+            return
+        assert batch is not None
         index = self._cursor
         item = batch.items[index]
+        if index in self._committed:  # saved earlier in this batch: replace it
+            self._revise(session, item, mask)
+            self._advance()
+            return
         path = batch.mask_dir / f"seg_{index:05}.tif"
         initial = item.initial_mask
         if initial is not None and np.array_equal(mask, initial):
@@ -607,33 +700,87 @@ class OMEROAnnotateDock(QWidget):
         )
         self._advance()
 
+    def _revise(
+        self, session: AnnotationSession, item: BatchItem, mask: np.ndarray
+    ) -> None:
+        """Save corrected objects of an image saved earlier in this session."""
+        annotation_id = item.annotation_id
+        path = self._scratch() / f"{annotation_id}_mask.tif"
+        tifffile.imwrite(path, mask.astype(np.uint32), compression="zlib")
+
+        def revised(outcome: str) -> None:
+            if outcome == "failed":
+                self._notify(
+                    f"The correction of {annotation_id} could not be uploaded; "
+                    "the earlier mask is kept."
+                )
+
+        self._io.run(
+            lambda: session.revise(annotation_id, path, publish_config=False),
+            revised,
+            self._on_error,
+        )
+
     def _skip(self) -> None:
         # Also without a shown image: an image whose embedding failed can be skipped.
-        if self._batch is None or self._finishing:
+        if self._finishing:
             return
-        self._skipped.add(self._batch.items[self._cursor].annotation_id)
+        if self._revisit is not None:  # leave the saved image as it is
+            self._resume()
+            return
+        if self._batch is None:
+            return
+        if self._cursor not in self._committed:
+            self._skipped.add(self._batch.items[self._cursor].annotation_id)
         self._advance()
 
     def _prev(self) -> None:
-        if self._batch is None or self._finishing:
+        """Back one image: within the batch (saved or skipped), then through the
+        images saved in earlier batches of this session."""
+        if self._finishing or self._session is None:
             return
-        earlier = [i for i in range(self._cursor) if i not in self._committed]
+        if self._revisit is None and self._batch is not None and self._cursor > 0:
+            self._show(self._cursor - 1)
+            return
+        items = [item for item, _ in self._history]
+        earlier = (
+            self._history
+            if self._revisit is None
+            else self._history[: items.index(self._revisit)]
+        )
         if earlier:
-            self._show(earlier[-1])
+            self._show_saved(earlier[-1])
+
+    def _resume(self) -> None:
+        """From an image of an earlier batch back to the current batch."""
+        self._revisit = None
+        if self._batch is None:
+            self._no_images_left()
+            return
+        self._cursor = -1
+        self._advance()
+
+    def _no_images_left(self) -> None:
+        self._ready = False
+        self._set_buttons(False)
+        self.prev_button.setEnabled(bool(self._history))
+        self.current_label.setText("No images left in this session.")
+        self._say(
+            "All images are done or skipped. Prev goes back to saved images; "
+            "add a note and finish the session."
+        )
 
     def _advance(self) -> None:
         batch, session = self._batch, self._session
         if batch is None or session is None or self._finishing:
             return
-        todo = [
-            i
-            for i in range(self._cursor + 1, len(batch.items))
-            if i not in self._committed
-            and batch.items[i].annotation_id not in self._skipped
-        ]
+        todo = self._todo(batch, self._cursor)
         if todo:
             self._show(todo[0])
             return
+        self._history += [
+            (batch.items[i], batch.model_type) for i in sorted(self._committed)
+        ]
 
         def next_batch() -> Batch | None:
             session.release(batch)
@@ -662,6 +809,10 @@ class OMEROAnnotateDock(QWidget):
             reviewed = self._reviewing
             self._finishing = False
             self._session = self._batch = None
+            self._history, self._revisit = [], None
+            if self._tmp is not None:
+                self._tmp.cleanup()
+                self._tmp = None
             self._bind_keys(False)
             self._controller.teardown()
             self.note.clear()
@@ -812,7 +963,7 @@ class OMEROAnnotateDock(QWidget):
     def _on_image_error(self, exc: BaseException) -> None:
         """The image could not be shown: Skip moves on, Prev goes back."""
         self._on_error(exc)
-        if self._batch is not None and not self._finishing:
+        if self._session is not None and not self._finishing:
             self.skip_button.setEnabled(True)
             self.prev_button.setEnabled(True)
 

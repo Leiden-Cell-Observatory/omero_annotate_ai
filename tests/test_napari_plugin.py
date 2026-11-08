@@ -57,9 +57,13 @@ class FakeController:
 
 
 class InstantEmbedder:
-    """Skips SAM: reports an embedding as ready straight away."""
+    """Skips SAM: reports an embedding as ready straight away; records the paths."""
+
+    def __init__(self) -> None:
+        self.paths: list[Path] = []
 
     def compute(self, image, save_path, model_type, on_done, on_error) -> None:
+        self.paths.append(Path(save_path))
         on_done(Embedding(Path(save_path), None, None))
 
 
@@ -196,6 +200,65 @@ class TestDock:
         widget.prev_button.click()
         assert widget._cursor == 0
         assert len(controller.shown) == 3
+
+    def test_the_next_embedding_is_computed_while_annotating(
+        self, tmp_path, make_dock, qtbot
+    ):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget = make_dock(home, source)[0]
+        _start(widget, qtbot)
+        names = [p.name for p in widget._embedder.paths]
+        assert names == ["embedding_00000.zarr", "embedding_00001.zarr"]
+
+    def test_prev_reopens_a_saved_image_and_saves_corrections(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, omero, home = _make_set(tmp_path, "omero")
+        widget, controller, _ = make_dock(home, source, omero, conn=omero.conn())
+        _start(widget, qtbot)
+        first = widget._batch.items[0].annotation_id
+        controller.mask[2:6, 2:6] = 1
+        widget.accept_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+
+        widget.prev_button.click()  # back to the saved image, with its mask
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 0, timeout=5000)
+        assert controller.initial[-1].max() == 1
+        label = next(r.label_id for r in ts.units() if r.annotation_id == first)
+        controller.mask[2:6, 2:6] = 3  # a correction
+        widget.accept_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+
+        def replaced() -> bool:
+            row = next(r for r in widget._session._set.rows if r.annotation_id == first)
+            return row.label_id != label
+
+        qtbot.waitUntil(replaced, timeout=5000)
+        assert list(omero.uploads_per_tag().values()) == [(1, 1)]
+
+    def test_prev_reaches_images_saved_in_earlier_batches(
+        self, tmp_path, make_dock, qtbot
+    ):
+        _, source, _, home = _make_set(tmp_path, "local")  # batches of 2
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        first_batch = widget._batch.index
+        for value in (1, 2):
+            controller.mask[2:6, 2:6] = value
+            widget.accept_button.click()
+            qtbot.waitUntil(lambda: widget._ready, timeout=5000)
+        assert widget._batch.index == first_batch + 1 and widget._cursor == 0
+
+        widget.prev_button.click()
+        qtbot.waitUntil(
+            lambda: widget._ready and widget._revisit is not None, timeout=5000
+        )
+        assert controller.initial[-1].max() == 2  # the last saved image
+        widget.prev_button.click()
+        qtbot.waitUntil(lambda: controller.initial[-1].max() == 1, timeout=5000)
+        widget.skip_button.click()  # unchanged: back to the image still to do
+        qtbot.waitUntil(lambda: widget._ready and widget._revisit is None, timeout=5000)
+        assert widget._batch.index == first_batch + 1 and widget._cursor == 0
 
     def test_keys_are_bound_only_while_annotating(self, tmp_path, make_dock, qtbot):
         _, source, _, home = _make_set(tmp_path, "local")

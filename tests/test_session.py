@@ -176,6 +176,48 @@ class TestAnnotationSession:
         assert all(a.processed and a.mask_digest for a in pipeline.rows)
 
 
+@pytest.mark.unit
+class TestRevise:
+    """Going back to a unit saved earlier in the same session."""
+
+    def _saved(self, tmp_path):
+        pipeline, omero = ready_pipeline(tmp_path, n_images=2)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        session.commit(batch, masks_for(batch, {0}))
+        return pipeline, omero, session, batch, batch.items[0].annotation_id
+
+    def test_a_changed_mask_replaces_the_upload(self, tmp_path):
+        pipeline, omero, session, _, unit = self._saved(tmp_path)
+        old_label = next(r.label_id for r in pipeline.rows if r.annotation_id == unit)
+        saved = session.saved_mask(unit)
+        changed = tmp_path / "changed.tif"
+        tifffile.imwrite(changed, np.where(saved > 0, 2, 0).astype(np.uint32))
+
+        assert session.revise(unit, changed) == "revised"
+
+        row = next(r for r in pipeline.rows if r.annotation_id == unit)
+        assert row.label_id != old_label and old_label not in omero.labels
+        assert session.saved_mask(unit).max() == 2
+        table = omero.tables[pipeline.table_id].set_index("annotation_id")
+        assert table.loc[unit, "label_id"] == row.label_id
+        assert session.annotated == 1  # still one unit annotated
+
+    def test_an_unchanged_mask_keeps_the_upload(self, tmp_path):
+        pipeline, omero, session, _, unit = self._saved(tmp_path)
+        before = dict(omero.labels)
+        same = tmp_path / "same.tif"
+        tifffile.imwrite(same, session.saved_mask(unit).astype(np.uint32))
+
+        assert session.revise(unit, same) == "unchanged"
+        assert omero.labels.keys() == before.keys()
+
+    def test_only_units_saved_by_this_session(self, tmp_path):
+        _, _, session, batch, _ = self._saved(tmp_path)
+        with pytest.raises(ValueError, match="not saved in this session"):
+            session.revise(batch.items[1].annotation_id, tmp_path / "x.tif")
+
+
 def edited(pixels, mask):
     """A reviewer's correction: one pixel less of the object."""
     out = np.array(mask, copy=True)

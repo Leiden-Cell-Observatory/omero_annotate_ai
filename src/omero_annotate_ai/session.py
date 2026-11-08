@@ -457,6 +457,34 @@ class AnnotationSession:
         self._set.events(UnitConflict(annotation_id, str(keep)))
         return True
 
+    def saved_mask(self, annotation_id: str) -> np.ndarray:
+        """The mask saved for a unit, e.g. to show it again."""
+        return np.asarray(
+            tifffile.imread(mask_path(self._set.bundle_dir, annotation_id))
+        )
+
+    def revise(
+        self, annotation_id: str, mask: Path, *, publish_config: bool = True
+    ) -> Literal["revised", "unchanged", "failed"]:
+        """Replace the saved mask of a unit saved in this session (the annotator
+        went back to it), as a review would: an unchanged mask keeps its upload.
+
+        Raises:
+            ValueError: The unit was not handed out and saved in this session.
+        """
+        row = next(
+            (a for a in self._set.rows if a.annotation_id == annotation_id), None
+        )
+        if row is None or not row.processed or annotation_id not in self._handed_out:
+            raise ValueError(f"{annotation_id} was not saved in this session")
+        outcome = review_unit(self._set, row, Path(mask), self.session)
+        if outcome == "revised" and not self._set.is_local:
+            self._set.write_table([row])
+            if publish_config:
+                self._set.publish_config()
+        self._set.save_config()
+        return outcome
+
     def release(self, batch: Batch) -> None:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
         left = self._open.get(batch.index, set())

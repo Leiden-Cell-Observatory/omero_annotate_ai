@@ -34,14 +34,17 @@ message naming the one it needs.
 2. **Annotate.** Click *Annotate*. The set is opened, and repaired first if an earlier
    run was interrupted (*Cancel* stops that). The image appears with micro-SAM's annotator docked
    next to it; the image embedding is computed in the background first (a progress
-   bar shows while it runs). Meanwhile the next image is shown dimmed, without the
+   bar shows while it runs); the next image's embedding is computed while you
+   annotate, so moving on is quick. Meanwhile the next image is shown dimmed, without the
    previous image's objects, and micro-SAM's dock is disabled. Segment with micro-SAM's usual keys, commit the objects,
    then:
     - **Accept** (`N`) saves the committed objects for this image and moves on. An
       image without objects asks for a second press, so empty images are saved on
       purpose only.
     - **Skip** (`Shift-N`) leaves the image for a later session.
-    - **Prev** goes back to an earlier image of the current batch that is not saved yet.
+    - **Prev** goes back one image, through every image of this session: a saved
+      image opens with its objects, and Accept saves your corrections (replacing the
+      upload; an unchanged mask keeps it). Skip leaves it as it is.
 
     If an image cannot be shown (for example its embedding fails), the error is shown
     and **Skip** / **Prev** still work.
