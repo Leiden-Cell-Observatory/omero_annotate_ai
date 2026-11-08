@@ -1275,6 +1275,7 @@ class TestBIAExport:
                 z_slice=0,
                 channel=0,
                 annotation_type="segmentation_mask",
+                processed=True,
             )
             for i in (1, 2, 3)
         ]

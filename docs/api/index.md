@@ -10,7 +10,8 @@ from omero_annotate_ai import (
     create_omero_connection_widget,  # Jupyter widgets
     create_workflow_widget,
     create_training_data_widget,
-    prepare_training_data_from_table,  # training data
+    export_training_set,  # training data (OMERO or local set)
+    prepare_training_data_from_table,
     reorganize_local_data_for_training,
     setup_training,
     run_training,  # micro-SAM training

@@ -36,8 +36,13 @@ from ..events import (
     UploadFailed,
 )
 from ..omero.omero_utils import get_container_info
-from ..planning import Mode
-from ..trainingset import TrainingSet, TrainingSetSummary, list_training_sets, summarize
+from ..planning import Mode, parse_indices
+from ..trainingset import (
+    TrainingSet,
+    TrainingSetSummary,
+    summarize,
+    training_set_choices,
+)
 
 CONTAINER_TYPES = ("dataset", "project", "plate", "screen")
 MODELS = (
@@ -121,26 +126,6 @@ def open_or_create(
     return ts
 
 
-def parse_indices(text: str, what: str) -> list[int]:
-    """``"0, 3, 5-7"`` as ``[0, 3, 5, 6, 7]``; a clear ``ValueError`` otherwise."""
-    indices: list[int] = []
-    for part in filter(None, (p.strip() for p in text.split(","))):
-        low, dash, high = part.partition("-")
-        try:
-            start = int(low)
-            stop = int(high) if dash else start
-        except ValueError:
-            raise ValueError(
-                f"{what}: '{part}' is not a number or range (use e.g. 0, 3, 5-7)"
-            ) from None
-        if start < 0 or stop < start:
-            raise ValueError(f"{what}: '{part}' is not a valid range")
-        indices.extend(range(start, stop + 1))
-    if not indices:
-        raise ValueError(f"{what}: list at least one index (e.g. 0)")
-    return sorted(set(indices))
-
-
 class _AxisPicker:
     """Which timepoints or z-slices to use: listed ones, all, or a random draw."""
 
@@ -190,10 +175,37 @@ def _card(title: str, *children: widgets.Widget) -> widgets.VBox:
     return card
 
 
-def _local_sets(home: Path) -> list[tuple[str, int | Path]]:
-    """Training sets kept only on disk, as ``(label, folder)``."""
-    folders = sorted((home / "local").glob("*/config.yaml"))
-    return [(f"{f.parent.name} (local)", f.parent) for f in folders]
+def container_options(
+    connection: Any, container_type: Any, on_error: Callable[[str], None]
+) -> list[tuple[str, int]]:
+    """``(label, id)`` of the containers of one type; an OMERO error is reported."""
+    kind = str(container_type).capitalize()
+    try:
+        found = list(connection.getObjects(kind))
+    except Exception as error:  # noqa: BLE001 - UI boundary: show any OMERO error
+        on_error(f"Could not list {kind}s: {error}")
+        return []
+    return [(f"{c.getName()} (ID {c.getId()})", c.getId()) for c in found]
+
+
+def load_set_choices(
+    connection: Any,
+    container_type: Any,
+    container_id: Any,
+    home: Path,
+    on_error: Callable[[str], None],
+) -> list[tuple[str, int | Path]]:
+    """Set picker options; an OMERO error is reported and the local sets still shown."""
+    try:
+        return training_set_choices(
+            connection,
+            str(container_type),
+            None if container_id is None else int(container_id),
+            home=home,
+        )
+    except Exception as error:  # noqa: BLE001 - UI boundary
+        on_error(f"Could not list training sets: {error}")
+        return training_set_choices(home=home)
 
 
 def render_summary(summary: TrainingSetSummary) -> str:
@@ -412,15 +424,9 @@ class WorkflowWidget:
         if self.connection is None:
             self.container.options = []
             return
-        kind = str(self.container_type.value).capitalize()
-        try:
-            found = list(self.connection.getObjects(kind))
-        except Exception as error:  # noqa: BLE001 - UI boundary: show any OMERO error
-            self._error(f"Could not list {kind}s: {error}")
-            return
-        self.container.options = [
-            (f"{c.getName()} (ID {c.getId()})", c.getId()) for c in found
-        ]
+        self.container.options = container_options(
+            self.connection, self.container_type.value, self._error
+        )
 
     def _on_container(self) -> None:
         self._reset_selection()
@@ -474,20 +480,13 @@ class WorkflowWidget:
         self.status.value = ""
 
     def _load_sets(self) -> None:
-        options: list[tuple[str, int | Path]] = []
-        if self.connection is not None and self.container.value is not None:
-            try:
-                options += [
-                    (f"{s.name} (table {s.table_id})", s.table_id)
-                    for s in list_training_sets(
-                        self.connection,
-                        str(self.container_type.value),
-                        int(self.container.value),
-                    )
-                ]
-            except Exception as error:  # noqa: BLE001 - UI boundary
-                self._error(f"Could not list training sets: {error}")
-        options += _local_sets(self.home)
+        options = load_set_choices(
+            self.connection,
+            self.container_type.value,
+            self.container.value,
+            self.home,
+            self._error,
+        )
         self.sets.options = options
         if not options:
             self.summary.value = (

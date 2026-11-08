@@ -536,7 +536,8 @@ def save_bia_package(
 
     Args:
         config: The annotation config describing the submission.
-        rows: The rows to submit (e.g. ``TrainingSet.units()``).
+        rows: The rows to submit (e.g. ``TrainingSet.units()``); units not annotated
+            yet are left out.
         data_dir: The folder holding the files (``TrainingSet.bundle_dir``).
         dest_dir: Where to build the bundle.
         accession: Accession used in the MIFA filenames.
@@ -548,6 +549,7 @@ def save_bia_package(
             It is destructive against a real annotation run's output directory, which is
             why it defaults to copying.
     """
+    rows = [row for row in rows if row.processed]  # only units with a mask
     dest = Path(dest_dir)
     metadata_dir = dest / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)

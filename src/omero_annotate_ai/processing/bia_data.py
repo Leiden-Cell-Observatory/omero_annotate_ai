@@ -12,10 +12,8 @@ That layout is a training set's own folder (``TrainingSet.bundle_dir``). A
 table-driven export starts with the data on OMERO instead, so
 :func:`prepare_bia_data_from_table` fetches it and writes exactly that layout.
 
-Unlike the training-data path
-(:func:`omero_annotate_ai.processing.training_functions.prepare_training_data_from_table`),
-images are written at their **native bit depth**: the training path rescales every
-plane to 8-bit, which is lossy and unacceptable for an archive submission.
+Images are written at their **native bit depth**, as the training export does
+(:func:`omero_annotate_ai.processing.training_functions.prepare_training_data_from_table`).
 """
 
 from __future__ import annotations
@@ -40,6 +38,13 @@ MASK_DIR = "annotation_output"
 # A separate-channel workflow also writes model_input/, but the BIA source image is the
 # channel the mask was drawn on.
 IMAGE_DIR = "annotation_input"
+
+
+def _read_table(conn: Any, table_id: int) -> Any:
+    """The tracking table with its link columns named ``image_id`` / ``roi_id``."""
+    from ..omero.omero_functions import read_tracking_table  # avoids an import cycle
+
+    return read_tracking_table(conn, table_id)
 
 
 def _non_negative(value: int | None, default: int = 0) -> int:
@@ -223,7 +228,7 @@ def prepare_bia_data_from_table(
     output_dir = Path(output_dir)
 
     try:
-        table = ezomero.get_table(conn, table_id)
+        table = _read_table(conn, table_id)
     except Exception as exc:
         raise ValueError(f"Failed to load table {table_id}: {exc}") from exc
 

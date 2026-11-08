@@ -87,7 +87,13 @@ def plane():
 @pytest.fixture
 def mock_ezomero(plane):
     """Patched ezomero module inside bia_data."""
-    with patch("omero_annotate_ai.processing.bia_data.ezomero") as ez:
+    with (
+        patch("omero_annotate_ai.processing.bia_data.ezomero") as ez,
+        patch(
+            "omero_annotate_ai.processing.bia_data._read_table",
+            side_effect=lambda conn, table_id: ez.get_table(conn, table_id),
+        ),
+    ):
         ez.get_image.side_effect = fake_get_image_factory(plane)
         ez.get_file_annotation.side_effect = fake_get_file_annotation
         yield ez
@@ -423,3 +429,25 @@ def test_without_clean_existing_previous_files_survive(
     prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
     assert stale.exists()
+
+
+# --------------------------------------------------------------------------- #
+# A local training set straight into a bundle
+# --------------------------------------------------------------------------- #
+
+
+def test_local_set_bundle_holds_only_annotated_units(tmp_path):
+    pytest.importorskip("bia_mifa_models")
+    from tests.fakes import annotate, create_set, omero_set
+
+    config, source, omero = omero_set(tmp_path, n_images=3)
+    config.storage = "local"
+    ts = create_set(config, source, omero, tmp_path / "home")
+    assert annotate(ts, limit=2) == 2
+
+    result = save_bia_package(ts.config, ts.units(), ts.bundle_dir, tmp_path / "bia")
+
+    assert result["n_annotations"] == 2
+    assert result["missing"] == 0
+    assert len(list((tmp_path / "bia" / "annotations").glob("*_mask.tif"))) == 2
+    assert len(list(ts.bundle_dir.glob("annotation_output/*_mask.tif"))) == 2  # copied

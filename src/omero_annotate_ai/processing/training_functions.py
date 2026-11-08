@@ -853,3 +853,75 @@ def reorganize_local_data_for_training(
     return _build_standard_result(
         base_dir=output_dir, created_dirs=created_dirs, stats=stats
     )
+
+
+def default_export_dir(
+    ref: int | str | Path, name: str, home: str | Path | None = None
+) -> Path:
+    """Where a set's training export goes by default: ``<home>/exports/<name>_<ref>``.
+
+    Outside the set's folder, so cleaning an export never touches the set.
+    """
+    from ..bundle import home_dir
+
+    return (
+        home_dir(home)
+        / "exports"
+        / f"{name}_{ref if isinstance(ref, int) else 'local'}"
+    )
+
+
+def export_training_set(
+    ref: int | str | Path,
+    output_dir: str | Path,
+    conn: Any = None,
+    *,
+    training_channels: list[int] | None = None,
+    label_channel: int | None = None,
+    apply_normalization: bool | None = None,
+) -> dict[str, Any]:
+    """Write a training set's annotated units into the training layout.
+
+    One entry point for the widget, the marimo notebook and scripts. ``ref`` is a
+    table ID (the data comes from OMERO, see :func:`prepare_training_data_from_table`)
+    or a set's folder (offline, see :func:`reorganize_local_data_for_training`).
+    Channels and normalisation default to the set's config; ``apply_normalization``
+    overrides ``normalization.apply_at_export``. A local set exports the channels its
+    folder holds, so other channels are refused there.
+
+    Returns:
+        The export result: the created folders and ``stats``.
+    """
+    from ..trainingset import read_set_config  # the core imports this module
+
+    config = read_set_config(ref, conn).model_copy(deep=True)
+    coverage = config.spatial_coverage
+    if not isinstance(ref, int) and (
+        (label_channel is not None and label_channel != coverage.get_label_channel())
+        or (
+            training_channels is not None
+            and training_channels != coverage.get_training_channels()
+        )
+    ):
+        raise ValueError(
+            "A local training set exports the channels it was annotated with "
+            f"(label {coverage.get_label_channel()}, training "
+            f"{coverage.get_training_channels()})"
+        )
+    if label_channel is not None:
+        coverage.label_channel = label_channel
+    if training_channels is not None:
+        coverage.training_channels = training_channels
+    if apply_normalization is not None:
+        config.normalization.apply_at_export = apply_normalization
+    if isinstance(ref, int):
+        return prepare_training_data_from_table(
+            conn,
+            ref,
+            output_dir,
+            training_name=config.name,
+            label_channel=coverage.get_label_channel(),
+            training_channels=coverage.get_training_channels(),
+            normalization=config.normalization,
+        )
+    return reorganize_local_data_for_training(config, Path(ref), output_dir)

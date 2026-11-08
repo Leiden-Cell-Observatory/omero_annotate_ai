@@ -25,6 +25,10 @@ adding images, notes) is a method on it.
 
 ::: omero_annotate_ai.trainingset.summarize
 
+::: omero_annotate_ai.trainingset.training_set_choices
+
+::: omero_annotate_ai.trainingset.read_set_config
+
 ## Annotation sessions
 
 ::: omero_annotate_ai.session.AnnotationSession

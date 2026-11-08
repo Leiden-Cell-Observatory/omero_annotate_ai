@@ -1008,3 +1008,41 @@ class TestRunTrainingLength:
 
         assert seen["n_epochs"] == 2
         assert seen["n_iterations"] is None
+
+
+@pytest.mark.unit
+class TestExportTrainingSet:
+    """One entry point: table ID -> OMERO export, folder -> local reorganise."""
+
+    def test_table_id_uses_the_set_config_and_overrides(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        config = create_default_config()
+        config.name = "nuclei"
+        config.spatial_coverage.channels = [2]
+        with (
+            patch("omero_annotate_ai.trainingset.read_set_config", return_value=config),
+            patch.object(tf, "prepare_training_data_from_table") as prepare,
+        ):
+            tf.export_training_set(
+                7, tmp_path, "conn", training_channels=[0, 1], apply_normalization=True
+            )
+        args, kwargs = prepare.call_args
+        assert args == ("conn", 7, tmp_path)
+        assert kwargs["training_name"] == "nuclei"
+        assert kwargs["label_channel"] == 2
+        assert kwargs["training_channels"] == [0, 1]
+        assert kwargs["normalization"].apply_at_export is True
+        assert config.normalization.apply_at_export is False  # caller's copy untouched
+
+    def test_local_set_refuses_other_channels(self, tmp_path):
+        from omero_annotate_ai.core.annotation_config import create_default_config
+
+        with (
+            patch(
+                "omero_annotate_ai.trainingset.read_set_config",
+                return_value=create_default_config(),
+            ),
+            pytest.raises(ValueError, match="exports the channels it was annotated"),
+        ):
+            tf.export_training_set(tmp_path / "set", tmp_path / "out", label_channel=3)
