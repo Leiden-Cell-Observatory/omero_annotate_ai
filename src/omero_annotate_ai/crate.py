@@ -227,7 +227,7 @@ def build_ro_crate(
             parts.append(image_ref)
             based_on = [image_ref, source]
         mask = mask_path(bundle_dir, row.annotation_id)
-        if row.processed and mask.exists():
+        if row.processed and not row.excluded and mask.exists():
             mask_ref = graph.add(
                 _file(
                     mask,

@@ -20,7 +20,7 @@ from ..core.annotation_config import NormalizationConfig
 from ..errors import IntegrityError
 from ..omero._untyped import ezomero
 from ..provenance import describe_change
-from ..rows import rows_from_frame
+from ..rows import EXCLUDED, rows_from_frame
 from ..sources import OmeroImageSource, read_unit
 from ..utils.logging import create_training_logger
 from .normalization import NormalizationRecorder, write_native_sidecar
@@ -163,6 +163,9 @@ def prepare_training_data_from_table(
         logger.info(f"Table saved to: {table_path}")
     except OSError as e:
         logger.warning(f"Failed to save table: {e}")
+
+    if "annotation_type" in table.columns:  # excluded units have no mask
+        table = table.loc[table["annotation_type"] != EXCLUDED].copy()
 
     # Check if 'processed' column exists and filter to only processed rows
     if "processed" in table.columns:
@@ -542,7 +545,7 @@ def reorganize_local_data_for_training(
     if not table_file.exists():
         raise FileNotFoundError(f"No tracking_table.csv in: {annotation_dir}")
     rows = rows_from_frame(pd.read_csv(table_file, keep_default_na=False))
-    processed_annotations = [row for row in rows if row.processed]
+    processed_annotations = [row for row in rows if row.processed and not row.excluded]
     if not processed_annotations:
         raise ValueError(f"No annotated units in {table_file}")
 

@@ -68,10 +68,10 @@ class InstantEmbedder:
         on_done(Embedding(Path(save_path), None, None))
 
 
-def _make_set(tmp_path, storage: str, n_images: int = 3):
+def _make_set(tmp_path, storage: str, n_images: int = 3, batch_size: int = 2):
     config, source, omero = omero_set(tmp_path, n_images=n_images)
     config.storage = storage
-    config.workflow.batch_size = 2
+    config.workflow.batch_size = batch_size
     home = tmp_path / "home"
     ts = create_set(config, source, omero, home)
     return ts, source, omero, home
@@ -291,6 +291,117 @@ class TestDock:
         qtbot.waitUntil(lambda: saved().max() == 9, timeout=5000)
         assert "Training 2/3" in widget.progress_label.text()  # not counted twice
         assert not list((ts.bundle_dir / ".scratch").glob("*/*_mask.tif"))
+
+    def test_exclude_marks_the_image_done_without_a_mask(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, omero, home = _make_set(tmp_path, "omero")
+        widget, _, _ = make_dock(home, source, omero, conn=omero.conn())
+        _start(widget, qtbot)
+        excluded = widget._batch.items[0].annotation_id
+        widget.exclude_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+        assert "Training 1/3 (1 excluded)" in widget.progress_label.text()
+
+        def row():
+            return next(
+                r for r in widget._session._set.rows if r.annotation_id == excluded
+            )
+
+        qtbot.waitUntil(lambda: row().excluded, timeout=5000)
+        assert omero.uploads_per_tag() == {}
+        widget.finish_button.click()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
+        qtbot.waitUntil(lambda: "(1 excluded)" in widget.summary.text(), timeout=5000)
+        table = omero.tables[ts.table_id].set_index("annotation_id")
+        assert table.loc[excluded, "annotation_type"] == "excluded"
+
+    def test_an_excluded_image_can_be_saved_after_all(self, tmp_path, make_dock, qtbot):
+        ts, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        widget.exclude_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+        widget.prev_button.click()  # back to the excluded image
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 0, timeout=5000)
+        assert "excluded" in widget.current_label.text()
+        assert not widget.exclude_button.isEnabled()
+        controller.mask[2:6, 2:6] = 1
+        widget.accept_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+        qtbot.waitUntil(
+            lambda: (
+                "Training 1/3" in widget.progress_label.text()
+                and "excluded" not in widget.progress_label.text()
+            ),
+            timeout=5000,
+        )
+        output = ts.bundle_dir / "annotation_output"
+        qtbot.waitUntil(lambda: len(list(output.glob("*_mask.tif"))) == 1, timeout=5000)
+
+    def test_an_excluded_image_is_not_shown_again(self, tmp_path, make_dock, qtbot):
+        _, source, _, home = _make_set(tmp_path, "local", batch_size=3)
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        widget.skip_button.click()  # A: later
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+        widget.exclude_button.click()  # B
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 2, timeout=5000)
+        widget.prev_button.click()
+        widget.prev_button.click()  # back to A, past B
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 0, timeout=5000)
+        controller.mask[2:6, 2:6] = 1
+        widget.accept_button.click()  # A saved: on to C, not B
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 2, timeout=5000)
+
+    def test_an_image_done_elsewhere_meanwhile_is_left_alone(
+        self, tmp_path, make_dock, qtbot
+    ):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        widget._session.exclude = lambda batch, ids, **kwargs: ()  # theirs won
+        widget.exclude_button.click()
+        qtbot.waitUntil(lambda: "theirs is kept" in widget.notice.text(), timeout=5000)
+        assert "Training 1/3" in widget.progress_label.text()  # done, by them
+        assert "excluded" not in widget.progress_label.text()
+        widget.prev_button.click()  # nothing before it is offered
+        assert widget._cursor == 1 and widget._ready
+        assert 0 in widget._committed
+
+    def test_a_failed_exclude_leaves_the_image_to_do(self, tmp_path, make_dock, qtbot):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, _, _ = make_dock(home, source)
+        _start(widget, qtbot)
+
+        def offline(batch, ids, **kwargs):
+            raise ConnectionError("server gone")
+
+        widget._session.exclude = offline
+        widget.exclude_button.click()
+        qtbot.waitUntil(lambda: "server gone" in widget.status.text(), timeout=5000)
+        assert "Training 0/3" in widget.progress_label.text()
+        assert not widget._excluded
+
+    def test_review_sessions_cannot_exclude(self, tmp_path, make_dock, qtbot):
+        ts, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        annotate(ts)
+        widget, _, _ = make_dock(home, source, omero, conn=omero.conn())
+        widget.review.setChecked(True)
+        _start(widget, qtbot)
+        assert not widget.exclude_button.isEnabled()
+
+    def test_a_saved_image_cannot_be_excluded(self, tmp_path, make_dock, qtbot):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        assert widget.exclude_button.isEnabled()
+        controller.mask[2:6, 2:6] = 1
+        widget.accept_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 1, timeout=5000)
+        widget.prev_button.click()
+        qtbot.waitUntil(lambda: widget._ready and widget._cursor == 0, timeout=5000)
+        assert not widget.exclude_button.isEnabled()
 
     def test_skip_does_nothing_while_the_next_batch_loads(
         self, tmp_path, make_dock, qtbot

@@ -3,6 +3,7 @@
 The OMERO connection, ``ezomero`` and the image source are faked - no live server.
 """
 
+import warnings
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -240,6 +241,21 @@ def test_unprocessed_and_maskless_rows_are_skipped_and_counted(
     ]
 
 
+def test_excluded_rows_are_skipped_silently(mock_conn, mock_ezomero, tmp_path):
+    excluded = annotation(image_id=102, label_id=None)
+    excluded.mark_excluded(session=1)
+    mock_ezomero.get_table.return_value = build_table(
+        [annotation(image_id=101, label_id=555), excluded]
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
+
+    assert [r.annotation_id for r in stats["rows"]] == ["101_0_0"]
+    assert (stats["skipped_unprocessed"], stats["skipped_no_mask"]) == (0, 0)
+
+
 def test_skipped_rows_are_pruned_from_the_config(mock_conn, mock_ezomero, tmp_path):
     """Skipped rows must not survive into the config save_bia_package() reads.
 
@@ -467,6 +483,24 @@ def test_local_set_bundle_holds_only_annotated_units(tmp_path):
     assert result["missing"] == 0
     assert len(list((tmp_path / "bia" / "annotations").glob("*_mask.tif"))) == 2
     assert len(list(ts.bundle_dir.glob("annotation_output/*_mask.tif"))) == 2  # copied
+
+
+def test_local_set_bundle_leaves_excluded_units_out(tmp_path):
+    pytest.importorskip("bia_mifa_models")
+    from tests.fakes import annotate, create_set, omero_set
+
+    config, source, omero = omero_set(tmp_path, n_images=3)
+    config.storage = "local"
+    ts = create_set(config, source, omero, tmp_path / "home")
+    session = ts.start_session(batch_size=1)
+    batch = session.next_batch()
+    session.exclude(batch, [batch.items[0].annotation_id])
+    session.finish()
+    assert annotate(ts) == 2
+
+    result = save_bia_package(ts.config, ts.units(), ts.bundle_dir, tmp_path / "bia")
+
+    assert (result["n_annotations"], result["missing"]) == (2, 0)
 
 
 def test_mask_changed_on_omero_since_annotation_is_refused(

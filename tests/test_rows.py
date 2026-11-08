@@ -122,6 +122,21 @@ class TestReports:
     def test_progress(self):
         assert progress_summary(self._rows())["completed_units"] == 1
 
+    def test_excluded_units_count_as_done(self):
+        rows = self._rows()
+        rows[0].label_id = 7
+        rows[0].claimed_by = "1@me/host"
+        rows[0].mark_excluded(session=3)
+
+        summary = progress_summary(rows)
+
+        assert (summary["completed_units"], summary["excluded_units"]) == (2, 1)
+        assert summary["pending_units"] == 1
+        (again,) = rows_from_frame(rows_to_frame(rows[:1]))
+        assert again.excluded and again.annotation_type == "excluded"
+        assert (again.label_id, again.session, again.claimed_by) == (None, 3, "")
+        assert not rows[2].excluded  # annotated, not excluded
+
     def test_split_report_lists_images_in_several_splits(self):
         report = split_report(self._rows(), "image")
         assert report["images"]["spanning_splits"] == ["omero:image:1"]
