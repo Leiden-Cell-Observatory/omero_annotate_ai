@@ -27,7 +27,7 @@ from typing import Any, TypeVar
 import numpy as np
 from qtpy.QtCore import QObject, Signal
 
-from ._core import Event
+from ..events import Event
 
 logger = logging.getLogger(__name__)
 

@@ -2,19 +2,26 @@
 # (conda's PyQt5 ships no type stubs, so Qt classes are unknown to pyright.)
 """The plugin's dock widget: connect, pick a training set, annotate, finish.
 
+Every call into the core (connect, list, open, next batch, commit, finish) runs on
+one IO thread, because a BlitzGateway must be used from one thread at a time.
+
 No ``from __future__ import annotations`` here: npe2 reads the ``napari.Viewer``
 annotation of ``__init__`` at runtime to inject the viewer.
 """
 
 import logging
-import tempfile
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import napari
 import numpy as np
 import tifffile
 from qtpy.QtWidgets import (
+    QApplication,
     QCheckBox,
+    QComboBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -24,46 +31,78 @@ from qtpy.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ..annotators import Batch, BatchItem
+from ..bundle import home_dir
+from ..events import Event, ReconcileAction, UnitCommitted, UploadFailed
 from ..omero.simple_connection import SimpleOMEROConnection
-from ._controller import MicroSamController
-from ._core import (
-    CATEGORIES,
-    AnnotatorResult,
-    Backend,
-    Batch,
-    Event,
-    FakeBackend,
-    Session,
-    SetSummary,
-    UnitCommitted,
-    series_mask_name,
+from ..session import AnnotationSession
+from ..trainingset import (
+    TrainingSet,
+    TrainingSetSummary,
+    list_training_sets,
+    summarize,
 )
+from ._controller import MicroSamController
 from ._workers import Embedder, Embedding, EventBridge, Worker
 
 logger = logging.getLogger(__name__)
 
 ACCEPT_KEY = "n"
 SKIP_KEY = "Shift-N"
+CATEGORIES = ("training", "validation", "test")
+CONTAINER_TYPES = ("dataset", "plate", "project", "screen")
+
+Ref = int | Path
+"""A training set as the core opens it: a tracking-table ID or a set folder."""
+
+Opened = tuple[AnnotationSession, Batch | None, dict[str, list[int]]]
 
 
-def _summary_text(summary: SetSummary) -> str:
-    lines = [f"<b>{summary.name}</b> ({summary.storage}, model {summary.model})"]
+def _summary_text(summary: TrainingSetSummary) -> str:
+    where = f"table {summary.table_id}" if summary.table_id else summary.storage
+    lines = [f"<b>{summary.name}</b> ({where})"]
     for category in CATEGORIES:
-        done, total = summary.counts.get(category, (0, 0))
+        done, total = summary.progress.get(category, (0, 0))
         if total:
             lines.append(f"{category.capitalize()}: {done}/{total}")
     for record in summary.sessions[-3:]:
         note = f" — {record.note}" if record.note else ""
         lines.append(
-            f"Session {record.id} ({record.started[:10]}, {record.status}): "
+            f"Session {record.id} ({record.started:%Y-%m-%d}, {record.status}): "
             f"{record.n_annotated} annotated{note}"
         )
     return "<br>".join(lines)
+
+
+def _describe(item: BatchItem) -> str:
+    """One line for the dock: where the image comes from, and which plane."""
+    unit = item.unit
+    if unit is None:
+        return item.annotation_id
+    identity = unit.identity
+    place = " / ".join(
+        p for p in (identity.image_name, identity.well, identity.field) if p
+    )
+    return (
+        f"{place} · t{unit.timepoint} c{unit.channel} z{unit.z_slice} [{unit.category}]"
+    )
+
+
+def _local_sets(home: Path) -> list[tuple[Ref, TrainingSetSummary]]:
+    """Training sets with a folder under ``home`` (read-only)."""
+    found: list[tuple[Ref, TrainingSetSummary]] = []
+    for config in sorted(home.glob("*/*/config.yaml")):
+        try:
+            found.append((config.parent, summarize(config.parent)))
+        except Exception:  # noqa: BLE001 - a broken folder must not hide the others
+            logger.warning("Skipping %s: not a readable training set", config.parent)
+    return found
 
 
 class OMEROAnnotateDock(QWidget):
@@ -73,24 +112,26 @@ class OMEROAnnotateDock(QWidget):
         self,
         napari_viewer: napari.Viewer,
         *,
-        backend: Backend | None = None,
+        home: Path | None = None,
+        core_options: Mapping[str, Any] | None = None,
         controller: MicroSamController | None = None,
         embedder: Embedder | None = None,
-        demo_root: Path | None = None,
     ) -> None:
         super().__init__()
         self._viewer = napari_viewer
-        self._backend = backend
+        self._home = home_dir(home)
+        # Extra TrainingSet.open() arguments (tests pass an image source and fake OMERO).
+        self._core_options = dict(core_options or {})
         self._controller = controller or MicroSamController(napari_viewer)
         self._io = Worker("oai-io")
         self._embedder = embedder or Embedder(Worker("oai-compute"))
         self._bridge = EventBridge()
         self._bridge.event.connect(self._on_event)
-        self._demo_root = demo_root
-        self._conn: object | None = None
-        self._summaries: list[SetSummary] = []
+        self._conn: Any = None
+        self._sets: list[tuple[Ref, TrainingSetSummary]] = []
+        self._cancel_requested = False
 
-        self._session: Session | None = None
+        self._session: AnnotationSession | None = None
         self._batch: Batch | None = None
         self._cursor = 0
         self._committed: set[int] = set()
@@ -108,13 +149,18 @@ class OMEROAnnotateDock(QWidget):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
+        app = QApplication.instance()
+        if app is not None:  # quitting napari mid-session records it as interrupted
+            app.aboutToQuit.connect(self._interrupt)
+        self._refresh()
+
     # --- layout -------------------------------------------------------------------
 
     def _build_start_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        connection = QGroupBox("OMERO server")
+        connection = QGroupBox("OMERO server (not needed for local sets)")
         form = QFormLayout(connection)
         self.host = QLineEdit()
         self.user = QLineEdit()
@@ -135,22 +181,39 @@ class OMEROAnnotateDock(QWidget):
         form.addRow("Password", self.password)
         form.addRow(self.remember)
         form.addRow(self.connect_button)
+        self.container_type = QComboBox()
+        self.container_type.addItems(CONTAINER_TYPES)
+        self.container_id = QSpinBox()
+        self.container_id.setRange(0, 2**31 - 1)
+        self.list_button = QPushButton("List sets")
+        self.list_button.setEnabled(False)
+        self.list_button.clicked.connect(self._refresh)
+        container = QHBoxLayout()
+        for widget in (self.container_type, self.container_id, self.list_button):
+            container.addWidget(widget)
+        form.addRow("Container", container)
         layout.addWidget(connection)
 
         sets = QGroupBox("Training sets")
         sets_layout = QVBoxLayout(sets)
         self.set_list = QListWidget()
         self.set_list.currentRowChanged.connect(self._on_set_selected)
-        self.summary = QLabel("Connect, or open the demo training set.")
+        self.summary = QLabel(
+            "Sets with a folder in the home folder are listed here; connect to "
+            "list the sets on an OMERO container."
+        )
         self.summary.setWordWrap(True)
         buttons = QHBoxLayout()
-        self.demo_button = QPushButton("Open demo set")
-        self.demo_button.clicked.connect(self._use_demo)
+        self.folder_button = QPushButton("Open folder…")
+        self.folder_button.clicked.connect(self._choose_folder)
         self.open_button = QPushButton("Annotate")
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self._open_selected)
-        buttons.addWidget(self.demo_button)
-        buttons.addWidget(self.open_button)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self._request_cancel)
+        for button in (self.folder_button, self.open_button, self.cancel_button):
+            buttons.addWidget(button)
         sets_layout.addWidget(self.set_list)
         sets_layout.addWidget(self.summary)
         sets_layout.addLayout(buttons)
@@ -204,96 +267,126 @@ class OMEROAnnotateDock(QWidget):
             self._say("Fill in host, user and password.", error=True)
             return
 
-        def connect() -> object | None:
+        def connect() -> Any:
             omero = SimpleOMEROConnection()
-            conn = omero.connect(host, user, password)
-            if conn is not None and remember:
+            conn = omero.connect(host, user, password, verbose=False)
+            if remember:
                 omero.save_password(host, user, password)
             return conn
 
-        def done(conn: object | None) -> None:
-            self.connect_button.setEnabled(True)
-            if conn is None:
-                self._say(
-                    f"Could not connect to {host}. Check host, user and password.",
-                    error=True,
-                )
-                return
+        def done(conn: Any) -> None:
             self._conn = conn
+            self.connect_button.setEnabled(True)
+            self.list_button.setEnabled(True)
             self.password.clear()
-            self._say(f"Connected to {host} as {user}.")
-            self.summary.setText(
-                "Training sets on OMERO open here once the 0.5.0 core is released. "
-                "Until then, use the demo set."
-            )
+            self._say(f"Connected to {host}. Choose a container and list its sets.")
 
         self.connect_button.setEnabled(False)
         self._say(f"Connecting to {host}…")
         self._io.run(connect, done, self._on_error)
 
-    def _use_demo(self) -> None:
-        root = self._demo_root or Path(
-            tempfile.mkdtemp(prefix="omero-annotate-ai-demo-")
-        )
-        self._backend = FakeBackend(root)
-        self._refresh()
-
     def _refresh(self) -> None:
-        backend = self._backend
-        if backend is None:
-            return
-        self._io.run(backend.list_sets, self._show_sets, self._on_error)
+        conn, home = self._conn, self._home
+        container = (self.container_type.currentText(), self.container_id.value())
 
-    def _show_sets(self, summaries: list[SetSummary]) -> None:
-        self._summaries = summaries
+        def list_sets() -> list[tuple[Ref, TrainingSetSummary]]:
+            found = _local_sets(home)
+            if conn is not None and container[1]:
+                listed = list_training_sets(conn, *container)
+                ids = {info.table_id for info in listed}
+                found = [(r, s) for r, s in found if s.table_id not in ids]
+                found += [(i.table_id, summarize(i.table_id, conn)) for i in listed]
+            return found
+
+        self._io.run(list_sets, self._show_sets, self._on_error)
+
+    def _show_sets(self, sets: list[tuple[Ref, TrainingSetSummary]]) -> None:
+        self._sets = sets
         self.set_list.clear()
-        for summary in summaries:
-            done = sum(d for d, _ in summary.counts.values())
-            total = sum(t for _, t in summary.counts.values())
+        for _ref, summary in sets:
+            done = sum(d for d, _ in summary.progress.values())
+            total = sum(t for _, t in summary.progress.values())
             self.set_list.addItem(QListWidgetItem(f"{summary.name}  ({done}/{total})"))
-        if summaries:
+        if sets:
             self.set_list.setCurrentRow(0)
 
     def _on_set_selected(self, row: int) -> None:
-        valid = 0 <= row < len(self._summaries)
+        valid = 0 <= row < len(self._sets)
         self.open_button.setEnabled(valid)
         if valid:
-            self.summary.setText(_summary_text(self._summaries[row]))
+            self.summary.setText(_summary_text(self._sets[row][1]))
+
+    def _choose_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Training set folder", str(self._home)
+        )
+        if folder:
+            self._open(Path(folder), Path(folder).name)
 
     def _open_selected(self) -> None:
-        backend, row = self._backend, self.set_list.currentRow()
-        if backend is None or not 0 <= row < len(self._summaries):
-            return
-        summary = self._summaries[row]
+        row = self.set_list.currentRow()
+        if 0 <= row < len(self._sets):
+            ref, summary = self._sets[row]
+            self._open(ref, summary.name)
 
-        def open_set() -> tuple[Session, Batch | None]:
-            session = backend.open(summary.key, self._bridge.sink).start_session()
-            return session, session.next_batch()
+    def _open(self, ref: Ref, name: str) -> None:
+        conn, home, options = self._conn, self._home, self._core_options
+        self._cancel_requested = False
 
-        def opened(result: tuple[Session, Batch | None]) -> None:
-            self._session, batch = result
-            self._done = {c: list(summary.counts.get(c, (0, 0))) for c in CATEGORIES}
+        def open_set() -> Opened:
+            ts = TrainingSet.open(
+                ref,
+                conn,
+                home=home,
+                events=self._bridge.sink,
+                cancel=lambda: self._cancel_requested,
+                **options,
+            )
+            done = {c: [0, 0] for c in CATEGORIES}
+            for row in ts.units():
+                done[row.category][1] += 1
+                done[row.category][0] += int(row.processed)
+            session = ts.start_session()
+            return session, session.next_batch(), done
+
+        def opened(result: Opened) -> None:
+            self._session, batch, self._done = result
+            self.cancel_button.setVisible(False)
             self._skipped.clear()
             self._bind_keys(True)
             self._pages.setCurrentIndex(1)
             self._start_batch(batch)
 
         self.open_button.setEnabled(False)
-        self._say(f"Opening {summary.name}…")
+        self.cancel_button.setVisible(True)
+        self._say(f"Opening {name} (repairing it if a run was interrupted)…")
         self._io.run(open_set, opened, self._on_error)
+
+    def _request_cancel(self) -> None:
+        self._cancel_requested = True
+        self._say("Cancelling…")
 
     # --- annotate page ------------------------------------------------------------
 
     def _start_batch(self, batch: Batch | None) -> None:
-        if batch is not None and all(
-            i.unit.annotation_id in self._skipped for i in batch.items
+        session = self._session
+        if batch is not None and (
+            batch.is_volumetric
+            or all(i.annotation_id in self._skipped for i in batch.items)
         ):
-            # Only skipped images are left: hand them back and stop.
-            session, leftover = self._session, batch
+            # 3D, or only skipped images left: hand the batch back and stop.
+            leftover = batch
             if session is not None:
                 self._io.run(
                     lambda: session.release(leftover), lambda _: None, self._on_error
                 )
+            if batch.is_volumetric:
+                self._say(
+                    "3D training sets are not supported in the plugin yet.", error=True
+                )
+                self._batch = None
+                self._set_buttons(False)
+                return
             batch = None
         self._batch, self._committed = batch, set()
         if batch is None:
@@ -307,7 +400,7 @@ class OMEROAnnotateDock(QWidget):
             (
                 i
                 for i, item in enumerate(batch.items)
-                if item.unit.annotation_id not in self._skipped
+                if item.annotation_id not in self._skipped
             ),
             0,
         )
@@ -320,13 +413,15 @@ class OMEROAnnotateDock(QWidget):
         self._cursor, self._confirm_empty, self._ready = index, False, False
         item = batch.items[index]
         self.current_label.setText(
-            f"Image {index + 1}/{len(batch.items)}: {item.unit.describe()}"
+            f"Image {index + 1}/{len(batch.items)}: {_describe(item)}"
         )
         self._update_progress()
         self._set_buttons(False)
         self.busy.setVisible(True)
         self._say("Computing the image embedding…")
-        path = batch.embedding_dir / f"embedding_{index:05}.zarr"
+        embeddings = batch.embedding_dir or batch.mask_dir / "embeddings"
+        embeddings.mkdir(parents=True, exist_ok=True)
+        path = embeddings / f"embedding_{index:05}.zarr"
 
         def ready(embedding: Embedding) -> None:
             if self._batch is not batch or self._cursor != index:
@@ -358,20 +453,23 @@ class OMEROAnnotateDock(QWidget):
             return
         index = self._cursor
         item = batch.items[index]
-        path = batch.mask_dir / series_mask_name(index)
+        path = batch.mask_dir / f"seg_{index:05}.tif"
         tifffile.imwrite(path, mask.astype(np.uint32), compression="zlib")
         self._committed.add(index)
-        self._skipped.discard(item.unit.annotation_id)
-        result = AnnotatorResult({item.unit.annotation_id: path})
+        self._skipped.discard(item.annotation_id)
+        result = {item.annotation_id: path}
+        # The OMERO config is replaced once, at finish, not after every image.
         self._io.run(
-            lambda: session.commit(batch, result), lambda _: None, self._on_error
+            lambda: session.commit(batch, result, publish_config=False),
+            lambda _: None,
+            self._on_error,
         )
         self._advance()
 
     def _skip(self) -> None:
         if self._batch is None or not self._ready:
             return
-        self._skipped.add(self._batch.items[self._cursor].unit.annotation_id)
+        self._skipped.add(self._batch.items[self._cursor].annotation_id)
         self._advance()
 
     def _prev(self) -> None:
@@ -389,7 +487,7 @@ class OMEROAnnotateDock(QWidget):
             i
             for i in range(self._cursor + 1, len(batch.items))
             if i not in self._committed
-            and batch.items[i].unit.annotation_id not in self._skipped
+            and batch.items[i].annotation_id not in self._skipped
         ]
         if todo:
             self._show(todo[0])
@@ -399,6 +497,7 @@ class OMEROAnnotateDock(QWidget):
             session.release(batch)
             return session.next_batch()
 
+        self._ready = False  # no Accept/Skip (also by key) until the next image shows
         self._set_buttons(False)
         self._io.run(next_batch, self._start_batch, self._on_error)
 
@@ -406,26 +505,42 @@ class OMEROAnnotateDock(QWidget):
         session = self._session
         if session is None:
             return
-        note = self.note.text().strip()
+        note = self.note.text().strip() or None
         batch = self._batch
 
-        def finish() -> object:
+        def finish() -> int:
             if batch is not None:
                 session.release(batch)
             return session.finish(note)
 
-        def finished(_: object) -> None:
+        def finished(annotated: int) -> None:
             self._session = self._batch = None
             self._bind_keys(False)
             self._controller.teardown()
             self.note.clear()
             self._pages.setCurrentIndex(0)
-            self._say("Session finished.")
+            self._say(f"Session finished: {annotated} image(s) annotated.")
             self._refresh()
 
         self._set_buttons(False)
         self.finish_button.setEnabled(False)
         self._io.run(finish, finished, self._on_error)
+
+    def _interrupt(self) -> None:
+        """Record a session still open when napari quits as interrupted."""
+        session = self._session
+        if session is None:
+            return
+        self._session = None
+        future = self._io.run(
+            lambda: session.finish(status="interrupted"),
+            lambda _: None,
+            self._on_error,
+        )
+        try:
+            future.result(timeout=30)
+        except Exception:  # noqa: BLE001 - quitting; the next open closes it anyway
+            logger.warning("Could not record the session as interrupted")
 
     # --- helpers ------------------------------------------------------------------
 
@@ -435,16 +550,18 @@ class OMEROAnnotateDock(QWidget):
             if category:
                 self._done[category][0] += 1
             self._update_progress()
-        else:
+        elif isinstance(event, UploadFailed):
             self._say(
                 f"Upload failed for {event.annotation_id}: {event.error}", error=True
             )
+        elif isinstance(event, ReconcileAction):
+            self._say(f"Repaired {event.annotation_id}: {event.action} {event.detail}")
 
     def _category_of(self, annotation_id: str) -> str | None:
         if self._batch is None:
             return None
         for item in self._batch.items:
-            if item.unit.annotation_id == annotation_id:
+            if item.annotation_id == annotation_id and item.unit is not None:
                 return item.unit.category
         return None
 
@@ -467,8 +584,9 @@ class OMEROAnnotateDock(QWidget):
 
     def _on_error(self, exc: BaseException) -> None:
         self.busy.setVisible(False)
+        self.cancel_button.setVisible(False)
         self.connect_button.setEnabled(True)
-        self.open_button.setEnabled(bool(self._summaries))
+        self.open_button.setEnabled(bool(self._sets))
         self._set_buttons(self._ready)
         self._say(f"{type(exc).__name__}: {exc}", error=True)
 

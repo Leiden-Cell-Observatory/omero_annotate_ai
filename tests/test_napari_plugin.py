@@ -1,4 +1,4 @@
-"""Tests for the napari plugin (headless Qt, against the plugin's fake core)."""
+"""Tests for the napari plugin: headless Qt, the real core on fake OMERO and images."""
 
 import inspect
 from pathlib import Path
@@ -9,14 +9,9 @@ import pytest
 napari = pytest.importorskip("napari")
 pytest.importorskip("pytestqt")
 
-from omero_annotate_ai.napari_plugin import _core  # noqa: E402
-from omero_annotate_ai.napari_plugin._core import (  # noqa: E402
-    AnnotatorResult,
-    FakeBackend,
-    UnitCommitted,
-    series_mask_name,
-)
 from omero_annotate_ai.napari_plugin._workers import Embedding  # noqa: E402
+from omero_annotate_ai.trainingset import summarize  # noqa: E402
+from tests.fakes import create_set, omero_set  # noqa: E402
 
 pytestmark = pytest.mark.napari
 
@@ -26,7 +21,7 @@ class FakeController:
 
     def __init__(self) -> None:
         self.shown: list[np.ndarray] = []
-        self.mask = np.zeros((256, 256), np.uint32)
+        self.mask = np.zeros((16, 16), np.uint32)
         self.torn_down = False
 
     def show(self, pixels, embedding, model_type) -> None:
@@ -46,88 +41,72 @@ class InstantEmbedder:
         on_done(Embedding(Path(save_path), None, None))
 
 
+def _make_set(tmp_path, storage: str, n_images: int = 3):
+    config, source, omero = omero_set(tmp_path, n_images=n_images)
+    config.storage = storage
+    config.workflow.batch_size = 2
+    home = tmp_path / "home"
+    ts = create_set(config, source, omero, home)
+    return ts, source, omero, home
+
+
 @pytest.fixture
-def dock(make_napari_viewer, qtbot, tmp_path):
+def make_dock(make_napari_viewer, qtbot):
     from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
 
-    viewer = make_napari_viewer()
-    controller = FakeController()
-    widget = OMEROAnnotateDock(
-        viewer,
-        controller=controller,  # type: ignore[arg-type]
-        embedder=InstantEmbedder(),  # type: ignore[arg-type]
-        demo_root=tmp_path / "demo",
-    )
-    qtbot.addWidget(widget)
-    return widget, controller, viewer, tmp_path / "demo"
+    def make(home, source, omero=None, conn=None):
+        viewer = make_napari_viewer()
+        controller = FakeController()
+        options = {"image_source": source}
+        if omero is not None:
+            options["omero_writes"] = omero
+        widget = OMEROAnnotateDock(
+            viewer,
+            home=home,
+            core_options=options,
+            controller=controller,  # type: ignore[arg-type]
+            embedder=InstantEmbedder(),  # type: ignore[arg-type]
+        )
+        widget._conn = conn
+        qtbot.addWidget(widget)
+        qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=5000)
+        return widget, controller, viewer
+
+    return make
 
 
-def _open_demo(widget, qtbot) -> None:
-    widget.demo_button.click()
-    qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=5000)
+def _start(widget, qtbot) -> None:
     widget.open_button.click()
     qtbot.waitUntil(
-        lambda: widget._pages.currentIndex() == 1 and widget._ready, timeout=5000
+        lambda: widget._pages.currentIndex() == 1 and widget._ready, timeout=10000
     )
-
-
-class TestFakeCore:
-    """The fake follows the planned core contract the widget relies on."""
-
-    def test_partial_commit_is_idempotent_and_release_returns_units(self, tmp_path):
-        events = []
-        ts = FakeBackend(tmp_path).open(str(tmp_path), events.append)
-        session = ts.start_session()
-        batch = session.next_batch()
-        assert batch is not None and len(batch.items) == 3
-
-        first = batch.items[0].unit.annotation_id
-        mask = batch.mask_dir / series_mask_name(0)
-        mask.write_bytes(b"")  # any file stands in for a mask here
-        session.commit(batch, AnnotatorResult({first: mask}))
-        session.commit(batch, AnnotatorResult({first: mask}))  # second call: no-op
-        assert events == [UnitCommitted(first)]
-        assert (tmp_path / "annotation_output" / f"{first}_mask.tif").exists()
-
-        session.release(batch)
-        again = session.next_batch()
-        assert again is not None
-        assert first not in {i.unit.annotation_id for i in again.items}
-        assert batch.items[1].unit.annotation_id in {
-            i.unit.annotation_id for i in again.items
-        }
-
-        record = session.finish("nuclei only")
-        assert (record.n_annotated, record.note, record.status) == (
-            1,
-            "nuclei only",
-            "finished",
-        )
-        assert ts.summary().counts["training"] == (1, 4)
 
 
 class TestDock:
-    """The annotate loop end to end, with the core and micro-SAM faked."""
+    """The annotate loop end to end on the real core; only micro-SAM is faked."""
 
-    def test_accept_skip_empty_and_finish_with_note(self, dock, qtbot):
-        widget, controller, viewer, root = dock
-        _open_demo(widget, qtbot)
-        assert widget._pages.currentIndex() == 1
-        assert "Training 0/4" in widget.progress_label.text()
+    def test_local_set_accept_skip_empty_and_finish_with_note(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+        assert "Training: 0/3" in widget.summary.text()
+        _start(widget, qtbot)
+        assert "Training 0/3" in widget.progress_label.text()
 
-        controller.mask[10:20, 10:20] = 1
+        controller.mask[2:6, 2:6] = 1
         widget.accept_button.click()  # image 1: saved
         qtbot.waitUntil(
-            lambda: "Training 1/4" in widget.progress_label.text(), timeout=5000
+            lambda: "Training 1/3" in widget.progress_label.text(), timeout=5000
         )
-
-        widget.skip_button.click()  # image 2: skipped
+        widget.skip_button.click()  # image 2: skipped, back for a later session
         controller.mask[:] = 0
-        widget.accept_button.click()  # image 3: empty, needs confirmation
+        qtbot.waitUntil(lambda: widget._ready, timeout=5000)  # image 3 (next batch)
+        widget.accept_button.click()  # empty: needs confirmation
         assert "Press Accept again" in widget.status.text()
         widget.accept_button.click()
         qtbot.waitUntil(
-            lambda: "Training 2/4" in widget.progress_label.text(), timeout=5000
+            lambda: "Training 2/3" in widget.progress_label.text(), timeout=5000
         )
 
         widget.note.setText("nuclei only, skipped debris")
@@ -135,43 +114,91 @@ class TestDock:
         qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
         qtbot.waitUntil(lambda: "nuclei only" in widget.summary.text(), timeout=5000)
 
-        saved = sorted(p.name for p in (root / "annotation_output").iterdir())
+        summary = summarize(ts.bundle_dir)
+        assert summary.progress["training"] == (2, 3)
+        assert summary.sessions[-1].note == "nuclei only, skipped debris"
+        assert summary.sessions[-1].status == "finished"
+        saved = sorted((ts.bundle_dir / "annotation_output").glob("*_mask.tif"))
         assert len(saved) == 2
         assert controller.torn_down
-        assert "Training: 2/4" in widget.summary.text()
 
-    def test_prev_goes_back_to_an_uncommitted_image(self, dock, qtbot):
-        widget, controller, _, _ = dock
-        _open_demo(widget, qtbot)
+    def test_omero_set_uploads_each_accepted_image_once(
+        self, tmp_path, make_dock, qtbot
+    ):
+        _, source, omero, home = _make_set(tmp_path, "omero", n_images=2)
+        widget, controller, _ = make_dock(home, source, omero, conn=omero.conn())
+        _start(widget, qtbot)
+        controller.mask[1:4, 1:4] = 7
+        widget.accept_button.click()
+        qtbot.waitUntil(
+            lambda: "Training 1/2" in widget.progress_label.text(), timeout=5000
+        )
+        widget.finish_button.click()  # image 2 stays pending for a later session
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
+
+        tags = omero.uploads_per_tag()
+        assert list(tags.values()) == [(1, 1)]  # one label and one ROI, tagged
+        qtbot.waitUntil(lambda: "Training: 1/2" in widget.summary.text(), timeout=5000)
+
+    def test_prev_goes_back_to_an_uncommitted_image(self, tmp_path, make_dock, qtbot):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, controller, _ = make_dock(home, source)
+        _start(widget, qtbot)
         widget.skip_button.click()
         assert widget._cursor == 1
         widget.prev_button.click()
         assert widget._cursor == 0
         assert len(controller.shown) == 3
 
-    def test_keys_are_bound_only_while_annotating(self, dock, qtbot):
-        widget, _, viewer, _ = dock
-        _open_demo(widget, qtbot)
+    def test_keys_are_bound_only_while_annotating(self, tmp_path, make_dock, qtbot):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget, _, viewer = make_dock(home, source)
+        _start(widget, qtbot)
         assert "N" in {str(k) for k in viewer.keymap}
         widget.finish_button.click()
         qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=5000)
         assert "N" not in {str(k) for k in viewer.keymap}
 
-    def test_failed_connection_is_reported(self, dock, qtbot, monkeypatch):
+    def test_quitting_mid_session_records_it_as_interrupted(
+        self, tmp_path, make_dock, qtbot
+    ):
+        ts, source, _, home = _make_set(tmp_path, "local")
+        widget, _, _ = make_dock(home, source)
+        _start(widget, qtbot)
+        widget._interrupt()
+        assert summarize(ts.bundle_dir).sessions[-1].status == "interrupted"
+
+    def test_failed_connection_is_reported(
+        self, tmp_path, make_dock, qtbot, monkeypatch
+    ):
+        from omero_annotate_ai.errors import ConnectionFailed
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 
-        widget = dock[0]
-        monkeypatch.setattr(
-            SimpleOMEROConnection, "connect", lambda self, *a, **k: None
-        )
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget = make_dock(home, source)[0]
+
+        def refuse(self, *args, **kwargs):
+            raise ConnectionFailed("login failed")
+
+        monkeypatch.setattr(SimpleOMEROConnection, "connect", refuse)
         widget.host.setText("omero.example.org")
         widget.user.setText("someone")
         widget.password.setText("secret")
         widget.connect_button.click()
-        qtbot.waitUntil(
-            lambda: "Could not connect" in widget.status.text(), timeout=5000
-        )
+        qtbot.waitUntil(lambda: "login failed" in widget.status.text(), timeout=5000)
         assert widget.connect_button.isEnabled()
+        assert not widget.list_button.isEnabled()
+
+
+def _synthetic_image(seed: int, shape: tuple[int, int] = (256, 256)) -> np.ndarray:
+    """A uint16 image with a few bright round 'nuclei' on a noisy background."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[: shape[0], : shape[1]]
+    image = rng.normal(200, 20, shape)
+    for _ in range(8):
+        cy, cx = rng.integers(20, shape[0] - 20), rng.integers(20, shape[1] - 20)
+        image[(yy - cy) ** 2 + (xx - cx) ** 2 < rng.integers(8, 18) ** 2] += 1500
+    return np.clip(image, 0, 65535).astype(np.uint16)
 
 
 class TestMicroSamContract:
@@ -217,7 +244,7 @@ class TestMicroSamContract:
         from omero_annotate_ai.napari_plugin._workers import Embedder, Worker
 
         viewer = make_napari_viewer()
-        images = [_core.synthetic_image(1), _core.synthetic_image(2)]
+        images = [_synthetic_image(1), _synthetic_image(2)]
         results: list[Embedding] = []
         embedder = Embedder(Worker("test-compute"))
         for i, image in enumerate(images):
@@ -230,9 +257,7 @@ class TestMicroSamContract:
         assert MASK_LAYER in viewer.layers
         viewer.layers[MASK_LAYER].data[5:9, 5:9] = 3
         assert controller.current_mask().max() == 3
-        controller.show(
-            images[1], results[1], "vit_b_lm"
-        )  # next image: fresh empty mask
+        controller.show(images[1], results[1], "vit_b_lm")  # fresh empty mask
         assert not controller.current_mask().any()
         controller.teardown()
 
@@ -240,8 +265,9 @@ class TestMicroSamContract:
 def test_manifest_is_valid_and_points_at_the_widget():
     from npe2 import PluginManifest
 
-    manifest_path = Path(_core.__file__).with_name("napari.yaml")
-    manifest = PluginManifest.from_file(manifest_path)
+    import omero_annotate_ai.napari_plugin as plugin
+
+    manifest = PluginManifest.from_file(Path(plugin.__file__).with_name("napari.yaml"))
     (command,) = manifest.contributions.commands or []
     module, _, attr = (command.python_name or "").partition(":")
     widget_cls = getattr(__import__(module, fromlist=[attr]), attr)
