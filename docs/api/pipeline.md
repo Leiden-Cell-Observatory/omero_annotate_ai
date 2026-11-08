@@ -20,6 +20,7 @@ adding images, notes) is a method on it.
         - reconcile
         - prepare_external
         - collect_masks
+        - write_ro_crate
 
 ::: omero_annotate_ai.trainingset.list_training_sets
 
@@ -45,6 +46,14 @@ adding images, notes) is a method on it.
         - file_code
         - distance
         - describe_change
+
+## RO-Crate
+
+::: omero_annotate_ai.crate
+    options:
+      members:
+        - build_ro_crate
+        - write_ro_crate
 
 ## Several computers (claims)
 

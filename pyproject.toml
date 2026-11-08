@@ -133,6 +133,7 @@ strict = [
     "src/omero_annotate_ai/reconcile.py",
     "src/omero_annotate_ai/claims.py",
     "src/omero_annotate_ai/provenance.py",
+    "src/omero_annotate_ai/crate.py",
 ]
 
 [tool.pytest.ini_options]

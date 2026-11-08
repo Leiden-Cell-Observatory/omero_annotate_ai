@@ -124,6 +124,7 @@ Each training set has one folder on your disk, with the same layout in every mod
     ├── annotation_output/            accepted masks: <unit id>_mask.tif
     ├── external_output/              masks from Cellpose or other tools, until collected
     ├── model_input/                  training channel(s), if different from the annotated one
+    ├── ro-crate-metadata.json        RO-Crate description, written by ts.write_ro_crate()
     └── .scratch/                     micro-SAM's files for the current batch only
 ```
 
