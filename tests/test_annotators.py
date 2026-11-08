@@ -150,3 +150,57 @@ class TestMicroSamAnnotator:
         monkeypatch.setattr(importlib, "import_module", import_module)
         with pytest.raises(AnnotatorUnavailable, match="micro-SAM"):
             MicroSamAnnotator().annotate(_batch(tmp_path))
+
+    @staticmethod
+    def _fake_micro_sam(monkeypatch) -> Mock:
+        import importlib
+
+        sam = Mock()
+        modules = {"napari": MagicMock(), "micro_sam.sam_annotator": sam}
+        monkeypatch.setattr(importlib, "import_module", lambda name: modules[name])
+        return sam
+
+    def test_initial_masks_go_to_micro_sam_as_initial_segmentations(
+        self, tmp_path, monkeypatch
+    ):
+        sam = self._fake_micro_sam(monkeypatch)
+        saved = np.ones((8, 10), np.uint16)
+        items = (
+            BatchItem("a0", np.zeros((8, 10), np.uint16), initial_mask=saved),
+            BatchItem("a1", np.zeros((8, 10), np.uint16)),
+        )
+
+        MicroSamAnnotator().annotate(Batch(1, items, tmp_path / "masks"))
+
+        initial = sam.image_series_annotator.call_args.kwargs["initial_segmentations"]
+        assert initial[0] is saved
+        assert initial[1].shape == (8, 10) and not initial[1].any()
+
+    def test_no_initial_segmentations_when_annotating(self, tmp_path, monkeypatch):
+        sam = self._fake_micro_sam(monkeypatch)
+
+        MicroSamAnnotator().annotate(_batch(tmp_path))
+
+        kwargs = sam.image_series_annotator.call_args.kwargs
+        assert kwargs["initial_segmentations"] is None
+
+
+@pytest.mark.unit
+class TestScriptedReview:
+    @staticmethod
+    def _review_batch(tmp_path):
+        saved = np.full((8, 10), 5, np.uint16)
+        item = BatchItem("a0", np.zeros((8, 10), np.uint16), initial_mask=saved)
+        return Batch(1, (item,), tmp_path / "masks")
+
+    def test_initial_mask_is_kept_without_review_fn(self, tmp_path):
+        masks = ScriptedAnnotator(_label).annotate(self._review_batch(tmp_path))
+
+        assert (tifffile.imread(masks["a0"]) == 5).all()
+
+    def test_review_fn_edits_the_initial_mask(self, tmp_path):
+        annotator = ScriptedAnnotator(_label, review_fn=lambda p, m: m * 2)
+
+        masks = annotator.annotate(self._review_batch(tmp_path))
+
+        assert (tifffile.imread(masks["a0"]) == 10).all()

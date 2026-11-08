@@ -964,3 +964,105 @@ class TestTwoComputers:
         on("b")
         again = open_set(omero_conn, a.table_id, tmp_path / "b")
         assert len(again.start_session().next_batch().items) == 2  # expired: free
+
+
+# ---------------------------------------------------------------------------
+# Reviewing annotated units
+# ---------------------------------------------------------------------------
+
+
+def corrected(pixels: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """A reviewer's correction: the object loses its first row."""
+    out = np.array(mask, copy=True)
+    rows = np.nonzero(out.any(axis=-1))[0]
+    out[..., rows[0], :] = 0
+    return out
+
+
+class DyingDelete(OmeroWrites):
+    """The process dies when a review deletes an old upload (then works again)."""
+
+    def __init__(self) -> None:
+        self.dead = False
+
+    def delete_objects(self, conn, kind, ids):
+        if not self.dead:
+            self.dead = True
+            raise KeyboardInterrupt("killed before the old upload was deleted")
+        super().delete_objects(conn, kind, ids)
+
+
+def assert_one_upload_matching_the_local_mask(conn, ts, row) -> None:
+    """The unit has one tagged label file and ROI, and the label is the local mask."""
+    from omero_annotate_ai.bundle import mask_path
+    from omero_annotate_ai.omero.omero_functions import find_tagged
+
+    labels, rois = find_tagged(
+        conn, int(row["image_id"]), ts.upload_tag(row["annotation_id"])
+    )
+    assert labels == [row["label_id"]] and rois == [row["roi_id"]]
+    local = tifffile.imread(mask_path(ts.bundle_dir, row["annotation_id"]))
+    assert np.array_equal(download_label(conn, row["label_id"]), local)
+
+
+class TestReview:
+    def _annotated(self, conn, seed, tmp_path, name, writes=None):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        ts = TrainingSet.create(
+            make_config(seed, name, validate_n=0, test_n=0),
+            conn,
+            home=tmp_path,
+            omero_writes=writes,
+        )
+        ts.annotate(ScriptedAnnotator(mask_for))
+        return ts
+
+    def test_review_replaces_changed_masks_only(self, omero_conn, omero_seed, tmp_path):
+        ts = self._annotated(omero_conn, omero_seed, tmp_path, "review")
+        before = table_rows(omero_conn, ts.table_id).set_index("annotation_id")
+
+        assert ts.review(ScriptedAnnotator(mask_for)) == 0  # looked, changed nothing
+        assert (
+            table_rows(omero_conn, ts.table_id)
+            .set_index("annotation_id")["label_id"]
+            .equals(before["label_id"])
+        )
+        assert ts.review(ScriptedAnnotator(mask_for, review_fn=corrected)) == 2
+
+        rows = table_rows(omero_conn, ts.table_id)
+        for _, row in rows.iterrows():
+            old = before.loc[row["annotation_id"]]
+            assert row["label_id"] > old["label_id"] and row["roi_id"] != old["roi_id"]
+            assert omero_conn.getObject("FileAnnotation", int(old["label_id"])) is None
+            assert omero_conn.getObject("Roi", int(old["roi_id"])) is None
+            assert row["mask_digest"] != old["mask_digest"]
+            assert_one_upload_matching_the_local_mask(omero_conn, ts, row)
+        assert [s.kind for s in ts.config.sessions] == ["annotate", "review", "review"]
+
+    def test_crash_between_upload_and_delete_keeps_the_newer_upload(
+        self, omero_conn, omero_seed, tmp_path
+    ):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        ts = self._annotated(
+            omero_conn, omero_seed, tmp_path, "reviewcrash", DyingDelete()
+        )
+        old = table_rows(omero_conn, ts.table_id).set_index("annotation_id")
+        with pytest.raises(KeyboardInterrupt):
+            ts.review(ScriptedAnnotator(mask_for, review_fn=corrected))
+
+        TrainingSet.open(ts.table_id, omero_conn, home=tmp_path)
+
+        rows = table_rows(omero_conn, ts.table_id)
+        replaced = [
+            row
+            for _, row in rows.iterrows()
+            if row["label_id"] != old.loc[row["annotation_id"], "label_id"]
+        ]
+        assert len(replaced) == 1  # the unit the crash interrupted, finished on open
+        gone = old.loc[replaced[0]["annotation_id"]]
+        assert omero_conn.getObject("FileAnnotation", int(gone["label_id"])) is None
+        assert omero_conn.getObject("Roi", int(gone["roi_id"])) is None
+        for _, row in rows.iterrows():
+            assert_one_upload_matching_the_local_mask(omero_conn, ts, row)

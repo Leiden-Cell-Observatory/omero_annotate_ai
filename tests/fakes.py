@@ -96,9 +96,10 @@ class FakeOmero(OmeroWrites):
     """OMERO in memory: one tracking table, label files and ROIs with their tags.
 
     ``fail`` / ``crash`` map a call name (``label``, ``label_after``, ``roi``,
-    ``roi_after``, ``table``, ``read``, ``cells``) to the 1-based call number that fails with a
-    ``ConnectionError`` / dies with :class:`Crash`. ``*_after`` fire once the object
-    exists on the server, i.e. the upload happened but the caller never heard back.
+    ``roi_after``, ``table``, ``read``, ``cells``, ``delete``) to the 1-based call
+    number that fails with a ``ConnectionError`` / dies with :class:`Crash`.
+    ``*_after`` fire once the object exists on the server, i.e. the upload happened
+    but the caller never heard back.
     """
 
     fail: dict[str, int] = field(default_factory=dict)
@@ -222,6 +223,7 @@ class FakeOmero(OmeroWrites):
         return int(object_id) in store
 
     def delete_objects(self, conn, kind, ids):
+        self._call("delete")
         store = self.rois if kind == "Roi" else self.labels
         for i in ids:
             store.pop(int(i), None)

@@ -14,6 +14,7 @@ adding images, notes) is a method on it.
         - units
         - extend
         - annotate
+        - review
         - start_session
         - set_session_note
         - reconcile

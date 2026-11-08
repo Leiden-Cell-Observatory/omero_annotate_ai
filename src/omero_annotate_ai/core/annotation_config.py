@@ -633,6 +633,7 @@ class SessionRecord(BaseModel):
     """One annotation session: who, when, how many units, and the user's note."""
 
     id: int
+    kind: Literal["annotate", "review"] = "annotate"
     started: datetime
     ended: datetime | None = None
     status: Literal["open", "finished", "interrupted"] = "open"
@@ -641,7 +642,9 @@ class SessionRecord(BaseModel):
     software_version: str | None = None
     model: str | None = None
     batch_size: int | None = None
-    n_annotated: int = 0
+    n_annotated: int = Field(
+        default=0, description="Units saved (annotated, or changed in a review)"
+    )
     note: str | None = None
 
 

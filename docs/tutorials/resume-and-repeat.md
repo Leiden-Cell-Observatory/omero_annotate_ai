@@ -41,6 +41,14 @@ print(ts.config.sessions)
 A session that stopped without finishing (napari closed, kernel died) is marked
 `interrupted` the next time the set is opened on the same computer.
 
+### Correct earlier annotations
+
+`ts.review()` (or *Review annotated* in the widget) opens annotated units with their saved
+masks so you can correct them; a changed mask replaces the upload on OMERO. Replacing is
+crash-safe too: the new label file and ROI are uploaded before the old ones are deleted,
+and opening the set finishes a replacement a crash interrupted. See the
+[micro-SAM tutorial](microsam-annotation-pipeline.md#correct-earlier-annotations).
+
 ### Several computers, one set
 
 The OMERO tracking table is the source of truth; the local folder is a working copy.
@@ -48,7 +56,7 @@ Open the set by its table ID on another computer and carry on: rows come from th
 table, and nothing is uploaded twice.
 
 Two people (or two computers) can also annotate the same set **at the same time**.
-Before napari shows a batch, the session claims its units in the table (columns
+Before napari shows a batch (also in a review), the session claims its units in the table (columns
 `claimed_by`, `claimed_at`), so the other session gets different units. Claims are
 released when a unit is saved or handed back, and expire after
 `workflow.claim_hours` (default 6) if a computer goes quiet. Opening the set again on

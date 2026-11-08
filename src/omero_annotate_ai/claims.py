@@ -60,12 +60,17 @@ def is_live(claimed_by: Any, claimed_at: Any, hours: float) -> bool:
 
 
 def claim(
-    training_set: TrainingSet, session_token: str, keys: Sequence[str], limit: int
+    training_set: TrainingSet,
+    session_token: str,
+    keys: Sequence[str],
+    limit: int,
+    *,
+    annotated: bool = False,
 ) -> list[str]:
     """Claim up to ``limit`` of ``keys`` (in order) that are free; returns them.
 
-    Free means: not annotated, and not claimed by a live session other than
-    ``session_token``.
+    Free means: not annotated (annotated, for a review), and not claimed by a live
+    session other than ``session_token``.
     """
     hours = training_set.config.workflow.claim_hours
     stamp = now()
@@ -73,7 +78,7 @@ def claim(
 
     def take(row: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal taken
-        if taken >= limit or row.get("processed"):
+        if taken >= limit or bool(row.get("processed")) != annotated:
             return None
         holder = row.get("claimed_by") or ""
         if holder != session_token and is_live(holder, row.get("claimed_at"), hours):

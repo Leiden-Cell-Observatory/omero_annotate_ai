@@ -20,13 +20,16 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import tifffile
 
 from . import claims
 from .annotators import Annotator, Batch, BatchItem, MicroSamAnnotator
 from .bundle import (
     atomic_write,
+    file_digest,
     home_dir,
     local_bundle,
+    mask_path,
     new_local_id,
     omero_bundle,
     pixel_digest,
@@ -445,10 +448,11 @@ class TrainingSet:
         )
         return [Row.from_unit(unit) for unit in units]
 
-    def prepare_item(self, annotation: Row) -> BatchItem:
+    def prepare_item(self, annotation: Row, *, with_mask: bool = False) -> BatchItem:
         """Load a unit for annotation and save its input image(s) into the bundle.
 
-        Records the digest of the pixels shown to the annotator.
+        Records the digest of the pixels shown to the annotator. ``with_mask`` adds
+        the unit's saved mask (a review).
         """
         meta = self._meta_for(annotation)
         image_obj = self.image_source.get_image(annotation.image_uri)
@@ -460,7 +464,22 @@ class TrainingSet:
             pixels=pixels,
             context=self._context_for(image_obj, meta),
             unit=annotation.unit(),
+            initial_mask=self.saved_mask(annotation) if with_mask else None,
         )
+
+    def saved_mask(self, annotation: Row) -> np.ndarray | None:
+        """The unit's mask: the folder's copy if it matches the recorded digest,
+        else the label file on OMERO (saved into the folder if it has none)."""
+        path = mask_path(self.bundle_dir, annotation.annotation_id)
+        if path.exists() and file_digest(path) == annotation.mask_digest:
+            return np.asarray(tifffile.imread(path))
+        if not self.is_local and annotation.label_id is not None:
+            pixels = self.omero_writes.download_label(self.conn, annotation.label_id)
+            if pixels is not None:
+                if not path.exists():
+                    atomic_write(path, lambda tmp: tifffile.imwrite(tmp, pixels))
+                return pixels
+        return np.asarray(tifffile.imread(path)) if path.exists() else None
 
     def make_batch(
         self, index: int, items: Sequence[BatchItem], scratch: Path
@@ -928,9 +947,8 @@ class TrainingSet:
     def refresh(self) -> None:
         """Take over what other computers saved meanwhile (OMERO sets).
 
-        Units another session annotated get the table's row; rows another
-        computer added are appended; claims are updated. Units this run
-        annotated keep the local row.
+        Units another session annotated (or reviewed: a newer label file) get the
+        table's row; rows another computer added are appended; claims are updated.
         """
         if self.is_local or self.table_id is None:
             return
@@ -939,7 +957,8 @@ class TrainingSet:
             theirs = remote.pop(row.annotation_id, None)
             if theirs is None:
                 continue
-            if theirs.processed and not row.processed:
+            newer = (theirs.label_id or 0) > (row.label_id or 0)  # OMERO IDs only grow
+            if theirs.processed and (not row.processed or newer):
                 self.rows[position] = theirs
             else:
                 row.claimed_by, row.claimed_at = theirs.claimed_by, theirs.claimed_at
@@ -1194,9 +1213,17 @@ class TrainingSet:
         return added
 
     def start_session(
-        self, *, model: str | None = None, batch_size: int | None = None
+        self,
+        *,
+        model: str | None = None,
+        batch_size: int | None = None,
+        review: bool = False,
+        ids: Sequence[str] | None = None,
     ) -> AnnotationSession:
-        """A new annotation session over the pending units (see :mod:`..session`)."""
+        """A new session over the pending units, or a review of annotated ones.
+
+        See :mod:`..session`; ``ids`` limits a session to those units.
+        """
         if not self.rows:
             raise ValueError("The training set has no units")
         return AnnotationSession(
@@ -1204,6 +1231,8 @@ class TrainingSet:
             batch_size=batch_size or self._config.workflow.batch_size or None,
             model=model,
             cancel=self.cancel,
+            review=review,
+            ids=ids,
         )
 
     def annotate(
@@ -1219,8 +1248,36 @@ class TrainingSet:
         ``annotator`` defaults to micro-SAM in napari. ``note`` is stored with the
         session (see :meth:`set_session_note` to add one afterwards).
         """
-        annotator = annotator if annotator is not None else MicroSamAnnotator()
         session = self.start_session(model=model, batch_size=batch_size)
+        return self._run(session, annotator, note)
+
+    def review(
+        self,
+        annotator: Annotator | None = None,
+        *,
+        ids: Sequence[str] | None = None,
+        batch_size: int | None = None,
+        model: str | None = None,
+        note: str | None = None,
+    ) -> int:
+        """Correct annotated units (all, or ``ids``); returns how many changed.
+
+        Each unit opens with its saved mask (downloaded from OMERO if the folder
+        lacks it). A changed mask replaces the upload; an unchanged one is left
+        alone. The session is recorded as a review, with ``note``.
+        """
+        session = self.start_session(
+            model=model, batch_size=batch_size, review=True, ids=ids
+        )
+        return self._run(session, annotator, note)
+
+    def _run(
+        self,
+        session: AnnotationSession,
+        annotator: Annotator | None,
+        note: str | None,
+    ) -> int:
+        annotator = annotator if annotator is not None else MicroSamAnnotator()
         try:
             while (batch := session.next_batch()) is not None:
                 session.commit(batch, annotator.annotate(batch))
@@ -1245,7 +1302,12 @@ class TrainingSet:
                 merged[theirs.id] = theirs  # another computer's session: theirs wins
         self._config.sessions = sorted(merged.values(), key=lambda s: s.id)
 
-    def begin_session(self, model: str | None, batch_size: int | None) -> int:
+    def begin_session(
+        self,
+        model: str | None,
+        batch_size: int | None,
+        kind: Literal["annotate", "review"] = "annotate",
+    ) -> int:
         """Record a new session in the config; returns its number.
 
         For OMERO sets the number is taken after merging the sessions on OMERO,
@@ -1257,6 +1319,7 @@ class TrainingSet:
         self._config.sessions.append(
             SessionRecord(
                 id=session_id,
+                kind=kind,
                 started=datetime.now(),
                 user=self._user(),
                 host=claims.host_id(),

@@ -67,7 +67,9 @@ A line below shows the number of images, a sample image's dimensions and its cha
 | Storage | *OMERO* uploads masks and keeps a tracking table; *Local folder only* writes nothing to OMERO. |
 
 *Open* lists the training sets on the container (and local ones). Selecting one shows its
-progress per split and the notes of earlier sessions; you can add images per split.
+progress per split and the notes of earlier sessions; you can add images per split, and
+choose *Annotate pending* (the default) or *Review annotated* (see
+[Correct earlier annotations](#correct-earlier-annotations)).
 
 **Annotation.** The SAM model (`vit_b_lm` for light microscopy, `vit_b_em_organelles` for
 electron microscopy) and the batch size (images per napari session; progress is saved
@@ -101,6 +103,21 @@ later, open the set again with `TrainingSet.open(ts.table_id, conn)`.
 The first time, micro-SAM downloads its model (a few hundred MB). For each image it then
 computes an *embedding*; this is what makes the clicks fast afterwards, and takes a few
 seconds on a GPU or longer on a CPU.
+
+### Correct earlier annotations
+
+To check or fix masks you already saved, open the set, choose **Review annotated** and
+run the same cell, or call `ts.review()`:
+
+```python
+ts.review(note="tightened the outlines")       # every annotated unit
+ts.review(ids=["4ba674d4_0_0"])                # or only some (annotation IDs)
+```
+
+Each unit opens in napari with its saved mask (downloaded from OMERO if your folder lacks
+it); correct it with micro-SAM or napari's label tools and go to the next image as usual.
+A changed mask replaces the old label file and ROI on OMERO; an unchanged one is left
+alone. The session is recorded as a review, with the number of masks it changed.
 
 ### In napari
 

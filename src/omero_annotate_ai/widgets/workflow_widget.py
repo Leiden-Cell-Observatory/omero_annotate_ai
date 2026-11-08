@@ -206,7 +206,8 @@ def render_summary(summary: TrainingSetSummary) -> str:
     )
     sessions = (
         "".join(
-            f"<li>Session {s.id} ({s.status}, {s.n_annotated} saved"
+            f"<li>Session {s.id} ({'review, ' if s.kind == 'review' else ''}"
+            f"{s.status}, {s.n_annotated} {'revised' if s.kind == 'review' else 'saved'}"
             f"{', ' + html.escape(s.user) if s.user else ''})"
             f"{': <i>' + html.escape(s.note) + '</i>' if s.note else ''}</li>"
             for s in summary.sessions
@@ -317,6 +318,17 @@ class WorkflowWidget:
         self.add = {
             category: number(f"+ {category}", 0, 0, 100_000) for category, _ in SPLITS
         }
+        self.task = widgets.ToggleButtons(
+            options=[
+                ("Annotate pending", "annotate"),
+                ("Review annotated", "review"),
+            ],
+            value="annotate",
+            tooltips=[
+                "Annotate the units not annotated yet",
+                "Open annotated units with their saved mask to correct them",
+            ],
+        )
         self.open_card = _card(
             "Open training set",
             self.sets,
@@ -325,6 +337,7 @@ class WorkflowWidget:
                 "<span class='oai-muted'>Add images per split (optional)</span>"
             ),
             widgets.HBox(list(self.add.values())),
+            self.task,
         )
 
         # Run settings (both modes)
@@ -445,6 +458,7 @@ class WorkflowWidget:
         self.summary.value = ""
         for box in self.add.values():
             box.value = 0
+        self.task.value = "annotate"
         self.status.value = ""
 
     def _load_sets(self) -> None:
@@ -543,13 +557,22 @@ class WorkflowWidget:
     def annotate(
         self, annotator: Annotator | None = None, note: str | None = None
     ) -> int:
-        """Annotate the set's pending units with the form's model and batch size."""
-        return self.training_set().annotate(
+        """Run a session with the form's model and batch size.
+
+        Annotates the pending units, or - with *Review annotated* chosen for an
+        opened set - opens the annotated units with their masks to correct them.
+        """
+        ts = self.training_set()
+        run = ts.review if self._reviewing() else ts.annotate
+        return run(
             annotator,
             model=str(self.model.value),
             batch_size=int(self.batch_size.value) or None,
             note=note,
         )
+
+    def _reviewing(self) -> bool:
+        return self.mode.value == "open" and self.task.value == "review"
 
     def _resolve(self) -> None:
         self._training_set = None
@@ -558,10 +581,12 @@ class WorkflowWidget:
         except (OmeroAnnotateAIError, OSError, ValueError) as error:
             self._error(str(error))
             return
-        pending = sum(not row.processed for row in ts.units())
+        reviewing = self._reviewing()
+        count = sum(row.processed == reviewing for row in ts.units())
+        todo = "annotated units to review" if reviewing else "units to annotate"
         where = f"table {ts.table_id}" if ts.table_id else "local"
         self.status.value = (
-            f"✅ <b>{html.escape(ts.name)}</b> ({where}): {pending} units to annotate. "
+            f"✅ <b>{html.escape(ts.name)}</b> ({where}): {count} {todo}. "
             f"<span class='oai-muted'>Folder: {html.escape(str(ts.bundle_dir))}</span>"
         )
 
@@ -574,7 +599,7 @@ class WorkflowWidget:
                 self._last_session = session
                 self.progress.max = max(1, pending)
                 self.progress.value = 0
-                self._add_log(f"Session {session}: {pending} units to annotate")
+                self._add_log(f"Session {session}: {pending} units")
             case BatchPrepared(index=index, annotation_ids=ids):
                 self._add_log(f"Batch {index}: {len(ids)} units in napari")
             case UnitCommitted():

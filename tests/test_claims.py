@@ -7,11 +7,23 @@ the tests switch with :func:`on`.
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import tifffile
 
 from omero_annotate_ai import claims
 from omero_annotate_ai.events import ClaimsHeld, ClaimsReleased, UnitConflict
-from tests.fakes import Crash, create_set, omero_set, reopen
-from tests.test_session import masks_for
+from tests.fakes import Crash, annotate, create_set, omero_set, reopen
+from tests.test_session import edited, masks_for
+
+
+def edited_masks(batch):
+    """A reviewer's corrections of every item's saved mask."""
+    batch.mask_dir.mkdir(parents=True, exist_ok=True)
+    result = {}
+    for position, item in enumerate(batch.items):
+        path = batch.mask_dir / f"seg_{position:05}.tif"
+        tifffile.imwrite(path, edited(item.pixels, item.initial_mask))
+        result[item.annotation_id] = path
+    return result
 
 
 @pytest.fixture
@@ -186,3 +198,24 @@ class TestTwoComputers:
         on_omero = omero.read_config(None, a.table_id)
         assert {s.note for s in on_omero.sessions} == {"from a", "from b"}
         assert len({s.id for s in on_omero.sessions}) == 2
+
+    def test_reviews_claim_too_and_a_newer_review_wins(self, tmp_path, on):
+        a, b, _, omero = two_computers(tmp_path, on, n_images=2)
+        on("a")
+        annotate(a)
+        session_a = a.start_session(review=True, batch_size=1)
+        batch_a = session_a.next_batch()
+
+        on("b")
+        session_b = b.start_session(review=True)
+        batch_b = session_b.next_batch()  # b's copy is refreshed first
+        assert [i.annotation_id for i in batch_b.items] != [
+            i.annotation_id for i in batch_a.items
+        ]
+        assert len(batch_b.items) == 1  # a holds the other one
+        item = batch_b.items[0]
+        assert item.initial_mask is not None  # downloaded: b never annotated it
+
+        report = session_b.commit(batch_b, edited_masks(batch_b))
+        assert report.committed == (item.annotation_id,)
+        assert all(n == (1, 1) for n in omero.uploads_per_tag().values())
