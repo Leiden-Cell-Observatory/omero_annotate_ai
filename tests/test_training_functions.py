@@ -15,7 +15,7 @@ from omero_annotate_ai.processing import training_functions as tf
 from omero_annotate_ai.processing.training_functions import (
     reorganize_local_data_for_training,
 )
-from omero_annotate_ai.rows import Row, rows_to_frame
+from omero_annotate_ai.rows import Row, rows_from_frame, rows_to_frame
 
 
 @pytest.mark.unit
@@ -153,6 +153,25 @@ class TestReorganizeOntoRecords:
             (annotation_dir / "annotation_output" / f"{i}_mask.tif").write_bytes(b"lbl")
             if separate_channels:
                 (annotation_dir / "model_input" / f"{i}.tif").write_bytes(b"model")
+
+    def test_excluded_units_are_left_out_silently(self, tmp_path, caplog):
+        annotation_dir = tmp_path / "project"
+        annotation_dir.mkdir()
+        self._populate(annotation_dir, [0])
+        config = self._config(annotation_dir, ["training", "training"])
+        rows = rows_from_frame(pd.read_csv(annotation_dir / "tracking_table.csv"))
+        rows[1].mark_excluded(session=1)  # no files in the folder
+        _write_rows(annotation_dir, rows)
+
+        result = reorganize_local_data_for_training(
+            config=config,
+            annotation_dir=annotation_dir,
+            output_dir=tmp_path / "project_training",
+        )
+
+        assert [p.name for p in result["train_input"].glob("*.tif")] == ["0.tif"]
+        assert result["stats"]["n_missing"] == 0
+        assert "Skipping annotation 1" not in caplog.text
 
     def test_writes_unified_layout(self, tmp_path):
         annotation_dir = tmp_path / "project"
@@ -552,6 +571,16 @@ class TestPrepareFromTableRecords:
         # Annotation 0 lost its label, so it is dropped whole - not left as an orphan.
         assert images == labels == ["1.tif"]
         assert result["stats"]["n_missing"] == 1
+
+    def test_excluded_rows_are_not_exported(self, tmp_path):
+        table = self._table()
+        table["annotation_type"] = ["segmentation_mask", "excluded"]
+        table.loc[1, "label_id"] = 0
+
+        result = self._run(tmp_path, table)
+
+        assert [p.name for p in result["train_input"].glob("*.tif")] == ["0.tif"]
+        assert result["stats"]["n_missing"] == 0
 
     def test_files_named_by_annotation_id(self, tmp_path):
         result = self._run(tmp_path, self._table())

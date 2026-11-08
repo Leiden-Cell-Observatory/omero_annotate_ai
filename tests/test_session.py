@@ -4,17 +4,19 @@ import numpy as np
 import pandas as pd
 import pytest
 import tifffile
+import yaml
 
 from omero_annotate_ai import provenance
 from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.bundle import file_digest, mask_path
-from omero_annotate_ai.errors import Cancelled
+from omero_annotate_ai.errors import Cancelled, TableWriteError
 from omero_annotate_ai.events import (
     BatchReleased,
     RunCancelled,
     SessionFinished,
     SessionStarted,
     UnitCommitted,
+    UnitExcluded,
     UploadFailed,
 )
 from tests.fakes import annotate, create_set, image_mask, omero_set
@@ -267,6 +269,187 @@ class TestRevise:
         _, _, session, batch, _ = self._saved(tmp_path)
         with pytest.raises(ValueError, match="not saved in this session"):
             session.revise(batch.items[1].annotation_id, tmp_path / "x.tif")
+
+
+def local_rows(ts):
+    """The set's tracking_table.csv, by annotation ID."""
+    return pd.read_csv(ts.bundle_dir / "tracking_table.csv").set_index("annotation_id")
+
+
+@pytest.mark.unit
+class TestExclude:
+    def test_excluded_unit_is_done_without_uploads(self, tmp_path):
+        events = []
+        pipeline, omero = ready_pipeline(tmp_path, events=events)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        bad = batch.items[0].annotation_id
+
+        assert session.exclude(batch, [bad], publish_config=False) == (bad,)
+
+        table = omero.tables[pipeline.table_id].set_index("annotation_id")
+        for rows in (table, local_rows(pipeline)):
+            row = rows.loc[bad]
+            assert row["processed"] and row["annotation_type"] == "excluded"
+            assert (row["label_id"], row["roi_id"]) == (0, 0)
+            assert row["session"] == session.session
+            assert pd.isna(row["claimed_by"]) or row["claimed_by"] == ""
+        others = table.drop(index=bad)
+        assert (others["claimed_by"] == session.token).all()  # still held
+        assert UnitExcluded(bad) in events
+        assert pipeline.upload_tag(bad) not in omero.uploads_per_tag()
+
+        assert session.exclude(batch, [bad]) == ()  # idempotent
+        session.commit(batch, masks_for(batch, {1, 2}))
+        assert session.next_batch() is None
+        session.finish()
+        assert pipeline.config.sessions[-1].n_annotated == 2  # excluded not counted
+        assert pipeline.start_session().next_batch() is None
+
+    def test_config_keeps_the_schema_older_versions_read(self, tmp_path):
+        # 0.5.0-0.5.2 refuse unknown keys (extra="forbid"): nothing new may appear.
+        released = {
+            "id", "kind", "started", "ended", "status", "user", "host",
+            "software_version", "model", "batch_size", "n_annotated", "note",
+        }  # fmt: skip
+        pipeline, omero = ready_pipeline(tmp_path, n_images=2)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        session.exclude(batch, [batch.items[0].annotation_id])
+        session.finish("one bad image")
+
+        published = yaml.safe_load(omero.config_text[pipeline.table_id])
+        for record in published["sessions"]:
+            assert set(record) <= released
+
+    @pytest.mark.parametrize("delete_fails", [False, True])
+    def test_upload_of_an_earlier_failed_commit_is_deleted(
+        self, tmp_path, delete_fails
+    ):
+        events = []
+        pipeline, omero = ready_pipeline(tmp_path, n_images=1, events=events)
+        omero.fail = {"roi": omero.calls.get("roi", 0) + 1}  # label posts, ROI fails
+        first = pipeline.start_session()
+        first.commit(batch := first.next_batch(), masks_for(batch))
+        first.finish()
+        (row,) = pipeline.rows
+        assert row.label_id is not None and not row.processed
+        assert mask_path(pipeline.bundle_dir, row.annotation_id).exists()
+        if delete_fails:
+            omero.fail = {"delete": omero.calls.get("delete", 0) + 1}
+        session = pipeline.start_session()
+        batch = session.next_batch()
+
+        assert session.exclude(batch, [row.annotation_id]) == (row.annotation_id,)
+
+        assert row.excluded and row.label_id is None
+        assert not mask_path(pipeline.bundle_dir, row.annotation_id).exists()
+        reported = [e for e in events if getattr(e, "action", "") == "excluded"]
+        if delete_fails:
+            assert len(omero.labels) == 1 and len(reported) == 1
+        else:
+            assert omero.uploads_per_tag() == {} and not reported
+
+    def test_unit_saved_elsewhere_meanwhile_is_taken_over(self, tmp_path):
+        pipeline, omero = ready_pipeline(tmp_path, n_images=2)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        unit = batch.items[0].annotation_id
+        table = omero.tables[pipeline.table_id]
+        at = table.index[table["annotation_id"] == unit][0]
+        table.loc[at, ["processed", "label_id", "session"]] = [True, 999, 77]
+
+        assert session.exclude(batch, [unit]) == ()
+
+        row = next(r for r in pipeline.rows if r.annotation_id == unit)
+        assert (row.excluded, row.label_id, row.session) == (False, 999, 77)
+        assert omero.tables[pipeline.table_id].loc[at, "annotation_type"] != "excluded"
+
+    def test_local_set(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        config.storage = "local"
+        ts = create_set(config, source, omero, tmp_path / "home")
+        session = ts.start_session()
+        batch = session.next_batch()
+        bad = batch.items[1].annotation_id
+
+        session.exclude(batch, [bad, "not-in-batch"])
+
+        row = local_rows(ts).loc[bad]
+        assert row["processed"] and row["annotation_type"] == "excluded"
+        assert not mask_path(ts.bundle_dir, bad).exists()
+        session.release(batch)
+        assert [r.annotation_id for r in ts.rows if not r.processed] == [
+            batch.items[0].annotation_id
+        ]
+        assert ts.start_session().next_batch().items[0].annotation_id != bad
+
+    def test_commit_after_exclude_once_the_batch_is_closed(self, tmp_path):
+        pipeline, omero = ready_pipeline(tmp_path, n_images=2)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        first, last = (i.annotation_id for i in batch.items)
+        session.commit(batch, masks_for(batch, {1}))
+        session.exclude(batch, [first])
+        assert not batch.mask_dir.exists()  # nothing waits: the batch is closed
+
+        redo = pipeline.bundle_dir / "redo.tif"
+        tifffile.imwrite(redo, np.ones(batch.items[0].pixels.shape, np.uint16))
+        report = session.commit(batch, {first: redo})
+
+        assert report.committed == (first,)
+        assert not redo.exists() and mask_path(pipeline.bundle_dir, first).exists()
+        assert {pipeline.upload_tag(first), pipeline.upload_tag(last)} == set(
+            omero.uploads_per_tag()
+        )
+
+    def test_commit_after_exclude_makes_a_normal_annotation(self, tmp_path):
+        pipeline, omero = ready_pipeline(tmp_path, n_images=1)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        unit = batch.items[0].annotation_id
+        session.exclude(batch, [unit])
+
+        report = session.commit(batch, masks_for(batch))
+
+        assert report.committed == (unit,)
+        (row,) = pipeline.rows
+        assert not row.excluded and row.annotation_type == "segmentation_mask"
+        assert omero.uploads_per_tag() == {pipeline.upload_tag(unit): (1, 1)}
+        table = omero.tables[pipeline.table_id].set_index("annotation_id")
+        assert table.loc[unit, "label_id"] == row.label_id
+        assert table.loc[unit, "annotation_type"] == "segmentation_mask"
+        session.finish()
+        assert pipeline.config.sessions[-1].n_annotated == 1
+
+    def test_failed_table_write_keeps_the_exclusion_locally(self, tmp_path):
+        pipeline, omero = ready_pipeline(tmp_path, n_images=2)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        bad = batch.items[0].annotation_id
+        omero.fail = {"table": omero.calls.get("table", 0) + 1}
+
+        with pytest.raises(TableWriteError):
+            session.exclude(batch, [bad])
+
+        assert local_rows(pipeline).loc[bad, "annotation_type"] == "excluded"
+
+    def test_review_does_not_offer_excluded_units(self, tmp_path):
+        pipeline, _ = ready_pipeline(tmp_path)
+        session = pipeline.start_session()
+        batch = session.next_batch()
+        bad = batch.items[0].annotation_id
+        session.exclude(batch, [bad])
+        session.commit(batch, masks_for(batch, {1, 2}))
+        session.finish()
+
+        review = pipeline.start_session(review=True)
+        offered = review.next_batch()
+
+        assert bad not in [i.annotation_id for i in offered.items]
+        assert len(offered.items) == 2
+        with pytest.raises(ValueError, match="review"):
+            review.exclude(offered, [offered.items[0].annotation_id])
 
 
 def edited(pixels, mask):

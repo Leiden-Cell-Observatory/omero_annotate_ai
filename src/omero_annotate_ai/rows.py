@@ -25,6 +25,9 @@ SPLIT_CATEGORIES: tuple[Category, ...] = ("training", "validation", "test")
 OMERO_ID_UNSET = 0
 """OMERO id columns are non-nullable: 0 means "not uploaded" (no object has id 0)."""
 
+EXCLUDED = "excluded"
+"""``annotation_type`` of a unit the annotator excluded (see :attr:`Row.excluded`)."""
+
 
 class Row(BaseModel):
     """One annotation unit and its state: what to annotate, and what was saved."""
@@ -151,6 +154,23 @@ class Row(BaseModel):
         if self.annotation_created_at is None:
             self.annotation_created_at = now
         self.annotation_type = annotation_type
+
+    @property
+    def excluded(self) -> bool:
+        """Whether the annotator excluded the unit: done, with no mask and no uploads.
+
+        Excluded units are never handed out again and never exported for training.
+        """
+        return self.processed and self.annotation_type == EXCLUDED
+
+    def mark_excluded(self, session: int) -> None:
+        """Mark the unit excluded by ``session``: done, without mask, uploads or claim."""
+        self.mark_processed(annotation_type=EXCLUDED)
+        self.session = session
+        self.label_id = self.roi_id = None
+        self.mask_digest = self.mask_iscc = None
+        self.error = None
+        self.claimed_by = self.claimed_at = ""
 
 
 # --- Table codec ----------------------------------------------------------------
@@ -392,12 +412,13 @@ def keep_local_codes(row: Row, local: Row | None) -> None:
 
 
 def progress_summary(rows: Sequence[Row]) -> dict[str, int | float]:
-    """Units in total, annotated and pending, and the percentage done."""
+    """Units in total, done (annotated or excluded), excluded, pending; percent done."""
     total = len(rows)
     done = sum(r.processed for r in rows)
     return {
         "total_units": total,
         "completed_units": done,
+        "excluded_units": sum(r.excluded for r in rows),
         "pending_units": total - done,
         "progress_percent": round(100 * done / total, 1) if total else 0,
     }
