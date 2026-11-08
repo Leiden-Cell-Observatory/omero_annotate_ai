@@ -267,7 +267,7 @@ types guess the bit depth from the image maximum, so exporting with
 | Value | Meaning |
 |---|---|
 | `omero` (default) | A tracking table on OMERO (its ID identifies the set), masks uploaded as ROIs and label files, plus a local copy in the set's folder. |
-| `local` | Nothing is written to OMERO; images, masks and `tracking_table.csv` stay in the set's folder. Use on public servers such as the IDR. OME-Zarr sets (`source: zarr`) are always `local`. |
+| `local` | Nothing is written to OMERO; images, masks and `tracking_table.csv` stay in the set's folder. Use on servers you cannot write to. OME-Zarr sets (`source: zarr`) are always `local`. |
 
 Fixed when the set is created. Each set has its own folder:
 `<home>/<server>/<table id>_<name>/` (or `<home>/local/<id>_<name>/` for local sets),
