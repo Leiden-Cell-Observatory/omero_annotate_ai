@@ -29,6 +29,7 @@ carries on with the next unit.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ import tifffile
 
 from . import claims
 from .annotators import Batch, BatchItem
-from .bundle import conflict_path, file_digest, fresh_scratch, mask_path
+from .bundle import conflict_path, file_digest, fresh_scratch, mask_path, pixel_digest
 from .errors import Cancelled
 from .events import (
     BatchPrepared,
@@ -94,13 +95,41 @@ def check_cancel(
 def upload_unit(training_set: TrainingSet, annotation: Row, mask_file: Path) -> bool:
     """Steps 3a/3b: upload what is missing (label file, then ROI), saving each ID.
 
+    Uploads already carrying the unit's tag (a session that crashed before its table
+    write) are adopted instead of uploaded again; if their label differs from this
+    mask nothing is uploaded and the unit is marked for review.
+
     Returns False, leaving the unit unannotated with the error recorded, if an
-    upload fails.
+    upload fails or a tagged upload differs.
     """
     label_img = np.asarray(tifffile.imread(mask_file))
     common = training_set.upload_fields(annotation)
     writes = training_set.omero_writes
     try:
+        if (
+            annotation.image_id is not None
+            and annotation.label_id is None
+            and annotation.roi_id is None
+        ):
+            labels, rois = writes.find_tagged(
+                training_set.conn, annotation.image_id, common["tag"]
+            )
+            if labels:
+                pixels = writes.download_label(training_set.conn, labels[0])
+                if pixels is None or pixel_digest(pixels) != pixel_digest(label_img):
+                    annotation.processed = False
+                    annotation.error = (
+                        NEEDS_REVIEW + "another session uploaded a different mask "
+                        f"for this unit (label {labels[0]})"
+                    )
+                    training_set.save_local_table()
+                    training_set.events(
+                        UploadFailed(annotation.annotation_id, annotation.error)
+                    )
+                    return False
+                annotation.label_id = labels[0]
+                annotation.roi_id = rois[0] if rois else None
+                training_set.save_local_table()
         if annotation.label_id is None:
             annotation.label_id = writes.upload_label(
                 training_set.conn, annotation.image_id, label_img, **common
@@ -165,8 +194,12 @@ def review_unit(
         return "unchanged"
     target = mask_path(training_set.bundle_dir, annotation.annotation_id)
     target.parent.mkdir(parents=True, exist_ok=True)
+    previous = target.with_name(f"{target.stem}.previous.tif")
+    if target.exists():
+        target.replace(previous)
     Path(mask_source).replace(target)
     old = (("FileAnnotation", annotation.label_id), ("Roi", annotation.roi_id))
+    before = annotation.model_copy()
     annotation.mask_digest = digest
     annotation.session = session
     annotation.error = None
@@ -174,6 +207,7 @@ def review_unit(
     annotation.mark_processed(annotation_type=training_set.annotation_type)
     training_set.save_local_table()
     if training_set.is_local:
+        previous.unlink(missing_ok=True)
         training_set.events(UnitCommitted(annotation.annotation_id))
         return "revised"
     pixels = np.asarray(tifffile.imread(target))
@@ -193,10 +227,23 @@ def review_unit(
         )
         training_set.save_local_table()
     except Exception as error:  # noqa: BLE001 - the old uploads stay valid
+        # The unit stays as it was: old mask, old uploads. The correction is kept as
+        # a conflict file, and a new label that did get uploaded is removed.
+        if annotation.label_id not in (None, before.label_id):
+            with contextlib.suppress(Exception):
+                writes.delete_objects(conn, "FileAnnotation", [annotation.label_id])
+        keep = conflict_path(training_set.bundle_dir, annotation.annotation_id, session)
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        target.replace(keep)
+        if previous.exists():
+            previous.replace(target)
+        for name in ("label_id", "roi_id", "mask_digest", "session"):
+            setattr(annotation, name, getattr(before, name))
         annotation.error = f"{type(error).__name__}: {error}"
         training_set.save_local_table()
         training_set.events(UploadFailed(annotation.annotation_id, annotation.error))
         return "failed"
+    previous.unlink(missing_ok=True)
     for kind, object_id in old:
         if object_id is None:
             continue
@@ -262,10 +309,7 @@ class AnnotationSession:
             and (self._ids is None or a.annotation_id in self._ids)
             and a.annotation_id not in self._handed_out
             and not (a.error or "").startswith(NEEDS_REVIEW)
-            and not (
-                a.claimed_by != self.token
-                and claims.is_live(a.claimed_by, a.claimed_at, hours)
-            )
+            and not claims.held_by_other(a.claimed_by, a.claimed_at, self.token, hours)
         ]
 
     def _choose(self) -> list[Row]:
@@ -354,7 +398,7 @@ class AnnotationSession:
             self._set.events(Progress("upload", done, len(todo)))
         committed = outcome["revised"]
         self.annotated += len(committed)
-        self._unclaim(set(outcome["unchanged"]))
+        self._unclaim({*outcome["unchanged"], *outcome["failed"], *outcome["conflict"]})
 
         if committed and not self._set.is_local:
             self._set.write_table([by_id[i] for i in committed])

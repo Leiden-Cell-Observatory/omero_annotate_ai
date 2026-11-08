@@ -183,10 +183,11 @@ def replace_table_config(
 ) -> int:
     """Attach a training set's config YAML, replacing the previous one.
 
-    Every set keeps exactly one config on OMERO, named
-    ``annotation_config_table_<id>.yaml``. The new file is posted first and
-    the old ones deleted after, so a failed upload never leaves the set
-    without a config.
+    Every set keeps one config on OMERO, named
+    ``annotation_config_table_<id>.yaml``. The new file is posted first and only
+    older copies (lower IDs) are deleted after, so a failed upload never leaves
+    the set without a config, and two computers publishing at once never delete
+    each other's new file: the newest one stays (readers take the newest).
 
     Args:
         conn: OMERO connection
@@ -216,10 +217,13 @@ def replace_table_config(
         for ann in _table_config_annotations(
             conn, table_id, [(container_type, container_id)]
         )
-        if ann["id"] != new_id
+        if ann["id"] < new_id
     ]
-    if old:
-        conn.deleteObjects("Annotation", old, wait=True)
+    for old_id in old:  # one by one: another computer may delete the same copy
+        try:
+            conn.deleteObjects("Annotation", [old_id], wait=True)
+        except Exception:  # noqa: BLE001 - already gone or not ours: harmless
+            logger.debug("Old config %s not deleted", old_id)
     return new_id
 
 

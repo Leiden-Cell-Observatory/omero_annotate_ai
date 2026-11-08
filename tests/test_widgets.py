@@ -661,6 +661,28 @@ class TestWorkflowWidget:
         widget._save_note()
         assert "Pick a set with a session" in widget.status.value
 
+    def test_note_after_changing_container_creates_nothing(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        conn = omero.conn()
+        conn.getObjects.return_value = []
+        widget = WorkflowWidget(conn, home=tmp_path / "home")
+        widget.name.value = "widget_set"
+        widget.counts["training"].value, widget.counts["validation"].value = 2, 0
+        widget.training_set(
+            image_source=source,
+            omero_writes=omero,
+            images=[source.get_image(i) for i in (1, 2)],
+        )
+        widget.annotate(ScriptedAnnotator(image_mask))
+
+        widget._reset_selection()  # the user picks another container
+        widget.note.value = "for the old set"
+        widget._save_note()
+
+        assert widget.note_session.options == ()
+        assert "Pick a set with a session" in widget.status.value
+        assert len(omero.tables) == 1  # no second set was created
+
     def test_new_set_annotate_and_note_on_the_real_core(self, tmp_path):
         config, source, omero = omero_set(tmp_path, n_images=2)
         conn = omero.conn()

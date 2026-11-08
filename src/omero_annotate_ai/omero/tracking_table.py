@@ -379,35 +379,67 @@ def update_cells(
     """Change some cells of some rows in one read-modify-write.
 
     ``change`` gets each row (by ``keys``, in order) as it is in the table now and
-    returns the cells to set, or None to leave the row alone. Other cells keep the
-    table's values, so a concurrent writer's columns are never overwritten with a
-    stale copy.
+    returns the cells to set, or None to leave the row alone. Only the changed
+    cells are written (``Table.update`` writes every column it is given, for every
+    row it is given), and only if they still hold the values ``change`` saw: a
+    concurrent writer's cells are never overwritten with a stale copy.
 
     Returns:
         The keys of the rows changed.
     """
     table = _open(conn, table_id)
     try:
-        found = _row_numbers(table, keys)
-        if not found:
-            return []
-        data = table.readCoordinates([n for _, n in found])
-        columns = {_df_name(c.name): c for c in data.columns}
-        changed: list[str] = []
-        for position, (key, _) in enumerate(found):
-            row = {name: column.values[position] for name, column in columns.items()}
-            cells = change(row)
-            if not cells:
-                continue
-            for name, value in cells.items():
-                columns[name].values[position] = value
-            changed.append(key)
-        if changed:
-            widths = _header_widths(table.getHeaders())
-            check_string_lengths(
-                pd.DataFrame({n: list(c.values) for n, c in columns.items()}), widths
-            )
-            table.update(data)
-        return changed
+        return update_table_cells(table, keys, change)
     finally:
         table.close()
+
+
+def update_table_cells(
+    table,
+    keys: Iterable[str],
+    change: Callable[[dict[str, Any]], dict[str, Any] | None],
+) -> list[str]:
+    """:func:`update_cells` on an open table."""
+    found = _row_numbers(table, keys)
+    if not found:
+        return []
+    data = table.readCoordinates([n for _, n in found])
+    seen = {_df_name(c.name): list(c.values) for c in data.columns}
+    planned: list[tuple[str, int, dict[str, Any]]] = []
+    for position, (key, _) in enumerate(found):
+        cells = change({name: values[position] for name, values in seen.items()})
+        if cells:
+            planned.append((key, position, cells))
+    if not planned:
+        return []
+    headers = table.getHeaders()
+    names = sorted({name for _, _, cells in planned for name in cells})
+    index = {_df_name(h.name): i for i, h in enumerate(headers)}
+    check_string_lengths(
+        pd.DataFrame(
+            {name: [cells.get(name, "") for _, _, cells in planned] for name in names}
+        ),
+        _header_widths(headers),
+    )
+    rows = [found[position][1] for _, position, _ in planned]
+    fresh = table.slice([index[name] for name in names], rows)
+    columns = {_df_name(c.name): c for c in fresh.columns}
+    changed: list[str] = []
+    keep: list[int] = []
+    for i, (key, position, cells) in enumerate(planned):
+        # Skip a row another writer changed since it was read (no compare-and-swap
+        # in OMERO.tables; this narrows the window to the update call itself).
+        if any(columns[name].values[i] != seen[name][position] for name in names):
+            continue
+        for name in names:
+            columns[name].values[i] = cells.get(name, seen[name][position])
+        changed.append(key)
+        keep.append(i)
+    if not changed:
+        return []
+    if len(keep) < len(rows):
+        for column in fresh.columns:
+            column.values = [column.values[i] for i in keep]
+        fresh.rowNumbers = [rows[i] for i in keep]
+    table.update(fresh)
+    return changed

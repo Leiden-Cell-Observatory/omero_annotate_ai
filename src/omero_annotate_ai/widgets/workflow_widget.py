@@ -466,6 +466,8 @@ class WorkflowWidget:
         self._training_set = None
         self.sets.options = []
         self.summary.value = ""
+        self._notes = {}
+        self.note_session.options = []
         for box in self.add.values():
             box.value = 0
         self.task.value = "annotate"
@@ -662,15 +664,18 @@ class WorkflowWidget:
     def _save_note(self) -> None:
         note = self.note.value.strip()
         session = self.note_session.value
-        if session is None or not note:
+        no_set = self._training_set is None and (
+            self.mode.value != "open" or self.sets.value is None
+        )
+        if session is None or not note or no_set:
             self._error(
                 "Pick a set with a session (or annotate one), then write a note"
             )
             return
         try:
-            ts = self.training_set()  # opens the picked set if needed
+            ts = self.training_set()  # opens the picked set; never creates one
             ts.set_session_note(session, note)
-        except (OmeroAnnotateAIError, OSError, ValueError) as error:
+        except (OmeroAnnotateAIError, OSError, ValueError, KeyError) as error:
             self._error(str(error))
             return
         self._notes[session] = note

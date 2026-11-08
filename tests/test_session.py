@@ -233,6 +233,23 @@ class TestReview:
             assert table.loc[row.annotation_id, "label_id"] == row.label_id
             assert omero.labels[row.label_id].pixels[0, 0] == 0
 
+    def test_failed_review_upload_leaves_the_unit_as_it_was(self, tmp_path):
+        ts, _, omero = annotated_set(tmp_path, n_images=1)
+        (row,) = ts.rows
+        before = (row.label_id, row.roi_id, row.mask_digest)
+        mask = mask_path(ts.bundle_dir, row.annotation_id)
+        saved = tifffile.imread(mask)
+        omero.fail = {"roi": omero.calls.get("roi", 0) + 1}  # label posts, ROI fails
+
+        assert ts.review(ScriptedAnnotator(image_mask, review_fn=edited)) == 0
+
+        assert (row.label_id, row.roi_id, row.mask_digest) == before
+        assert np.array_equal(tifffile.imread(mask), saved)
+        assert omero.uploads_per_tag() == {ts.upload_tag(row.annotation_id): (1, 1)}
+        kept = list((ts.bundle_dir / "annotation_output" / "conflicts").iterdir())
+        assert len(kept) == 1 and tifffile.imread(kept[0])[0, 0] == 0
+        assert not list(mask.parent.glob("*.previous.tif"))
+
     def test_ids_limit_the_review(self, tmp_path):
         ts, _, _ = annotated_set(tmp_path, n_images=3)
         chosen = ts.rows[1].annotation_id

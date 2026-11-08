@@ -100,8 +100,10 @@ class MicroSamAnnotator:
             images = [item.pixels for item in batch.items]
             initial = None
             if any(item.initial_mask is not None for item in batch.items):
+                # A label image has no channel axis: (z,) y, x of the pixels.
+                ndim = 3 if batch.is_volumetric else 2
                 initial = [
-                    np.zeros(item.pixels.shape, np.uint32)
+                    np.zeros(item.pixels.shape[:ndim], np.uint32)
                     if item.initial_mask is None
                     else item.initial_mask
                     for item in batch.items

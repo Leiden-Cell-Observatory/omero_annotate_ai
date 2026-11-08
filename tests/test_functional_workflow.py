@@ -992,6 +992,24 @@ class TestTwoComputers:
         again = open_set(omero_conn, a.table_id, tmp_path / "b")
         assert len(again.start_session().next_batch().items) == 2  # expired: free
 
+    def test_own_leftover_claims_never_block(
+        self, omero_conn, omero_seed, on, tmp_path
+    ):
+        a, _ = self._create_and_open(
+            omero_conn, omero_seed, on, tmp_path, "own", validate_n=0, test_n=0
+        )
+        on("a")
+        a.start_session().next_batch()  # then an exception: never finished
+
+        session = a.start_session()  # the same object, a new session
+        batch = session.next_batch()
+        assert len(batch.items) == 2
+        session.commit(batch, scripted_masks(batch))
+        session.finish()
+
+        rows = table_rows(omero_conn, a.table_id)
+        assert rows["processed"].all() and (rows["claimed_by"] == "").all()
+
 
 # ---------------------------------------------------------------------------
 # Reviewing annotated units

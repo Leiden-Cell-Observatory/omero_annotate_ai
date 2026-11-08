@@ -5,14 +5,24 @@ Before a session shows a unit in napari it claims the unit in the tracking table
 ``claimed_at`` the time (UTC). Other sessions skip units with a live claim. A claim
 is released when the unit is committed or handed back, and expires after
 ``workflow.claim_hours`` - so a crashed session never blocks a unit for good.
-Opening a set releases the claims an earlier run on the same computer (same user
-and host) left behind.
+Claims never block their owner: a session of the same user on the same computer
+takes units an earlier session left claimed (a dropped connection, an exception),
+and opening a set releases such leftovers.
 
-OMERO.tables has no compare-and-swap, so claiming is a read-modify-write of the
-claim cells only (:func:`~omero_annotate_ai.omero.tracking_table.update_cells`):
-two sessions claiming the same unit within the same instant could both win. The
-commit check in :mod:`omero_annotate_ai.session` (re-read the row, never upload
-over a unit another session saved) keeps that case from duplicating uploads.
+OMERO.tables has no compare-and-swap, so claiming is a read-modify-write that
+writes only the claim cells, and only those still holding what was read
+(:func:`~omero_annotate_ai.omero.tracking_table.update_cells`): two sessions
+claiming the same unit within the instant of one table update could both win.
+The commit check in :mod:`omero_annotate_ai.session` (re-read the row, adopt an
+upload already carrying the unit's tag, never upload over a unit another session
+saved) keeps that case from duplicating uploads.
+
+The set's config on OMERO has the same limit: publishing merges what other
+computers published (sessions, notes, image counts) just before posting, and the
+newest file wins. Two computers publishing within that instant can lose one
+session record's latest change; the rows in the table are not affected. A session
+number taken by two computers at once is detected after publishing and the later
+one renumbered (:meth:`~omero_annotate_ai.trainingset.TrainingSet.begin_session`).
 Local sets have no claims: their folder belongs to one computer.
 """
 
@@ -43,6 +53,20 @@ def token(session: int, user: str | None) -> str:
     return f"{session}@{owner(user)}"
 
 
+def held_by_other(
+    holder: Any, claimed_at: Any, session_token: str, hours: float
+) -> bool:
+    """Whether a live claim belongs to another user or computer than ``session_token``.
+
+    Claims of the same owner (user and computer) never block: a session that died
+    with its connection, or ended without releasing, hands its units to the next
+    session of the same user on the same computer, whatever its number.
+    """
+    if not holder or str(holder).partition("@")[2] == session_token.partition("@")[2]:
+        return False
+    return is_live(holder, claimed_at, hours)
+
+
 def now() -> str:
     """The current time as stored in ``claimed_at``."""
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -70,7 +94,7 @@ def claim(
     """Claim up to ``limit`` of ``keys`` (in order) that are free; returns them.
 
     Free means: not annotated (annotated, for a review), and not claimed by a live
-    session other than ``session_token``.
+    session of another user or computer (see :func:`held_by_other`).
     """
     hours = training_set.config.workflow.claim_hours
     stamp = now()
@@ -80,8 +104,9 @@ def claim(
         nonlocal taken
         if taken >= limit or bool(row.get("processed")) != annotated:
             return None
-        holder = row.get("claimed_by") or ""
-        if holder != session_token and is_live(holder, row.get("claimed_at"), hours):
+        if held_by_other(
+            row.get("claimed_by"), row.get("claimed_at"), session_token, hours
+        ):
             return None
         taken += 1
         return {"claimed_by": session_token, "claimed_at": stamp}

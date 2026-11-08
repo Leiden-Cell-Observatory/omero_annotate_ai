@@ -176,6 +176,20 @@ class TestMicroSamAnnotator:
         assert initial[0] is saved
         assert initial[1].shape == (8, 10) and not initial[1].any()
 
+    def test_placeholder_mask_has_no_channel_axis(self, tmp_path, monkeypatch):
+        sam = self._fake_micro_sam(monkeypatch)
+        items = (
+            BatchItem("a0", np.zeros((8, 10, 3), np.uint8), initial_mask=None),
+            BatchItem(
+                "a1", np.zeros((8, 10, 3), np.uint8), initial_mask=np.ones((8, 10))
+            ),
+        )
+
+        MicroSamAnnotator().annotate(Batch(1, items, tmp_path / "masks"))
+
+        initial = sam.image_series_annotator.call_args.kwargs["initial_segmentations"]
+        assert initial[0].shape == (8, 10)
+
     def test_no_initial_segmentations_when_annotating(self, tmp_path, monkeypatch):
         sam = self._fake_micro_sam(monkeypatch)
 

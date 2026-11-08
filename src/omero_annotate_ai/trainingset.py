@@ -213,6 +213,11 @@ class TrainingSet:
         self.cancel = cancel
         self._bundle = bundle
         self._batches_run = 0
+        # Notes set here on sessions of other computers, kept over their copy on
+        # OMERO until published (see _merge_remote_config).
+        self._note_edits: dict[int, str] = {}
+        # A session being started: renumbered if another computer took its number.
+        self._starting: SessionRecord | None = None
         _ = self._seed  # generate and store the seed before anything is planned
         self.image_source = (
             image_source
@@ -971,19 +976,22 @@ class TrainingSet:
     def publish_config(self) -> int | None:
         """Replace the set's one config YAML on OMERO with the local one.
 
-        Sessions other computers recorded meanwhile are merged in first.
+        What other computers published meanwhile is merged in first (see
+        :meth:`_merge_remote_config`).
         """
         if self.table_id is None:
             return None
-        self._merge_remote_sessions()
+        self._merge_remote_config()
         self.save_config()
-        return self.omero_writes.replace_config(
+        file_id = self.omero_writes.replace_config(
             self.conn,
             self.table_id,
             str(self._config_path()),
             self._config.omero.container_type,
             self._config.omero.get_primary_container_id(),
         )
+        self._note_edits.clear()
+        return file_id
 
     # --- Creating and opening ----------------------------------------------------
 
@@ -1162,6 +1170,9 @@ class TrainingSet:
         Raises:
             ConfigError: A count is lower than the set already has.
         """
+        if not self.is_local:
+            self.refresh()  # rows other computers added count towards the targets
+            self._merge_remote_config()
         training = self._config.training
         for key, value in (
             ("train_n", train_n),
@@ -1290,20 +1301,46 @@ class TrainingSet:
             raise
         return session.finish(note)
 
-    def _merge_remote_sessions(self) -> None:
-        """Take other computers' session records from the config on OMERO."""
+    def _merge_remote_config(self) -> AnnotationConfig | None:
+        """Take what other computers published from the config on OMERO.
+
+        - Sessions: this computer's records are kept, other computers' records are
+          taken from OMERO - except notes set here (:meth:`set_session_note`). A
+          session being started whose number another computer took meanwhile is
+          renumbered (no rows carry it yet).
+        - Image counts only grow (:meth:`extend`), so the larger count wins.
+
+        Everything else in a set's config is fixed once it is created.
+        """
         if self.table_id is None:
-            return
+            return None
         remote = self.omero_writes.read_config(self.conn, self.table_id)
         if remote is None:
-            return
+            return None
         host = claims.host_id()
         merged = {s.id: s for s in self._config.sessions}
         for theirs in remote.sessions:
             mine = merged.get(theirs.id)
-            if mine is None or mine.host not in (None, host):
+            if mine is not None and mine is self._starting and theirs.host != host:
+                merged[theirs.id] = theirs
+                taken = [*merged, *(t.id for t in remote.sessions)]
+                taken += [r.session for r in self.rows]
+                mine.id = 1 + max(taken)
+                merged[mine.id] = mine
+            elif mine is None or mine.host not in (None, host):
                 merged[theirs.id] = theirs  # another computer's session: theirs wins
+        for session_id, note in self._note_edits.items():
+            if session_id in merged:
+                merged[session_id].note = note
         self._config.sessions = sorted(merged.values(), key=lambda s: s.id)
+        training = self._config.training
+        for key in ("train_n", "validate_n", "test_n"):
+            setattr(
+                training,
+                key,
+                max(getattr(training, key), getattr(remote.training, key)),
+            )
+        return remote
 
     def begin_session(
         self,
@@ -1313,29 +1350,47 @@ class TrainingSet:
     ) -> int:
         """Record a new session in the config; returns its number.
 
-        For OMERO sets the number is taken after merging the sessions on OMERO,
-        and published at once so other computers continue after it.
+        For OMERO sets the number follows the sessions on OMERO and is published at
+        once, then checked: if another computer published the same number at the
+        same time, this session takes the next free one. (Two computers publishing
+        within the same instant can still overwrite each other's new record; see
+        :mod:`omero_annotate_ai.claims`.)
         """
-        self._merge_remote_sessions()
+        self._merge_remote_config()
         known = [s.id for s in self._config.sessions] + [r.session for r in self.rows]
-        session_id = 1 + max(known, default=0)
-        self._config.sessions.append(
-            SessionRecord(
-                id=session_id,
-                kind=kind,
-                started=datetime.now(),
-                user=self._user(),
-                host=claims.host_id(),
-                software_version=_software_version(),
-                model=model or self._config.ai_model.pretrained_from,
-                batch_size=batch_size,
-            )
+        record = SessionRecord(
+            id=1 + max(known, default=0),
+            kind=kind,
+            started=datetime.now(),
+            user=self._user(),
+            host=claims.host_id(),
+            software_version=_software_version(),
+            model=model or self._config.ai_model.pretrained_from,
+            batch_size=batch_size,
         )
-        if self.table_id is not None:
-            self.publish_config()
-        elif self._can_save():
-            self.save_config()
-        return session_id
+        self._config.sessions.append(record)
+        if self.table_id is None:
+            if self._can_save():
+                self.save_config()
+            return record.id
+        self._starting = record
+        try:
+            for _ in range(5):
+                self.publish_config()
+                remote = self.omero_writes.read_config(self.conn, self.table_id)
+                owner = next(
+                    (
+                        s.host
+                        for s in (remote.sessions if remote else [])
+                        if s.id == record.id
+                    ),
+                    record.host,
+                )
+                if owner == record.host:
+                    break
+        finally:
+            self._starting = None
+        return record.id
 
     def end_session(
         self,
@@ -1355,8 +1410,18 @@ class TrainingSet:
         self.publish_config()
 
     def set_session_note(self, session_id: int, note: str) -> None:
-        """Set (or replace) a session's note, locally and on OMERO."""
+        """Set (or replace) a session's note, locally and on OMERO.
+
+        Works for sessions of other computers too: the note set here wins over
+        their copy on OMERO.
+
+        Raises:
+            KeyError: The set has no such session.
+        """
+        if self.table_id is not None:
+            self._merge_remote_config()
         self._session(session_id).note = note
+        self._note_edits[session_id] = note
         self.save_config()
         self.publish_config()
 
@@ -1472,8 +1537,9 @@ class TrainingSet:
         """Save the masks an external tool wrote as ``{annotation_id}_mask.tif``.
 
         ``folder`` is relative to the set's folder and may be a glob pattern. Each
-        mask goes through the same write order as a session (one new session).
-        Returns the number of units saved.
+        mask goes through the same write order as a session (one new session). On
+        OMERO sets the table is read first and the units claimed: units saved or
+        claimed on another computer are skipped. Returns the number of units saved.
         """
         files: list[Path] = []
         folders = (
@@ -1484,22 +1550,39 @@ class TrainingSet:
         for found in folders:
             if found.is_dir():
                 files += [*found.glob("*_mask.tif"), *found.glob("*_mask.tiff")]
+        if not self.is_local:
+            self.refresh()  # units saved on other computers meanwhile are skipped
         by_id = {r.annotation_id: r for r in self.rows}
-        todo = [
-            (by_id[f.stem.removesuffix("_mask")], f)
+        todo = {
+            f.stem.removesuffix("_mask"): f
             for f in files
             if f.stem.removesuffix("_mask") in by_id
             and not by_id[f.stem.removesuffix("_mask")].processed
-        ]
+        }
         if not todo:
             return 0
         session_id = self.begin_session(None, None)
-        saved = sum(commit_unit(self, row, path, session_id) for row, path in todo)
-        if saved and not self.is_local:
-            self.write_table([row for row, _ in todo])
-        self.end_session(session_id, saved, None)
-        logger.info("Saved %d annotations", saved)
-        return saved
+        token = claims.token(session_id, self._user())
+        if not self.is_local:  # like a session: claim first, skip units held elsewhere
+            todo = {
+                k: todo[k] for k in claims.claim(self, token, list(todo), len(todo))
+            }
+        committed: list[Row] = []
+        failed: list[str] = []
+        for annotation_id, path in todo.items():
+            row = by_id[annotation_id]
+            if commit_unit(self, row, path, session_id):
+                committed.append(row)
+            else:
+                failed.append(annotation_id)
+        if not self.is_local:
+            if committed:
+                self.write_table(committed)
+            if failed:
+                claims.release(self, token, failed)
+        self.end_session(session_id, len(committed), None)
+        logger.info("Saved %d annotations", len(committed))
+        return len(committed)
 
     def _meta_for(self, annotation: Row) -> dict:
         """A unit's plane, patch and image as the image loaders expect them."""
