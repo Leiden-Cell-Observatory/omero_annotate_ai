@@ -79,15 +79,21 @@ _CONTEXT_COLORMAP_CYCLE = ["blue", "magenta", "green", "yellow", "cyan"]
 class SpatialCoverage(BaseModel):
     """Spatial scope of annotations (MIFA requirement)"""
 
-    channels: list[int] = Field(description="Channel indices processed")
-    timepoints: list[int] = Field(description="Timepoints as list")
+    channels: list[int] = Field(
+        default_factory=lambda: [0], description="Channel indices processed"
+    )
+    timepoints: list[int] = Field(
+        default_factory=lambda: [0], description="Timepoints as list"
+    )
     n_timepoints: int | None = Field(
         default=None,
         description="Number of timepoints to randomly select (used when timepoint_mode='random'). "
         "If not specified, uses the length of timepoints list for backward compatibility.",
     )
     timepoint_mode: Literal["all", "random", "specific"] = "specific"
-    z_slices: list[int] = Field(description="Z-slices as list")
+    z_slices: list[int] = Field(
+        default_factory=lambda: [0], description="Z-slices as list"
+    )
     # Number of slices/timepoints for random mode (optional, defaults to list length)
     n_slices: int | None = Field(
         default=None,
@@ -714,11 +720,7 @@ class AnnotationConfig(BaseModel):
     annotation_methodology: AnnotationMethodology = Field(
         default_factory=lambda: AnnotationMethodology(annotation_criteria="")
     )
-    spatial_coverage: SpatialCoverage = Field(
-        default_factory=lambda: SpatialCoverage(
-            channels=[0], timepoints=[0], z_slices=[0]
-        )
-    )
+    spatial_coverage: SpatialCoverage = Field(default_factory=SpatialCoverage)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
 

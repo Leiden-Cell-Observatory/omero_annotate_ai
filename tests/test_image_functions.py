@@ -1,10 +1,13 @@
 """Tests for image processing functions."""
 
+import random
+
 import numpy as np
 import pytest
 
 from omero_annotate_ai.processing.image_functions import (
     _rectangles_overlap,
+    generate_patch_coordinates,
 )
 
 # Test label_to_rois if OpenCV is available
@@ -20,9 +23,44 @@ except ImportError:
     OPENCV_AVAILABLE = False
 
 
-# NOTE: TestPatchGeneration class removed in Phase 1 cleanup
-# These tests were using outdated API (random=True/False instead of random_patch=True/False)
-# Will be rewritten in Phase 8 with correct API signatures
+def _disjoint(origins: list[tuple[int, int]], h: int, w: int) -> bool:
+    rects = [(x, y, x + w, y + h) for x, y in origins]
+    return not any(
+        _rectangles_overlap(a, b) for i, a in enumerate(rects) for b in rects[i + 1 :]
+    )
+
+
+@pytest.mark.unit
+class TestPatchGeneration:
+    """Patches never overlap, stay inside the image, and every patch that fits is placed."""
+
+    @pytest.mark.parametrize("random_patch", [True, False])
+    def test_tight_image_gets_every_patch(self, random_patch):
+        # 64x80 fits 2x2 non-overlapping 32x32 patches.
+        for seed in range(50):
+            origins, size = generate_patch_coordinates(
+                (64, 80), [32, 32], 4, random_patch, rng=random.Random(seed)
+            )
+            assert size == (32, 32)
+            assert len(origins) == 4
+            assert _disjoint(origins, 32, 32)
+            assert all(0 <= x <= 48 and 0 <= y <= 32 for x, y in origins)
+
+    def test_grid_caps_at_what_fits(self):
+        origins, _ = generate_patch_coordinates((64, 80), [32, 32], 10, False)
+        assert len(origins) == 4
+        assert _disjoint(origins, 32, 32)
+
+    def test_seeded_random_is_reproducible(self):
+        def run():
+            return generate_patch_coordinates(
+                (512, 512), [64, 64], 5, True, rng=random.Random(42)
+            )[0]
+
+        assert run() == run()
+
+    def test_image_smaller_than_patch_uses_whole_image(self):
+        assert generate_patch_coordinates((20, 30), [64, 64], 3) == ([(0, 0)], (20, 30))
 
 
 class TestRectangleOverlap:
@@ -96,9 +134,6 @@ class TestRectangleOverlap:
 
         assert _rectangles_overlap(outer, inner)
         assert _rectangles_overlap(inner, outer)
-
-
-# Grid and random patch generation are tested through the main generate_patch_coordinates function
 
 
 @pytest.mark.skipif(not OPENCV_AVAILABLE, reason="OpenCV not available")

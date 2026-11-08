@@ -2,7 +2,8 @@
 
 Everything runs through the public API — ``create_pipeline`` and its workflows,
 ``collect_annotations_from_disk``, ``prepare_training_data_from_table``,
-``setup_training``/``run_training`` and ``delete_training_set`` — on the seeded test
+``setup_training``/``run_training``, ``delete_training_set``, the workflow widget and
+a YAML file loaded with ``load_config_from_yaml`` — on the seeded test
 server (tests/omero_seed.py). Only the interactive step is replaced: the pipeline gets
 a :class:`~omero_annotate_ai.annotators.ScriptedAnnotator` instead of micro-SAM in
 napari. It writes masks the way micro-SAM does (``seg_{i:05}.tif`` in the output
@@ -1066,3 +1067,130 @@ class TestReview:
         assert omero_conn.getObject("Roi", int(gone["roi_id"])) is None
         for _, row in rows.iterrows():
             assert_one_upload_matching_the_local_mask(omero_conn, ts, row)
+
+
+# ---------------------------------------------------------------------------
+# 10. Front ends: the Jupyter widget and a YAML file
+# ---------------------------------------------------------------------------
+
+
+class TestFrontEndRoutes:
+    """The two ways users start a set: filling in the widget, or loading a YAML."""
+
+    @staticmethod
+    def _widget(conn, seed, home):
+        from omero_annotate_ai.widgets.workflow_widget import create_workflow_widget
+
+        widget = create_workflow_widget(connection=conn, home=home)
+        widget.container_type.value = "dataset"
+        widget.container.value = seed.dataset_id
+        return widget
+
+    def test_widget_create_annotate_note_reopen_extend(
+        self, omero_conn, omero_seed, tmp_path
+    ):
+        home = tmp_path / "home"
+        widget = self._widget(omero_conn, omero_seed, home)
+        widget.name.value = f"{omero_seed.tag}_widget"
+        widget.channel.value = 1
+        widget.timepoints.mode.value = "random"
+        widget.timepoints.n_random.value = 1
+        widget.z_slices.listed.value = "1"
+        for category, n in (("training", 2), ("validation", 1), ("test", 0)):
+            widget.counts[category].value = n
+        widget.seed.value = "42"
+        widget.storage.value = "omero"
+        widget.batch_size.value = 2
+        widget.go.click()
+
+        assert "✅" in widget.status.value, widget.status.value
+        ts = widget.training_set()
+        table_id = ts.table_id
+        coverage = ts.config.spatial_coverage
+        assert (coverage.channels, coverage.timepoint_mode, coverage.n_timepoints) == (
+            [1],
+            "random",
+            1,
+        )
+        assert ts.bundle_dir.parent.parent == home
+
+        assert widget.annotate(ScriptedAnnotator(mask_for), note="session 1") == 3
+        rows = table_rows(omero_conn, table_id)
+        assert len(rows) == 3 and (rows["z_slice"] == 1).all()
+        assert_labels_on_right_images(omero_conn, omero_seed, rows)
+        assert len(config_annotations(omero_conn, table_id)) == 1
+        assert widget.note.value == "session 1"
+
+        widget.note.value = "checked"
+        widget.save_note.click()  # replaces the note, locally and on OMERO
+
+        reopened = self._widget(omero_conn, omero_seed, home)
+        reopened.mode.value = "open"
+        assert table_id in [value for _, value in reopened.sets.options]
+        reopened.sets.value = table_id
+        assert "2 / 2 annotated" in reopened.summary.value
+        assert "checked" in reopened.summary.value
+        assert "session 1" not in reopened.summary.value
+
+        reopened.add["training"].value = 1
+        reopened.go.click()
+        assert "1 units to annotate" in reopened.status.value, reopened.status.value
+        assert reopened.training_set().table_id == table_id
+        assert reopened.annotate(ScriptedAnnotator(mask_for)) == 1
+        rows = table_rows(omero_conn, table_id)
+        assert len(rows) == 4 and rows["processed"].all()
+        assert len(tagged_rois(omero_conn, table_id, rows["image_id"])) == 4
+
+    def test_yaml_create_annotate_reopen(self, omero_conn, omero_seed, tmp_path):
+        """As in docs/configuration.md and notebooks/marimo/annotate-from-yaml.py."""
+        from omero_annotate_ai import TrainingSet, load_config_from_yaml
+        from omero_annotate_ai.core.annotation_pipeline import OmeroWrites
+
+        home = tmp_path / "home"
+        path = tmp_path / "set.yaml"
+        path.write_text(
+            f"name: {omero_seed.tag}_yaml\n"
+            "omero:\n"
+            "  container_type: dataset\n"
+            f"  container_id: {omero_seed.dataset_id}\n"
+            "spatial_coverage:\n"
+            "  channels: [0]\n"
+            "  use_patches: true\n"
+            "  patch_size: [16, 16]\n"
+            "  patches_per_image: 2\n"
+            "training:\n"
+            "  train_n: 2\n"
+            "  validate_n: 1\n"
+            "  test_n: 0\n"
+            "  seed: 7\n"
+            "ai_model:\n"
+            "  pretrained_from: vit_b_lm\n"
+            "workflow:\n"
+            "  batch_size: 4\n"
+            "storage: omero\n"
+        )
+        text = path.read_text()
+
+        ts = TrainingSet.create(load_config_from_yaml(str(path)), omero_conn, home=home)
+        assert ts.annotate(ScriptedAnnotator(mask_for), note="from yaml") == 6
+        assert path.read_text() == text  # the user's file is not changed
+        rows = table_rows(omero_conn, ts.table_id)
+        assert len(rows) == 6 and rows["is_patch"].all()
+        assert_labels_on_right_images(omero_conn, omero_seed, rows)
+
+        # The config on OMERO round-trips: same definition, now with the set's identity.
+        remote = OmeroWrites().read_config(omero_conn, ts.table_id)
+        local = ts.config
+        assert remote.identity.table_id == ts.table_id
+        for part in ("omero", "spatial_coverage", "training", "ai_model"):
+            assert getattr(remote, part) == getattr(local, part), part
+        assert [s.note for s in remote.sessions] == ["from yaml"]
+
+        # Reopen by table ID, and like the notebook does from the set's folder.
+        by_id = TrainingSet.open(ts.table_id, omero_conn, home=home)
+        folder_config = load_config_from_yaml(str(ts.bundle_dir / "config.yaml"))
+        by_folder = TrainingSet.open(ts.bundle_dir, omero_conn, home=home)
+        assert folder_config.identity.table_id == ts.table_id
+        for opened in (by_id, by_folder):
+            assert opened.table_id == ts.table_id
+            assert all(unit.processed for unit in opened.units())
