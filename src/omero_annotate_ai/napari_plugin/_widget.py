@@ -124,7 +124,8 @@ class OMEROAnnotateDock(QWidget):
         self._core_options = dict(core_options or {})
         self._controller = controller or MicroSamController(napari_viewer)
         self._io = Worker("oai-io")
-        self._embedder = embedder or Embedder(Worker("oai-compute"))
+        self._compute = Worker("oai-compute")
+        self._embedder = embedder or Embedder(self._compute)
         self._bridge = EventBridge()
         self._bridge.event.connect(self._on_event)
         self._conn: Any = None
@@ -541,6 +542,13 @@ class OMEROAnnotateDock(QWidget):
             future.result(timeout=30)
         except Exception:  # noqa: BLE001 - quitting; the next open closes it anyway
             logger.warning("Could not record the session as interrupted")
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802 - Qt's name
+        """Record an open session as interrupted, then stop the background threads."""
+        self._interrupt()
+        self._io.shutdown()
+        self._compute.shutdown()
+        super().closeEvent(event)
 
     # --- helpers ------------------------------------------------------------------
 

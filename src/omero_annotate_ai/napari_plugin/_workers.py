@@ -42,10 +42,12 @@ class _Delivery(QObject):
 
     def __init__(self) -> None:
         super().__init__()
+        self.closed = False
         self.ready.connect(self._call)
 
     def _call(self, callback: Callable[[Any], None], value: Any) -> None:
-        callback(value)
+        if not self.closed:  # the widget the callback updates may be gone
+            callback(value)
 
 
 class Worker:
@@ -76,7 +78,9 @@ class Worker:
         return self._executor.submit(job)
 
     def shutdown(self) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        """Stop: drop queued jobs, wait for the running one, ignore late results."""
+        self._delivery.closed = True
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
 
 class EventBridge(QObject):
