@@ -1,6 +1,8 @@
 """Tests for the napari plugin: headless Qt, the real core on fake OMERO and images."""
 
 import inspect
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -86,6 +88,11 @@ def _start(widget, qtbot) -> None:
     )
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin" and bool(os.environ.get("CI")),
+    reason="Qt widgets with background threads segfault on headless GitHub macOS "
+    "runners (not reproduced on Linux/Windows); run these locally on macOS",
+)
 class TestDock:
     """The annotate loop end to end on the real core; only micro-SAM is faked."""
 
