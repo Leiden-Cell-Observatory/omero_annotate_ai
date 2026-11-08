@@ -260,6 +260,26 @@ class TestConfigEdgeCases:
         with pytest.raises(RemovedConfigKey, match=replacement):
             AnnotationConfig.from_dict({"name": "x", **data})
 
+    def test_old_yaml_file_raises_naming_the_replacement(self, tmp_path):
+        from omero_annotate_ai.errors import RemovedConfigKey
+
+        path = tmp_path / "old.yaml"
+        path.write_text("name: x\nworkflow:\n  read_only_mode: true\n")
+        with pytest.raises(RemovedConfigKey, match="storage: local"):
+            load_config_from_yaml(str(path))
+
+    def test_spatial_coverage_lists_default_to_first_plane(self):
+        # As documented: a YAML may leave out channels, timepoints and z_slices.
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "spatial_coverage": {"use_patches": True}}
+        )
+        coverage = config.spatial_coverage
+        assert (coverage.channels, coverage.timepoints, coverage.z_slices) == (
+            [0],
+            [0],
+            [0],
+        )
+
     def test_other_schema_versions_are_refused(self):
         from omero_annotate_ai.errors import ConfigError
 
