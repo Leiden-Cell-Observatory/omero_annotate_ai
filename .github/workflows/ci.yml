@@ -3,18 +3,57 @@ name: CI/CD
 on:
   push:
     branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+  pull_request:  # every PR, including PRs into feature branches
   release:
     types: [ published ]
 
+# Least privilege by default; jobs that need more (publish) ask for it.
+permissions:
+  contents: read
+
+# A new push to the same PR/branch cancels the run that is still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  notebooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v7
+    - name: Notebooks have no outputs
+      run: python3 .github/scripts/check_notebook_outputs.py
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install pixi
+      uses: prefix-dev/setup-pixi@v0.11.2
+      with:
+        pixi-version: v0.72.2
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        locked: true
+        environments: dev
+
+    - name: Ruff (lint + format)
+      run: pixi run -e dev lint
+
+    - name: Pyright
+      run: pixi run -e dev typecheck
+
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
+      fail-fast: false  # report every platform, not just the first failure
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        
+
     steps:
     - uses: actions/checkout@v7
     
@@ -30,17 +69,23 @@ jobs:
     - name: Run unit tests
       run: pixi run -e dev test-unit
       
-    # - name: Check code quality
-    #   run: pixi run -e dev lint
-      
-    - name: Test OMERO functionality (Linux only)
+    - name: Start test OMERO (Linux only)
       if: matrix.os == 'ubuntu-latest'
-      run: pixi run -e dev test
+      run: pixi run start-omero
+
+    - name: Integration tests against OMERO (Linux only)
+      if: matrix.os == 'ubuntu-latest'
+      run: pixi run -e dev test-omero
+
+    - name: Stop test OMERO
+      if: always() && matrix.os == 'ubuntu-latest'
+      run: pixi run stop-omero
 
   build:
-    needs: test
+    needs: [test, lint, notebooks]
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
     - uses: actions/checkout@v7
     
@@ -55,7 +100,14 @@ jobs:
         
     - name: Build package
       run: pixi run -e dev build
-        
+
+    - name: Check package metadata and contents
+      run: |
+        pixi run -e dev check-package
+        python3 -m zipfile -l dist/*.whl | tee wheel-contents.txt
+        grep -q "omero_annotate_ai/py.typed" wheel-contents.txt
+        grep -q "omero_annotate_ai/planning.py" wheel-contents.txt
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7
       with:
@@ -67,9 +119,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment: release
+    timeout-minutes: 15
     permissions:
-      id-token: write  # For trusted publishing
-      
+      contents: read
+      id-token: write  # trusted publishing (and PyPI attestations)
+
     steps:
     - uses: actions/checkout@v7
     

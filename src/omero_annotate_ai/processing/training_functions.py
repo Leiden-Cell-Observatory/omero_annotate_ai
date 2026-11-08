@@ -1,17 +1,28 @@
 """Training data preparation functions for micro-SAM workflows."""
 
+import ast
+import logging
 import shutil
-import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Union,
+)
 
-import ezomero
 import numpy as np
 import pandas as pd
-from tifffile import imwrite
-from tqdm import tqdm
+from tifffile import imread
 
+from ..bundle import file_digest
+from ..core.annotation_config import NormalizationConfig
+from ..errors import IntegrityError
+from ..omero._untyped import ezomero
+from ..rows import rows_from_frame
 from ..utils.logging import create_training_logger
+from .normalization import NormalizationRecorder, write_native_sidecar
 from .training_layout import (
     AnnotationRecord,
     ArraySource,
@@ -24,10 +35,12 @@ from .utils import validate_table_schema
 if TYPE_CHECKING:
     from ..core.annotation_config import AnnotationConfig
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _build_standard_result(
-    base_dir: Path, created_dirs: Dict[str, Path], stats: Dict[str, Any], **extra_fields
-) -> Dict[str, Any]:
+    base_dir: Path, created_dirs: dict[str, Path], stats: dict[str, Any], **extra_fields
+) -> dict[str, Any]:
     """
     Build the standard result dictionary for training functions.
 
@@ -58,29 +71,28 @@ def _build_standard_result(
 def prepare_training_data_from_table(
     conn: Any,
     table_id: int,
-    output_dir: Union[str, Path],
+    output_dir: str | Path,
     training_name: str = "micro_sam_training",
-    validation_split: float = 0.2,
     clean_existing: bool = True,
-    tmp_dir: Optional[Union[str, Path]] = None,
+    tmp_dir: str | Path | None = None,
     verbose: bool = False,
-    label_channel: Optional[int] = None,
-    training_channels: Optional[List[int]] = None,
+    label_channel: int | None = None,
+    training_channels: list[int] | None = None,
     upload_annotation_input: bool = False,
-) -> Dict[str, Any]:
+    normalization: Union["NormalizationConfig", dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """
     Prepare training data from OMERO annotation table.
 
-    Downloads images and labels from OMERO based on annotation table data,
-    splits into training/validation sets, and organizes into directory structure
-    suitable for micro-SAM training.
+    Downloads images and labels from OMERO based on annotation table data and
+    organizes them by each row's ``category`` (training, validation, test) into a
+    directory structure suitable for micro-SAM training.
 
     Args:
         conn: OMERO connection object
         table_id: ID of the annotation table in OMERO
         output_dir: Directory to store training data
         training_name: Name for the training session (used in directory naming)
-        validation_split: Fraction of data to use for validation (0.0-1.0) if not already defined in the table
         clean_existing: Whether to clean existing output directories
         tmp_dir: Temporary directory for downloads (optional)
         verbose: If True, show detailed debug information in console output
@@ -92,6 +104,10 @@ def prepare_training_data_from_table(
             train_input and val_input. Currently uses first channel if multiple specified.
         upload_annotation_input: If True and using separate channels, uploads the annotation-channel
             images back to OMERO as file annotations. Default is False.
+        normalization: Normalisation spec (``config.normalization`` or an equivalent dict).
+            Images are written at native bit depth unless ``apply_at_export`` is set, in
+            which case they are written as float32 and the bounds per image are recorded.
+            When given, the spec is saved as ``normalization.json`` in output_dir.
 
     Returns:
         Dictionary with paths to created directories:
@@ -102,7 +118,10 @@ def prepare_training_data_from_table(
             'train_annotation_input': Path to annotation-channel images (separate channels only),
             'val_input': Path to validation images,
             'val_label': Path to validation labels (segmentation masks),
-            'val_annotation_input': Path to annotation-channel validation images (separate channels only),
+            'val_annotation_input': Path to annotation-channel validation images
+                (separate channels only),
+            'test_input', 'test_label': Test images and labels (only when the table
+                has test rows),
             'stats': Statistics about the prepared data
         }
 
@@ -110,36 +129,26 @@ def prepare_training_data_from_table(
         ValueError: If table not found or invalid parameters
         ImportError: If required dependencies missing
     """
-    # Validate parameters
-    if not 0.0 <= validation_split <= 1.0:
-        raise ValueError("validation_split must be between 0.0 and 1.0")
-
     # Convert paths
     output_dir = Path(output_dir)
-    try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        raise OSError(f"Failed to create output directory {output_dir}: {e}")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Set up logger for this training session
     logger = create_training_logger(output_dir, verbose=verbose)
     logger.info(f"Starting training data preparation from table {table_id}")
     logger.debug(
-        f"Parameters: output_dir={output_dir}, validation_split={validation_split}, clean_existing={clean_existing}"
+        f"Parameters: output_dir={output_dir}, clean_existing={clean_existing}"
     )
 
     if tmp_dir is None:
         tmp_dir = output_dir / "tmp"
     tmp_dir = Path(tmp_dir)
-    try:
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        raise OSError(f"Failed to create temporary directory {tmp_dir}: {e}")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         table = _load_table(conn, table_id)
-    except Exception as e:
-        raise ValueError(f"Failed to load table {table_id}: {e}")
+    except Exception as e:  # noqa: BLE001 - any read failure means the table is unusable
+        raise ValueError(f"Failed to load table {table_id}: {e}") from e
 
     if table is None or len(table) == 0:
         raise ValueError(f"Table {table_id} is empty or not found")
@@ -151,7 +160,7 @@ def prepare_training_data_from_table(
     try:
         table.to_csv(table_path, index=True)
         logger.info(f"Table saved to: {table_path}")
-    except Exception as e:
+    except OSError as e:
         logger.warning(f"Failed to save table: {e}")
 
     # Check if 'processed' column exists and filter to only processed rows
@@ -168,7 +177,7 @@ def prepare_training_data_from_table(
             )
 
         # Filter to only processed rows
-        table = table[table["processed"]].copy()
+        table = table.loc[table["processed"].astype(bool)].copy()
 
         if len(table) == 0:
             raise ValueError(
@@ -195,35 +204,35 @@ def prepare_training_data_from_table(
 
     if uses_separate_channels:
         logger.info(
-            f"Using separate channels: label_channel={label_channel}, training_channels={training_channels}"
+            f"Using separate channels: label_channel={label_channel}, "
+            f"training_channels={training_channels}"
         )
 
     # Determine the effective training channel to use
     effective_train_channel = training_channels[0] if training_channels else None
 
-    # Split: make sure the table carries a boolean train/validate split, then let
-    # _records_from_table read the category straight off each row.
-    if "train" in table.columns and "validate" in table.columns:
-        logger.info("Using existing train/validate split from table")
-    else:
-        n_val = int(len(table) * validation_split)
-        shuffled_indices = np.random.permutation(len(table))
-        val_indices = shuffled_indices[:n_val]
-
-        table = table.copy()
-        table["train"] = True
-        table.iloc[val_indices, table.columns.get_loc("train")] = False
-        table["validate"] = ~table["train"]
-        logger.info(f"Applied automatic split with validation_split={validation_split}")
-
-    table = table[table["train"] | table["validate"]].copy()
-    n_train = int(table["train"].sum())
-    n_val_rows = int(table["validate"].sum())
-    logger.info(f"Using {n_train} training images and {n_val_rows} validation images")
+    # The split was planned when the training set was created; each row carries it.
+    counts = table["category"].value_counts()
+    include_test = bool(counts.get("test", 0))
+    logger.info(
+        f"Using {counts.get('training', 0)} training, {counts.get('validation', 0)} "
+        f"validation and {counts.get('test', 0)} test rows"
+    )
 
     # Build records. A row whose label cannot be downloaded is dropped whole: writing
     # the image without its label would leave an orphan, and consumers pair images to
     # labels by sorted filename, so one orphan shifts every subsequent pair.
+    spec = (
+        NormalizationConfig.model_validate(normalization)
+        if normalization is not None
+        else None
+    )
+    recorder = (
+        NormalizationRecorder(spec)
+        if spec is not None and spec.apply_at_export
+        else None
+    )
+
     records, n_missing = _records_from_table(
         conn,
         table,
@@ -232,6 +241,7 @@ def prepare_training_data_from_table(
         label_channel,
         effective_train_channel,
         logger,
+        transform=recorder,
     )
 
     created_dirs, stats = write_training_layout(
@@ -239,11 +249,16 @@ def prepare_training_data_from_table(
         output_dir,
         layout="split",
         clean_existing=clean_existing,
+        include_test=include_test,
         uses_separate_channels=uses_separate_channels,
         logger=logger,
     )
     stats["n_missing"] = n_missing
     stats["total_rows_processed"] = len(table)
+    if recorder is not None:
+        recorder.write_sidecar(output_dir)
+    elif spec is not None:
+        write_native_sidecar(spec, output_dir)
 
     annotation_input_upload_ids = []
     if uses_separate_channels and upload_annotation_input:
@@ -267,7 +282,7 @@ def prepare_training_data_from_table(
 
                     file_ann_id = upload_annotation_input_image(
                         conn,
-                        image_id=int(row["image_id"]),
+                        image_id=int(str(row["image_id"])),
                         annotation_input_file=str(tif_file),
                         trainingset_name=training_name,
                         channel=label_channel,
@@ -275,11 +290,13 @@ def prepare_training_data_from_table(
                         z_slice=_optional_int(row.get("z_slice")),
                     )
                     annotation_input_upload_ids.append(file_ann_id)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - best effort per file; keep exporting
                     logger.warning(f"Could not upload {tif_file.name}: {e}")
 
         stats["n_annotation_input_uploaded"] = len(annotation_input_upload_ids)
-        logger.info(f"Uploaded {len(annotation_input_upload_ids)} annotation-channel images")
+        logger.info(
+            f"Uploaded {len(annotation_input_upload_ids)} annotation-channel images"
+        )
 
     # Clean up temporary directory
     if tmp_dir.exists():
@@ -314,7 +331,7 @@ def prepare_training_data_from_table(
 
 def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
     """
-    Fetch one annotated image from OMERO as an 8-bit array.
+    Fetch one annotated image from OMERO at its native bit depth.
 
     Handles the 2D, 2D-patch and 3D-volumetric cases. Returns the array rather than
     writing it, so the caller decides where it lands - which is what lets files be
@@ -327,11 +344,13 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         logger: Optional logger
 
     Returns:
-        The image as an 8-bit numpy array (2D, or 3D for volumetric data)
+        The image as a numpy array (2D, or 3D for volumetric data), unscaled.
+        Normalisation is defined in the config and applied by the caller or the trainer.
 
     Raises:
         ValueError: If the image is not found in OMERO
     """
+    log = logger or _LOGGER
     # Extract metadata
     image_id = int(row["image_id"])
 
@@ -341,20 +360,17 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
         z_slice = 0
     elif isinstance(z_slice, str) and z_slice.startswith("["):
         try:
-            z_slice = eval(z_slice)
+            z_slice = ast.literal_eval(z_slice)
             if isinstance(z_slice, list) and len(z_slice) > 0:
                 z_slice = z_slice[0]  # Use first slice for 2D
-        except Exception:
+        except (ValueError, SyntaxError):
             z_slice = 0
 
     # channel is supplied by the caller, which has already resolved label vs training
-    timepoint = (
-        int(row["timepoint"]) if pd.notna(row["timepoint"]) else 0
-    )
+    timepoint = int(row["timepoint"]) if pd.notna(row["timepoint"]) else 0
     is_volumetric = (
         bool(row["is_volumetric"])
-        if "is_volumetric" in row
-        and pd.notna(row["is_volumetric"])
+        if "is_volumetric" in row and pd.notna(row["is_volumetric"])
         else False
     )
 
@@ -365,11 +381,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
     patch_width = int(row["patch_width"])
     patch_height = int(row["patch_height"])
 
-    if logger:
-        logger.debug(
-            f"Image {image_id}: patch={is_patch} {patch_width}x{patch_height} "
-            f"at ({patch_x},{patch_y}), volumetric={is_volumetric}, channel={channel}"
-        )
+    log.debug(
+        f"Image {image_id}: patch={is_patch} {patch_width}x{patch_height} "
+        f"at ({patch_x},{patch_y}), volumetric={is_volumetric}, channel={channel}"
+    )
 
     # Process based on whether it's 3D volumetric or 2D
     if is_volumetric:
@@ -399,15 +414,10 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
             z_val = int(z)
             if is_patch and patch_width > 0 and patch_height > 0:
                 # Debug start_coords and axis_lengths
-                if logger:
-                    logger.debug(
-                        f"3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                    )
-                else:
-                    print(
-                        f"  3D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                    )
-
+                log.debug(
+                    f"3D patch request: start ({patch_x}, {patch_y}, {z_val}, {channel}, "
+                    f"{timepoint}), size {patch_width}x{patch_height}"
+                )
                 # Use ezomero.get_image to extract the patch for this z-slice
                 _, img_slice = ezomero.get_image(
                     conn,
@@ -418,15 +428,9 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                 )
 
                 # Check shape of returned array
-                if logger:
-                    logger.debug(
-                        f"Returned array shape (before extraction): {img_slice.shape}"
-                    )
-                else:
-                    print(
-                        f"  Returned array shape (before extraction): {img_slice.shape}"
-                    )
-
+                log.debug(
+                    f"Returned array shape (before extraction): {img_slice.shape}"
+                )
                 # The result will be 5D, extract just the 2D slice.
                 # ezomero hands back XYZCT, so x is axis 0; swap to (Y, X) like every
                 # other branch does. Omitting this swap here transposed volumetric
@@ -434,17 +438,12 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                 if len(img_slice.shape) == 5:
                     img_slice = img_slice[:, :, 0, 0, 0]
                     img_slice = np.swapaxes(img_slice, 0, 1)
-                if logger:
-                    logger.debug(f"Extracted slice shape: {img_slice.shape}")
-                else:
-                    print(f"  Extracted slice shape: {img_slice.shape}")
+                log.debug(f"Extracted slice shape: {img_slice.shape}")
             else:
                 # Get full plane for this z-slice
                 # Get image dimensions if not already obtained
                 if size_x is None:
-                    omero_image, _ = ezomero.get_image(
-                        conn, image_id, no_pixels=True
-                    )
+                    omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
                     size_x = omero_image.getSizeX()
                     size_y = omero_image.getSizeY()
 
@@ -456,141 +455,82 @@ def _fetch_plane(conn, row, channel: int, logger=None) -> np.ndarray:
                     xyzct=True,  # Use XYZCT ordering
                 )
                 # Check shape of returned array
-                if logger:
-                    logger.debug(
-                        f"Full plane shape (before extraction): {img_slice.shape}"
-                    )
-                else:
-                    print(
-                        f"  Full plane shape (before extraction): {img_slice.shape}"
-                    )
-
+                log.debug(f"Full plane shape (before extraction): {img_slice.shape}")
                 # The result will be 5D, extract just the 2D slice
                 if len(img_slice.shape) == 5:
                     img_slice = img_slice[:, :, 0, 0, 0]
                     img_slice = np.swapaxes(img_slice, 0, 1)
-                if logger:
-                    logger.debug(
-                        f"Extracted full plane shape: {img_slice.shape}"
-                    )
-                else:
-                    print(f"  Extracted full plane shape: {img_slice.shape}")
-
+                log.debug(f"Extracted full plane shape: {img_slice.shape}")
             img_3d.append(img_slice)
 
         # Convert to numpy array
         img_3d = np.array(img_3d)
-        if logger:
-            logger.debug(f"Final 3D array shape: {img_3d.shape}")
-        else:
-            print(f"  Final 3D array shape: {img_3d.shape}")
+        log.debug(f"Final 3D array shape: {img_3d.shape}")
+        return img_3d
 
-        # Normalize to 8-bit
-        max_val = img_3d.max()
-        if max_val > 0:
-            img_8bit = ((img_3d) * (255.0 / max_val)).astype(np.uint8)
-        else:
-            img_8bit = img_3d.astype(np.uint8)
+    # Handle 2D data with patch support using ezomero.get_image
+    if is_patch and patch_width > 0 and patch_height > 0:
+        # Use ezomero.get_image with appropriate coordinates and dimensions
+        z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
 
-        return img_8bit
+        # Debug start_coords and axis_lengths
+        log.debug(
+            f"2D patch request: start ({patch_x}, {patch_y}, {z_val}, {channel}, "
+            f"{timepoint}), size {patch_width}x{patch_height}"
+        )
+        _, img_data = ezomero.get_image(
+            conn,
+            image_id,
+            start_coords=(patch_x, patch_y, int(z_val), channel, timepoint),
+            axis_lengths=(patch_width, patch_height, 1, 1, 1),
+            xyzct=True,
+        )
 
+        # Check shape of returned array
+        log.debug(f"Returned array shape: {img_data.shape}")
+        # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
+        # We just need to remove the trailing dimensions
+        if len(img_data.shape) == 5:
+            # Take only the first (and only) z, c, t indices
+            img_data = img_data[:, :, 0, 0, 0]
+            # swap x and y dimensions in the numpy array
+            img_data = np.swapaxes(img_data, 0, 1)
+
+        log.debug(f"Extracted 2D shape: {img_data.shape}")
     else:
-        # Handle 2D data with patch support using ezomero.get_image
-        if is_patch and patch_width > 0 and patch_height > 0:
-            # Use ezomero.get_image with appropriate coordinates and dimensions
-            z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
+        # Get full plane
+        z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
 
-            # Debug start_coords and axis_lengths
-            if logger:
-                logger.debug(
-                    f"2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                )
-            else:
-                print(
-                    f"  2D Patch Request - start_coords: ({patch_x}, {patch_y}, {z_val}, {channel}, {timepoint}), dimensions: {patch_width}x{patch_height}"
-                )
+        # Get image dimensions to specify exact plane size
+        omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
+        size_x = omero_image.getSizeX()
+        size_y = omero_image.getSizeY()
 
-            _, img_data = ezomero.get_image(
-                conn,
-                image_id,
-                start_coords=(patch_x, patch_y, int(z_val), channel, timepoint),
-                axis_lengths=(patch_width, patch_height, 1, 1, 1),
-                xyzct=True,
-            )
+        # Debug start_coords
+        log.debug(
+            f"2D full image request: start (0, 0, {z_val}, {channel}, {timepoint}), "
+            f"size {size_x}x{size_y}"
+        )
+        _, img_data = ezomero.get_image(
+            conn,
+            image_id,
+            start_coords=(0, 0, int(z_val), channel, timepoint),
+            axis_lengths=(size_x, size_y, 1, 1, 1),
+            xyzct=True,
+        )
 
-            # Check shape of returned array
-            if logger:
-                logger.debug(f"Returned array shape: {img_data.shape}")
-            else:
-                print(f"  Returned array shape: {img_data.shape}")
+        # Check shape of returned array
+        log.debug(f"Returned array shape: {img_data.shape}")
+        # Remove trailing dimensions
+        if len(img_data.shape) == 5:
+            img_data = img_data[:, :, 0, 0, 0]
+            img_data = np.swapaxes(img_data, 0, 1)
 
-            # The array is already in the right dimensions (width, height, z=1, c=1, t=1)
-            # We just need to remove the trailing dimensions
-            if len(img_data.shape) == 5:
-                # Take only the first (and only) z, c, t indices
-                img_data = img_data[:, :, 0, 0, 0]
-                # swap x and y dimensions in the numpy array
-                img_data = np.swapaxes(img_data, 0, 1)
-
-            if logger:
-                logger.debug(f"Extracted 2D shape: {img_data.shape}")
-            else:
-                print(f"  Extracted 2D shape: {img_data.shape}")
-        else:
-            # Get full plane
-            z_val = z_slice if not isinstance(z_slice, list) else z_slice[0]
-
-            # Get image dimensions to specify exact plane size
-            omero_image, _ = ezomero.get_image(conn, image_id, no_pixels=True)
-            size_x = omero_image.getSizeX()
-            size_y = omero_image.getSizeY()
-
-            # Debug start_coords
-            if logger:
-                logger.debug(
-                    f"2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
-                )
-            else:
-                print(
-                    f"  2D Full Image Request - start_coords: (0, 0, {z_val}, {channel}, {timepoint}), dimensions: {size_x}x{size_y}"
-                )
-
-            _, img_data = ezomero.get_image(
-                conn,
-                image_id,
-                start_coords=(0, 0, int(z_val), channel, timepoint),
-                axis_lengths=(size_x, size_y, 1, 1, 1),
-                xyzct=True,
-            )
-
-            # Check shape of returned array
-            if logger:
-                logger.debug(f"Returned array shape: {img_data.shape}")
-            else:
-                print(f"  Returned array shape: {img_data.shape}")
-
-            # Remove trailing dimensions
-            if len(img_data.shape) == 5:
-                img_data = img_data[:, :, 0, 0, 0]
-                img_data = np.swapaxes(img_data, 0, 1)
-
-            if logger:
-                logger.debug(f"Extracted 2D shape: {img_data.shape}")
-            else:
-                print(f"  Extracted 2D shape: {img_data.shape}")
-
-        # Normalize to 8-bit
-        # TODO make this optional; not always need 8-bit I guess
-        max_val = img_data.max()
-        if max_val > 0:
-            img_8bit = ((img_data) * (255.0 / max_val)).astype(np.uint8)
-        else:
-            img_8bit = img_data.astype(np.uint8)
-
-        return img_8bit
+        log.debug(f"Extracted 2D shape: {img_data.shape}")
+    return img_data
 
 
-def _optional_int(value) -> Optional[int]:
+def _optional_int(value) -> int | None:
     """Parse a table cell that may be int, float, NaN, or the string 'None'."""
     if value is None or pd.isna(value):
         return None
@@ -629,7 +569,7 @@ def _load_table(conn, table_id: int) -> pd.DataFrame:
     return read_tracking_table(conn, table_id)
 
 
-def _download_label(conn, label_id, tmp_dir: Path, logger=None) -> Optional[Path]:
+def _download_label(conn, label_id, tmp_dir: Path, logger=None) -> Path | None:
     """
     Download a label file annotation. Returns None if it is missing or unreadable.
 
@@ -647,7 +587,7 @@ def _download_label(conn, label_id, tmp_dir: Path, logger=None) -> Optional[Path
             return None
         file_path = ezomero.get_file_annotation(conn, label_id, str(tmp_dir))
         return Path(file_path) if file_path else None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a missing label skips the record
         if logger:
             logger.error(f"Error downloading label {label_id}: {e}")
         return None
@@ -658,25 +598,34 @@ def _records_from_table(
     df: pd.DataFrame,
     tmp_dir: Path,
     uses_separate_channels: bool,
-    label_channel: Optional[int],
-    train_channel: Optional[int],
+    label_channel: int | None,
+    train_channel: int | None,
     logger=None,
+    transform: Callable[[str, np.ndarray], np.ndarray] | None = None,
 ):
     """
     Build annotation records from a tracking table.
 
+    ``transform(annotation_id, image)`` is applied to the model input image (used for
+    normalisation at export); the label and annotation-channel images are untouched.
+
     A row whose label cannot be downloaded is dropped entirely. The image plane is
     fetched lazily (ArraySource), so dropping the record costs nothing - and nothing
     is written for it.
+
+    Raises:
+        IntegrityError: A label file's pixels no longer match the ``mask_digest``
+            recorded when it was annotated.
 
     Returns:
         (records, n_missing)
     """
     records = []
     n_missing = 0
+    changed: list[str] = []
 
     for _, row in df.iterrows():
-        annotation_id = row["annotation_id"]
+        annotation_id = str(row["annotation_id"])
 
         label_id = _optional_int(row.get("label_id"))
         label_path = _download_label(conn, label_id, tmp_dir, logger)
@@ -685,16 +634,22 @@ def _records_from_table(
             if logger:
                 logger.warning(f"Skipping annotation {annotation_id}: no label")
             continue
+        recorded = str(row.get("mask_digest") or "")
+        if recorded and recorded != "nan" and file_digest(label_path) != recorded:
+            changed.append(annotation_id)
 
-        category = "training" if bool(row["train"]) else "validation"
+        category = str(row["category"])
 
         image_channel = (
             train_channel if train_channel is not None else _channel_from_row(row)
         )
+
         # Bind row/channel per iteration: a bare closure would capture the final values.
-        image_source = ArraySource(
-            lambda row=row, ch=image_channel: _fetch_plane(conn, row, ch, logger)
-        )
+        def load_image(row=row, ch=image_channel, annotation_id=str(annotation_id)):
+            image = _fetch_plane(conn, row, ch, logger)
+            return transform(annotation_id, image) if transform else image
+
+        image_source = ArraySource(load_image)
 
         annotation_source = None
         if uses_separate_channels and label_channel is not None:
@@ -712,18 +667,24 @@ def _records_from_table(
             )
         )
 
+    if changed:
+        raise IntegrityError(
+            f"{len(changed)} label file(s) on OMERO no longer match the masks recorded "
+            f"when they were annotated: {', '.join(changed[:5])}"
+            + (" ..." if len(changed) > 5 else "")
+        )
     return records, n_missing
 
 
 def reorganize_local_data_for_training(
     config: "AnnotationConfig",
-    annotation_dir: Union[str, Path],
-    output_dir: Optional[Union[str, Path]] = None,
+    annotation_dir: str | Path,
+    output_dir: str | Path | None = None,
     file_mode: Literal["copy", "move", "symlink"] = "copy",
     clean_existing: bool = True,
-    include_test: Optional[bool] = None,
+    include_test: bool | None = None,
     verbose: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Reorganize locally-stored annotation data into the training layout.
 
@@ -732,8 +693,9 @@ def reorganize_local_data_for_training(
     layout (train_input/, train_label/, val_input/, val_label/).
 
     Args:
-        config: AnnotationConfig with populated annotations (carries the category)
-        annotation_dir: Directory containing the annotation phase's output
+        config: The training set's config (channels, normalisation)
+        annotation_dir: The training set's folder (``TrainingSet.bundle_dir``); its
+            ``tracking_table.csv`` says which units are annotated and their split
         output_dir: Target directory. Must NOT be inside annotation_dir - cleaning the
             training layout there would delete the source images. Defaults to the sibling
             <annotation_dir>_training/.
@@ -742,6 +704,11 @@ def reorganize_local_data_for_training(
         clean_existing: Remove the training folders before writing
         include_test: Write a test split. None (default) auto-detects from the annotations.
         verbose: Show detailed progress
+
+    Normalisation follows ``config.normalization``: with ``apply_at_export`` the model
+    input images are written as float32 (file_mode then applies to labels only) and the
+    bounds per image go to ``normalization.json``; otherwise images keep their native bit
+    depth and ``normalization.json`` records what the trainer should apply.
 
     Returns:
         Dictionary with the created directories and statistics. Keys include base_dir,
@@ -764,9 +731,13 @@ def reorganize_local_data_for_training(
     logger = create_training_logger(output_dir, verbose=verbose)
     logger.info("Reorganizing local annotation data for training")
 
-    processed_annotations = [ann for ann in config.annotations if ann.processed]
+    table_file = annotation_dir / "tracking_table.csv"
+    if not table_file.exists():
+        raise FileNotFoundError(f"No tracking_table.csv in: {annotation_dir}")
+    rows = rows_from_frame(pd.read_csv(table_file, keep_default_na=False))
+    processed_annotations = [row for row in rows if row.processed]
     if not processed_annotations:
-        raise ValueError("No processed annotations found in config")
+        raise ValueError(f"No annotated units in {table_file}")
 
     uses_separate_channels = config.spatial_coverage.uses_separate_channels()
 
@@ -783,6 +754,9 @@ def reorganize_local_data_for_training(
         )
     if not label_source.exists():
         raise FileNotFoundError(f"Output folder not found: {label_source}")
+
+    spec = config.normalization
+    recorder = NormalizationRecorder(spec) if spec.apply_at_export else None
 
     records = []
     n_missing = 0
@@ -812,11 +786,18 @@ def reorganize_local_data_for_training(
         if uses_separate_channels and annotation_file.exists():
             annotation_source = FileSource(annotation_file)
 
+        if recorder is not None:
+            image_source = ArraySource(
+                lambda f=image_file, a=str(annotation_id): recorder(a, imread(f))
+            )
+        else:
+            image_source = FileSource(image_file)
+
         records.append(
             AnnotationRecord(
                 annotation_id=annotation_id,
                 category=ann.category,
-                image=FileSource(image_file),
+                image=image_source,
                 label=FileSource(label_file),
                 annotation_image=annotation_source,
             )
@@ -833,6 +814,10 @@ def reorganize_local_data_for_training(
         logger=logger,
     )
     stats["n_missing"] = n_missing
+    if recorder is not None:
+        recorder.write_sidecar(output_dir)
+    else:
+        write_native_sidecar(spec, output_dir)
 
     # An empty training set must be loud. prepare_training_data_from_table() already
     # raises here; without the same guard, a producer/consumer folder mismatch returns

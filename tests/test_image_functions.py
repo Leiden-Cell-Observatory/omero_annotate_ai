@@ -1,32 +1,71 @@
 """Tests for image processing functions."""
 
-import pytest
+import random
+
 import numpy as np
+import pytest
+
 from omero_annotate_ai.processing.image_functions import (
+    _rectangles_overlap,
     generate_patch_coordinates,
-    _rectangles_overlap
 )
 
 # Test label_to_rois if OpenCV is available
 try:
     from omero_annotate_ai.processing.image_functions import (
         label_to_rois,
+        mask_to_contour,
         process_label_plane,
-        mask_to_contour
     )
+
     OPENCV_AVAILABLE = True
 except ImportError:
     OPENCV_AVAILABLE = False
 
 
-# NOTE: TestPatchGeneration class removed in Phase 1 cleanup
-# These tests were using outdated API (random=True/False instead of random_patch=True/False)
-# Will be rewritten in Phase 8 with correct API signatures
+def _disjoint(origins: list[tuple[int, int]], h: int, w: int) -> bool:
+    rects = [(x, y, x + w, y + h) for x, y in origins]
+    return not any(
+        _rectangles_overlap(a, b) for i, a in enumerate(rects) for b in rects[i + 1 :]
+    )
+
+
+@pytest.mark.unit
+class TestPatchGeneration:
+    """Patches never overlap, stay inside the image, and every patch that fits is placed."""
+
+    @pytest.mark.parametrize("random_patch", [True, False])
+    def test_tight_image_gets_every_patch(self, random_patch):
+        # 64x80 fits 2x2 non-overlapping 32x32 patches.
+        for seed in range(50):
+            origins, size = generate_patch_coordinates(
+                (64, 80), [32, 32], 4, random_patch, rng=random.Random(seed)
+            )
+            assert size == (32, 32)
+            assert len(origins) == 4
+            assert _disjoint(origins, 32, 32)
+            assert all(0 <= x <= 48 and 0 <= y <= 32 for x, y in origins)
+
+    def test_grid_caps_at_what_fits(self):
+        origins, _ = generate_patch_coordinates((64, 80), [32, 32], 10, False)
+        assert len(origins) == 4
+        assert _disjoint(origins, 32, 32)
+
+    def test_seeded_random_is_reproducible(self):
+        def run():
+            return generate_patch_coordinates(
+                (512, 512), [64, 64], 5, True, rng=random.Random(42)
+            )[0]
+
+        assert run() == run()
+
+    def test_image_smaller_than_patch_uses_whole_image(self):
+        assert generate_patch_coordinates((20, 30), [64, 64], 3) == ([(0, 0)], (20, 30))
 
 
 class TestRectangleOverlap:
     """Test rectangle overlap detection."""
-    
+
     def test_overlapping_rectangles(self):
         """
         Tests the detection of overlapping rectangles.
@@ -35,10 +74,10 @@ class TestRectangleOverlap:
         """
         rect1 = (0, 0, 100, 100)
         rect2 = (50, 50, 150, 150)
-        
+
         assert _rectangles_overlap(rect1, rect2)
         assert _rectangles_overlap(rect2, rect1)  # Commutative
-    
+
     def test_non_overlapping_rectangles(self):
         """
         Tests the detection of non-overlapping rectangles.
@@ -47,10 +86,10 @@ class TestRectangleOverlap:
         """
         rect1 = (0, 0, 50, 50)
         rect2 = (60, 60, 110, 110)
-        
+
         assert not _rectangles_overlap(rect1, rect2)
         assert not _rectangles_overlap(rect2, rect1)  # Commutative
-    
+
     def test_adjacent_rectangles(self):
         """
         Tests that adjacent rectangles are not considered overlapping.
@@ -59,10 +98,10 @@ class TestRectangleOverlap:
         """
         rect1 = (0, 0, 50, 50)
         rect2 = (50, 0, 100, 50)  # Adjacent, not overlapping
-        
+
         assert not _rectangles_overlap(rect1, rect2)
         assert not _rectangles_overlap(rect2, rect1)
-    
+
     def test_touching_corner_rectangles(self):
         """
         Tests rectangles that only touch at a corner.
@@ -71,9 +110,9 @@ class TestRectangleOverlap:
         """
         rect1 = (0, 0, 50, 50)
         rect2 = (50, 50, 100, 100)  # Touch at corner (50, 50)
-        
+
         assert not _rectangles_overlap(rect1, rect2)
-    
+
     def test_identical_rectangles(self):
         """
         Tests that identical rectangles overlap completely.
@@ -81,9 +120,9 @@ class TestRectangleOverlap:
         that two identical rectangles overlap.
         """
         rect = (10, 10, 60, 60)
-        
+
         assert _rectangles_overlap(rect, rect)
-    
+
     def test_contained_rectangles(self):
         """
         Tests that contained rectangles overlap.
@@ -92,18 +131,15 @@ class TestRectangleOverlap:
         """
         outer = (0, 0, 100, 100)
         inner = (25, 25, 75, 75)
-        
+
         assert _rectangles_overlap(outer, inner)
         assert _rectangles_overlap(inner, outer)
-
-
-# Grid and random patch generation are tested through the main generate_patch_coordinates function
 
 
 @pytest.mark.skipif(not OPENCV_AVAILABLE, reason="OpenCV not available")
 class TestROICreation:
     """Test ROI creation functions (requires OpenCV)."""
-    
+
     def test_mask_to_contour_simple(self):
         """
         Tests converting a simple binary mask to contours.
@@ -113,12 +149,12 @@ class TestROICreation:
         # Create a simple rectangular mask
         mask = np.zeros((100, 100), dtype=np.uint8)
         mask[25:75, 25:75] = 1
-        
+
         contours = mask_to_contour(mask)
-        
+
         assert len(contours) == 1
         assert len(contours[0]) >= 4  # At least 4 points for rectangle
-    
+
     def test_mask_to_contour_multiple_objects(self):
         """
         Tests converting a mask with multiple objects to contours.
@@ -128,11 +164,11 @@ class TestROICreation:
         mask = np.zeros((100, 100), dtype=np.uint8)
         mask[10:30, 10:30] = 1  # First object
         mask[60:80, 60:80] = 1  # Second object
-        
+
         contours = mask_to_contour(mask)
-        
+
         assert len(contours) == 2
-    
+
     def test_mask_to_contour_empty(self):
         """
         Tests converting an empty mask to contours.
@@ -140,11 +176,11 @@ class TestROICreation:
         empty mask and returns no contours.
         """
         mask = np.zeros((100, 100), dtype=np.uint8)
-        
+
         contours = mask_to_contour(mask)
-        
+
         assert len(contours) == 0
-    
+
     def test_process_label_plane_basic(self):
         """
         Tests processing a basic label plane to generate OMERO shapes.
@@ -155,7 +191,7 @@ class TestROICreation:
         labels = np.zeros((100, 100), dtype=np.uint16)
         labels[10:30, 10:30] = 1  # Object 1
         labels[60:80, 60:80] = 2  # Object 2
-        
+
         shapes = process_label_plane(
             label_plane=labels,
             z_slice=0,
@@ -167,12 +203,12 @@ class TestROICreation:
 
         # Check shape properties
         for shape in shapes:
-            assert hasattr(shape, 'points')
+            assert hasattr(shape, "points")
             assert shape.z == 0
             assert shape.c == 0
             assert shape.t == 0
             assert "micro_sam" in shape.label
-    
+
     def test_process_label_plane_with_offset(self):
         """
         Tests processing a label plane with a patch offset.
@@ -181,16 +217,16 @@ class TestROICreation:
         """
         labels = np.zeros((50, 50), dtype=np.uint16)
         labels[10:30, 10:30] = 1
-        
+
         patch_offset = (100, 200)
-        
+
         shapes = process_label_plane(
             label_plane=labels,
             z_slice=0,
             channel=0,
             timepoint=0,
             x_offset=patch_offset[0],
-            y_offset=patch_offset[1]
+            y_offset=patch_offset[1],
         )
 
         assert len(shapes) == 1
@@ -203,7 +239,7 @@ class TestROICreation:
         for x, y in points:
             assert x >= 100  # Should be offset by patch_offset[0]
             assert y >= 200  # Should be offset by patch_offset[1]
-    
+
     def test_label_to_rois_basic(self):
         """
         Tests converting a basic label image to ROI shapes.
@@ -213,13 +249,13 @@ class TestROICreation:
         # Create 3D label image (single plane) with volumetric=True
         label_img = np.zeros((1, 100, 100), dtype=np.uint16)
         label_img[0, 25:75, 25:75] = 1
-        
+
         shapes = label_to_rois(
             label_img=label_img,
             z_slice=0,
             channel=0,
             timepoint=0,
-            is_volumetric=True  # Changed to True since it's 3D
+            is_volumetric=True,  # Changed to True since it's 3D
         )
 
         assert len(shapes) == 1
@@ -229,7 +265,7 @@ class TestROICreation:
         assert shape.c == 0
         assert shape.t == 0
         assert "micro_sam" in shape.label
-    
+
     def test_label_to_rois_2d(self):
         """
         Tests converting a 2D label image to ROI shapes.
@@ -241,11 +277,7 @@ class TestROICreation:
         label_img[25:75, 25:75] = 1
 
         shapes = label_to_rois(
-            label_img=label_img,
-            z_slice=0,
-            channel=0,
-            timepoint=0,
-            is_volumetric=False
+            label_img=label_img, z_slice=0, channel=0, timepoint=0, is_volumetric=False
         )
 
         assert len(shapes) == 1
@@ -259,11 +291,7 @@ class TestROICreation:
         label_img = np.zeros((100, 100), dtype=np.uint16)
 
         shapes = label_to_rois(
-            label_img=label_img,
-            z_slice=0,
-            channel=0,
-            timepoint=0,
-            is_volumetric=False
+            label_img=label_img, z_slice=0, channel=0, timepoint=0, is_volumetric=False
         )
 
         assert len(shapes) == 0
@@ -271,10 +299,10 @@ class TestROICreation:
 
 class TestEdgeCases:
     """Test edge cases and error conditions."""
-    
+
     # NOTE: Patch generation tests removed in Phase 1 cleanup
     # These used outdated API (random=True/False instead of random_patch=True/False)
-    
+
     def test_rectangle_overlap_invalid_rectangles(self):
         """
         Tests the rectangle overlap detection with invalid rectangles.
@@ -284,10 +312,10 @@ class TestEdgeCases:
         # Rectangle with negative dimensions
         rect1 = (0, 0, -10, -10)
         rect2 = (5, 5, 15, 15)
-        
+
         # Should handle gracefully (probably return False)
         result = _rectangles_overlap(rect1, rect2)
         assert isinstance(result, bool)
-    
+
     # NOTE: test_patch_generation_very_large_patch removed in Phase 1 cleanup
     # Used outdated API (random=True instead of random_patch=True)

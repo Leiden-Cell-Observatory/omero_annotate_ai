@@ -5,10 +5,10 @@ every option for when you want to read, edit or write one by hand.
 
 Only `name` is required. Everything else has a default.
 
-!!! warning "Misspelled keys are ignored without a warning"
-    If a key is not recognised, it is silently dropped and the default is used. After
-    loading a config, print the sections you changed to check that they were read:
-    `print(config.spatial_coverage)`.
+!!! tip "Typos are errors"
+    Unknown keys are refused when a config is loaded, in every section, so a misspelt
+    setting never falls back to a default unnoticed. Keys from older versions name their
+    replacement.
 
 ## A minimal example
 
@@ -34,27 +34,25 @@ ai_model:
 
 workflow:
   batch_size: 4            # images per napari session
-  read_only_mode: false    # true = write nothing to OMERO
 
-output:
-  output_directory: ./annotations/hela_nuclei_v1
+storage: omero             # "local" = write nothing to OMERO
 ```
 
 Load and run it:
 
 ```python
-from omero_annotate_ai import load_config_from_yaml, create_pipeline
+from omero_annotate_ai import TrainingSet, load_config_from_yaml
 
-config = load_config_from_yaml("hela_nuclei_v1.yaml")
-config.config_file_path = None     # keep this file unchanged; progress is saved in output_directory
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+config = load_config_from_yaml("hela_nuclei_v1.yaml")  # this file is not changed
+ts = TrainingSet.create(config, conn)  # the set's own copy goes to its folder
+ts.annotate()
 ```
 
 A fully commented template is available from Python:
 
 ```python
 from omero_annotate_ai.core.annotation_config import get_config_template
+
 print(get_config_template())
 ```
 
@@ -63,12 +61,11 @@ print(get_config_template())
 | Key | Default | Meaning |
 |---|---|---|
 | `container_type` | `dataset` | `project`, `dataset`, `plate`, `screen` or `image` |
-| `container_id` | `0` | ID of the container. The config is attached here at the end of a run. |
+| `container_id` | `0` | ID of the container. The tracking table and the set's config are attached here. |
 | `container_ids` | – | List of several containers of the same type to draw images from. Set `container_id` too. |
 | `source_desc` | `""` | Free-text description of the source. |
 | `well_filters` | – | Plates only: keep wells by their key-value pairs, e.g. `{treatment: [DMSO]}`. Several keys must all match. |
 | `well_filter_mode` | `include` | `include` keeps matching wells, `exclude` drops them. |
-| `table_id` | – | Filled in by the pipeline: the current tracking table. |
 
 ```yaml
 omero:
@@ -79,6 +76,24 @@ omero:
     cell_line: [HeLa]
   well_filter_mode: include
 ```
+
+## `zarr`: OME-Zarr images instead of OMERO
+
+With `source: zarr` images are read from OME-Zarr files or URLs (for example the
+BioImage Archive) and no OMERO connection is needed; such sets are always
+`storage: local`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `uris` | `[]` | OME-Zarr plates, wells or images (http(s) URL or local path). |
+| `level` | `0` | Multiscale level to read. |
+| `fields` | `first` | Fields per well: `first` or `all`. |
+| `wells` | – | Only these wells, e.g. `[B2]`. |
+| `well_metadata` | – | CSV with a `well` column (optional `plate`) and metadata columns, for filters and stratified splits. |
+| `well_filters`, `well_filter_mode` | – , `include` | As for OMERO plates, on the `well_metadata` columns. |
+
+An example is in
+[`notebooks/marimo/configs/`](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/tree/main/notebooks/marimo/configs).
 
 ## `spatial_coverage`: what to annotate in each image
 
@@ -104,7 +119,7 @@ omero:
 | `z_slice_mode` | `specific` | `specific`, `all`, or `random`. |
 | `n_slices` | – | Number of random slices (with `random`). |
 | `three_d` | `false` | Annotate each timepoint as one 3D volume instead of separate planes. |
-| `z_range_start`, `z_range_end` | – | Volume range in 3D mode; filled from `z_slices` if not set. |
+| `z_range_start`, `z_range_end` | – | Optional volume range in 3D mode; filled from `z_slices` if not set. |
 
 **Patches**
 
@@ -147,8 +162,89 @@ effect.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `seed` | – | Seed for every random choice (split, timepoints, z-slices, patches). Empty: one is picked and stored when the set is created, so the selection can be repeated. |
 | `validation_strategy` | `random_split` | Recorded as metadata: `random_split`, `expert_review` or `cross_validation`. |
 | `quality_threshold` | – | Recorded as metadata. |
+
+### Split Unit
+
+`split_unit` sets the level at which data are assigned to a split. All annotations
+of one unit end up in the same split, and `train_n`/`validate_n`/`test_n` and the
+fractions count units:
+
+- `image` (default): an image (a plate field) with all its timepoints and z-slices.
+  Fields from one well may end up in different splits.
+- `well`: all fields of a plate well. Needs plate data with well information
+  (OMERO plates or OME-Zarr HCS plates).
+
+Whether fields of one well are independent enough to be split apart depends on the
+task, so the choice is recorded rather than imposed. Use `split_rationale` to say
+why, for example:
+
+```yaml
+training:
+  split_unit: image
+  split_rationale: >
+    Fields within a well do not overlap; for nucleus segmentation they are
+    treated as independent.
+```
+
+`config.split_report()` lists which images and wells have annotations in more than
+one split, and `config.split_summary()` puts this in a sentence that is added to the
+MIFA annotation method. Validation reports an error when annotations of one declared
+unit are found in different splits.
+
+### Stratified Splits
+
+`stratify_by` divides the units over the splits per condition, so that validation
+and test cover every condition instead of whatever a random draw gives. Keys are
+well key-value pairs (from OMERO map annotations or OME-Zarr well attributes), or
+`well` itself:
+
+```yaml
+training:
+  segment_all: true
+  stratify_by: [cell_line, treatment]
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+```
+
+- Fraction mode: within each condition, validation and test get their rounded share
+  and training the rest (4 fields at 0.6/0.2/0.2 become 2/1/1).
+- Count mode: each split draws units in turn from all conditions, test and
+  validation first.
+
+When a condition has too few units to reach every split (for example one well per
+condition with `split_unit: well`), the split still runs with a warning, and
+`split_report()` lists the conditions that miss a split. A key that no image has is
+an error, as it is most likely a typo. Images lacking a key that others have form
+their own `(missing)` group.
+
+## `normalization`: intensity scaling of model input
+
+How raw intensities become model input is defined once, in the config, and travels with
+the annotation set (OMERO, YAML, MIFA export):
+
+```yaml
+normalization:
+  method: "percentile"      # "percentile" or "none"
+  percentile_low: 1.0       # per-image percentile mapped to 0
+  percentile_high: 99.8     # per-image percentile mapped to 1
+  clip: true
+  apply_at_export: false    # true: write float32 normalised images
+```
+
+Training data is exported at native bit depth unless `apply_at_export` is set. With
+`apply_at_export: true` the model input images are written as float32 and the exact
+bounds used for each image are recorded in `normalization.json` next to the data;
+labels are never changed. Without it, `normalization.json` records what the trainer
+must apply; micro-SAM training applies it when loading.
+
+`omero_annotate_ai.processing.normalization.biapy_normalization(config.normalization)`
+returns the matching BiaPy `DATA.NORMALIZATION` block. BiaPy's `div` and `scale_range`
+types guess the bit depth from the image maximum, so exporting with
+`apply_at_export: true` (BiaPy then applies the identity) is the most reliable route.
 
 ## `ai_model`: the model
 
@@ -163,15 +259,19 @@ effect.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `batch_size` | `0` | Units per napari session; progress is saved after each batch. `0` = all at once. |
-| `read_only_mode` | `false` | `true`: write nothing to OMERO; keep images, masks and `tracking_table.csv` locally. Use on public servers such as the IDR. |
-| `resume_from_table` | `false` | Not reliable in this version; to resume, reload the saved YAML instead. See [Resume or repeat a run](tutorials/resume-and-repeat.md). |
+| `batch_size` | `0` | Units per napari session; a batch's masks are saved and uploaded when its napari window closes. `0` = all at once. |
+| `claim_hours` | `6` | OMERO sets: how long a session's claim on the units it shows lasts before another computer may take them over. Your own claims on the same computer never block you. |
 
-## `output`
+## `storage`: where rows and masks are kept
 
-| Key | Default | Meaning |
-|---|---|---|
-| `output_directory` | `./annotations` | Working directory for this run. Progress is saved here as `annotation_config_<name>.yaml`. |
+| Value | Meaning |
+|---|---|
+| `omero` (default) | A tracking table on OMERO (its ID identifies the set), masks uploaded as ROIs and label files, plus a local copy in the set's folder. |
+| `local` | Nothing is written to OMERO; images, masks and `tracking_table.csv` stay in the set's folder. Use on public servers such as the IDR. OME-Zarr sets (`source: zarr`) are always `local`. |
+
+Fixed when the set is created. Each set has its own folder:
+`<home>/<server>/<table id>_<name>/` (or `<home>/local/<id>_<name>/` for local sets),
+where `<home>` is `home=`, else `$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`.
 
 ## Metadata for sharing
 
@@ -212,15 +312,34 @@ annotation_methodology:
 tags: [segmentation, nuclei]
 ```
 
-Other top-level keys: `version` (your version of this config), `documentation` and
-`repository` (URLs), and `feature_types` (list of `name` and `color`).
+Other top-level keys: `documentation` and `repository` (URLs), and `feature_types`
+(list of `name` and `color`).
 
-## Filled in by the pipeline
+### Notes and Custom Metadata
 
-`schema_version`, `created`, `config_file_path` and the `annotations:` list are written
-by the pipeline. `annotations:` holds one entry per annotation unit with its split,
-position and `processed` flag; this is what makes a run resumable. Remove it when you
-reuse a config for a new run.
+Anything the structured schema does not cover can be recorded in two open fields. Both
+are stored with the configuration; `notes` is also added to the MIFA annotation overview.
+
+```yaml
+notes: "Wells A1-B2 use the key 'celline' instead of 'cellline' in OMERO."
+custom_metadata:
+  instrument: "Incucyte SX5"
+  objective: "10x"
+```
+
+## Filled in by omero-annotate-ai
+
+`schema_version` (3), `created`, `training.seed` (if you left it empty), `identity` (the set's table ID or local
+ID) and `sessions` (who annotated when, annotate or review, how many units, and the
+session note) are written
+when a set is created and annotated. The rows (one per annotation unit, with its split
+and state) live in `tracking_table.csv` and the OMERO table, not in the config. To start
+a new set from a saved config, remove `identity` and `sessions`.
+
+Keys removed in schema version 3 are refused with a message naming the replacement (for
+example `workflow.read_only_mode` → `storage: local`, `omero.table_id` →
+`TrainingSet.open(table_id)`); the full list is in
+[migrating from 0.4](release-notes.md#migrating-from-04).
 
 ## Example recipes
 
@@ -265,11 +384,11 @@ reuse a config for a new run.
 ```python
 from omero_annotate_ai import load_config, create_default_config
 
-config = load_config("my_run.yaml")       # also accepts a dict
+config = load_config("my_run.yaml")  # also accepts a dict
 config.save_yaml("copy.yaml")
 print(config.to_yaml())
 
-config = create_default_config()          # start from defaults
+config = create_default_config()  # start from defaults
 config.name = "new_run"
 config.omero.container_id = 123
 ```

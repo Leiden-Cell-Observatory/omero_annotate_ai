@@ -40,24 +40,29 @@ annotation_methodology:
 
 ```python
 from omero_annotate_ai import prepare_bia_data_from_table
-from omero_annotate_ai.omero.omero_functions import download_annotation_config_from_omero
+from omero_annotate_ai.core.mifa_export import save_bia_package
+from omero_annotate_ai.omero.omero_functions import find_annotation_config_for_table
 
-config = download_annotation_config_from_omero(conn, "Dataset", 123)   # the run's config
-stats = prepare_bia_data_from_table(conn, table_id, "bia_staging", config=config)
+config = find_annotation_config_for_table(conn, table_id)  # the set's config
+stats = prepare_bia_data_from_table(conn, table_id, "bia_staging")
 
-config.output.output_directory = "bia_staging"
-summary = config.save_bia_package("bia_bundle", move_data=True)
+summary = save_bia_package(
+    config, stats["rows"], "bia_staging", "bia_bundle", move_data=True
+)
 ```
 
 `prepare_bia_data_from_table` downloads the finished units in their original bit depth;
 `save_bia_package` writes the bundle.
 
-## From a local read-only run
+## From a local training set
 
 ```python
-config = load_config_from_yaml("annotations/annotation_config_hela_nuclei_v1.yaml")
-config.annotations = config.get_processed()      # leave out unfinished units
-config.save_bia_package("bia_bundle")
+from omero_annotate_ai import TrainingSet
+from omero_annotate_ai.core.mifa_export import save_bia_package
+
+ts = TrainingSet.open("~/omero_annotate_ai/local/<id>_hela_nuclei_v1")
+done = [row for row in ts.units() if row.processed]  # leave out unfinished units
+save_bia_package(ts.config, done, ts.bundle_dir, "bia_bundle")
 ```
 
 ## What is in the bundle

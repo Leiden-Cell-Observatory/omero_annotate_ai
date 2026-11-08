@@ -11,7 +11,7 @@ class TrainingDataWidget:
 
     def __init__(self, connection=None):
         """Initialize the training data widget.
-        
+
         Args:
             connection: OMERO connection object. If provided, enables container selection.
         """
@@ -20,14 +20,14 @@ class TrainingDataWidget:
         self.annotation_tables = []
         self._create_widgets()
         self._setup_observers()
-        
+
         # Enable widgets if connection is provided
         if self.connection is not None:
             self._enable_widgets()
 
     def _create_widgets(self):
         """Create all widget components."""
-        
+
         # Header
         self.header = widgets.HTML(
             value="<h3>🎯 Training Data Selection</h3>",
@@ -93,23 +93,27 @@ class TrainingDataWidget:
         self.status_output = widgets.Output()
 
         # Main container
-        self.main_widget = widgets.VBox([
-            self.header,
-            widgets.HTML("<b>Step 1: Select Container</b>"),
-            self.container_type_dropdown,
-            widgets.HBox([self.container_dropdown, self.refresh_button]),
-            widgets.HTML("<br><b>Step 2: Find Training Tables</b>"),
-            self.scan_button,
-            self.tables_output,
-            widgets.HTML("<br><b>Step 3: Select Table</b>"),
-            self.table_dropdown,
-            self.status_output,
-        ])
+        self.main_widget = widgets.VBox(
+            [
+                self.header,
+                widgets.HTML("<b>Step 1: Select Container</b>"),
+                self.container_type_dropdown,
+                widgets.HBox([self.container_dropdown, self.refresh_button]),
+                widgets.HTML("<br><b>Step 2: Find Training Tables</b>"),
+                self.scan_button,
+                self.tables_output,
+                widgets.HTML("<br><b>Step 3: Select Table</b>"),
+                self.table_dropdown,
+                self.status_output,
+            ]
+        )
 
     def _setup_observers(self):
         """Setup widget observers."""
-        self.container_type_dropdown.observe(self._on_container_type_change, names="value")
-        self.container_dropdown.observe(self._on_container_change, names="value") 
+        self.container_type_dropdown.observe(
+            self._on_container_type_change, names="value"
+        )
+        self.container_dropdown.observe(self._on_container_change, names="value")
         self.table_dropdown.observe(self._on_table_change, names="value")
         self.refresh_button.on_click(self._on_refresh_containers)
         self.scan_button.on_click(self._on_scan_tables)
@@ -179,10 +183,12 @@ class TrainingDataWidget:
                 if self.annotation_tables:
                     print(f"📋 Found {len(self.annotation_tables)} annotation tables:")
                     for i, table in enumerate(self.annotation_tables):
-                        name = table.get('name', 'Unknown')
-                        table_id = table.get('id', 'Unknown')
-                        created = table.get('created', 'Unknown')
-                        print(f"  {i + 1}. {name} (ID: {table_id}) - Created: {created}")
+                        name = table.get("name", "Unknown")
+                        table_id = table.get("id", "Unknown")
+                        created = table.get("created", "Unknown")
+                        print(
+                            f"  {i + 1}. {name} (ID: {table_id}) - Created: {created}"
+                        )
                 else:
                     print("❌ No annotation tables found in this container")
 
@@ -206,7 +212,7 @@ class TrainingDataWidget:
                 else:
                     print("ℹ️ No annotation tables found")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
             with self.status_output:
                 clear_output()
                 print(f"❌ Error scanning tables: {e}")
@@ -241,14 +247,14 @@ class TrainingDataWidget:
 
             self.container_dropdown.options = options
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
             with self.status_output:
                 clear_output()
                 print(f"❌ Error loading containers: {e}")
 
     def set_connection(self, connection):
         """Set OMERO connection and enable widgets.
-        
+
         Args:
             connection: OMERO BlitzGateway connection object
         """
@@ -271,7 +277,7 @@ class TrainingDataWidget:
 
     def get_selected_table_id(self):
         """Get the selected annotation table ID.
-        
+
         Returns:
             Selected table ID, or None if no table selected
         """
@@ -279,13 +285,13 @@ class TrainingDataWidget:
 
     def get_selected_table_info(self):
         """Get complete information about the selected table.
-        
+
         Returns:
             Table information including name, ID, creation date, etc.
         """
         if not self.selected_table_id:
             return None
-            
+
         for table in self.annotation_tables:
             if table.get("id") == self.selected_table_id:
                 return table
@@ -317,14 +323,15 @@ def create_training_data_widget(connection=None):
 
     Returns:
         TrainingDataWidget instance
-        
+
     Raises:
         ValueError: If the provided connection is not active
     """
-    if connection is not None:
-        if not hasattr(connection, "isConnected") or not connection.isConnected():
-            raise ValueError(
-                "Provided OMERO connection is not active. Please establish a valid connection first."
-            )
+    if connection is not None and (
+        not hasattr(connection, "isConnected") or not connection.isConnected()
+    ):
+        raise ValueError(
+            "Provided OMERO connection is not active. Please establish a valid connection first."
+        )
 
     return TrainingDataWidget(connection=connection)

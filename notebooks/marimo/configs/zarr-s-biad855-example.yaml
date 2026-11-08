@@ -1,0 +1,23 @@
+# Annotate a public Cell Painting plate (BioImage Archive S-BIAD855) straight from OME-Zarr.
+# Load it in notebooks/marimo/annotate-from-yaml.py.
+name: s-biad855-zarr-demo
+source: zarr
+zarr:
+  uris:
+    - https://livingobjects.ebi.ac.uk/bioimaging-integrator-data/S-BIAD855/781ac3d7-673f-47be-a4d2-3fdf3f477047/781ac3d7-673f-47be-a4d2-3fdf3f477047.zarr
+  level: 1          # half resolution (260 x 348); masks and coordinates use this grid
+  fields: first
+  wells: [B2, C5, D10]
+spatial_coverage:
+  channels: [2]     # Hoechst
+  timepoints: [0]
+  z_slices: [0]
+training:
+  segment_all: false
+  train_n: 2
+  validate_n: 1
+  test_n: 0
+ai_model:
+  framework: micro_sam
+  pretrained_from: vit_b_lm
+storage: local  # OME-Zarr sets are kept in their local folder

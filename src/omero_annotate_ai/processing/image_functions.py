@@ -1,20 +1,23 @@
 """Image processing functions for annotation workflows."""
 
+import logging
 import random as rnd
-from typing import List, Tuple
 
 # Optional dependencies for ROI functionality
 import cv2
 import ezomero.rois
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 
 def generate_patch_coordinates(
-    image_shape: Tuple[int, int],
-    patch_size: List[int],
+    image_shape: tuple[int, int],
+    patch_size: list[int],
     n_patches: int,
     random_patch: bool = True,
-) -> Tuple[List[Tuple[int, int]], Tuple[int, int]]:
+    rng: rnd.Random | None = None,
+) -> tuple[list[tuple[int, int]], tuple[int, int]]:
     """Generate non-overlapping patch coordinates for an image.
 
     CRUCIAL: Ensures patches do not overlap when generating multiple patches.
@@ -24,6 +27,7 @@ def generate_patch_coordinates(
         patch_size: (height, width) of patches
         n_patches: Number of patches to generate
         random_patch: Whether to generate random patches or grid-based patches
+        rng: Random stream for random patches; the ``random`` module when omitted.
 
     Returns:
         Tuple containing:
@@ -36,92 +40,64 @@ def generate_patch_coordinates(
     # Check if image is smaller than patch
     if width < patch_w or height < patch_h:
         # Image smaller than patch, return image size as patch size
-        print("Image smaller than patch size, using full image")
+        logger.info("Image smaller than patch size, using full image")
         actual_patch_size = (height, width)
         return [(0, 0)], actual_patch_size
 
     # Image is large enough for requested patch size
     actual_patch_size = (patch_h, patch_w)
-    
-    # Ensure patches fit within image
-    max_x = max(0, width - patch_w)
-    max_y = max(0, height - patch_h)
 
-    coordinates = []
-
-    if random_patch:
-        # Generate random non-overlapping coordinates
-        used_areas = []  # Track used rectangular areas
-        max_attempts = n_patches * 20  # Limit attempts to avoid infinite loops
-        attempts = 0
-
-        while len(coordinates) < n_patches and attempts < max_attempts:
-            attempts += 1
-            x = rnd.randint(0, max_x)
-            y = rnd.randint(0, max_y)
-
-            # Check if this patch overlaps with any existing patch
-            new_rect = (x, y, x + patch_w, y + patch_h)
-            overlaps = False
-
-            for used_rect in used_areas:
-                if _rectangles_overlap(new_rect, used_rect):
-                    overlaps = True
-                    break
-
-            if not overlaps:
-                coordinates.append((x, y))
-                used_areas.append(new_rect)
-
-        if len(coordinates) < n_patches:
-            print(
-                f"Could only place {len(coordinates)} non-overlapping patches out of {n_patches} requested"
+    grid = _grid_origins(height, width, patch_h, patch_w)
+    if not random_patch:
+        if n_patches > len(grid):
+            logger.warning(
+                f"Requested {n_patches} patches, but only {len(grid)} "
+                "non-overlapping patches fit"
             )
+        return grid[:n_patches], actual_patch_size
 
-    else:
-        # Generate grid-based non-overlapping patches
-        # Calculate how many patches fit in each dimension
-        patches_x = max(1, (width + patch_w - 1) // patch_w)  # Ceiling division
-        patches_y = max(1, (height + patch_h - 1) // patch_h)
-        max_grid_patches = patches_x * patches_y
+    # Random: rejection sampling; if that leaves too few on a tight image, a random
+    # pick of grid slots, which always fits as many patches as the grid holds.
+    draw = rng if rng is not None else rnd.Random()
+    max_x, max_y = width - patch_w, height - patch_h
+    coordinates: list[tuple[int, int]] = []
+    for _ in range(n_patches * 50):
+        if len(coordinates) == n_patches:
+            break
+        x, y = draw.randint(0, max_x), draw.randint(0, max_y)
+        rect = (x, y, x + patch_w, y + patch_h)
+        if not any(
+            _rectangles_overlap(rect, (cx, cy, cx + patch_w, cy + patch_h))
+            for cx, cy in coordinates
+        ):
+            coordinates.append((x, y))
+    if len(coordinates) < min(n_patches, len(grid)):
+        coordinates = draw.sample(grid, min(n_patches, len(grid)))
 
-        if n_patches > max_grid_patches:
-            print(
-                f"Requested {n_patches} patches, but only {max_grid_patches} non-overlapping patches fit"
-            )
-            n_patches = max_grid_patches
-
-        # Calculate spacing to distribute patches evenly
-        if patches_x > 1:
-            step_x = (width - patch_w) // (patches_x - 1)
-        else:
-            step_x = 0
-
-        if patches_y > 1:
-            step_y = (height - patch_h) // (patches_y - 1)
-        else:
-            step_y = 0
-
-        # Generate grid coordinates
-        patch_count = 0
-        for row in range(patches_y):
-            for col in range(patches_x):
-                if patch_count >= n_patches:
-                    break
-
-                x = min(col * step_x, max_x)
-                y = min(row * step_y, max_y)
-                coordinates.append((x, y))
-                patch_count += 1
-
-            if patch_count >= n_patches:
-                break
-
+    if len(coordinates) < n_patches:
+        logger.warning(
+            f"Could only place {len(coordinates)} non-overlapping patches "
+            f"out of {n_patches} requested"
+        )
     return coordinates, actual_patch_size
 
 
+def _grid_origins(
+    height: int, width: int, patch_h: int, patch_w: int
+) -> list[tuple[int, int]]:
+    """Top-left corners of the most non-overlapping patches that fit, spread evenly."""
+
+    def axis(size: int, patch: int) -> list[int]:
+        count = size // patch
+        if count <= 1:
+            return [0]
+        return [round(i * (size - patch) / (count - 1)) for i in range(count)]
+
+    return [(x, y) for y in axis(height, patch_h) for x in axis(width, patch_w)]
+
+
 def _rectangles_overlap(
-    rect1: Tuple[int, int, int, int], rect2: Tuple[int, int, int, int]
+    rect1: tuple[int, int, int, int], rect2: tuple[int, int, int, int]
 ) -> bool:
     """Check if two rectangles overlap.
 
@@ -135,12 +111,8 @@ def _rectangles_overlap(
     x1_1, y1_1, x2_1, y2_1 = rect1
     x1_2, y1_2, x2_2, y2_2 = rect2
 
-    # Check if rectangles do NOT overlap (then return False)
-    if x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1:
-        return False
-
-    # If not non-overlapping, they must overlap
-    return True
+    # They overlap unless one lies entirely to one side of the other.
+    return not (x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1)
 
 
 def mask_to_contour(mask):
@@ -195,10 +167,15 @@ def process_label_plane(
                 contour = contour + np.array([x_offset, y_offset])
 
             # Create polygon without text parameter
-            segmentation_type = "volumetric" if isinstance(z_slice, (list, range)) or z_slice > 0 else "manual"
+            segmentation_type = (
+                "volumetric"
+                if isinstance(z_slice, (list, range)) or z_slice > 0
+                else "manual"
+            )
             poly = ezomero.rois.Polygon(
                 points=contour,  # explicitly name the points parameter
-                z=z_slice,
+                # Volumetric shapes pass a z range; ezomero types z as int.
+                z=z_slice,  # pyright: ignore[reportArgumentType]
                 c=channel,
                 t=timepoint,
                 label=f"micro_sam.{segmentation_type}_instance_segmentation",
@@ -246,7 +223,7 @@ def label_to_rois(
             else:
                 actual_z = z_slice + z_index  # Assume z_slice is the starting index
 
-            print(f"Processing volumetric ROIs for z-slice {actual_z}")
+            logger.debug(f"Processing volumetric ROIs for z-slice {actual_z}")
             shapes.extend(
                 process_label_plane(
                     z_plane,

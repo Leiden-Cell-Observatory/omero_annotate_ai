@@ -1,15 +1,15 @@
 """Download OMERO table data into the on-disk layout a BIA bundle is built from.
 
-:meth:`AnnotationConfig.save_bia_package` copies the referenced images and masks out
-of ``config.output.output_directory``, using the paths that
-:func:`omero_annotate_ai.core.mifa_export._file_ids` derives from each annotation:
+:func:`omero_annotate_ai.core.mifa_export.save_bia_package` copies the referenced
+images and masks out of a data folder, using the paths
+:func:`omero_annotate_ai.core.mifa_export._file_ids` derives from each row:
 
 - ``annotation_output/{annotation_id}_mask.tif``
 - ``annotation_input/{annotation_id}.tif`` - the annotated channel, also when the
   config annotates one channel and trains on another
 
-That layout is what ``AnnotationPipeline`` leaves behind on the machine that did the
-annotating. A table-driven export starts with the data on OMERO instead, so
+That layout is a training set's own folder (``TrainingSet.bundle_dir``). A
+table-driven export starts with the data on OMERO instead, so
 :func:`prepare_bia_data_from_table` fetches it and writes exactly that layout.
 
 Unlike the training-data path
@@ -23,35 +23,34 @@ from __future__ import annotations
 import shutil
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import Any
 
-import ezomero
 import numpy as np
 from tifffile import imwrite
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..core.annotation_config import AnnotationConfig, ImageAnnotation
+from ..omero._untyped import ezomero
+from ..rows import Row, rows_from_frame
 
 __all__ = ["prepare_bia_data_from_table"]
 
-# Directory holding the mask files (mirrors AnnotationPipeline._setup_directories).
+# Directory holding the mask files (see omero_annotate_ai.bundle).
 MASK_DIR = "annotation_output"
 
-# Directory holding the annotated channel (mirrors AnnotationPipeline._get_input_folders).
+# Directory holding the annotated channel (see omero_annotate_ai.bundle).
 # A separate-channel workflow also writes model_input/, but the BIA source image is the
 # channel the mask was drawn on.
 IMAGE_DIR = "annotation_input"
 
 
-def _non_negative(value: Optional[int], default: int = 0) -> int:
-    """Coerce an ImageAnnotation coordinate to a usable index (``-1``/None -> default)."""
+def _non_negative(value: int | None, default: int = 0) -> int:
+    """Coerce an Row coordinate to a usable index (``-1``/None -> default)."""
     if value is None:
         return default
     value = int(value)
     return value if value >= 0 else default
 
 
-def _z_slices(annotation: "ImageAnnotation") -> List[int]:
+def _z_slices(annotation: Row) -> list[int]:
     """Z indices to fetch: the volume's range for 3D records, one plane otherwise."""
     if not annotation.is_volumetric:
         return [_non_negative(annotation.z_slice)]
@@ -62,7 +61,7 @@ def _z_slices(annotation: "ImageAnnotation") -> List[int]:
 
 
 def _fetch_plane(
-    conn: Any, annotation: "ImageAnnotation", z: int, channel: int, timepoint: int
+    conn: Any, annotation: Row, z: int, channel: int, timepoint: int
 ) -> np.ndarray:
     """Fetch one 2D plane (or patch) from OMERO as a ``(y, x)`` array, native dtype.
 
@@ -70,8 +69,16 @@ def _fetch_plane(
     z/c/t axes are dropped and x/y swapped to give the row-major (y, x) layout
     ``tifffile`` expects.
     """
-    image_id = int(annotation.image_id)
-    if annotation.is_patch and annotation.patch_width > 0 and annotation.patch_height > 0:
+    if annotation.image_id is None:
+        raise ValueError(
+            f"Annotation {annotation.annotation_id!r} has no OMERO image id"
+        )
+    image_id = annotation.image_id
+    if (
+        annotation.is_patch
+        and annotation.patch_width > 0
+        and annotation.patch_height > 0
+    ):
         start_coords = (
             int(annotation.patch_x),
             int(annotation.patch_y),
@@ -91,7 +98,13 @@ def _fetch_plane(
         if omero_image is None:
             raise ValueError(f"Image {image_id} not found in OMERO")
         start_coords = (0, 0, int(z), int(channel), int(timepoint))
-        axis_lengths = (int(omero_image.getSizeX()), int(omero_image.getSizeY()), 1, 1, 1)
+        axis_lengths = (
+            int(omero_image.getSizeX()),
+            int(omero_image.getSizeY()),
+            1,
+            1,
+            1,
+        )
 
     _, pixels = ezomero.get_image(
         conn,
@@ -110,7 +123,7 @@ def _fetch_plane(
     return pixels
 
 
-def _write_image(conn: Any, annotation: "ImageAnnotation", dest: Path) -> None:
+def _write_image(conn: Any, annotation: Row, dest: Path) -> None:
     """Fetch the plane/patch/volume for one annotation and write it to ``dest``.
 
     No intensity rescaling: the array is written at the dtype OMERO returned.
@@ -168,21 +181,19 @@ def _clean_data_dirs(output_dir: Path) -> None:
 def prepare_bia_data_from_table(
     conn: Any,
     table_id: int,
-    output_dir: Union[str, Path],
-    config: Optional["AnnotationConfig"] = None,
+    output_dir: str | Path,
     clean_existing: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Download the data referenced by an OMERO annotation table for a BIA export.
 
-    Loads the table, rebuilds the annotation records from it (each carries a unique
-    ``annotation_id``) and writes, for every row that is ``processed`` and has a
+    Loads the table's rows and writes, for every row that is ``processed`` and has a
     ``label_id``:
 
     - ``{output_dir}/annotation_input/{annotation_id}.tif`` - the image plane, patch or volume
     - ``{output_dir}/annotation_output/{annotation_id}_mask.tif`` - the mask FileAnnotation
 
-    which is the layout :meth:`AnnotationConfig.save_bia_package` copies from. Set
-    ``config.output.output_directory = output_dir`` afterwards and package it.
+    which is the layout :func:`~omero_annotate_ai.core.mifa_export.save_bia_package`
+    copies from: pass it the returned ``rows`` and ``output_dir``.
 
     Images are written at their **native dtype** - no 8-bit rescaling.
 
@@ -190,34 +201,26 @@ def prepare_bia_data_from_table(
     with a warning. Individual fetch failures are warned about and skipped too; only a
     missing/empty table is fatal.
 
-    On return, ``config.annotations`` holds **only the exported records** - the ones whose
-    image and mask both reached the disk. ``save_bia_package`` derives the BIA file lists
-    from every annotation in the config, so leaving a skipped row in place would list a
-    file that was never downloaded in the submission manifest.
+    The returned ``rows`` hold **only the exported records** - the ones whose image and
+    mask both reached the disk - so the BIA file lists never name a file that was not
+    downloaded.
 
     Args:
         conn: OMERO connection (``BlitzGateway``).
         table_id: OMERO ID of the annotation table (``OriginalFile``).
-        output_dir: Directory to write the ``annotation_input`` and ``annotation_output`` trees into.
-        config: Annotation config, **mutated in place**: its ``annotations`` are rebuilt from
-            the table (as :func:`sync_omero_table_to_config` does), then pruned to the
-            exported records, so the ids on disk match the ones the MIFA/BIA file lists
-            reference. A default config is used when omitted.
-        clean_existing: Remove existing ``annotation_input``/``annotation_output`` directories first.
+        output_dir: Directory to write the ``annotation_input`` and
+            ``annotation_output`` trees into.
+        clean_existing: Remove existing ``annotation_input``/``annotation_output``
+            directories first.
 
     Returns:
-        Dict with ``output_dir``, ``n_images``, ``n_masks``, ``skipped_unprocessed``
-        and ``skipped_no_mask``.
+        Dict with ``output_dir``, ``rows`` (the exported rows), ``n_images``,
+        ``n_masks``, ``skipped_unprocessed`` and ``skipped_no_mask``.
 
     Raises:
         ValueError: If the table cannot be loaded or is empty.
     """
     output_dir = Path(output_dir)
-
-    if config is None:
-        from ..core.annotation_config import create_default_config
-
-        config = create_default_config()
 
     try:
         table = ezomero.get_table(conn, table_id)
@@ -227,8 +230,7 @@ def prepare_bia_data_from_table(
     if table is None or len(table) == 0:
         raise ValueError(f"Table {table_id} is empty or not found")
 
-    # Rebuild the annotation records (and their annotation_ids) from the table.
-    config.from_dataframe(table)
+    rows = rows_from_frame(table)
 
     if clean_existing:
         _clean_data_dirs(output_dir)
@@ -243,10 +245,10 @@ def prepare_bia_data_from_table(
     n_masks = 0
     skipped_unprocessed = 0
     skipped_no_mask = 0
-    exported: List["ImageAnnotation"] = []
+    exported: list[Row] = []
 
     try:
-        for annotation in config.annotations:
+        for annotation in rows:
             if not annotation.processed:
                 skipped_unprocessed += 1
                 continue
@@ -259,7 +261,7 @@ def prepare_bia_data_from_table(
             try:
                 _write_image(conn, annotation, image_dir / f"{annotation_id}.tif")
                 n_images += 1
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best effort per record
                 warnings.warn(
                     f"Failed to export image for annotation {annotation_id!r} "
                     f"(image {annotation.image_id}): {exc}",
@@ -277,7 +279,7 @@ def prepare_bia_data_from_table(
                 ):
                     n_masks += 1
                     exported.append(annotation)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - best effort per record
                 warnings.warn(
                     f"Failed to export mask for annotation {annotation_id!r} "
                     f"(label {annotation.label_id}): {exc}",
@@ -286,11 +288,6 @@ def prepare_bia_data_from_table(
                 )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    # Keep only what actually made it to disk. save_bia_package() builds the BIA file
-    # lists from every annotation in the config, so a skipped row left in place would
-    # put a path to a file we never downloaded into the submission manifest.
-    config.annotations = exported
 
     if skipped_unprocessed or skipped_no_mask:
         warnings.warn(
@@ -303,6 +300,7 @@ def prepare_bia_data_from_table(
 
     return {
         "output_dir": output_dir,
+        "rows": exported,
         "n_images": n_images,
         "n_masks": n_masks,
         "skipped_unprocessed": skipped_unprocessed,
