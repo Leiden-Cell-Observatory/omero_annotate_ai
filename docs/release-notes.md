@@ -12,6 +12,8 @@ Newest first. The full list of pull requests per version is on
   dimmed, the previous image's objects and prompts are hidden and micro-SAM's dock is
   disabled, so nothing is drawn against the wrong embedding. Each image gets its own
   contrast limits.
+- **napari plugin:** the dock can be made as short as the annotate page, so micro-SAM's
+  dock below it gets the room (it kept the height of the start page).
 - **One pixel reader.** The training export and the BioImage Archive export read
   planes, patches and volumes through the same image source as annotation
   (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.

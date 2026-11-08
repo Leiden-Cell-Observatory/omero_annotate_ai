@@ -178,6 +178,15 @@ class TestDock:
         assert list(tags.values()) == [(1, 1)]  # one label and one ROI, tagged
         qtbot.waitUntil(lambda: "Training: 1/2" in widget.summary.text(), timeout=5000)
 
+    def test_the_dock_shrinks_to_the_annotate_page(self, tmp_path, make_dock, qtbot):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget = make_dock(home, source)[0]
+        start = widget.minimumSizeHint().height()
+        _start(widget, qtbot)
+        # micro-SAM's dock sits below: the short annotate page must not keep the
+        # start page's height.
+        assert widget.minimumSizeHint().height() < start
+
     def test_prev_goes_back_to_an_uncommitted_image(self, tmp_path, make_dock, qtbot):
         _, source, _, home = _make_set(tmp_path, "local")
         widget, controller, _ = make_dock(home, source)
