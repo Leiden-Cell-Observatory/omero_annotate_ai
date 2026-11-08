@@ -10,6 +10,11 @@ Newest first. The full list of pull requests per version is on
   warnings say whether a changed file is a near-duplicate or different content, and the
   BioImage Archive file lists carry `pixel_sha256` and `iscc` per file. Tables made by
   0.5.0 keep working without the new columns.
+- **Public IDR data via OME-Zarr.** The IDR's OMERO API is no longer open for
+  logins, so the [public-data tutorial](tutorials/public-data-idr.md) and the new
+  `idr-zarr-demo.py` notebook (replacing `omero-idr-demo.py`) read IDR studies as
+  OME-Zarr from its public S3 storage, with an example config
+  (`notebooks/marimo/configs/idr0013-mitocheck-zarr.yaml`).
 
 ## 0.5.0
 

@@ -1,0 +1,26 @@
+# HeLa nuclei (H2B-GFP) from the MitoCheck screen (IDR study idr0013A), read as OME-Zarr
+# from the IDR's public S3 storage: no OMERO login needed, nothing is uploaded.
+# Load it in notebooks/marimo/annotate-from-yaml.py or notebooks/marimo/idr-zarr-demo.py.
+name: idr0013-mitocheck-nuclei
+source: zarr
+zarr:
+  uris:
+    - https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/idr0013A/3451.zarr
+  level: 0          # full resolution (1024 x 1344)
+  fields: first
+  wells: [A1, B2, C3, D4]
+spatial_coverage:
+  channels: [0]     # GFP-tagged histone H2B: nuclei
+  timepoint_mode: random
+  n_timepoints: 1   # one random frame of each time-lapse
+  z_slices: [0]
+training:
+  segment_all: false
+  train_n: 2
+  validate_n: 1
+  test_n: 0
+  seed: 42
+ai_model:
+  framework: micro_sam
+  pretrained_from: vit_b_lm
+storage: local  # OME-Zarr sets are kept in their local folder
