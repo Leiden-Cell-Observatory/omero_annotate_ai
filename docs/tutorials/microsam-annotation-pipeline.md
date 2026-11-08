@@ -59,9 +59,9 @@ A line below shows the number of images, a sample image's dimensions and its cha
 |---|---|
 | Name | A short, descriptive name such as `hela_nuclei_v1`; used for the OMERO table and the local folder. |
 | Channel | The channel you will draw on, e.g. the DAPI channel for nuclei. Channel numbers start at 0. |
-| Timepoint, Z-slice | Which plane to annotate. For 2D images leave them at 0. |
-| 3D | Annotate whole z-stacks as volumes instead of single planes. |
-| Patches | Annotate crops instead of whole images. Recommended for large images or a CPU-only computer. |
+| Timepoints, Z-slices | Which planes to annotate: *Specific* (a list such as `0, 3, 5-7`), *All*, or *Random* (`n` drawn per image with the seed). For 2D images leave them at *Specific* `0`. |
+| 3D | Annotate one volume over the chosen z-slices instead of single planes (e.g. z-slices *Specific* `10-20`, or *All*). |
+| Patches | Annotate crops instead of whole images, with patch size and patches per image. Recommended for large images or a CPU-only computer. |
 | Training / Validation / Test | How many images to annotate for each split. Start small, e.g. 5 and 2. |
 | Seed | Empty picks one at random and stores it, so the selection can be repeated. |
 | Storage | *OMERO* uploads masks and keeps a tracking table; *Local folder only* writes nothing to OMERO. |
@@ -84,8 +84,9 @@ ts = workflow_widget.training_set()
 workflow_widget.annotate(note="nuclei only")  # the note is stored with this session
 ```
 
-Progress appears in the widget's **Progress** card, and **Save note to last session**
-adds or changes the note afterwards. Without the widget, `TrainingSet.create(config, conn)`
+Progress appears in the widget's **Progress** card. After the session the note box shows
+the session's note; edit it and click **Save session note** to replace it (one note per
+session). Without the widget, `TrainingSet.create(config, conn)`
 and `ts.annotate(...)` do the same.
 
 Creating the set:
