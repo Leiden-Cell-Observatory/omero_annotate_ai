@@ -24,13 +24,14 @@ def _(mo):
     The IDR is a public repository of reference image datasets from published scientific studies,
     hosted on an OMERO server. Anyone can connect and browse the data.
 
-    **Read-only mode:**
-    Since IDR is a public server, you cannot upload annotations or tables. The pipeline runs in
-    **read-only mode**, saving all progress locally to CSV files instead of OMERO tables.
+    **Local storage:**
+    IDR is a public server, so nothing can be uploaded to it. This demo creates a training
+    set with `storage: local`: the masks and the tracking table stay in the set's folder under
+    `~/omero_annotate_ai/local/`.
 
     **If the connection fails:** the IDR's OMERO API is not always available. The same IDR
     and BioImage Archive images can be annotated as OME-Zarr without OMERO, using
-    `zarr-annotate-ai-from-yaml.py` (`source: zarr`).
+    `annotate-from-yaml.py` with `source: zarr`.
 
     **Workflow Steps:**
     1. Connect to IDR (pre-configured)
@@ -277,24 +278,27 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md("""
-    ## 5. Output Settings
+    ## 5. Training set name
     """)
     return
 
 
 @app.cell
-def _(Path, datetime, mo):
-    output_directory = mo.ui.text(
-        value=str(Path.home() / "omero_annotate_ai" / "idr_annotations"),
-        label="Output Directory",
-        full_width=True,
-    )
+def _(datetime, mo):
     workflow_name = mo.ui.text(
         value=f"idr_annotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        label="Workflow Name",
+        label="Training set name",
     )
-    mo.vstack([output_directory, workflow_name])
-    return output_directory, workflow_name
+    mo.vstack(
+        [
+            workflow_name,
+            mo.md(
+                "IDR is read-only, so this is a **local** training set: masks and the "
+                "tracking table stay in its folder under `~/omero_annotate_ai/local/`."
+            ),
+        ]
+    )
+    return (workflow_name,)
 
 
 @app.cell
@@ -314,7 +318,6 @@ def _(
     container_type,
     mo,
     model_type,
-    output_directory,
     patch_size,
     patches_per_image,
     segment_all,
@@ -332,7 +335,6 @@ def _(
         name=workflow_name.value,
         container_type=container_type.value,
         container_id=int(container_id.value),
-        output_dir=output_directory.value,
         segment_all=segment_all.value,
         train_n=train_n.value,
         validate_n=validate_n.value,
@@ -348,7 +350,6 @@ def _(
         patch_size=patch_size.value,
         batch_size=batch_size.value,
         model_type=model_type.value,
-        read_only_mode=True,
     )
 
     mo.md(f"""
@@ -358,13 +359,12 @@ def _(
     |---------|-------|
     | Workflow Name | {config.name} |
     | Container | {config.omero.container_type} (ID: {config.omero.container_id}) |
-    | Output Directory | {config.output.output_directory} |
     | Model | {config.ai_model.pretrained_from} |
     | Channel | {config.spatial_coverage.channels} |
     | Segment All | {config.training.segment_all} |
     | Train/Val/Test | {config.training.train_n}/{config.training.validate_n}/{config.training.test_n} |
     | Use Patches | {config.spatial_coverage.use_patches} |
-    | **Read-only Mode** | **True** (IDR is public) |
+    | **Storage** | **local** (IDR is public) |
     """)
     return (config,)
 
@@ -387,7 +387,7 @@ def _(mo):
 
 
 @app.cell
-def _(config, conn, container_id, create_pipeline, mo, run_button):
+def _(TrainingSet, config, conn, container_id, mo, run_button):
     mo.stop(not run_button.value, mo.md("Click 'Run Annotation Pipeline' to start"))
 
     if not conn or not conn.isConnected():
@@ -395,27 +395,18 @@ def _(config, conn, container_id, create_pipeline, mo, run_button):
     elif container_id.value <= 0:
         mo.output.replace(mo.md("**Error:** Please select a valid container ID"))
     else:
-        try:
-            pipeline = create_pipeline(config, conn)
-            mo.output.replace(
-                mo.md(
-                    "**Starting annotation pipeline...** Napari will open for interactive annotation."
-                )
-            )
+        ts = TrainingSet.create(config, conn)
+        mo.output.replace(mo.md("**napari opens for annotation...**"))
+        _saved = ts.annotate()
+        mo.output.replace(
+            mo.md(f"""
+        **Annotation finished: {_saved} units saved.**
 
-            table_id, updated_config = pipeline.run_full_micro_sam_workflow()
-
-            result_md = f"""
-            **Annotation pipeline completed!**
-
-            - Total images processed: {len(updated_config.get_processed())}
-            - Annotations saved locally to: `{updated_config.output.output_directory}`
-            - Local tracking CSV used (read-only mode)
-            """
-            mo.output.replace(mo.md(result_md))
-        except Exception as e:
-            mo.output.replace(mo.md(f"**Error during pipeline execution:** {str(e)}"))
-    return
+        - Local training set folder: `{ts.bundle_dir}`
+        - Open it again later with `TrainingSet.open("{ts.bundle_dir}")`
+        """)
+        )
+    return (ts,)
 
 
 @app.cell
@@ -451,7 +442,6 @@ def _(mo):
 
 @app.cell
 def _(
-    config,
     datetime,
     mo,
     parse_patch_size,
@@ -462,13 +452,14 @@ def _(
     train_button,
     train_epochs,
     train_patch_shape,
+    ts,
 ):
     mo.stop(
         not train_button.value,
         mo.md("Click 'Prepare Data & Train' after completing annotation"),
     )
 
-    if not config.get_processed():
+    if not any(r.processed for r in ts.units()):
         mo.output.replace(
             mo.md("**Error:** No annotations yet. Run the annotation step first.")
         )
@@ -481,7 +472,7 @@ def _(
             # reorganise the local annotation folders into the training layout.
             # It is written next to the annotation folder, never inside it.
             _training_result = reorganize_local_data_for_training(
-                config, annotation_dir=config.output.output_directory
+                ts.config, annotation_dir=ts.bundle_dir
             )
 
             _patch = parse_patch_size(train_patch_shape.value)
@@ -521,43 +512,9 @@ def _(
 @app.cell
 def _(mo):
     mo.md("""
-    ## 9. Save Configuration
+    The set's configuration is saved as `config.yaml` in its folder; load it with
+    `load_config_from_yaml(...)` to repeat the selection elsewhere.
     """)
-    return
-
-
-@app.cell
-def _(mo):
-    save_button = mo.ui.run_button(label="Save Configuration to YAML")
-    save_button
-    return (save_button,)
-
-
-@app.cell
-def _(Path, config, mo, save_button):
-    mo.stop(
-        not save_button.value,
-        mo.md("Click 'Save Configuration' to export your settings"),
-    )
-
-    _result = None
-    try:
-        config_path = (
-            Path(config.output.output_directory)
-            / f"annotation_config_{config.name}.yaml"
-        )
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config.save_yaml(config_path)
-        _result = mo.md(f"""
-        **Configuration saved!**
-
-        File: `{config_path}`
-
-        To reuse: `config = load_config_from_yaml('{config_path}')`
-        """)
-    except Exception as e:
-        _result = mo.md(f"**Error saving configuration:** {str(e)}")
-    _result
     return
 
 
@@ -580,7 +537,7 @@ def _():
 def _():
     from omero_annotate_ai import (
         create_default_config,
-        create_pipeline,
+        TrainingSet,
         reorganize_local_data_for_training,
         run_training,
         setup_training,
@@ -596,7 +553,7 @@ def _():
         OMERO_AVAILABLE,
         SimpleOMEROConnection,
         create_default_config,
-        create_pipeline,
+        TrainingSet,
         reorganize_local_data_for_training,
         setup_training,
         run_training,
@@ -652,12 +609,11 @@ def _():
 
 
 @app.cell
-def _(Path, create_default_config, parse_int_list, parse_patch_size):
+def _(create_default_config, parse_int_list, parse_patch_size):
     def build_config(
         name,
         container_type,
         container_id,
-        output_dir,
         segment_all,
         train_n,
         validate_n,
@@ -673,14 +629,13 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
         patch_size,
         batch_size,
         model_type,
-        read_only_mode,
     ):
         config = create_default_config()
 
         config.name = name
         config.omero.container_type = container_type
         config.omero.container_id = container_id
-        config.output.output_directory = Path(output_dir)
+        config.storage = "local"  # IDR is read-only
 
         config.training.segment_all = segment_all
         config.training.train_n = train_n
@@ -700,8 +655,6 @@ def _(Path, create_default_config, parse_int_list, parse_patch_size):
         config.workflow.batch_size = batch_size
 
         config.ai_model.pretrained_from = model_type
-
-        config.workflow.read_only_mode = read_only_mode
 
         return config
 
