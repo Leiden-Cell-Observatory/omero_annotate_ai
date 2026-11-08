@@ -8,7 +8,7 @@ uploads them to OMERO.
 ```mermaid
 flowchart LR
     A[OMERO] -->|1. export| B[annotation_input/<br/>unit_id.tif]
-    B -->|2. annotate in Cellpose| C[annotation_output/<br/>unit_id_mask.tif]
+    B -->|2. annotate in Cellpose| C[external_output/<br/>unit_id_mask.tif]
     C -->|3. collect| D[OMERO<br/>masks · ROIs · table]
 ```
 
@@ -43,10 +43,10 @@ This creates the tracking table in OMERO and writes one TIFF per annotation unit
 
 Open the images in `annotation_input/` in the Cellpose GUI (`cellpose` on the command
 line). Run a model, correct the outlines, and **save each result as a label image** in
-`annotation_output/` with the same name plus `_mask.tif`:
+`external_output/` with the same name plus `_mask.tif`:
 
 ```text
-annotation_input/12345_0_0.tif   →   annotation_output/12345_0_0_mask.tif
+annotation_input/12345_0_0.tif   →   external_output/12345_0_0_mask.tif
 ```
 
 !!! warning "Use the `_mask.tif` naming"

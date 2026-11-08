@@ -589,6 +589,26 @@ class TestTrainingData:
             training_channels=[0],
         )
 
+    def test_training_data_widget_finds_the_set(
+        self, omero_conn, omero_seed, finished_set, tmp_path
+    ):
+        from omero_annotate_ai.widgets.training_data_widget import (
+            create_training_data_widget,
+        )
+
+        table_id, config = finished_set
+        widget = create_training_data_widget(omero_conn)
+        widget.container_type_dropdown.value = "dataset"
+        widget._load_containers()
+        widget.container_dropdown.value = omero_seed.dataset_id
+        widget.scan_button.click()
+        assert table_id in [value for _, value in widget.table_dropdown.options]
+        widget.table_dropdown.value = table_id
+
+        assert widget.get_selected_table_id() == table_id
+        result = self._export(omero_conn, table_id, config, tmp_path / "out")
+        assert result["stats"]["n_training_images"] > 0
+
     def test_layout_dtype_pairing_and_normalisation(
         self, omero_conn, finished_set, tmp_path
     ):
@@ -692,27 +712,33 @@ class TestTrainingData:
 
 class TestOtherPaths:
     def test_cellpose_prepare_then_collect(self, omero_conn, omero_seed, tmp_path):
-        from omero_annotate_ai.core.annotation_pipeline import create_pipeline
+        from omero_annotate_ai.trainingset import TrainingSet
 
         config = make_config(omero_seed, "cellpose", train_n=2, validate_n=1, test_n=0)
         config.ai_model.framework = "cellpose"
-        pipeline = create_pipeline(config, omero_conn)
-        table_id, config = pipeline.run_cp_workflow()
+        ts = TrainingSet.create(config, omero_conn, home=tmp_path)
+        assert ts.prepare_external() == 3
 
         # The user segments the exported images with Cellpose: masks from the images.
-        bundle = pipeline.bundle_dir
-        inputs = sorted((bundle / "annotation_input").glob("*.tif"))
+        inputs = sorted((ts.bundle_dir / "annotation_input").glob("*.tif"))
         assert len(inputs) == 3
-        (bundle / "annotation_output").mkdir(exist_ok=True)
-        for path in inputs:
+        for path in inputs[:2]:
             tifffile.imwrite(
-                bundle / "annotation_output" / f"{path.stem}_mask.tif",
+                ts.bundle_dir / "external_output" / f"{path.stem}_mask.tif",
                 mask_for(tifffile.imread(path)),
             )
-        n, _ = pipeline.collect_annotations_from_disk()
+        assert ts.collect_masks() == 2
+        assert ts.collect_masks() == 0  # collecting again uploads nothing twice
 
-        assert n == 3
-        rows = table_rows(omero_conn, table_id)
+        # The last mask arrives later; a reopened set collects only that one.
+        tifffile.imwrite(
+            ts.bundle_dir / "external_output" / f"{inputs[2].stem}_mask.tif",
+            mask_for(tifffile.imread(inputs[2])),
+        )
+        reopened = TrainingSet.open(ts.table_id, omero_conn, home=tmp_path)
+        assert reopened.collect_masks() == 1
+        rows = table_rows(omero_conn, ts.table_id)
+        assert len(rows) == 3
         assert_labels_on_right_images(omero_conn, omero_seed, rows)
 
     def test_read_only_writes_nothing_to_omero(

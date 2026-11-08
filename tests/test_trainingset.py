@@ -134,11 +134,14 @@ class TestExternalTool:
         assert len(list((ts.bundle_dir / "annotation_input").glob("*.tif"))) == 2
 
         first = ts.rows[0].annotation_id
-        mask = ts.bundle_dir / "annotation_output" / f"{first}_mask.tif"
-        tifffile.imwrite(mask, np.ones((16, 16), np.uint16))
+        draft = ts.bundle_dir / "external_output" / f"{first}_mask.tif"
+        tifffile.imwrite(draft, np.ones((16, 16), np.uint16))
         assert ts.collect_masks() == 1
 
         assert [r.processed for r in ts.rows] == [True, False]
+        # Collected masks move to annotation_output/, which holds accepted masks only.
+        assert not draft.exists()
+        assert (ts.bundle_dir / "annotation_output" / f"{first}_mask.tif").exists()
         assert omero.uploads_per_tag()
 
 

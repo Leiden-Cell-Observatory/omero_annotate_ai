@@ -385,7 +385,7 @@ def _(
     1. Open the Cellpose GUI (`cellpose`; install with `pixi add cellpose` or
        `pip install cellpose`).
     2. Annotate the images in `{ts.bundle_dir / "annotation_input"}`.
-    3. Save each mask in `{ts.bundle_dir / "annotation_output"}` as
+    3. Save each mask in `{ts.bundle_dir / "external_output"}` as
        `<image name>_mask.tif` (e.g. `12345_0_0.tif` → `12345_0_0_mask.tif`; Cellpose's
        own `_seg.npy` / `_cp_masks.png` files are not picked up).
     4. Come back and click **Collect masks** below.

@@ -63,7 +63,7 @@ Unknown keys are refused instead of ignored.
 |---|---|
 | `create_pipeline(config, conn).run_full_micro_sam_workflow()` | `TrainingSet.create(config, conn).annotate()` (the old call still works, deprecated) |
 | resume with `resume_from_table` | `TrainingSet.open(table_id, conn).annotate()` |
-| `run_cp_workflow()` / `collect_annotations_from_disk()` | `ts.prepare_external()` / `ts.collect_masks()` |
+| `run_cp_workflow()` / `collect_annotations_from_disk()` | `ts.prepare_external()` / `ts.collect_masks()`; Cellpose masks go to `external_output/` (was `annotation_output/`) |
 | `config.get_processed()`, `config.annotations` | `[r for r in ts.units() if r.processed]` |
 | `config.save_bia_package(dest)` | `save_bia_package(ts.config, ts.units(), ts.bundle_dir, dest)` |
 | `cleanup_project_annotations(...)` | `delete_training_set(conn, table_id)` |

@@ -70,6 +70,9 @@ from .sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 
 logger = logging.getLogger(__name__)
 
+# Where external tools (e.g. Cellpose) write masks for collect_masks.
+EXTERNAL_OUTPUT = "external_output"
+
 
 def _well_name(row: int, column: int) -> str:
     """Well name from 0-based plate indices: (1, 1) -> B2, (27, 11) -> AB12."""
@@ -1432,12 +1435,14 @@ class TrainingSet:
         """Save the pending units' images for an external tool; returns how many.
 
         Images go to ``annotation_input/`` (and ``model_input/`` for separate
-        channels); the tool writes ``annotation_output/{annotation_id}_mask.tif``.
-        The units stay pending until :meth:`collect_masks` finds their masks.
+        channels); the tool writes ``external_output/{annotation_id}_mask.tif``.
+        The units stay pending until :meth:`collect_masks` finds their masks:
+        ``annotation_output/`` only ever holds accepted masks, so drafts in
+        ``external_output/`` are never uploaded by the repair on open.
         """
         pending = [r for r in self.rows if not r.processed]
         self._save_images_for_external(pending)
-        (self.bundle_dir / "annotation_output").mkdir(parents=True, exist_ok=True)
+        (self.bundle_dir / EXTERNAL_OUTPUT).mkdir(parents=True, exist_ok=True)
         self.save_local_table()
         self.save_config()
         return len(pending)
@@ -1463,7 +1468,7 @@ class TrainingSet:
                         "Could not save the model image of %s", row.annotation_id
                     )
 
-    def collect_masks(self, folder: str = "annotation_output") -> int:
+    def collect_masks(self, folder: str = EXTERNAL_OUTPUT) -> int:
         """Save the masks an external tool wrote as ``{annotation_id}_mask.tif``.
 
         ``folder`` is relative to the set's folder and may be a glob pattern. Each

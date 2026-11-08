@@ -120,7 +120,7 @@ class AnnotationPipeline:
         return self._result()
 
     def collect_annotations_from_disk(
-        self, folder_pattern: str = "annotation_output"
+        self, folder_pattern: str = "external_output"
     ) -> tuple[int, AnnotationConfig]:
         """Save the masks an external tool wrote; returns ``(n_saved, config)``."""
         return self.training_set.collect_masks(folder_pattern), self.config
