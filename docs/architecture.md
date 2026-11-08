@@ -34,8 +34,10 @@ flowchart LR
 | `planning.py` | Pure planning: which images go to which split (`plan_split`), the units of one image (`units_for_image`), and which images to add to a set (`plan_extension`). Every random choice comes from `training.seed` via `rng_for`, so a plan can be reproduced. |
 | `annotators.py` | The `Annotator` protocol and its two implementations: `MicroSamAnnotator` (napari, interactive) and `ScriptedAnnotator` (draws masks with a function; for scripts and tests). |
 | `sources/` | Reading pixels and image sizes from OMERO or OME-Zarr behind one `ImageSource` protocol. |
-| `omero/` | OMERO access: the tracking table (updated in place, so its ID identifies the training set), uploads of ROIs and labels, connections. |
-| `processing/` | Training data export and training helpers. |
+| `omero/` | OMERO access: the tracking table (updated in place, so its ID identifies the training set), uploads of ROIs and labels, connections (`ConnectionFailed`), and `delete_training_set` (by table ID and tag, dry run first, refuses other users' objects). |
+| `processing/` | Training data export (`prepare_training_data_from_table`, by each row's category), normalisation for micro-SAM/BiaPy, and training helpers. |
+| `core/mifa_export.py`, `processing/bia_data.py` | MIFA metadata and BioImage Archive bundles from a config plus rows. |
+| `widgets/` | ipywidgets front-ends: OMERO connection (keychain, history), the workflow widget (New / Open training set, progress from events, session note) and table selection for exports. |
 | `bundle.py` | Where a training set's files live: one folder per set under the home folder (`$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`), atomic writes, a fresh scratch folder per batch, masks matched to units by exact file name, and pixel digests. |
 | `errors.py` | The package's exceptions; all derive from `OmeroAnnotateAIError`. |
 

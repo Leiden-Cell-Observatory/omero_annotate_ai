@@ -140,29 +140,32 @@ def _(mo):
 
 
 @app.cell
-def _(conn, container_id, container_type, list_annotation_tables, mo):
+def _(conn, container_id, container_type, list_training_sets, mo, summarize):
     tables_info = ""
-    _tables = []
 
     if conn and conn.isConnected() and container_id.value > 0:
         try:
-            _tables = list_annotation_tables(
-                conn, container_type.value, container_id.value
-            )
-            if _tables:
-                rows = "\n".join(
-                    f"    | {t['id']} | {t['name']} | {t.get('progress_percent', 'N/A')}% |"
-                    for t in _tables
-                )
+            _sets = list_training_sets(conn, container_type.value, container_id.value)
+            if _sets:
+                _lines = []
+                for _info in _sets:
+                    _progress = summarize(_info.table_id, conn).progress
+                    _split = " · ".join(
+                        f"{name} {done}/{total}"
+                        for name, (done, total) in _progress.items()
+                        if total
+                    )
+                    _lines.append(f"    | {_info.table_id} | {_info.name} | {_split} |")
+                rows = "\n".join(_lines)
                 tables_info = f"""
-    Found **{len(_tables)}** annotation tables:
+    Found **{len(_sets)}** training sets:
 
-    | Table ID | Name | Progress |
-    |----------|------|----------|
+    | Table ID | Name | Annotated per split |
+    |----------|------|---------------------|
     {rows}
                 """
             else:
-                tables_info = "No annotation tables found in this container."
+                tables_info = "No training sets found in this container."
         except Exception as e:
             tables_info = f"Error: {str(e)}"
 
@@ -230,9 +233,6 @@ def _(Path, annotation_config, datetime, mo):
         if annotation_config and annotation_config.spatial_coverage.patch_size
         else "512, 512"
     )
-    _default_val_split = (
-        annotation_config.training.validation_fraction if annotation_config else 0.2
-    )
 
     output_directory = mo.ui.text(
         value=str(
@@ -255,12 +255,8 @@ def _(Path, annotation_config, datetime, mo):
     )
     batch_size = mo.ui.slider(start=1, stop=8, value=1, label="Batch Size")
     patch_shape = mo.ui.text(value=_default_patch, label="Patch Shape (width, height)")
-    validation_split = mo.ui.slider(
-        start=0.05,
-        stop=0.5,
-        step=0.05,
-        value=_default_val_split,
-        label="Validation Split",
+    n_iterations = mo.ui.number(
+        value=0, start=0, label="Iterations (0 = derive from epochs)"
     )
 
     mo.vstack(
@@ -268,7 +264,7 @@ def _(Path, annotation_config, datetime, mo):
             output_directory,
             mo.hstack([model_name, model_type], justify="start", gap=2),
             mo.hstack([epochs, batch_size], justify="start", gap=2),
-            mo.hstack([patch_shape, validation_split], justify="start", gap=2),
+            mo.hstack([patch_shape, n_iterations], justify="start", gap=2),
         ]
     )
     return (
@@ -276,9 +272,9 @@ def _(Path, annotation_config, datetime, mo):
         epochs,
         model_name,
         model_type,
+        n_iterations,
         output_directory,
         patch_shape,
-        validation_split,
     )
 
 
@@ -309,7 +305,6 @@ def _(
     prepare_button,
     prepare_training_data_from_table,
     table_id,
-    validation_split,
 ):
     training_result = None
     mo.stop(
@@ -332,7 +327,6 @@ def _(
                 training_name=model_name.value,
                 output_dir=_out_dir,
                 clean_existing=True,
-                validation_split=validation_split.value,
             )
 
             stats_rows = "\n".join(
@@ -350,6 +344,9 @@ def _(
             - Training labels: `{training_result["train_label"]}`
             - Validation images: `{training_result["val_input"]}`
             - Validation labels: `{training_result["val_label"]}`
+            - Test images: `{training_result.get("test_input", "none")}`
+
+            The splits come from the training set (each unit's category).
             """)
             )
         except Exception as e:
@@ -379,6 +376,7 @@ def _(
     mo,
     model_name,
     model_type,
+    n_iterations,
     patch_shape,
     run_training,
     setup_training,
@@ -390,6 +388,8 @@ def _(
         mo.md("Click 'Start Training' to begin micro-SAM fine-tuning"),
     )
 
+    training_config = None
+    training_results = None
     if training_result is None:
         mo.output.replace(mo.md("**Error:** Prepare training data first"))
     else:
@@ -399,6 +399,7 @@ def _(
                 training_result,
                 model_name=model_name.value,
                 epochs=epochs.value,
+                n_iterations=int(n_iterations.value) or None,
                 batch_size=batch_size.value,
                 learning_rate=1e-5,
                 patch_shape=tuple(_patch),
@@ -426,6 +427,71 @@ def _(
             )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error during training:** {str(e)}"))
+    return training_config, training_results
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## 6. Export to the BioImage Model Zoo (optional)
+
+    Packages the best checkpoint in [BioImage.IO](https://bioimage.io) format, with one
+    validation image as the test input. Fill in authors and a description first.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    bioimageio_authors = mo.ui.text(
+        value="Your Name; Your Institution", label="Author; affiliation"
+    )
+    bioimageio_description = mo.ui.text(
+        value="micro-SAM model fine-tuned on OMERO annotations",
+        label="Description",
+        full_width=True,
+    )
+    export_button = mo.ui.run_button(label="Export BioImage.IO model")
+    mo.vstack([bioimageio_authors, bioimageio_description, export_button])
+    return bioimageio_authors, bioimageio_description, export_button
+
+
+@app.cell
+def _(
+    Path,
+    bioimageio_authors,
+    bioimageio_description,
+    export_button,
+    mo,
+    training_config,
+    training_result,
+    training_results,
+):
+    mo.stop(not export_button.value)
+    mo.stop(training_results is None, mo.md("**Train a model first.**"))
+    import tifffile
+    from micro_sam.bioimageio.model_export import export_sam_model
+
+    _images = sorted(Path(training_result["val_input"]).glob("*.tif"))
+    _labels = sorted(Path(training_result["val_label"]).glob("*.tif"))
+    _checkpoint = (
+        training_results["best_checkpoint"] or training_results["latest_checkpoint"]
+    )
+    mo.stop(not (_images and _labels), mo.md("**No validation data to use as test.**"))
+    mo.stop(_checkpoint is None, mo.md("**No checkpoint found from training.**"))
+    _name, _, _affiliation = bioimageio_authors.value.partition(";")
+    _out = Path(training_results["output_dir"]) / "bioimage_io_model"
+    export_sam_model(
+        image=tifffile.imread(_images[0]),
+        label_image=tifffile.imread(_labels[0]),
+        model_type=training_config["model_type"],
+        name=training_config["model_name"],
+        output_path=str(_out),
+        checkpoint_path=str(_checkpoint),
+        authors=[{"name": _name.strip(), "affiliation": _affiliation.strip()}],
+        description=bioimageio_description.value,
+    )
+    mo.md(f"BioImage.IO model written to `{_out}`.")
     return
 
 
@@ -453,8 +519,8 @@ def _():
     )
     from omero_annotate_ai.omero.omero_functions import (
         find_annotation_config_for_table,
-        list_annotation_tables,
     )
+    from omero_annotate_ai.trainingset import list_training_sets, summarize
 
     try:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
@@ -466,10 +532,11 @@ def _():
         OMERO_AVAILABLE,
         SimpleOMEROConnection,
         find_annotation_config_for_table,
-        list_annotation_tables,
+        list_training_sets,
         prepare_training_data_from_table,
         run_training,
         setup_training,
+        summarize,
     )
 
 

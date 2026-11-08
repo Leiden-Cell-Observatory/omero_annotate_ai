@@ -117,14 +117,16 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 
 | | Jupyter | marimo |
 |---|---|---|
-| Annotate with micro-SAM | [widget workflow](notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb) | [annotation](notebooks/marimo/omero-annotate-ai-annotation.py) |
-| Prepare for Cellpose | [cellpose](notebooks/jupyter/annotation/omero-annotate-ai-cellpose.ipynb) | [cellpose](notebooks/marimo/omero-annotate-ai-cellpose.py) |
-| Run from YAML | [from YAML](notebooks/jupyter/annotation/omero-annotate-ai-from-yaml.ipynb) | [from YAML](notebooks/marimo/omero-annotate-ai-from-yaml.py) |
-| Train | [micro-SAM](notebooks/jupyter/training/omero-training-microsam.ipynb) · [BiaPy](notebooks/jupyter/training/omero-training_biapy.ipynb) · [DL4MicEverywhere](notebooks/jupyter/training/omero-training_DL4mic.ipynb) | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
+| Annotate with micro-SAM or Cellpose | [widget workflow](notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb) | [annotation](notebooks/marimo/omero-annotate-ai-annotation.py) |
+| Run from YAML (OMERO or OME-Zarr) | | [from YAML](notebooks/marimo/annotate-from-yaml.py) |
+| Train micro-SAM | | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
+| Export for BiaPy / DL4MicEverywhere | [export](notebooks/jupyter/training/omero-training-export.ipynb) | |
 | Export to the BioImage Archive | [BIA export](notebooks/jupyter/export_annotations/omero-table-to-bioimage-archive.ipynb) | |
-| Try it on public IDR data | | [IDR demo](notebooks/marimo/omero-idr-demo.py) |
+| Try it on public data | | [IDR demo](notebooks/marimo/omero-idr-demo.py) |
 
 ## Documentation
+
+Upgrading from 0.4? See [What's new in 0.5](https://leiden-cell-observatory.github.io/omero_annotate_ai/whats-new-0.5/) for the changes and a migration table.
 
 Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_ai/**
 ([micro-SAM tutorial](https://leiden-cell-observatory.github.io/omero_annotate_ai/tutorials/microsam-annotation-pipeline/),

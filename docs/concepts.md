@@ -3,17 +3,20 @@
 A short tour of the ideas you will meet in the widgets, the YAML file and the rest of
 these docs.
 
-## The run and its config
+## The training set and its config
 
-Each annotation project is a **run**, described by one **configuration file** (YAML).
-It says which OMERO container to take images from, which channel to annotate, how many
-images go into the training and validation sets, and where to put local files. You can
+Each annotation project is a **training set**: a fixed selection of images, split into
+training, validation and test, plus everything annotated for it. It is described by a
+**configuration** (YAML) that says which OMERO container (or OME-Zarr images) to take
+images from, which channel to annotate and how many images go into each split. You can
 create it with the Jupyter widget or write it by hand; see the
 [configuration reference](configuration.md).
 
-While you annotate, the pipeline writes progress into a copy of that file
-(`annotation_config_<name>.yaml` in your output folder). That copy is what lets you
-[resume or repeat a run](tutorials/resume-and-repeat.md).
+A YAML file you write is a template: `TrainingSet.create(config, conn)` makes a new set
+from it and never changes the file. The set keeps its own `config.yaml` (with its
+identity, seed and the record of every annotation **session**, including your notes) in
+its folder. `TrainingSet.open(table_id)` or `TrainingSet.open(folder)` continues a set;
+see [resume or repeat a run](tutorials/resume-and-repeat.md).
 
 ## Where images come from
 
@@ -49,29 +52,32 @@ units: one image with four patches gives four units.
 
 ## The two storage modes: OMERO or local
 
-| | `storage: omero` (default) | `storage: local` (read-only) |
+| | `storage: omero` (default) | `storage: local` |
 |---|---|---|
 | Writes to OMERO | yes: masks, ROIs, tracking table, config | nothing |
-| Local files | working files only | images, masks and a CSV table you can use directly |
-| Typical use | your own data on your institute's server | public servers such as the IDR, or a trial run |
+| Local folder | images, masks and `tracking_table.csv` | the same; it is the only copy |
+| Typical use | your own data on your institute's server | public servers such as the IDR, OME-Zarr data, or a trial run |
 
-Set it with `storage` in the config or the read-only checkbox in the widget. It is fixed
-when the training set is created.
+Set it with `storage` in the config or the **Storage** choice in the widget. It is fixed
+when the training set is created; OME-Zarr sets are always local.
 
 ## What ends up in OMERO
 
-In upload mode, for each annotated unit:
+For a set with `storage: omero`, for each annotated unit:
 
-- a **label mask** (TIFF) attached to the image,
+- a **label mask** (TIFF, compressed losslessly) attached to the image,
 - **polygon ROIs** on the image, visible in OMERO.web and OMERO.iviewer,
 
-and for the run as a whole:
+both tagged `omero-annotate-ai:<table id>:<unit id>` in their description, and for the
+set as a whole:
 
-- a **tracking table** on the container listing every unit, its split and whether it is done,
-- the **config YAML** attached to the container when the run ends.
+- a **tracking table** on the container listing every unit, its split, whether it is
+  done, the IDs of its mask and ROIs, and a pixel checksum of image and mask,
+- the set's **config YAML** next to the table, updated after each session.
 
-The tracking table is rewritten after every batch, so its OMERO ID changes as you go;
-the pipeline keeps track of the current one for you.
+The tracking table is updated in place, so its ID never changes: that ID *is* the
+training set's identity. The checksums let a resume or an export notice when a local
+mask no longer matches the one on OMERO.
 
 ## Batches
 
@@ -88,7 +94,7 @@ Each training set has one folder on your disk, with the same layout in every mod
 ```text
 ~/omero_annotate_ai/                  ← home folder
 ├── <server>/<table id>_<name>/       a set tracked in an OMERO table
-└── local/<id>_<name>/                a read-only or OME-Zarr set
+└── local/<id>_<name>/                a local (or OME-Zarr) set
     ├── config.yaml                   the config and progress, used to resume
     ├── tracking_table.csv            local copy of the progress table
     ├── annotation_input/             images as annotated: <unit id>.tif

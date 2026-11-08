@@ -12,8 +12,8 @@ flowchart LR
     C -->|3. collect| D[OMERO<br/>masks · ROIs · table]
 ```
 
-Notebooks: [Jupyter](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-cellpose.ipynb)
-· [marimo](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-cellpose.py)
+Notebook: [annotation (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-annotate-ai-annotation.py), with
+*Annotation tool: Cellpose GUI*.
 
 Cellpose itself is not installed with this package. Add it to your environment with
 `pixi add cellpose` (or `pip install cellpose`), or use an existing Cellpose installation.

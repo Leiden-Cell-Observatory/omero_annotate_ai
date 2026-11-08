@@ -131,18 +131,20 @@ for all annotator features and shortcuts.
 In the notebook:
 
 ```python
-print(config.get_progress_summary())
+done = sum(row.processed for row in ts.units())
+print(f"{done} of {len(ts.units())} units annotated; folder: {ts.bundle_dir}")
 ```
 
-In OMERO.web (upload mode):
+In OMERO.web (`storage: omero`):
 
 - Each annotated image now has **ROIs** (open it in OMERO.iviewer) and a **mask file**
   in its attachments.
 - The container has a **table** named after your run, listing every unit and whether it
   is done, plus the **configuration file** as an attachment.
 
-In read-only mode, the images and masks are in `annotation_input/` and
-`annotation_output/` in your working directory, with a `tracking_table.csv`.
+Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
+`annotation_input/` and `annotation_output/`, a `tracking_table.csv` and its
+`config.yaml`.
 
 ## 5. What next?
 
