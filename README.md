@@ -48,11 +48,11 @@ flowchart LR
 <table>
   <tr>
     <td width="45%"><img src="docs/images/widget_connect.png" alt="OMERO connection widget"></td>
-    <td width="55%"><img src="docs/images/widget_container.png" alt="Choosing an OMERO container in the workflow widget"></td>
+    <td width="55%"><img src="docs/images/widget_open_set.png" alt="Opening a training set in the workflow widget: progress per split and session notes"></td>
   </tr>
   <tr>
     <td><sub>Connect to any OMERO server.</sub></td>
-    <td><sub>Choose a project, dataset, plate or screen.</sub></td>
+    <td><sub>Pick a container, then start a new training set or continue one: progress per split and the notes of earlier sessions.</sub></td>
   </tr>
 </table>
 

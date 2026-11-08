@@ -55,6 +55,8 @@ A line below shows the number of images, a sample image's dimensions and its cha
 
 **New training set** or **Open training set.** For a first run choose *New*:
 
+![The workflow widget: a new training set on a dataset](../images/widget_new_set.png)
+
 | Setting | What to choose |
 |---|---|
 | Name | A short, descriptive name such as `hela_nuclei_v1`; used for the OMERO table and the local folder. |
@@ -70,6 +72,8 @@ A line below shows the number of images, a sample image's dimensions and its cha
 progress per split and the notes of earlier sessions; you can add images per split, and
 choose *Annotate pending* (the default) or *Review annotated* (see
 [Correct earlier annotations](#correct-earlier-annotations)).
+
+![Opening a training set: progress per split and the note of an earlier session](../images/widget_open_set.png)
 
 **Annotation.** The SAM model (`vit_b_lm` for light microscopy, `vit_b_em_organelles` for
 electron microscopy) and the batch size (images per napari session, 0 = all; the masks of a
