@@ -13,7 +13,7 @@ Newest first. The full list of pull requests per version is on
   disabled, so nothing is drawn against the wrong embedding. Each image gets its own
   contrast limits; the opacity you set on the image layer is kept.
 - **The napari plugin no longer offers to store the OMERO password** in the system
-  keychain; it is asked for at each connect and cleared after login.
+  keychain; it is asked for at each connect and the field is cleared straight away.
 - **One pixel reader.** The training export and the BioImage Archive export read
   planes, patches and volumes through the same image source as annotation
   (`omero_annotate_ai.sources.read_unit`) instead of two separate ezomero copies.

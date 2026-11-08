@@ -341,6 +341,7 @@ class OMEROAnnotateDock(QWidget):
             self.user.text().strip(),
             self.password.text(),
         )
+        self.password.clear()  # never kept, also not after a failed login
         if not (host and user and password):
             self._say("Fill in host, user and password.", error=True)
             return
@@ -353,7 +354,6 @@ class OMEROAnnotateDock(QWidget):
             self._conn = conn
             self.connect_button.setEnabled(True)
             self.list_button.setEnabled(True)
-            self.password.clear()
             self._say(f"Connected to {host}. Choose a container and list its sets.")
 
         self.connect_button.setEnabled(False)
