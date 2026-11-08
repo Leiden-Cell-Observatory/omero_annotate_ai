@@ -35,6 +35,17 @@ adding images, notes) is a method on it.
 
 ::: omero_annotate_ai.session.BatchReport
 
+## Content codes (provenance extra)
+
+::: omero_annotate_ai.provenance
+    options:
+      members:
+        - available
+        - image_code
+        - file_code
+        - distance
+        - describe_change
+
 ## Several computers (claims)
 
 ::: omero_annotate_ai.claims

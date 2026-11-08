@@ -569,6 +569,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/57/70/80f870701f8610e88649d3cd173a0e7ce66433913da3683035a4370063ad/websockets-17.4-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/5d/57/3c4b1c6f2e0cc29ba023802458ea3d2a996f87085559e4a5f2192d549532/more_itertools-11.2.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/61/30/5c6995c9a05c8dda4665c27fec412ad3d363d9d8fbce3f3044f77a34754e/iscc_lib-0.7.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/7b/e6/16ddb09185d79dc00177994cf0bdb1cd8e5cc44a1d1bfba61bdda5f382cb/msgspec-0.22.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/7e/85/545a951eecc270fcd688288c600017e2050a1aacb56c711d208586d3e470/pymdown_extensions-10.21.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/7f/66/b15ce62552d84bbfcec9a4873ab79d993a1dd4edb922cbfccae192bd5b5f/jaraco.classes-3.4.0-py3-none-any.whl
@@ -1035,6 +1036,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b9/fa/123043af240e49752f1c4bd24da5053b6bd00cad78c2be53c0d1e8b975bc/backports.tarfile-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cf/82/8ef9c7e0f50493307a49c09cfa7f00c5a778b6d1921f7b2dabe1d3a5809e/narwhals-2.28.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/d7/f6/4dfa6a706222470ca070765fa00bbe921bbad05386f9c5120ba105dfdad1/iscc_lib-0.7.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/da/46/7d84138a60a8bd796825b2d38ebe92d0d16501ca57d501b7c5d677401bbc/tomlkit-0.15.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f2/58/bc8954bda5fcda97bd7c19be11b85f91973d67a706ed4a3aec33e7de22db/jaraco_context-6.1.2-py3-none-any.whl
@@ -1534,6 +1536,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b9/fa/123043af240e49752f1c4bd24da5053b6bd00cad78c2be53c0d1e8b975bc/backports.tarfile-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/cf/82/8ef9c7e0f50493307a49c09cfa7f00c5a778b6d1921f7b2dabe1d3a5809e/narwhals-2.28.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/d7/f6/4dfa6a706222470ca070765fa00bbe921bbad05386f9c5120ba105dfdad1/iscc_lib-0.7.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/da/46/7d84138a60a8bd796825b2d38ebe92d0d16501ca57d501b7c5d677401bbc/tomlkit-0.15.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f2/58/bc8954bda5fcda97bd7c19be11b85f91973d67a706ed4a3aec33e7de22db/jaraco_context-6.1.2-py3-none-any.whl
@@ -2007,6 +2010,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/7f/66/b15ce62552d84bbfcec9a4873ab79d993a1dd4edb922cbfccae192bd5b5f/jaraco.classes-3.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/88/2e/947cfe02def9371c07cd5bf5b6b61c829e9aecb9904db02a66cfafbc1eec/starlette-1.10.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/94/fa/f59427460a6a6b73a20862b1afc58622f288fbb64fbf66c9a30b5da69f2e/iscc_lib-0.7.0-cp310-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a8/d1/b4d178512460c2a4a3134119ae799e119aafac32660f20f9809f9d17acb8/omero_py-5.23.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ab/2e/bdaf2039f1bac918d013f560f3dc3ac59974912178b24c8bf94d059fba2e/pixi_kernel-0.6.7-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/af/ea/207d850cda176ff24c5f0dc6f3eef41a1f9cdb7a264bd3192ac3b58507a9/loro-1.17.1-cp311-cp311-win_amd64.whl
@@ -2587,6 +2591,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/4b/27/20770bd6bf8fbe1e16f848ba21da9df061f38d2e6483952c29d2bb5d1d8b/narwhals-2.17.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/57/4d/a7545bf6c62b0dbe5795f22ea9e88cc070fdced5c34663ebc5bed2f610c0/returns-0.26.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/61/30/5c6995c9a05c8dda4665c27fec412ad3d363d9d8fbce3f3044f77a34754e/iscc_lib-0.7.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/63/1d/600b0dd24aa61f03d35293a2e9a4695add1e94c03d8701436fb52d5daf4f/linkml_runtime-1.11.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6b/96/5c095b940de3aa6b43a71ec76275ac3537b21bd45c7499b5a17a429110fa/msgspec-0.20.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/6b/e7/237155ae19a9023de7e30ec64e5d99a9431a567407ac21170a046d22a5a3/cryptography-46.0.5-cp311-abi3-manylinux_2_28_x86_64.whl
@@ -3097,6 +3102,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b5/11/87d6d29fb5d237229d67973a6c9e06e048f01cf4994dee194ab0ea841814/tomlkit-0.14.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b9/fa/123043af240e49752f1c4bd24da5053b6bd00cad78c2be53c0d1e8b975bc/backports.tarfile-1.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/d7/f6/4dfa6a706222470ca070765fa00bbe921bbad05386f9c5120ba105dfdad1/iscc_lib-0.7.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/dc/1e/fb11174c9eaebcec27d36e9e994b90ffa168bc3226925900b9dbbf16c9da/pytest-logging-2015.11.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/e1/67/921ec3024056483db83953ae8e48079ad62b92db7880013ca77632921dd0/readme_renderer-44.0-py3-none-any.whl
@@ -3631,6 +3637,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b5/11/87d6d29fb5d237229d67973a6c9e06e048f01cf4994dee194ab0ea841814/tomlkit-0.14.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b9/fa/123043af240e49752f1c4bd24da5053b6bd00cad78c2be53c0d1e8b975bc/backports.tarfile-1.2.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/d7/f6/4dfa6a706222470ca070765fa00bbe921bbad05386f9c5120ba105dfdad1/iscc_lib-0.7.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/dc/1e/fb11174c9eaebcec27d36e9e994b90ffa168bc3226925900b9dbbf16c9da/pytest-logging-2015.11.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/e1/67/921ec3024056483db83953ae8e48079ad62b92db7880013ca77632921dd0/readme_renderer-44.0-py3-none-any.whl
@@ -4139,6 +4146,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/89/b2/2b2153173f2819e3d7d1949918612981bc6bd895b75ffa392d63d115f327/prefixmaps-0.2.6-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/8b/ac/991733a89b74f62d05d3ad6da773e2d36e26a3a71b6ee6b9ef82b450b486/pystow-0.8.21-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/8d/48/aa685dbf1024c7bd82bede569e3a85f82c32fd3d79ba5fea578f0159571a/jaraco_context-6.1.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/94/fa/f59427460a6a6b73a20862b1afc58622f288fbb64fbf66c9a30b5da69f2e/iscc_lib-0.7.0-cp310-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a4/8e/469e5a4a2f5855992e425f3cb33804cc07bf18d48f2db061aec61ce50270/more_itertools-10.8.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a8/d1/b4d178512460c2a4a3134119ae799e119aafac32660f20f9809f9d17acb8/omero_py-5.23.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ab/2e/bdaf2039f1bac918d013f560f3dc3ac59974912178b24c8bf94d059fba2e/pixi_kernel-0.6.7-py3-none-any.whl
@@ -42030,7 +42038,8 @@ packages:
   - mkdocstrings-python>=1.18 ; extra == 'docs'
   - griffe-pydantic>=1.1.7 ; extra == 'docs'
   - ome-zarr>=0.16 ; extra == 'zarr'
-  - omero-annotate-ai[notebooks,microsam,zarr] ; extra == 'all'
+  - iscc-lib>=0.7,<0.8 ; extra == 'provenance'
+  - omero-annotate-ai[notebooks,microsam,zarr,provenance] ; extra == 'all'
   requires_python: '>=3.11'
 - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
   name: bia-mifa-models
@@ -42405,6 +42414,11 @@ packages:
   version: 11.2.1
   sha256: 35a7377edd1dd6608dcb2cdf534ded55ea32d49448875ad042cd3f879fb1ded0
   requires_python: '>=3.11'
+- pypi: https://files.pythonhosted.org/packages/61/30/5c6995c9a05c8dda4665c27fec412ad3d363d9d8fbce3f3044f77a34754e/iscc_lib-0.7.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+  name: iscc-lib
+  version: 0.7.0
+  sha256: 337b436751644c73b1af28a526ade57bd2a7842947a67c4e9fe29c32226163d0
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/63/1d/600b0dd24aa61f03d35293a2e9a4695add1e94c03d8701436fb52d5daf4f/linkml_runtime-1.11.1-py3-none-any.whl
   name: linkml-runtime
   version: 1.11.1
@@ -42676,6 +42690,11 @@ packages:
   - pytest-mypy>=1.0.1 ; extra == 'type'
   - mypy<1.19 ; platform_python_implementation == 'PyPy' and extra == 'type'
   requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/94/fa/f59427460a6a6b73a20862b1afc58622f288fbb64fbf66c9a30b5da69f2e/iscc_lib-0.7.0-cp310-abi3-win_amd64.whl
+  name: iscc-lib
+  version: 0.7.0
+  sha256: a4f1892a1a0be65a8819dc9063a97dc08651163f982df70999cac83d1948abd7
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/9d/22/45c17acb1a85360b10afb95f66777f76bc2634993c66db8b7833832bd343/msgspec-0.22.0-cp311-cp311-macosx_10_9_x86_64.whl
   name: msgspec
   version: 0.22.0
@@ -42820,6 +42839,11 @@ packages:
   name: websockets
   version: '16.0'
   sha256: 08d7af67b64d29823fed316505a89b86705f2b7981c07848fb5e3ea3020c1abe
+  requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/d7/f6/4dfa6a706222470ca070765fa00bbe921bbad05386f9c5120ba105dfdad1/iscc_lib-0.7.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
+  name: iscc-lib
+  version: 0.7.0
+  sha256: 9e0d8fa7f0def17b9da0340040b94ff3dcc4dd3b582cfee7e9331eca840d66b4
   requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/da/46/7d84138a60a8bd796825b2d38ebe92d0d16501ca57d501b7c5d677401bbc/tomlkit-0.15.2-py3-none-any.whl
   name: tomlkit

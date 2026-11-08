@@ -60,8 +60,9 @@ from .planning import (
     units_for_image,
 )
 from .processing.image_functions import generate_patch_coordinates
+from .provenance import image_code
 from .reconcile import reconcile
-from .rows import Category, Row, rows_from_frame, rows_to_frame
+from .rows import Category, Row, keep_local_codes, rows_from_frame, rows_to_frame
 from .session import AnnotationSession, commit_unit
 from .sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
 from .sources.uri import omero_uri, parse_omero_uri
@@ -467,6 +468,7 @@ class TrainingSet:
         pixels = self._load_image_data(image_obj, meta)
         self._save_inputs(image_obj, meta, annotation.annotation_id, pixels)
         annotation.input_digest = pixel_digest(pixels)
+        annotation.input_iscc = image_code(pixels)
         return BatchItem(
             annotation_id=annotation.annotation_id,
             pixels=pixels,
@@ -967,6 +969,7 @@ class TrainingSet:
                 continue
             newer = (theirs.label_id or 0) > (row.label_id or 0)  # OMERO IDs only grow
             if theirs.processed and (not row.processed or newer):
+                keep_local_codes(theirs, row)
                 self.rows[position] = theirs
             else:
                 row.claimed_by, row.claimed_at = theirs.claimed_by, theirs.claimed_at

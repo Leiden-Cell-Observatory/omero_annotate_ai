@@ -20,6 +20,7 @@ from ..bundle import file_digest
 from ..core.annotation_config import NormalizationConfig
 from ..errors import IntegrityError
 from ..omero._untyped import ezomero
+from ..provenance import describe_change
 from ..rows import rows_from_frame
 from ..utils.logging import create_training_logger
 from .normalization import NormalizationRecorder, write_native_sidecar
@@ -636,7 +637,13 @@ def _records_from_table(
             continue
         recorded = str(row.get("mask_digest") or "")
         if recorded and recorded != "nan" and file_digest(label_path) != recorded:
-            changed.append(annotation_id)
+            iscc = str(row.get("mask_iscc") or "")
+            change = describe_change(
+                iscc if iscc != "nan" else None,
+                np.asarray(imread(label_path)),
+                mask=True,
+            )
+            changed.append(f"{annotation_id} ({change})" if change else annotation_id)
 
         category = str(row["category"])
 

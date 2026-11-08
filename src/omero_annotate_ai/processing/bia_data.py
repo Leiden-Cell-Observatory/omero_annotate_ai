@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from tifffile import imwrite
+from tifffile import imread, imwrite
 
 from ..bundle import file_digest
 from ..errors import IntegrityError
 from ..omero._untyped import ezomero
+from ..provenance import describe_change
 from ..rows import Row, rows_from_frame
 
 __all__ = ["prepare_bia_data_from_table"]
@@ -285,7 +286,14 @@ def prepare_bia_data_from_table(
                 if _download_mask(conn, annotation.label_id, mask_file, tmp_dir):
                     recorded = annotation.mask_digest
                     if recorded and file_digest(mask_file) != recorded:
-                        changed.append(annotation_id)
+                        change = describe_change(
+                            annotation.mask_iscc,
+                            np.asarray(imread(mask_file)),
+                            mask=True,
+                        )
+                        changed.append(
+                            f"{annotation_id} ({change})" if change else annotation_id
+                        )
                     n_masks += 1
                     exported.append(annotation)
             except Exception as exc:  # noqa: BLE001 - best effort per record

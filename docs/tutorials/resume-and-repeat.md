@@ -92,6 +92,15 @@ matches (for example a mask edited after upload), and
 `prepare_training_data_from_table` stops with an `IntegrityError` if a label file on
 OMERO changed after it was annotated. Nothing is overwritten silently.
 
+With the `provenance` extra (`pip install "omero-annotate-ai[provenance]"`, included in
+the pixi environments) every unit also records an ISCC Image-Code (ISO 24138) of image
+and mask: `input_iscc` and `mask_iscc`. The warnings then say how much a file changed,
+for example *a near-duplicate: ISCC differs in 3 of 64 bits* for a touched-up mask or
+*different content* for a replaced one. Codes ignore contrast and the numbering of
+objects. Tables made by 0.5.0 have no ISCC columns; they keep working, and the codes
+stay in the local `tracking_table.csv`. The BioImage Archive export lists the digest
+and code of every file (`pixel_sha256`, `iscc`), so anyone can check a download.
+
 If a mask in your folder and its upload on OMERO differ, the unit is marked
 `needs review` and left out of new sessions. Decide which one is right:
 

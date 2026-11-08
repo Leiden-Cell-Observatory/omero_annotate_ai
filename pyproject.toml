@@ -69,8 +69,11 @@ docs = [
     "griffe-pydantic>=1.1.7",
 ]
 zarr = ["ome-zarr>=0.16"]
+# ISCC Image-Codes (ISO 24138) next to the SHA-256 digests: how much an image or
+# mask changed, not only whether it did. Imported lazily by provenance.py.
+provenance = ["iscc-lib>=0.7,<0.8"]
 all = [
-    "omero-annotate-ai[notebooks,microsam,zarr]",
+    "omero-annotate-ai[notebooks,microsam,zarr,provenance]",
 ]
 
 [project.urls]
@@ -129,6 +132,7 @@ strict = [
     "src/omero_annotate_ai/session.py",
     "src/omero_annotate_ai/reconcile.py",
     "src/omero_annotate_ai/claims.py",
+    "src/omero_annotate_ai/provenance.py",
 ]
 
 [tool.pytest.ini_options]

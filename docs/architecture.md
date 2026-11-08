@@ -41,6 +41,7 @@ flowchart LR
 | `core/mifa_export.py`, `processing/bia_data.py` | MIFA metadata and BioImage Archive bundles from a config plus rows. |
 | `widgets/` | ipywidgets front-ends: OMERO connection (keychain, history), the workflow widget (New / Open training set, annotate or review, progress from events, session notes) and table selection for exports. |
 | `bundle.py` | Where a training set's files live: one folder per set under the home folder (`$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`), atomic writes, a fresh scratch folder per batch, `annotation_output/` for accepted masks only, masks matched to units by exact file name, and pixel digests. |
+| `provenance.py` | Optional ISCC Image-Codes (`provenance` extra, `iscc-lib`) of each unit's image and mask, stored next to the pixel digests; repair and export messages use them to say whether a changed file is a near-duplicate or different content. Without the extra nothing is computed. |
 | `errors.py` | The package's exceptions; all derive from `OmeroAnnotateAIError`. |
 
 **Rules of thumb**

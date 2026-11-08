@@ -56,6 +56,7 @@ from .events import (
     UnitConflict,
     UploadFailed,
 )
+from .provenance import file_code
 
 if TYPE_CHECKING:
     from .rows import Row
@@ -173,6 +174,7 @@ def commit_unit(
     if Path(mask_source).resolve() != target.resolve():
         shutil.move(mask_source, target)  # a rename when both are in the bundle
     annotation.mask_digest = file_digest(target)
+    annotation.mask_iscc = file_code(target, mask=True)
     annotation.session = session
     annotation.error = None
     annotation.claimed_by = annotation.claimed_at = ""  # the table write releases it
@@ -201,6 +203,7 @@ def review_unit(
     old = (("FileAnnotation", annotation.label_id), ("Roi", annotation.roi_id))
     before = annotation.model_copy()
     annotation.mask_digest = digest
+    annotation.mask_iscc = file_code(target, mask=True)
     annotation.session = session
     annotation.error = None
     annotation.claimed_by = annotation.claimed_at = ""
@@ -237,7 +240,7 @@ def review_unit(
         target.replace(keep)
         if previous.exists():
             previous.replace(target)
-        for name in ("label_id", "roi_id", "mask_digest", "session"):
+        for name in ("label_id", "roi_id", "mask_digest", "mask_iscc", "session"):
             setattr(annotation, name, getattr(before, name))
         annotation.error = f"{type(error).__name__}: {error}"
         training_set.save_local_table()

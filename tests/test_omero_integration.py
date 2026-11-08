@@ -269,6 +269,37 @@ class TestTrackingTableOnOmero:
         assert list(df["session"]) == [-1, 1, -1, -1]
         assert list(df["image_id"])[-1] == extra
 
+    def test_a_table_without_the_iscc_columns_keeps_working(
+        self, omero_conn, omero_seed
+    ):
+        # Tables made by 0.5.0 have no ISCC columns: writes follow the table's own
+        # columns, reads leave the codes empty.
+        from omero_annotate_ai.omero import tracking_table
+        from omero_annotate_ai.omero.omero_functions import (
+            delete_training_set,
+            read_table_rows,
+            write_rows_to_table,
+        )
+        from omero_annotate_ai.rows import rows_to_frame
+
+        rows = _training_set_rows(omero_seed.image_ids[:2], ["training", "validation"])
+        frame = rows_to_frame(rows).drop(columns=["input_iscc", "mask_iscc"])
+        table_id = tracking_table.create_table(
+            omero_conn, frame, "oai_table_0_5_0", "dataset", [omero_seed.dataset_id]
+        )
+        try:
+            rows[0].mark_processed()
+            rows[0].mask_iscc = "ISCC:EEA6IF2FC2OREY73"
+            assert write_rows_to_table(omero_conn, table_id, rows) == {
+                "updated": 2,
+                "added": 0,
+            }
+            loaded = read_table_rows(omero_conn, table_id)
+            assert loaded[0].processed and loaded[0].mask_iscc is None
+        finally:
+            with patch("builtins.print"):
+                delete_training_set(omero_conn, table_id, dry_run=False)
+
     def test_over_long_string_is_refused_with_a_clear_error(
         self, omero_conn, training_set
     ):
