@@ -1,5 +1,6 @@
 """Tests for the ImageSource seam (omero_annotate_ai.sources)."""
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import numpy as np
@@ -323,3 +324,27 @@ class TestZarrRemote:
         image = source.get_image(ref.uri)
         patch = source.read_plane(image, t=0, c=2, z=0, region=(0, 0, 64, 64))
         assert patch.shape == (64, 64) and patch.dtype == np.uint16
+
+    def test_idr_example_plans_a_local_set(self, tmp_path):
+        """The IDR tutorial's MitoCheck plate: discovery, random frames, a local set."""
+        pytest.importorskip("ome_zarr")
+        requests = pytest.importorskip("requests")
+        from omero_annotate_ai import TrainingSet, load_config_from_yaml
+
+        root = Path(__file__).resolve().parents[1]
+        config = load_config_from_yaml(
+            str(root / "notebooks/marimo/configs/idr0013-mitocheck-zarr.yaml")
+        )
+        try:
+            requests.head(
+                config.zarr.uris[0] + "/.zattrs", timeout=10
+            ).raise_for_status()
+        except Exception as exc:
+            pytest.skip(f"IDR OME-Zarr not reachable: {exc}")
+
+        ts = TrainingSet.create(config, home=tmp_path)
+        units = ts.units()
+        assert [u.category for u in units].count("training") == 2
+        assert [u.category for u in units].count("validation") == 1
+        assert {u.well for u in units} <= {"A1", "B2", "C3", "D4"}
+        assert all(0 <= u.timepoint < 93 for u in units)  # one random frame each

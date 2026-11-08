@@ -13,6 +13,11 @@ Newest first. The full list of pull requests per version is on
 - **RO-Crate**: `ts.write_ro_crate()` describes a training set's folder as an RO-Crate
   1.1 (`ro-crate-metadata.json`): files with digests and codes, source images, and the
   sessions with their notes.
+- **Public IDR data via OME-Zarr.** The IDR's OMERO API is no longer open for
+  logins, so the [public-data tutorial](tutorials/public-data-idr.md) and the new
+  `idr-zarr-demo.py` notebook (replacing `omero-idr-demo.py`) read IDR studies as
+  OME-Zarr from its public S3 storage, with an example config
+  (`notebooks/marimo/configs/idr0013-mitocheck-zarr.yaml`).
 
 ## 0.5.0
 
