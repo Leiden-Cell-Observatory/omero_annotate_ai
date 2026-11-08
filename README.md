@@ -77,9 +77,9 @@ See the [installation guide](https://leiden-cell-observatory.github.io/omero_ann
 
 ```python
 from omero_annotate_ai import (
+    TrainingSet,
     create_omero_connection_widget,
     create_workflow_widget,
-    create_pipeline,
 )
 
 conn_widget = create_omero_connection_widget()
@@ -90,24 +90,35 @@ workflow_widget = create_workflow_widget(connection=conn)
 workflow_widget.display()
 
 config = workflow_widget.get_config()
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+ts = TrainingSet.create(config, conn)  # or TrainingSet.open(table_id, conn)
+ts.annotate(note="nuclei only, small debris skipped")
 ```
 
 **From a YAML config** (scripts, batch runs, or repeating a run):
 
 ```python
-from omero_annotate_ai import load_config, create_pipeline
+from omero_annotate_ai import TrainingSet, load_config
 
 config = load_config("annotation_config.yaml")
-pipeline = create_pipeline(config, conn)
-table_id, config = pipeline.run_full_micro_sam_workflow()
+ts = TrainingSet.create(config, conn)
+ts.annotate()
 ```
 
-Each training set keeps its files in one folder: images, masks, the config and a
-local copy of the tracking table. By default that is
+**Continue later** (after closing napari, or a crash): open the set by its table ID and
+annotate what is left; anything a crash left half-done is repaired first.
+
+```python
+ts = TrainingSet.open(12345, conn)
+ts.extend(train_n=10)  # optional: add images to the same table
+ts.annotate(note="second round")
+```
+
+Each training set keeps its files in one folder: images, masks, `config.yaml` (with the
+sessions and their notes) and a local copy of the tracking table. By default that is
 `~/omero_annotate_ai/<server>/<table id>_<name>/`; set `OMERO_ANNOTATE_AI_HOME` (or pass
-`home=` to `create_pipeline`) to keep the sets elsewhere.
+`home=` to `TrainingSet.create` / `open`) to keep the sets elsewhere.
+`create_pipeline(config, conn).run_full_micro_sam_workflow()` from 0.4 still works but
+is deprecated.
 
 The [configuration guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/configuration/) lists every option.
 

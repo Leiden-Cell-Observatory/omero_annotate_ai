@@ -107,8 +107,6 @@ max-line-length = 100
 "src/omero_annotate_ai/widgets/**" = ["T201"]
 ".github/scripts/**" = ["T201"]
 # legacy, rewritten in 0.5.0 core PRs
-"src/omero_annotate_ai/core/annotation_pipeline.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
-"src/omero_annotate_ai/core/annotation_config.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 "src/omero_annotate_ai/widgets/workflow_widget.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 "src/omero_annotate_ai/omero/omero_functions.py" = ["T20", "BLE", "PTH", "E501", "SIM", "RET", "B"]
 
@@ -120,8 +118,6 @@ reportMissingImports = "warning"
 reportMissingModuleSource = "none"
 # legacy, rewritten in 0.5.0 core PRs: analysed for imports, diagnostics not reported.
 ignore = [
-    "src/omero_annotate_ai/core/annotation_pipeline.py",
-    "src/omero_annotate_ai/core/annotation_config.py",
     "src/omero_annotate_ai/widgets/workflow_widget.py",
     "src/omero_annotate_ai/omero/omero_functions.py",
 ]

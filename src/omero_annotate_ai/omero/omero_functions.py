@@ -1,7 +1,9 @@
 """OMERO integration functions for micro-SAM workflows."""
 
+import logging
 import os
 import tempfile
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,8 +14,9 @@ import omero.model as omero_model
 import pandas as pd
 import tifffile
 
-from ..core.annotation_config import OMERO_ID_UNSET, AnnotationConfig
+from ..core.annotation_config import AnnotationConfig
 from ..processing.image_functions import label_to_rois
+from ..rows import Row, rows_from_frame, rows_to_frame
 from . import tracking_table
 from .omero_utils import (
     list_annotations_by_namespace,
@@ -29,73 +32,7 @@ LABELS_NS = "openmicroscopy.org/omero/annotate/labels"
 # Helper Functions
 # =============================================================================
 
-
-def _prepare_dataframe_for_omero(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare DataFrame with proper types for OMERO table storage.
-
-    Args:
-        df: DataFrame to prepare
-
-    Returns:
-        DataFrame with properly typed columns for OMERO
-    """
-    df = df.copy()
-
-    numeric_columns = [
-        "image_id",
-        "patch_x",
-        "patch_y",
-        "patch_width",
-        "patch_height",
-        "z_slice",
-        "timepoint",
-        "z_start",
-        "z_end",
-        "z_length",
-        "channel",
-        "level",
-        "session",
-    ]
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(-1).astype(int)
-
-    boolean_columns = ["train", "validate", "processed", "is_patch", "is_volumetric"]
-    for col in boolean_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna(False).astype(bool)
-
-    # Link ids reach OMERO as typed, non-nullable integer columns (see
-    # _build_omero_columns). 0 means "not set yet"; a legacy "None" string
-    # coerces to it via to_numeric.
-    link_id_columns = ["label_id", "roi_id", "annotation_input_id"]
-    for col in link_id_columns:
-        if col in df.columns:
-            df[col] = (
-                pd.to_numeric(df[col], errors="coerce")
-                .fillna(OMERO_ID_UNSET)
-                .astype(int)
-            )
-
-    id_columns = ["schema_attachment_id"]
-    for col in id_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("None").astype(str)
-
-    string_columns = ["annotation_type"]
-    for col in string_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("segmentation_mask").astype(str)
-
-    if "category" in df.columns:
-        df["category"] = df["category"].fillna("training").astype(str)
-
-    datetime_columns = ["annotation_created_at", "annotation_updated_at"]
-    for col in datetime_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna("None").astype(str)
-
-    return df
+logger = logging.getLogger(__name__)
 
 
 def _normalize_omero_table_df(df: Any) -> Any:
@@ -186,50 +123,47 @@ def _read_any_table(conn, table_id: int) -> Any:
 
 def create_tracking_table(
     conn,
-    config,
+    rows: Sequence[Row],
     table_title: str,
     container_type: str,
     container_ids: list[int],
 ) -> int:
-    """Create the tracking table for a training set from config.annotations.
+    """Create the tracking table for a training set's rows.
 
     The table is linked to every container in ``container_ids`` once, here.
-    From then on it is only updated in place (:func:`write_config_to_table`),
+    From then on it is only updated in place (:func:`write_rows_to_table`),
     so its ID identifies the training set.
 
     Returns:
         The table ID.
     """
-    df = config.to_dataframe()
-    if df.empty:
-        raise ValueError("No annotations in the config; define the schema first")
+    if not rows:
+        raise ValueError("No rows to track; plan the training set first")
     table_id = tracking_table.create_table(
-        conn,
-        _prepare_dataframe_for_omero(df),
-        table_title,
-        container_type,
-        container_ids,
+        conn, rows_to_frame(rows), table_title, container_type, container_ids
     )
-    print(
-        f"Created tracking table '{table_title}' with {len(df)} units (ID: {table_id})"
+    logger.info(
+        "Created tracking table '%s' with %d units (ID: %d)",
+        table_title,
+        len(rows),
+        table_id,
     )
     return table_id
 
 
-def write_config_to_table(conn, table_id: int, config) -> dict[str, int]:
-    """Write config.annotations to an existing tracking table, in place.
+def write_rows_to_table(conn, table_id: int, rows: Sequence[Row]) -> dict[str, int]:
+    """Write rows to an existing tracking table, in place.
 
     Rows are matched on annotation_id: existing rows are updated, new rows
     appended, and the table keeps its ID.
     """
-    df = config.to_dataframe()
-    if df.empty:
+    if not rows:
         return {"updated": 0, "added": 0}
-    return tracking_table.write_rows(conn, table_id, _prepare_dataframe_for_omero(df))
+    return tracking_table.write_rows(conn, table_id, rows_to_frame(rows))
 
 
-def sync_omero_table_to_config(conn, table_id: int, config) -> None:
-    """Load a tracking table's rows into config.annotations.
+def read_table_rows(conn, table_id: int) -> list[Row]:
+    """A tracking table's rows.
 
     Raises instead of returning quietly: a resume that cannot read its table
     must stop, never carry on as if the table were empty.
@@ -237,8 +171,7 @@ def sync_omero_table_to_config(conn, table_id: int, config) -> None:
     df = read_tracking_table(conn, table_id)
     if df is None or df.empty:
         raise ValueError(f"Tracking table {table_id} has no rows")
-    config.from_dataframe(df)
-    print(f"Loaded {len(config.annotations)} annotations from table {table_id}")
+    return rows_from_frame(df)
 
 
 def replace_table_config(

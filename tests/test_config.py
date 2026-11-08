@@ -3,19 +3,23 @@
 import tempfile
 from pathlib import Path
 
-import pandas as pd
 import pytest
 import yaml
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    ImageAnnotation,
     create_default_config,
     get_config_template,
     load_config,
     load_config_from_yaml,
-    validate_annotations_against_config,
 )
+from omero_annotate_ai.core.mifa_export import (
+    save_bia_package,
+    save_mifa,
+    to_mifa,
+    to_mifa_dicts,
+)
+from omero_annotate_ai.rows import Row
 
 
 @pytest.mark.unit
@@ -81,9 +85,7 @@ class TestAnnotationConfig:
         # Note: processing was removed in schema v2.0.0
         expected_prefix_order = [
             "schema_version",
-            "config_file_path",
             "name",
-            "version",
             "authors",
             "created",
             "study",
@@ -94,11 +96,12 @@ class TestAnnotationConfig:
             "normalization",
             "ai_model",
             "workflow",
-            "output",
             "omero",
             "source",
             "zarr",
-            "annotations",
+            "storage",
+            "identity",
+            "sessions",
             "documentation",
             "repository",
             "tags",
@@ -240,34 +243,50 @@ class TestConfigEdgeCases:
         # Clean up
         Path(f.name).unlink()
 
-    def test_path_serialization_in_model_dump(self):
-        """
-        Tests that Path objects are serialized to strings in model_dump.
-        This ensures OutputConfig and AnnotationConfig correctly handle
-        Path to string conversion for JSON/YAML serialization.
-        """
-        from omero_annotate_ai.core.annotation_config import OutputConfig
+    @pytest.mark.parametrize(
+        ("data", "replacement"),
+        [
+            ({"annotations": []}, "TrainingSet.units"),
+            ({"output": {"output_directory": "x"}}, "home"),
+            ({"workflow": {"read_only_mode": True}}, "storage: local"),
+            ({"workflow": {"resume_from_table": True}}, "TrainingSet.open"),
+            ({"omero": {"table_id": 5}}, "identity.table_id"),
+            ({"spatial_coverage": {"percentile_low": 1}}, "normalization"),
+        ],
+    )
+    def test_removed_keys_raise_naming_the_replacement(self, data, replacement):
+        from omero_annotate_ai.errors import RemovedConfigKey
 
-        # Test OutputConfig standalone
-        test_path = Path("/tmp/test_output")
-        output = OutputConfig(output_directory=test_path)
-        output_dict = output.model_dump()
-        assert isinstance(output_dict["output_directory"], str)
-        # Compare as Path objects to handle cross-platform path separators
-        assert Path(output_dict["output_directory"]) == test_path
+        with pytest.raises(RemovedConfigKey, match=replacement):
+            AnnotationConfig.from_dict({"name": "x", **data})
 
-        # Test AnnotationConfig with nested OutputConfig
+    def test_other_schema_versions_are_refused(self):
+        from omero_annotate_ai.errors import ConfigError
+
+        with pytest.raises(ConfigError, match="schema_version"):
+            AnnotationConfig.from_dict({"name": "x", "schema_version": "2.0.0"})
+
+    def test_unknown_keys_and_assignments_are_rejected(self):
+        with pytest.raises(ValueError):
+            AnnotationConfig.from_dict({"name": "x", "colour": "red"})
         config = create_default_config()
-        config_path = Path("/tmp/test_config_output")
-        config.output.output_directory = config_path
-        config_dict = config.model_dump()
-        assert isinstance(config_dict["output"]["output_directory"], str)
-        # Compare as Path objects to handle cross-platform path separators
-        assert Path(config_dict["output"]["output_directory"]) == config_path
+        with pytest.raises(ValueError):
+            config.storage = "cloud"
 
-        # Test to_dict (which uses model_dump)
-        config_dict = config.to_dict()
-        assert isinstance(config_dict["output"]["output_directory"], str)
+    def test_sessions_and_identity_round_trip(self):
+        from datetime import datetime
+
+        from omero_annotate_ai.core.annotation_config import SessionRecord
+
+        config = create_default_config()
+        config.identity.table_id = 12
+        config.sessions.append(
+            SessionRecord(id=1, started=datetime(2026, 1, 1), note="nuclei only")
+        )
+        again = AnnotationConfig.from_yaml(config.to_yaml())
+        assert again.identity.table_id == 12
+        assert again.sessions[0].note == "nuclei only"
+        assert again.sessions[0].status == "open"
 
 
 @pytest.mark.unit
@@ -686,253 +705,6 @@ class TestOMEROConfigMultiContainer:
 
 
 @pytest.mark.unit
-class TestAnnotationValidation:
-    """Tests for validate_annotations_against_config()."""
-
-    def _make_config(self, **spatial_kwargs):
-        """Helper: default config with customisable spatial coverage fields."""
-        config = create_default_config()
-        for k, v in spatial_kwargs.items():
-            setattr(config.spatial_coverage, k, v)
-        return config
-
-    def _make_ann(self, **kwargs):
-        """Helper: ImageAnnotation with sensible defaults."""
-        defaults = dict(
-            image_id=1,
-            image_name="test.tif",
-            channel=0,
-            timepoint=0,
-            z_slice=0,
-            is_volumetric=False,
-            is_patch=False,
-            category="training",
-        )
-        defaults.update(kwargs)
-        return ImageAnnotation(**defaults)
-
-    # ---- Valid cases ----
-
-    def test_valid_2d_annotations_pass(self):
-        """Consistent 2D annotations produce no errors and no warnings."""
-        config = self._make_config(
-            channels=[0], label_channel=0, three_d=False, use_patches=False
-        )
-        config.training.segment_all = True
-        config.training.train_fraction = 0.7
-        config.training.validation_fraction = 0.3
-        config.annotations = [
-            self._make_ann(
-                image_id=i,
-                channel=0,
-                is_volumetric=False,
-                is_patch=False,
-                category="training" if i < 7 else "validation",
-            )
-            for i in range(10)
-        ]
-        result = validate_annotations_against_config(config)
-        assert result.is_valid
-        assert result.errors == []
-        assert result.warnings == []
-
-    def test_valid_3d_annotations_pass(self):
-        """Consistent 3D annotations produce no errors."""
-        config = self._make_config(
-            channels=[0], label_channel=0, three_d=True, use_patches=False
-        )
-        config.annotations = [
-            self._make_ann(channel=0, is_volumetric=True, is_patch=False)
-        ]
-        result = validate_annotations_against_config(config)
-        assert result.is_valid
-        assert result.errors == []
-
-    def test_valid_patch_annotations_pass(self):
-        """Consistent patch annotations produce no errors."""
-        config = self._make_config(
-            channels=[0],
-            label_channel=0,
-            three_d=False,
-            use_patches=True,
-            patch_size=[512, 512],
-        )
-        config.annotations = [
-            self._make_ann(channel=0, is_patch=True, patch_width=512, patch_height=512)
-        ]
-        result = validate_annotations_against_config(config)
-        assert result.is_valid
-        assert result.errors == []
-
-    # ---- Error cases ----
-
-    def test_channel_mismatch_is_error(self):
-        """Annotations with wrong channel produce an error."""
-        config = self._make_config(channels=[0, 1], label_channel=1)
-        config.annotations = [self._make_ann(channel=0)]  # should be 1
-        result = validate_annotations_against_config(config)
-        assert not result.is_valid
-        assert any(e.field == "channel" for e in result.errors)
-
-    def test_volumetric_flag_mismatch_is_error(self):
-        """Annotations with wrong is_volumetric produce an error."""
-        config = self._make_config(channels=[0], three_d=True)
-        config.annotations = [self._make_ann(is_volumetric=False)]  # should be True
-        result = validate_annotations_against_config(config)
-        assert not result.is_valid
-        assert any(e.field == "is_volumetric" for e in result.errors)
-
-    def test_patch_flag_mismatch_is_error(self):
-        """Annotations with wrong is_patch produce an error."""
-        config = self._make_config(
-            channels=[0], use_patches=True, patch_size=[512, 512]
-        )
-        config.annotations = [self._make_ann(is_patch=False)]  # should be True
-        result = validate_annotations_against_config(config)
-        assert not result.is_valid
-        assert any(e.field == "is_patch" for e in result.errors)
-
-    # ---- Warning cases ----
-
-    def test_patch_size_mismatch_is_warning(self):
-        """Patch dimension differences produce a warning, not an error."""
-        config = self._make_config(
-            channels=[0], use_patches=True, patch_size=[512, 512]
-        )
-        config.annotations = [
-            self._make_ann(is_patch=True, patch_width=256, patch_height=256)
-        ]
-        result = validate_annotations_against_config(config)
-        assert result.is_valid  # warning only, not an error
-        assert any(w.field == "patch_size" for w in result.warnings)
-
-    def test_category_count_mismatch_is_warning(self):
-        """Wrong annotation counts vs train_n/validate_n produce a warning."""
-        config = create_default_config()
-        config.training.segment_all = False
-        config.training.train_n = 3
-        config.training.validate_n = 2
-        config.spatial_coverage.channels = [0]
-        config.annotations = [
-            self._make_ann(image_id=i, category="training") for i in range(5)
-        ]  # 5 training, 0 validation — doesn't match train_n=3, validate_n=2
-        result = validate_annotations_against_config(config)
-        assert result.is_valid
-        assert any(w.field == "category_counts" for w in result.warnings)
-
-    def test_category_fraction_mismatch_is_warning(self):
-        """A training fraction far from configured train_fraction produces a warning."""
-        config = create_default_config()
-        config.training.segment_all = True
-        config.training.train_fraction = 0.7
-        config.training.validation_fraction = 0.3
-        config.spatial_coverage.channels = [0]
-        # Only 2 training out of 10 → ratio = 0.2, far from 0.7
-        config.annotations = [
-            self._make_ann(image_id=i, category="training") for i in range(2)
-        ] + [self._make_ann(image_id=i + 10, category="validation") for i in range(8)]
-        result = validate_annotations_against_config(config)
-        assert result.is_valid
-        assert any(w.field == "category_fractions" for w in result.warnings)
-
-    # ---- is_valid semantics ----
-
-    def test_is_valid_false_when_errors_present(self):
-        """is_valid is False when the errors list is non-empty."""
-        config = self._make_config(channels=[0, 1], label_channel=1)
-        config.annotations = [self._make_ann(channel=0)]
-        result = validate_annotations_against_config(config)
-        assert not result.is_valid
-        assert len(result.errors) > 0
-
-    def test_is_valid_true_when_only_warnings(self):
-        """is_valid is True even when warnings are present."""
-        config = create_default_config()
-        config.training.segment_all = False
-        config.training.train_n = 3
-        config.training.validate_n = 0
-        config.spatial_coverage.channels = [0]
-        config.annotations = [
-            self._make_ann(image_id=i, category="training") for i in range(5)
-        ]
-        result = validate_annotations_against_config(config)
-        assert result.is_valid
-        assert len(result.warnings) > 0
-
-    def test_summary_valid(self):
-        """summary property returns OK string for a passing result."""
-        config = self._make_config(channels=[0], label_channel=0)
-        config.annotations = [self._make_ann(channel=0)]
-        result = validate_annotations_against_config(config)
-        assert result.summary.startswith("OK:")
-
-    def test_summary_invalid(self):
-        """summary property returns INVALID string when errors exist."""
-        config = self._make_config(channels=[0, 1], label_channel=1)
-        config.annotations = [self._make_ann(channel=0)]
-        result = validate_annotations_against_config(config)
-        assert result.summary.startswith("INVALID:")
-
-    def test_define_annotation_schema_raises_on_validation_error(self):
-        """define_annotation_schema raises ValueError for invalid reused annotations."""
-        from unittest.mock import Mock
-
-        from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-
-        config = self._make_config(channels=[0, 1], label_channel=1)
-        config.name = "test"
-        config.output.output_directory = "/tmp/test_validation"
-        config.annotations = [self._make_ann(channel=0)]  # wrong channel
-
-        mock_conn = Mock()
-        mock_conn.isConnected.return_value = True
-        pipeline = AnnotationPipeline(config, mock_conn)
-
-        with pytest.raises(ValueError, match="inconsistent with current config"):
-            pipeline.define_annotation_schema(images_list=[])
-
-
-@pytest.mark.unit
-class TestChannelPresentation:
-    """Tests for ChannelPresentation model."""
-
-    def test_create_with_required_fields(self):
-        from omero_annotate_ai.core.annotation_config import ChannelPresentation
-
-        cp = ChannelPresentation(
-            channel_index=0, contrast_start=100.0, contrast_end=4500.0
-        )
-        assert cp.channel_index == 0
-        assert cp.visible is True
-        assert cp.contrast_start == 100.0
-        assert cp.contrast_end == 4500.0
-        assert cp.color == "#FFFFFF"
-
-    def test_create_with_all_fields(self):
-        from omero_annotate_ai.core.annotation_config import ChannelPresentation
-
-        cp = ChannelPresentation(
-            channel_index=1,
-            visible=False,
-            contrast_start=0.0,
-            contrast_end=255.0,
-            color="#00FF00",
-        )
-        assert cp.visible is False
-        assert cp.color == "#00FF00"
-
-    def test_serialization_round_trip(self):
-        from omero_annotate_ai.core.annotation_config import ChannelPresentation
-
-        cp = ChannelPresentation(
-            channel_index=0, contrast_start=100.0, contrast_end=4500.0, color="#FF0000"
-        )
-        data = cp.model_dump()
-        cp2 = ChannelPresentation(**data)
-        assert cp == cp2
-
-
-@pytest.mark.unit
 class TestFeatureType:
     """Tests for FeatureType model."""
 
@@ -961,19 +733,16 @@ class TestAnnotationConfigJSON:
             AIModelConfig,
             AnnotationConfig,
             AnnotationMethodology,
-            ChannelPresentation,
             DatasetInfo,
             FeatureType,
-            ImageAnnotation,
             OMEROConfig,
-            OutputConfig,
             SpatialCoverage,
             StudyContext,
             TrainingConfig,
             WorkflowConfig,
         )
 
-        config = AnnotationConfig(
+        return AnnotationConfig(
             name="test_workflow",
             study=StudyContext(title="Test", description="Test study"),
             dataset=DatasetInfo(source_description="test"),
@@ -984,18 +753,9 @@ class TestAnnotationConfigJSON:
             training=TrainingConfig(),
             ai_model=AIModelConfig(),
             workflow=WorkflowConfig(),
-            output=OutputConfig(),
             omero=OMEROConfig(container_type="dataset", container_id=1),
             feature_types=[FeatureType(name="cell", color="#FF0000")],
         )
-        ann = ImageAnnotation(image_id=1, image_name="img1")
-        ann.channel_presentation = [
-            ChannelPresentation(
-                channel_index=0, contrast_start=100, contrast_end=4500, color="#00FF00"
-            )
-        ]
-        config.annotations.append(ann)
-        return config
 
     def test_to_json_returns_valid_json(self):
         import json
@@ -1014,8 +774,6 @@ class TestAnnotationConfigJSON:
         assert loaded.name == config.name
         assert len(loaded.feature_types) == 1
         assert loaded.feature_types[0].name == "cell"
-        assert len(loaded.annotations) == 1
-        assert loaded.annotations[0].channel_presentation[0].contrast_start == 100
 
     def test_from_json_dict(self):
         import json
@@ -1218,24 +976,10 @@ class TestMIFAExportHelpers:
         config.normalization.method = "none"
         assert "raw intensities" in compose_method(config)
 
-    @pytest.mark.parametrize(
-        "version,expected",
-        [("1.0.0", 1.0), ("v1.1.0", 1.1), ("2", 2.0), ("3.4.5", 3.4)],
-    )
-    def test_version_to_float(self, version, expected):
-        from omero_annotate_ai.core.mifa_export import version_to_float
-
-        assert version_to_float(version) == expected
-
-    def test_version_to_float_garbage_falls_back_with_warning(self):
-        from omero_annotate_ai.core.mifa_export import version_to_float
-
-        with pytest.warns(UserWarning, match="version"):
-            assert version_to_float("not-a-version") == 1.0
-
 
 @pytest.mark.unit
 class TestMIFAExport:
+    rows: list = []
     """Build MIFA documents from an AnnotationConfig (needs bia-mifa-models)."""
 
     @pytest.fixture(autouse=True)
@@ -1261,8 +1005,8 @@ class TestMIFAExport:
             ),
             AuthorInfo(name="", affiliation="Nowhere"),  # no name -> dropped
         ]
-        config.annotations = [
-            ImageAnnotation(
+        self.rows = [
+            Row(
                 image_id=1,
                 image_name="a.tif",
                 annotation_id="1_0_0",
@@ -1273,7 +1017,7 @@ class TestMIFAExport:
                 annotation_type="segmentation_mask",
                 annotation_created_at="2026-06-22T11:00:00+00:00",
             ),
-            ImageAnnotation(
+            Row(
                 image_id=2,
                 image_name="b.tif",
                 annotation_id="2_0_0",
@@ -1283,7 +1027,7 @@ class TestMIFAExport:
                 channel=0,
                 annotation_type="segmentation_mask",
             ),
-            ImageAnnotation(
+            Row(
                 image_id=3,
                 image_name="c.tif",
                 annotation_id="3_0_0",
@@ -1308,19 +1052,28 @@ class TestMIFAExport:
             Version,
         )
 
-        docs = self._rich_config().to_mifa()
+        docs = to_mifa(
+            self._rich_config(),
+            self.rows,
+        )
         assert isinstance(docs["study"], Study)
         assert isinstance(docs["annotations"], Annotations)
         assert isinstance(docs["version"], Version)
 
     def test_annotations_required_fields_present(self):
-        ann = self._rich_config().to_mifa()["annotations"]
+        ann = to_mifa(
+            self._rich_config(),
+            self.rows,
+        )["annotations"]
         assert ann.annotation_overview.strip()
         assert ann.annotation_method.strip()
 
     def test_study_required_fields_present_from_blank_config(self):
         # default config has blank study fields - fallbacks must satisfy MIFA requireds
-        st = create_default_config().to_mifa()["study"]
+        st = to_mifa(
+            create_default_config(),
+            [],
+        )["study"]
         assert st.title and st.description
         assert st.keywords  # required, non-empty
         assert str(st.license) in ("CC_BY", "CC0")
@@ -1328,44 +1081,57 @@ class TestMIFAExport:
         assert st.link_url  # required by the Links mixin, non-empty
 
     def test_file_metadata_count_matches_annotations(self):
-        ann = self._rich_config().to_mifa()["annotations"]
+        ann = to_mifa(
+            self._rich_config(),
+            self.rows,
+        )["annotations"]
         assert len(ann.file_metadata) == 3
 
     def test_file_metadata_local_ids(self):
-        ann = self._rich_config().to_mifa(file_id_source="local")["annotations"]
+        ann = to_mifa(self._rich_config(), self.rows, file_id_source="local")[
+            "annotations"
+        ]
         flm = ann.file_metadata[0]
         assert flm.annotation_id == "annotations/1_0_0_mask.tif"
         assert flm.source_image_id == "images/1_0_0.tif"
 
     def test_file_metadata_omero_ids(self):
         config = self._rich_config()
-        config.annotations[0].label_id = 555
-        ann = config.to_mifa(file_id_source="omero")["annotations"]
+        self.rows[0].label_id = 555
+        ann = to_mifa(config, self.rows, file_id_source="omero")["annotations"]
         flm = ann.file_metadata[0]
         assert flm.annotation_id == "555"
         assert flm.source_image_id == "1"
 
     def test_file_id_source_auto_is_per_record(self):
         config = self._rich_config()
-        config.annotations[0].label_id = 777  # uploaded -> omero ids
-        ann = config.to_mifa(file_id_source="auto")["annotations"]
+        self.rows[0].label_id = 777  # uploaded -> omero ids
+        ann = to_mifa(config, self.rows, file_id_source="auto")["annotations"]
         assert ann.file_metadata[0].annotation_id == "777"
         # second record never uploaded -> local path
         assert ann.file_metadata[1].annotation_id == "annotations/2_0_0_mask.tif"
 
     def test_spatial_information_encodes_plane_and_patch(self):
-        ann = self._rich_config().to_mifa(file_id_source="local")["annotations"]
+        ann = to_mifa(self._rich_config(), self.rows, file_id_source="local")[
+            "annotations"
+        ]
         si0 = ann.file_metadata[0].spatial_information
         assert "t=0" in si0 and "z=0" in si0 and "c=0" in si0
         assert "patch" in ann.file_metadata[2].spatial_information.lower()
 
     def test_annotation_creation_time_propagates(self):
-        ann = self._rich_config().to_mifa()["annotations"]
+        ann = to_mifa(
+            self._rich_config(),
+            self.rows,
+        )["annotations"]
         assert ann.file_metadata[0].annotation_creation_time is not None
         assert ann.file_metadata[1].annotation_creation_time is None
 
     def test_authors_mapped_and_blank_dropped(self):
-        ann = self._rich_config().to_mifa()["annotations"]
+        ann = to_mifa(
+            self._rich_config(),
+            self.rows,
+        )["annotations"]
         assert len(ann.authors) == 1
         author = ann.authors[0]
         assert author.author_first_name == "Jane"
@@ -1376,26 +1142,38 @@ class TestMIFAExport:
     def test_license_maps_to_mifa_code(self):
         config = self._rich_config()
         config.dataset.license = "CC0"
-        assert str(config.to_mifa()["study"].license) == "CC0"
-
-    def test_version_doc_uses_float_safe_version(self):
-        config = self._rich_config()
-        config.version = "2.3.1"
-        v = config.to_mifa()["version"]
-        assert v.version == 2.3
-        assert v.timestamp is not None
+        assert (
+            str(
+                to_mifa(
+                    config,
+                    self.rows,
+                )["study"].license
+            )
+            == "CC0"
+        )
 
     def test_funding_statement_field_and_kwarg_override(self):
         config = self._rich_config()
         config.study.funding_statement = "Funded by EMBO."
-        assert config.to_mifa()["study"].funding_statement == "Funded by EMBO."
         assert (
-            config.to_mifa(funding_statement="Override")["study"].funding_statement
+            to_mifa(
+                config,
+                self.rows,
+            )["study"].funding_statement
+            == "Funded by EMBO."
+        )
+        assert (
+            to_mifa(config, self.rows, funding_statement="Override")[
+                "study"
+            ].funding_statement
             == "Override"
         )
 
     def test_no_annotations_still_builds_valid_annotations_doc(self):
-        ann = create_default_config().to_mifa()["annotations"]
+        ann = to_mifa(
+            create_default_config(),
+            [],
+        )["annotations"]
         assert len(ann.file_metadata or []) == 0
         assert ann.annotation_overview.strip()
         assert ann.annotation_method.strip()
@@ -1404,7 +1182,9 @@ class TestMIFAExport:
         from bia_mifa_models.datamodel.bia_mifa_models import Annotations
         from linkml_runtime.loaders import yaml_loader
 
-        paths = self._rich_config().save_mifa(tmp_path, accession="S-BIAD123")
+        paths = save_mifa(
+            self._rich_config(), self.rows, tmp_path, accession="S-BIAD123"
+        )
         assert (tmp_path / "Study_S-BIAD123.yaml").exists()
         assert (tmp_path / "Annotations_S-BIAD123.yaml").exists()
         assert (tmp_path / "Version_S-BIAD123.yaml").exists()
@@ -1416,39 +1196,31 @@ class TestMIFAExport:
 
     def test_save_mifa_accession_fallback_naming(self, tmp_path):
         # no source_dataset_id -> accession falls back to a slug of the name
-        create_default_config().save_mifa(tmp_path)
+        save_mifa(create_default_config(), [], tmp_path)
         assert (tmp_path / "Annotations_default_annotation_workflow.yaml").exists()
 
     def test_to_mifa_metadata_returns_mifa_dicts(self):
-        result = create_default_config().to_mifa_metadata()
+        result = to_mifa_dicts(create_default_config(), [])
         assert set(result) == {"study", "annotations", "version"}
         assert isinstance(result["annotations"], dict)
         assert result["annotations"]["annotation_overview"]
 
 
-def _write_pipeline_layout(config):
-    """Write dummy files for ``config.annotations`` where AnnotationPipeline puts them.
+def _write_pipeline_layout(config, rows, root):
+    """Write dummy files for ``rows`` where a training set's folder keeps them."""
+    from omero_annotate_ai.bundle import input_path, mask_path
 
-    The folders come from the pipeline's own ``_get_input_folders`` and ``mask_path`` so
-    the BIA export is tested against the layout the pipeline actually writes, not a copy
-    of its names.
-    """
-    from omero_annotate_ai.bundle import mask_path
-    from omero_annotate_ai.core.annotation_pipeline import AnnotationPipeline
-
-    pipeline = AnnotationPipeline.__new__(AnnotationPipeline)
-    pipeline.config = config
-    root = pipeline.bundle_dir
-    folders = pipeline._get_input_folders()
-    for folder in [*folders.values(), mask_path(root, "x").parent]:
-        folder.mkdir(parents=True, exist_ok=True)
-    for ann in config.annotations:
-        (folders["annotation_input"] / f"{ann.annotation_id}.tif").write_bytes(b"img")
-        if "model_input" in folders:
-            (folders["model_input"] / f"{ann.annotation_id}.tif").write_bytes(b"model")
-        (root / "annotation_output" / f"{ann.annotation_id}_mask.tif").write_bytes(
-            b"mask"
-        )
+    for ann in rows:
+        image = input_path(root, ann.annotation_id)
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(b"img")
+        if config.spatial_coverage.uses_separate_channels():
+            model = root / "model_input" / f"{ann.annotation_id}.tif"
+            model.parent.mkdir(parents=True, exist_ok=True)
+            model.write_bytes(b"model")
+        mask = mask_path(root, ann.annotation_id)
+        mask.parent.mkdir(parents=True, exist_ok=True)
+        mask.write_bytes(b"mask")
 
 
 @pytest.mark.unit
@@ -1467,9 +1239,9 @@ class TestBIAExport:
         config.study.description = "desc"
         config.study.keywords = ["demo"]
         config.dataset.source_dataset_id = "S-BIAD999"
-        config.output.output_directory = root
-        config.annotations = [
-            ImageAnnotation(
+        self.root = root
+        self.rows = [
+            Row(
                 image_id=i,
                 image_name=f"img{i}.tif",
                 annotation_id=f"{i}_0_0",
@@ -1481,13 +1253,15 @@ class TestBIAExport:
             )
             for i in (1, 2, 3)
         ]
-        _write_pipeline_layout(config)
+        _write_pipeline_layout(config, self.rows, root)
         return config
 
     def test_file_lists_headers_and_counts(self, tmp_path):
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
 
-        images, annotations = build_bia_file_lists(self._config_with_data(tmp_path))
+        images, annotations = build_bia_file_lists(
+            (self._config_with_data(tmp_path), self.rows)[1]
+        )
         assert list(annotations.columns)[0] == "Files"
         assert "source_image" in annotations.columns
         assert len(annotations) == 3
@@ -1499,7 +1273,9 @@ class TestBIAExport:
     def test_file_lists_drop_constant_optional_columns(self, tmp_path):
         from omero_annotate_ai.core.mifa_export import build_bia_file_lists
 
-        _, annotations = build_bia_file_lists(self._config_with_data(tmp_path))
+        _, annotations = build_bia_file_lists(
+            (self._config_with_data(tmp_path), self.rows)[1]
+        )
         # constant optional columns dropped, varying ones kept, required always kept
         assert "Channel" not in annotations.columns
         assert "Timepoint" not in annotations.columns
@@ -1518,12 +1294,12 @@ class TestBIAExport:
         config = self._config_with_data(store)
         config.spatial_coverage.label_channel = 0
         config.spatial_coverage.training_channels = [1]
-        _write_pipeline_layout(config)
+        _write_pipeline_layout(config, self.rows, store)
 
-        _, annotations = build_bia_file_lists(config)
+        _, annotations = build_bia_file_lists(self.rows)
         assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
 
-        result = config.save_bia_package(tmp_path / "bundle")
+        result = save_bia_package(config, self.rows, self.root, tmp_path / "bundle")
         assert (tmp_path / "bundle" / "images" / "1_0_0.tif").read_bytes() == b"img"
         assert result["missing"] == 0
 
@@ -1531,7 +1307,9 @@ class TestBIAExport:
         store = tmp_path / "store"
         config = self._config_with_data(store)
         dest = tmp_path / "bundle"
-        result = config.save_bia_package(dest, accession="S-BIAD999")
+        result = save_bia_package(
+            config, self.rows, self.root, dest, accession="S-BIAD999"
+        )
         assert (dest / "file_list_images.tsv").exists()
         assert (dest / "file_list_annotations.tsv").exists()
         assert (dest / "metadata" / "Annotations_S-BIAD999.yaml").exists()
@@ -1552,7 +1330,9 @@ class TestBIAExport:
         config = self._config_with_data(store)
         dest = tmp_path / "bundle"
 
-        result = config.save_bia_package(dest, accession="S-BIAD999", move_data=True)
+        result = save_bia_package(
+            config, self.rows, self.root, dest, accession="S-BIAD999", move_data=True
+        )
 
         assert result["missing"] == 0
         assert (dest / "images" / "1_0_0.tif").exists()
@@ -1564,549 +1344,8 @@ class TestBIAExport:
     def test_save_bia_package_accession_fallback(self, tmp_path):
         config = self._config_with_data(tmp_path / "store")
         config.dataset.source_dataset_id = None
-        config.save_bia_package(tmp_path / "bundle")
+        save_bia_package(config, self.rows, self.root, tmp_path / "bundle")
         assert (tmp_path / "bundle" / "metadata" / "Annotations_bia_demo.yaml").exists()
-
-
-@pytest.mark.unit
-class TestAnnotationIdPersistence:
-    """annotation_id survives the OMERO table round-trip and is regenerated for legacy tables."""
-
-    def _config_with(self, annotations):
-        config = create_default_config()
-        config.annotations = list(annotations)
-        return config
-
-    def _legacy_df(self, config) -> pd.DataFrame:
-        """OMERO table as written before annotation_id was persisted."""
-        return config.to_dataframe().drop(columns=["annotation_id"])
-
-    def _reload(self, df) -> list:
-        """Round-trip a DataFrame through from_dataframe, returning the ids."""
-        config = create_default_config()
-        config.from_dataframe(df)
-        return [a.annotation_id for a in config.annotations]
-
-    # --- to_dataframe -------------------------------------------------------
-
-    def test_to_dataframe_has_annotation_id_column(self):
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="img.tif",
-                    annotation_id="101_0_0",
-                    timepoint=0,
-                    z_slice=0,
-                    channel=0,
-                )
-            ]
-        )
-        df = config.to_dataframe()
-        assert "annotation_id" in df.columns
-        assert df["annotation_id"].iloc[0] == "101_0_0"
-
-    def test_annotation_id_survives_round_trip(self):
-        """Stored ids are read back verbatim, even when they don't follow the scheme."""
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="a.tif",
-                    annotation_id="101_0_0",
-                    timepoint=0,
-                    z_slice=0,
-                    channel=0,
-                ),
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="a.tif",
-                    annotation_id="custom_name_xyz",
-                    timepoint=0,
-                    z_slice=1,
-                    channel=0,
-                ),
-                ImageAnnotation(
-                    image_id=202,
-                    image_name="b.tif",
-                    annotation_id="202_0_3d",
-                    timepoint=0,
-                    z_slice=0,
-                    channel=0,
-                    is_volumetric=True,
-                    z_start=0,
-                    z_end=4,
-                    z_length=5,
-                ),
-            ]
-        )
-        assert self._reload(config.to_dataframe()) == [
-            "101_0_0",
-            "custom_name_xyz",
-            "202_0_3d",
-        ]
-
-    # --- legacy tables (no annotation_id column) ----------------------------
-
-    def test_legacy_2d_ids_regenerated(self):
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="a.tif",
-                    timepoint=t,
-                    z_slice=z,
-                    channel=0,
-                )
-                for t in (0, 1)
-                for z in (0, 2)
-            ]
-        )
-        df = self._legacy_df(config)
-        assert "annotation_id" not in df.columns
-        assert self._reload(df) == ["101_0_0", "101_0_2", "101_1_0", "101_1_2"]
-
-    def test_legacy_patch_ids_indexed_by_sorted_coordinates(self):
-        """Patches on one plane get distinct indices, ordered by (patch_x, patch_y)."""
-        # Rows deliberately out of coordinate order in the table
-        coords = [(256, 256), (0, 0), (256, 0), (0, 256)]
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="a.tif",
-                    timepoint=0,
-                    z_slice=0,
-                    channel=0,
-                    is_patch=True,
-                    patch_x=x,
-                    patch_y=y,
-                    patch_width=256,
-                    patch_height=256,
-                )
-                for x, y in coords
-            ]
-        )
-        ids = self._reload(self._legacy_df(config))
-        # sorted on (x, y): (0,0) -> 0, (0,256) -> 1, (256,0) -> 2, (256,256) -> 3
-        assert ids == ["101_0_0_3", "101_0_0_0", "101_0_0_2", "101_0_0_1"]
-        assert len(set(ids)) == 4
-
-    def test_legacy_patch_indices_restart_per_plane(self):
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=image_id,
-                    image_name="a.tif",
-                    timepoint=0,
-                    z_slice=z,
-                    channel=0,
-                    is_patch=True,
-                    patch_x=x,
-                    patch_y=0,
-                    patch_width=256,
-                    patch_height=256,
-                )
-                for image_id in (101, 202)
-                for z in (0, 1)
-                for x in (0, 256)
-            ]
-        )
-        ids = self._reload(self._legacy_df(config))
-        assert ids == [
-            "101_0_0_0",
-            "101_0_0_1",
-            "101_0_1_0",
-            "101_0_1_1",
-            "202_0_0_0",
-            "202_0_0_1",
-            "202_0_1_0",
-            "202_0_1_1",
-        ]
-        assert len(set(ids)) == len(ids)
-
-    def test_legacy_volumetric_ids_regenerated(self):
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=303,
-                    image_name="v.tif",
-                    timepoint=t,
-                    z_slice=0,
-                    channel=0,
-                    is_volumetric=True,
-                    z_start=0,
-                    z_end=4,
-                    z_length=5,
-                )
-                for t in (0, 1)
-            ]
-        )
-        assert self._reload(self._legacy_df(config)) == ["303_0_3d", "303_1_3d"]
-
-    def test_legacy_volumetric_patch_ids_regenerated(self):
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=303,
-                    image_name="v.tif",
-                    timepoint=0,
-                    z_slice=0,
-                    channel=0,
-                    is_volumetric=True,
-                    z_start=0,
-                    z_end=4,
-                    z_length=5,
-                    is_patch=True,
-                    patch_x=x,
-                    patch_y=0,
-                    patch_width=256,
-                    patch_height=256,
-                )
-                for x in (256, 0)
-            ]
-        )
-        ids = self._reload(self._legacy_df(config))
-        assert ids == ["303_0_3d_1", "303_0_3d_0"]
-
-    # --- empty / stable / unique -------------------------------------------
-
-    def test_empty_annotation_id_column_is_regenerated(self):
-        """A table whose annotation_id column is blank does not stay blank."""
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="a.tif",
-                    timepoint=0,
-                    z_slice=z,
-                    channel=0,
-                )
-                for z in (0, 1)
-            ]
-        )
-        df = config.to_dataframe()
-        assert list(df["annotation_id"]) == ["", ""]  # default annotation_id
-        assert self._reload(df) == ["101_0_0", "101_0_1"]
-
-    def test_regeneration_is_stable_across_calls(self):
-        config = self._config_with(
-            [
-                ImageAnnotation(
-                    image_id=101,
-                    image_name="a.tif",
-                    timepoint=0,
-                    z_slice=0,
-                    channel=0,
-                    is_patch=True,
-                    patch_x=x,
-                    patch_y=y,
-                    patch_width=256,
-                    patch_height=256,
-                )
-                for x, y in [(256, 0), (0, 256), (0, 0)]
-            ]
-        )
-        df = self._legacy_df(config)
-        assert self._reload(df) == self._reload(df)
-
-    def test_all_ids_non_empty_and_unique_for_mixed_legacy_table(self):
-        """Post-condition: every reloaded annotation has a non-empty, unique id."""
-        annotations = [
-            ImageAnnotation(
-                image_id=101,
-                image_name="a.tif",
-                timepoint=0,
-                z_slice=0,
-                channel=0,
-            ),
-            ImageAnnotation(
-                image_id=101,
-                image_name="a.tif",
-                timepoint=0,
-                z_slice=1,
-                channel=0,
-            ),
-            ImageAnnotation(
-                image_id=202,
-                image_name="b.tif",
-                timepoint=1,
-                z_slice=0,
-                channel=0,
-                is_patch=True,
-                patch_x=0,
-                patch_y=0,
-                patch_width=256,
-                patch_height=256,
-            ),
-            ImageAnnotation(
-                image_id=202,
-                image_name="b.tif",
-                timepoint=1,
-                z_slice=0,
-                channel=0,
-                is_patch=True,
-                patch_x=256,
-                patch_y=0,
-                patch_width=256,
-                patch_height=256,
-            ),
-            ImageAnnotation(
-                image_id=303,
-                image_name="v.tif",
-                timepoint=0,
-                z_slice=0,
-                channel=0,
-                is_volumetric=True,
-                z_start=0,
-                z_end=4,
-                z_length=5,
-            ),
-        ]
-        ids = self._reload(self._legacy_df(self._config_with(annotations)))
-        assert len(ids) == len(annotations)
-        assert all(i for i in ids)
-        assert len(set(ids)) == len(ids)
-
-    def test_duplicate_rows_still_get_unique_ids(self):
-        """Two identical rows cannot collapse onto the same id."""
-        annotation = dict(
-            image_id=101,
-            image_name="a.tif",
-            timepoint=0,
-            z_slice=0,
-            channel=0,
-        )
-        config = self._config_with(
-            [ImageAnnotation(**annotation), ImageAnnotation(**annotation)]
-        )
-        ids = self._reload(self._legacy_df(config))
-        assert ids[0] == "101_0_0"
-        assert len(set(ids)) == 2
-
-
-@pytest.mark.unit
-class TestAnnotationInputIdRename:
-    """annotation_input_id replaces label_input_id; old OMERO tables still load."""
-
-    def _config_with_annotation(self, **ann_kwargs):
-        from omero_annotate_ai.core.annotation_config import (
-            ImageAnnotation,
-            create_default_config,
-        )
-
-        config = create_default_config()
-        config.annotations = [
-            ImageAnnotation(
-                image_id=100,
-                image_name="img",
-                annotation_id="0",
-                category="training",
-                processed=True,
-                **ann_kwargs,
-            )
-        ]
-        return config
-
-    def test_new_column_round_trips(self):
-        config = self._config_with_annotation(annotation_input_id=555)
-
-        df = config.to_dataframe()
-        assert "annotation_input_id" in df.columns
-        assert "label_input_id" not in df.columns
-
-        config.annotations = []
-        config.from_dataframe(df)
-        assert config.annotations[0].annotation_input_id == 555
-
-    def test_legacy_label_input_id_column_is_ignored(self):
-        """Old tables (label_input_id) are not supported from 0.5.0 on."""
-        config = self._config_with_annotation(annotation_input_id=777)
-        df = config.to_dataframe().rename(
-            columns={"annotation_input_id": "label_input_id"}
-        )
-
-        config.annotations = []
-        config.from_dataframe(df)
-
-        assert config.annotations[0].annotation_input_id is None
-
-    def test_category_column_keeps_the_test_split(self):
-        """The explicit category column survives a round trip, test included."""
-        config = self._config_with_annotation()
-        config.annotations[0].category = "test"
-        df = config.to_dataframe()
-        assert list(df["category"]) == ["test"]
-
-        config.annotations = []
-        config.from_dataframe(df)
-        assert config.annotations[0].category == "test"
-
-    def test_rows_without_category_fall_back_to_flags(self):
-        config = self._config_with_annotation()
-        df = config.to_dataframe().drop(columns=["category"])
-        df["train"] = [False]
-        df["validate"] = [False]
-        config.annotations = []
-        config.from_dataframe(df)
-        assert config.annotations[0].category == "test"
-
-
-@pytest.mark.unit
-class TestOmeroIdSerialization:
-    """roi_id/label_id round-trip as integers with a 0 sentinel for 'not yet set'.
-
-    OMERO table columns are non-nullable, so an unset id must be a real integer.
-    0 is used because no OMERO object has id 0.
-    """
-
-    def _config_with_annotation(self, **kwargs):
-        import pandas as pd  # noqa: F401
-
-        config = create_default_config()
-        config.annotations = [
-            ImageAnnotation(image_id=101, image_name="a.tif", **kwargs)
-        ]
-        return config
-
-    def test_unset_ids_serialize_to_zero_not_the_string_none(self):
-        config = self._config_with_annotation()
-
-        df = config.to_dataframe()
-
-        assert df["roi_id"].tolist() == [0]
-        assert df["label_id"].tolist() == [0]
-
-    def test_set_ids_serialize_as_integers(self):
-        config = self._config_with_annotation(roi_id=5012, label_id=77)
-
-        df = config.to_dataframe()
-
-        assert df["roi_id"].tolist() == [5012]
-        assert df["label_id"].tolist() == [77]
-
-    def test_zero_sentinel_reads_back_as_none(self):
-        """A 0 in the typed OMERO column means 'not set', not 'the object with id 0'."""
-        import pandas as pd
-
-        df = pd.DataFrame(
-            {
-                "image_id": [101],
-                "image_name": ["a.tif"],
-                "roi_id": [0],
-                "label_id": [0],
-            }
-        )
-
-        config = create_default_config()
-        config.from_dataframe(df)
-
-        assert config.annotations[0].roi_id is None
-        assert config.annotations[0].label_id is None
-
-    def test_real_ids_round_trip(self):
-        config = self._config_with_annotation(roi_id=5012, label_id=77)
-
-        df = config.to_dataframe()
-        reloaded = create_default_config()
-        reloaded.from_dataframe(df)
-
-        assert reloaded.annotations[0].roi_id == 5012
-        assert reloaded.annotations[0].label_id == 77
-
-    def test_legacy_string_encoded_table_still_loads(self):
-        """Tables already on users' servers encode ids as strings with "None"."""
-        import pandas as pd
-
-        legacy = pd.DataFrame(
-            {
-                "image_id": [101, 102],
-                "image_name": ["a.tif", "b.tif"],
-                "roi_id": ["5012", "None"],
-                "label_id": ["77", "None"],
-            }
-        )
-
-        config = create_default_config()
-        config.from_dataframe(legacy)
-
-        assert config.annotations[0].roi_id == 5012
-        assert config.annotations[0].label_id == 77
-        assert config.annotations[1].roi_id is None
-        assert config.annotations[1].label_id is None
-
-
-@pytest.mark.unit
-class TestImageUriIdentity:
-    def test_uri_is_derived_from_omero_id(self):
-        ann = ImageAnnotation(image_id=7, image_name="a")
-        assert ann.image_uri == "omero:image:7"
-
-    def test_zarr_annotation_has_no_omero_id(self):
-        ann = ImageAnnotation(image_uri="https://h/p.zarr/B/2/0", image_name="p_B2_0")
-        assert ann.image_id is None
-
-    def test_new_columns_round_trip(self):
-        config = create_default_config()
-        config.annotations.append(
-            ImageAnnotation(
-                image_uri="https://h/p.zarr/B/2/0",
-                image_name="p_B2_0",
-                annotation_id="abc_0_0",
-                level=1,
-                well="B2",
-                field="0",
-                well_metadata={"compound": "DMSO"},
-            )
-        )
-        df = config.to_dataframe()
-        assert df.loc[0, "image_uri"] == "https://h/p.zarr/B/2/0"
-        assert df.loc[0, "image_id"] == 0
-        assert df.loc[0, "level"] == 1
-        assert df.loc[0, "well_metadata"] == '{"compound": "DMSO"}'
-
-        restored = create_default_config()
-        restored.from_dataframe(df)
-        ann = restored.annotations[0]
-        assert (ann.image_uri, ann.image_id, ann.level, ann.well, ann.field) == (
-            "https://h/p.zarr/B/2/0",
-            None,
-            1,
-            "B2",
-            "0",
-        )
-        assert ann.well_metadata == {"compound": "DMSO"}
-
-    def test_csv_round_trip_has_no_nan_strings(self, tmp_path):
-        config = create_default_config()
-        config.annotations.append(
-            ImageAnnotation(image_id=5, image_name="a", annotation_id="x_0_0")
-        )
-        path = tmp_path / "t.csv"
-        config.to_dataframe().to_csv(path, index=False)
-        restored = create_default_config()
-        restored.from_dataframe(pd.read_csv(path))
-        ann = restored.annotations[0]
-        assert ann.image_uri == "omero:image:5"
-        assert (ann.well, ann.field, ann.well_metadata) == ("", "", {})
-
-    def test_legacy_table_without_uri_column(self):
-        df = pd.DataFrame(
-            [
-                {
-                    "image_id": 101,
-                    "image_name": "img",
-                    "annotation_id": "101_0_0",
-                    "timepoint": 0,
-                    "z_slice": 0,
-                }
-            ]
-        )
-        config = create_default_config()
-        config.from_dataframe(df)
-        ann = config.annotations[0]
-        assert ann.image_uri == "omero:image:101"
-        assert ann.annotation_id == "101_0_0"
 
 
 @pytest.mark.unit
@@ -2125,17 +1364,19 @@ class TestZarrConfig:
             AnnotationConfig(
                 name="z",
                 source="zarr",
+                storage="local",
                 zarr={"uris": ["a.zarr"], "well_filters": {"c": ["x"]}},
             )
 
-    def test_zarr_forces_read_only(self):
-        config = AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
-        assert config.workflow.read_only_mode is True
+    def test_zarr_needs_local_storage(self):
+        with pytest.raises(ValueError, match="storage: local"):
+            AnnotationConfig(name="z", source="zarr", zarr={"uris": ["a.zarr"]})
 
     def test_yaml_round_trip(self):
         config = AnnotationConfig(
             name="z",
             source="zarr",
+            storage="local",
             zarr={"uris": ["a.zarr"], "level": 1, "fields": "all", "wells": ["B2"]},
         )
         again = AnnotationConfig.from_yaml(config.to_yaml())
@@ -2157,7 +1398,7 @@ class TestZarrConfig:
         )
         assert config.source == "zarr"
         assert config.zarr.level == 1
-        assert config.workflow.read_only_mode is True
+        assert config.storage == "local"
 
 
 @pytest.mark.unit

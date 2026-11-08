@@ -8,7 +8,6 @@ from tifffile import imread, imwrite
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    ImageAnnotation,
     NormalizationConfig,
 )
 from omero_annotate_ai.processing.normalization import (
@@ -19,6 +18,7 @@ from omero_annotate_ai.processing.normalization import (
 from omero_annotate_ai.processing.training_functions import (
     reorganize_local_data_for_training,
 )
+from omero_annotate_ai.rows import Row, rows_to_frame
 
 
 @pytest.mark.unit
@@ -57,23 +57,13 @@ class TestPercentileNormalize:
 
 @pytest.mark.unit
 class TestNormalizationConfig:
-    def test_legacy_spatial_coverage_fields_are_migrated(self):
-        config = AnnotationConfig.from_dict(
-            {
-                "name": "legacy",
-                "spatial_coverage": {
-                    "channels": [0],
-                    "timepoints": [0],
-                    "z_slices": [0],
-                    "normalization_method": "percentile",
-                    "percentile_low": 0.5,
-                    "percentile_high": 99.5,
-                },
-            }
-        )
-        assert config.normalization.percentile_low == 0.5
-        assert config.normalization.percentile_high == 99.5
-        assert not hasattr(config.spatial_coverage, "percentile_low")
+    def test_legacy_spatial_coverage_fields_are_refused(self):
+        from omero_annotate_ai.errors import RemovedConfigKey
+
+        with pytest.raises(RemovedConfigKey, match="normalization.method"):
+            AnnotationConfig.from_dict(
+                {"name": "legacy", "spatial_coverage": {"normalization_method": "none"}}
+            )
 
     def test_low_must_be_below_high(self):
         with pytest.raises(ValueError, match="percentile_low"):
@@ -112,6 +102,7 @@ def _local_annotation_set(tmp_path, apply_at_export):
             "percentile_high": 100.0,
         },
     )
+    rows = []
     for i, category in enumerate(["training", "validation"]):
         annotation_id = f"img{i}"
         imwrite(
@@ -122,8 +113,8 @@ def _local_annotation_set(tmp_path, apply_at_export):
             annotation_dir / "annotation_output" / f"{annotation_id}_mask.tif",
             np.ones((8, 8), dtype=np.uint16),
         )
-        config.annotations.append(
-            ImageAnnotation(
+        rows.append(
+            Row(
                 image_id=i,
                 image_name=annotation_id,
                 annotation_id=annotation_id,
@@ -131,6 +122,7 @@ def _local_annotation_set(tmp_path, apply_at_export):
                 processed=True,
             )
         )
+    rows_to_frame(rows).to_csv(annotation_dir / "tracking_table.csv", index=False)
     return config, annotation_dir
 
 

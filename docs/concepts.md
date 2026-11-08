@@ -47,15 +47,16 @@ Images are picked **at random** from the container and assigned to a **training*
 `validate_n: 3`) or annotate everything and give fractions. Counts are in images, not
 units: one image with four patches gives four units.
 
-## The two modes: upload or read-only
+## The two storage modes: OMERO or local
 
-| | Upload mode (default) | Read-only mode |
+| | `storage: omero` (default) | `storage: local` (read-only) |
 |---|---|---|
 | Writes to OMERO | yes: masks, ROIs, tracking table, config | nothing |
 | Local files | working files only | images, masks and a CSV table you can use directly |
 | Typical use | your own data on your institute's server | public servers such as the IDR, or a trial run |
 
-Set it with `workflow.read_only_mode` in the config or the checkbox in the widget.
+Set it with `storage` in the config or the read-only checkbox in the widget. It is fixed
+when the training set is created.
 
 ## What ends up in OMERO
 
@@ -97,8 +98,7 @@ Each training set has one folder on your disk, with the same layout in every mod
 ```
 
 Choose another home folder with the `OMERO_ANNOTATE_AI_HOME` environment variable or
-`create_pipeline(..., home=...)`. To put one set somewhere specific, set
-`output.output_directory` to its folder. Files are written atomically (a crash never
+`home=` on `TrainingSet.create` / `TrainingSet.open`. Files are written atomically (a crash never
 leaves half a file), and micro-SAM works in a fresh folder for every batch, so masks
 always land on the image they were drawn on.
 

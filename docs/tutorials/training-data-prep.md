@@ -63,14 +63,12 @@ When the images and masks are on your disk (`annotation_input/` and
 `annotation_output/`), reorganise them without contacting OMERO:
 
 ```python
-from omero_annotate_ai import load_config_from_yaml, reorganize_local_data_for_training
+from omero_annotate_ai import TrainingSet, reorganize_local_data_for_training
 
-config = load_config_from_yaml(
-    "~/omero_annotate_ai/<server>/<table id>_hela_nuclei_v1/config.yaml"
-)
+ts = TrainingSet.open("~/omero_annotate_ai/local/<id>_hela_nuclei_v1")
 result = reorganize_local_data_for_training(
-    config,
-    annotation_dir=config.output.output_directory,  # the training set's folder
+    ts.config,
+    annotation_dir=ts.bundle_dir,  # its tracking_table.csv says what is annotated
     include_test=True,
 )
 ```

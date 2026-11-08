@@ -1,12 +1,13 @@
 # Architecture
 
-How the package is put together, for contributors. It describes the code as it is now;
-it changes as the 0.5.0 core rewrite lands.
+How the package is put together, for contributors. It describes the code as it is now.
 
 ```mermaid
 flowchart LR
-    W[widgets / notebooks] --> P[core.annotation_pipeline]
+    W[widgets / notebooks / napari] --> P[trainingset]
+    F[core.annotation_pipeline<br/>deprecated facade] --> P
     C[core.annotation_config] --> P
+    P --> RW[rows]
     P --> PL[planning]
     P --> SE[session]
     P --> R[reconcile]
@@ -23,8 +24,10 @@ flowchart LR
 
 | Part | Responsibility |
 |---|---|
-| `core/annotation_config.py` | The configuration (pydantic), its YAML form and the per-unit records (`ImageAnnotation`). |
-| `core/annotation_pipeline.py` | Runs a workflow: lists images, plans units, loads pixels and drives sessions. `OmeroWrites` holds every OMERO call it makes (replaceable in tests). |
+| `core/annotation_config.py` | A training set's definition (pydantic, schema version 3) and its YAML form: what to annotate and how, plus `identity` (table ID or local ID) and `sessions` (with notes). Rows are not part of it. Removed keys raise `RemovedConfigKey`. |
+| `trainingset.py` | `TrainingSet`: create (select images, plan units, create the table) or open (by table ID or folder, repair), annotate, extend, notes, external tools. Lists images and loads pixels. `OmeroWrites` holds every OMERO call it makes (replaceable in tests). Read-only `list_training_sets` / `summarize`. |
+| `rows.py` | `Row`, one per annotation unit, and the one codec between rows and a table (`tracking_table.csv` and the OMERO table). |
+| `core/annotation_pipeline.py` | Deprecated `create_pipeline` facade over `TrainingSet`, kept for 0.4 notebooks. |
 | `session.py` | One annotation session, step by step: `next_batch()`, `commit()`, `release()`, `finish()`. Owns the write order of a unit: mask into the bundle, local accept (CSV), upload label then ROI (each ID saved straight away, tagged), table update per commit. |
 | `reconcile.py` | On resume, compares the OMERO table, the local CSV and the mask files per unit (`decide`) and repairs: adopts tagged uploads, uploads what is missing, reports pixel mismatches. Idempotent. |
 | `events.py` | What a run reports (`UnitCommitted`, `UploadFailed`, `ReconcileAction`, `Progress`, ...) to an `EventSink`; default: logging. Front-ends pass their own. |
@@ -39,10 +42,10 @@ flowchart LR
 **Rules of thumb**
 
 - `planning.py`, `annotators.py`, `bundle.py`, `errors.py`, `events.py`, `session.py` and
-  `reconcile.py` are type-checked strictly (pyright) and must not print; the pipeline and
-  widgets are older code being replaced step by step.
+  `reconcile.py` are type-checked strictly (pyright); nothing in the core prints. The
+  widgets are older code, rewritten next.
 - A protocol needs two real implementations before it is introduced.
-- Tests: unit tests mirror the modules (`tests/test_planning.py`,
-  `tests/test_session.py`, `tests/test_reconcile.py`, ...) and use the in-memory OMERO in
+- Tests: unit tests mirror the modules (`tests/test_planning.py`, `tests/test_rows.py`,
+  `tests/test_trainingset.py`, `tests/test_session.py`, `tests/test_reconcile.py`, ...) and use the in-memory OMERO in
   `tests/fakes.py`, which can fail or "crash" any call; `tests/test_functional_workflow.py`
   runs the whole workflow against a Docker OMERO and is the acceptance suite.

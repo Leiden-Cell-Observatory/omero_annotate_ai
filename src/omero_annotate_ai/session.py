@@ -1,6 +1,6 @@
 """One annotation session, step by step: prepare a batch, commit its masks, finish.
 
-Every front-end (the notebook pipeline, the napari plugin, a script) drives the same
+Every front-end (the notebook training_set, the napari plugin, a script) drives the same
 steps, so a mask is always saved in the same order:
 
 1. the mask is moved into the bundle (``annotation_output/{id}_mask.tif``);
@@ -22,7 +22,7 @@ import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import tifffile
@@ -43,8 +43,8 @@ from .events import (
 )
 
 if TYPE_CHECKING:
-    from .core.annotation_config import ImageAnnotation
-    from .core.annotation_pipeline import AnnotationPipeline
+    from .rows import Row
+    from .trainingset import TrainingSet
 
 
 NEEDS_REVIEW = "needs review: "
@@ -62,56 +62,54 @@ class BatchReport:
 
 
 def check_cancel(
-    pipeline: AnnotationPipeline, cancel: Callable[[], bool] | None, stage: Stage
+    training_set: TrainingSet, cancel: Callable[[], bool] | None, stage: Stage
 ) -> None:
     """Raise :class:`~omero_annotate_ai.errors.Cancelled` if ``cancel()`` says so."""
     if cancel is not None and cancel():
-        pipeline.events(RunCancelled(stage))
+        training_set.events(RunCancelled(stage))
         raise Cancelled(f"Cancelled during {stage}")
 
 
-def upload_unit(
-    pipeline: AnnotationPipeline, annotation: ImageAnnotation, mask_file: Path
-) -> bool:
+def upload_unit(training_set: TrainingSet, annotation: Row, mask_file: Path) -> bool:
     """Steps 3a/3b: upload what is missing (label file, then ROI), saving each ID.
 
     Returns False, leaving the unit unannotated with the error recorded, if an
     upload fails.
     """
     label_img = np.asarray(tifffile.imread(mask_file))
-    common = pipeline.upload_fields(annotation)
-    writes = pipeline.omero_writes
+    common = training_set.upload_fields(annotation)
+    writes = training_set.omero_writes
     try:
         if annotation.label_id is None:
             annotation.label_id = writes.upload_label(
-                pipeline.conn, annotation.image_id, label_img, **common
+                training_set.conn, annotation.image_id, label_img, **common
             )
-            pipeline.save_local_table()
+            training_set.save_local_table()
         if annotation.roi_id is None:
             annotation.roi_id = writes.upload_roi(
-                pipeline.conn,
+                training_set.conn,
                 annotation.image_id,
                 label_img,
                 is_volumetric=annotation.is_volumetric,
                 **common,
             )
-            pipeline.save_local_table()
+            training_set.save_local_table()
     except Exception as error:  # noqa: BLE001 - any failure leaves the unit for a retry
         annotation.processed = False
         annotation.error = f"{type(error).__name__}: {error}"
-        pipeline.save_local_table()
-        pipeline.events(UploadFailed(annotation.annotation_id, annotation.error))
+        training_set.save_local_table()
+        training_set.events(UploadFailed(annotation.annotation_id, annotation.error))
         return False
     annotation.error = None
-    pipeline.events(
+    training_set.events(
         UnitCommitted(annotation.annotation_id, annotation.label_id, annotation.roi_id)
     )
     return True
 
 
 def commit_unit(
-    pipeline: AnnotationPipeline,
-    annotation: ImageAnnotation,
+    training_set: TrainingSet,
+    annotation: Row,
     mask_source: Path,
     session: int,
 ) -> bool:
@@ -120,21 +118,19 @@ def commit_unit(
     Returns:
         True when the unit is saved (and, for OMERO sets, uploaded).
     """
-    target = mask_path(pipeline.bundle_dir, annotation.annotation_id)
+    target = mask_path(training_set.bundle_dir, annotation.annotation_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     if Path(mask_source).resolve() != target.resolve():
         shutil.move(mask_source, target)  # a rename when both are in the bundle
     annotation.mask_digest = file_digest(target)
     annotation.session = session
     annotation.error = None
-    annotation.mark_processed(
-        annotation_type=pipeline.config.annotation_methodology.annotation_type
-    )
-    pipeline.save_local_table()
-    if pipeline.config.workflow.read_only_mode:
-        pipeline.events(UnitCommitted(annotation.annotation_id))
+    annotation.mark_processed(annotation_type=training_set.annotation_type)
+    training_set.save_local_table()
+    if training_set.is_local:
+        training_set.events(UnitCommitted(annotation.annotation_id))
         return True
-    return upload_unit(pipeline, annotation, target)
+    return upload_unit(training_set, annotation, target)
 
 
 class AnnotationSession:
@@ -148,28 +144,27 @@ class AnnotationSession:
 
     def __init__(
         self,
-        pipeline: AnnotationPipeline,
+        training_set: TrainingSet,
         *,
         batch_size: int | None = None,
+        model: str | None = None,
         cancel: Callable[[], bool] | None = None,
     ) -> None:
-        self._pipeline = pipeline
+        self._set = training_set
         self._batch_size = batch_size
         self._cancel = cancel
         self._open: dict[int, set[str]] = {}
         self._scratch: dict[int, Path] = {}
         self._handed_out: set[str] = set()  # each unit at most once per session
-        self._unpublished = False
-        self.session = 1 + max(
-            (a.session for a in pipeline.config.annotations), default=0
-        )
+        self._finished = False
+        self.session = training_set.begin_session(model, batch_size)
         self.annotated = 0
-        pipeline.events(SessionStarted(self.session, len(self._pending())))
+        training_set.events(SessionStarted(self.session, len(self._pending())))
 
-    def _pending(self) -> list[ImageAnnotation]:
+    def _pending(self) -> list[Row]:
         return [
             a
-            for a in self._pipeline.config.annotations
+            for a in self._set.rows
             if not a.processed
             and a.annotation_id not in self._handed_out
             and not (a.error or "").startswith(NEEDS_REVIEW)
@@ -187,18 +182,18 @@ class AnnotationSession:
         chosen = pending[:size]
         items: list[BatchItem] = []
         for done, annotation in enumerate(chosen, start=1):
-            check_cancel(self._pipeline, self._cancel, "load")
-            items.append(self._pipeline.prepare_item(annotation))
-            self._pipeline.events(Progress("load", done, len(chosen)))
-        self._pipeline.save_local_table()  # records the input digests
-        index = self._pipeline.next_batch_index()
-        scratch = fresh_scratch(self._pipeline.bundle_dir, self.session, index)
-        batch = self._pipeline.make_batch(index, items, scratch)
+            check_cancel(self._set, self._cancel, "load")
+            items.append(self._set.prepare_item(annotation))
+            self._set.events(Progress("load", done, len(chosen)))
+        self._set.save_local_table()  # records the input digests
+        index = self._set.next_batch_index()
+        scratch = fresh_scratch(self._set.bundle_dir, self.session, index)
+        batch = self._set.make_batch(index, items, scratch)
         ids = tuple(item.annotation_id for item in items)
         self._open[index] = set(ids)
         self._handed_out.update(ids)
         self._scratch[index] = scratch
-        self._pipeline.events(BatchPrepared(index, ids))
+        self._set.events(BatchPrepared(index, ids))
         return batch
 
     def commit(
@@ -219,31 +214,29 @@ class AnnotationSession:
                 are saved locally and tagged; resuming repairs the table).
         """
         waiting = self._open.get(batch.index, set())
-        by_id = {a.annotation_id: a for a in self._pipeline.config.annotations}
+        by_id = {a.annotation_id: a for a in self._set.rows}
         todo = [i.annotation_id for i in batch.items if i.annotation_id in result]
         todo = [annotation_id for annotation_id in todo if annotation_id in waiting]
         committed: list[str] = []
         failed: list[str] = []
         for done, annotation_id in enumerate(todo, start=1):
-            check_cancel(self._pipeline, self._cancel, "upload")
+            check_cancel(self._set, self._cancel, "upload")
             ok = commit_unit(
-                self._pipeline,
+                self._set,
                 by_id[annotation_id],
                 result[annotation_id],
                 self.session,
             )
             (committed if ok else failed).append(annotation_id)
             waiting.discard(annotation_id)
-            self._pipeline.events(Progress("upload", done, len(todo)))
+            self._set.events(Progress("upload", done, len(todo)))
         self.annotated += len(committed)
 
-        if committed and not self._pipeline.config.workflow.read_only_mode:
-            self._pipeline.write_table()
+        if committed and not self._set.is_local:
+            self._set.write_table()
             if publish_config:
-                self._pipeline.publish_config()
-            else:
-                self._unpublished = True
-        self._pipeline.save_config()
+                self._set.publish_config()
+        self._set.save_config()
         if not waiting:
             self._close(batch)
         return BatchReport(tuple(committed), tuple(failed))
@@ -252,7 +245,7 @@ class AnnotationSession:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
         left = self._open.get(batch.index, set())
         if left:
-            self._pipeline.events(BatchReleased(batch.index, tuple(sorted(left))))
+            self._set.events(BatchReleased(batch.index, tuple(sorted(left))))
         self._close(batch)
 
     def _close(self, batch: Batch) -> None:
@@ -260,14 +253,23 @@ class AnnotationSession:
         self._scratch.pop(batch.index, None)
         shutil.rmtree(batch.mask_dir, ignore_errors=True)
 
-    def finish(self, note: str | None = None) -> int:
-        """End the session: publish the config if still needed; returns units annotated."""
+    def finish(
+        self,
+        note: str | None = None,
+        *,
+        status: Literal["finished", "interrupted"] = "finished",
+    ) -> int:
+        """End the session: record it (with ``note``) in the config and publish it.
+
+        Returns the number of units annotated. Calling it again does nothing.
+        """
+        if self._finished:
+            return self.annotated
+        self._finished = True
         for index, scratch in list(self._scratch.items()):  # still-open batches
             self._open.pop(index, None)
             shutil.rmtree(scratch, ignore_errors=True)
         self._scratch.clear()
-        if self._unpublished:
-            self._pipeline.publish_config()
-        self._pipeline.save_config()
-        self._pipeline.events(SessionFinished(self.session, self.annotated, note))
+        self._set.end_session(self.session, self.annotated, note, status)
+        self._set.events(SessionFinished(self.session, self.annotated, note))
         return self.annotated

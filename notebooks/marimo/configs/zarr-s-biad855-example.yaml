@@ -20,5 +20,4 @@ training:
 ai_model:
   framework: micro_sam
   pretrained_from: vit_b_lm
-output:
-  output_directory: ./zarr_annotations
+storage: local  # OME-Zarr sets are kept in their local folder

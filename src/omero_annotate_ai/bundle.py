@@ -10,8 +10,9 @@ mode::
     .scratch/s{session}-b{batch}/      one batch at a time, removed afterwards
 
 Bundles live under a home folder: ``<home>/<server>/<table_id>_<name>/`` for sets
-tracked in an OMERO table, ``<home>/local/<uuid>_<name>/`` for read-only and
-OME-Zarr sets. Files are written atomically, so a crash never leaves half a file.
+tracked in an OMERO table, ``<home>/local/<id>_<name>/`` for local sets
+(``storage: local``, e.g. OME-Zarr). Files are written atomically, so a crash
+never leaves half a file.
 """
 
 from __future__ import annotations
@@ -60,9 +61,14 @@ def omero_bundle(home: Path, server: str, table_id: int, name: str) -> Path:
     return home / server / f"{table_id}_{_slug(name)}"
 
 
-def local_bundle(home: Path, name: str) -> Path:
-    """A new bundle for a set kept only on disk (read-only or OME-Zarr)."""
-    return home / "local" / f"{uuid.uuid4().hex[:8]}_{_slug(name)}"
+def new_local_id() -> str:
+    """ID of a new set kept only on disk (``storage: local``)."""
+    return uuid.uuid4().hex[:8]
+
+
+def local_bundle(home: Path, local_id: str, name: str) -> Path:
+    """Bundle of a set kept only on disk (``storage: local``, e.g. OME-Zarr)."""
+    return home / "local" / f"{local_id}_{_slug(name)}"
 
 
 def atomic_write(path: Path, write: Callable[[Path], object]) -> None:

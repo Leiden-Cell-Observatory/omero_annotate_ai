@@ -43,3 +43,20 @@ class IntegrityError(OmeroAnnotateAIError):
 
 class Cancelled(OmeroAnnotateAIError):
     """The caller's ``cancel`` callback asked a long operation to stop."""
+
+
+class ConfigError(OmeroAnnotateAIError):
+    """The configuration cannot be used as given.
+
+    Not a ``ValueError`` on purpose: pydantic re-wraps those, and the message naming
+    the replacement would be buried.
+    """
+
+
+class RemovedConfigKey(ConfigError):
+    """The configuration uses a key this version no longer has; the message names its
+    replacement."""
+
+
+class ConnectionFailed(OmeroAnnotateAIError):
+    """Connecting or logging in to OMERO failed; the message says why."""
