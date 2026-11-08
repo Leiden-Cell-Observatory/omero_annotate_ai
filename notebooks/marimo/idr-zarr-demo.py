@@ -66,7 +66,8 @@ def _(mo):
 
     Enter an IDR screen ID and the study's OME-Zarr folder (study name plus `A`, `B`, …
     as on the IDR, e.g. `idr0013A`). The IDR web API lists the screen's plates and each
-    plate is checked for an OME-Zarr copy.
+    plate is checked for an OME-Zarr copy. The web API calls follow the IDR's own
+    [IDR API example notebook](https://github.com/IDR/idr-notebooks/blob/master/IDR_API_example_script.ipynb) (IDR/idr-notebooks).
     """)
     return
 
