@@ -3,6 +3,20 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## QuPath extension 0.1.0 (experimental)
+
+- **A QuPath extension** ([guide](qupath-plugin.md), source in `qupath-extension/`)
+  annotates training sets in QuPath 0.6 and 0.7: a *Training set* tab to make or open
+  a set, annotate it image by image (Accept, Skip, Exclude, Previous), review saved
+  masks and export training data. Every object inside the frame becomes one object of
+  the mask, whatever made it (brush, QuPath cell detection, Cellpose, InstanSeg,
+  StarDist, SAM).
+- Sets are kept on OMERO (tracking table, label files, ROIs, config, claims) or in a
+  local folder, in the formats of the Python package: either side opens, continues,
+  reviews and exports the other's sets. For OMERO it uses the login of the official
+  QuPath OMERO extension and the OMERO Java libraries; local sets need neither.
+- The Python package itself is unchanged.
+
 ## 0.5.2
 
 - **Session numbers start at 1.** A new training set numbered its first session 0

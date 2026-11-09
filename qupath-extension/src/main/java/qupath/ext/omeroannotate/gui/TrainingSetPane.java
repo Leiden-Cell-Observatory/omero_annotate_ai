@@ -243,6 +243,11 @@ public final class TrainingSetPane extends BorderPane {
         return text == null || text.isBlank() ? cause.getClass().getSimpleName() : text;
     }
 
+    /** An error text without the Java class name in front. */
+    private static String plain(String error) {
+        return error == null ? "" : error.replaceFirst("^[A-Za-z.]*(Exception|Error): ", "");
+    }
+
     private void fail(String what, Throwable error) {
         logger.warn("{}: {}", what, error.toString(), error);
         status.setStyle("-fx-text-fill: #d64545; -fx-font-weight: bold;");
@@ -285,6 +290,16 @@ public final class TrainingSetPane extends BorderPane {
         if (scroll.getContent() != null)
             scroll.getContent().setDisable(value);
         busyText.setText(value && message != null ? message : "");
+    }
+
+    /** "1 image", "3 images", "2 patches". */
+    private static String count(long n, String noun) {
+        return n + " " + (n == 1 ? noun : noun.endsWith("ch") ? noun + "es" : noun + "s");
+    }
+
+    /** What one unit of the open set is called. */
+    private String unitNoun() {
+        return set != null && set.config().usesPatches() ? "patch" : "image";
     }
 
     private Path home() {
@@ -636,8 +651,8 @@ public final class TrainingSetPane extends BorderPane {
         }, created -> {
             set = created;
             showOverview();
-            say("Training set \"" + created.name() + "\" is ready: " + created.rows().size()
-                    + (created.rows().size() == 1 ? " image" : " images") + " to annotate.");
+            say("Training set \"" + created.name() + "\" is ready: " + count(created.rows().size(),
+                    created.config().usesPatches() ? "patch" : "image") + " to annotate.");
         }, error -> {
             if (error instanceof Planning.SelectionException)
                 Dialogs.showErrorMessage("New training set", error.getMessage());
@@ -824,6 +839,7 @@ public final class TrainingSetPane extends BorderPane {
                 if (!isBusy && session != null && !accept.isDisabled())
                     acceptCurrent();
             });
+            say("");
             Row first = (Row) result[1];
             if (first == null) {
                 noMoreUnits = true;
@@ -851,7 +867,8 @@ public final class TrainingSetPane extends BorderPane {
         accept.setTooltip(new Tooltip("Save every object inside the frame as this image's mask and go on ("
                 + ACCEPT_KEY.getDisplayText() + ")"));
         accept.setOnAction(e -> acceptCurrent());
-        skip.setTooltip(new Tooltip("Leave this image for a later session"));
+        skip.setTooltip(new Tooltip("Go on without saving: an open image is left for a later session, "
+                + "a saved one stays as it was"));
         skip.setOnAction(e -> skipCurrent());
         exclude.setTooltip(new Tooltip("Leave this image out of the training set for good (out of focus, artefact)"));
         exclude.setOnAction(e -> excludeCurrent());
@@ -930,7 +947,7 @@ public final class TrainingSetPane extends BorderPane {
                 + (elsewhere > 0 ? " · " + elsewhere + " being annotated on another computer" : ""));
         boolean has = current != null;
         accept.setDisable(!has);
-        skip.setDisable(!has || current.processed && !session.isReview());
+        skip.setDisable(!has);
         exclude.setDisable(!has || session.isReview() || current.isAnnotated() || current.isExcluded());
         previous.setDisable(position <= 0);
         if (!has) {
@@ -952,9 +969,14 @@ public final class TrainingSetPane extends BorderPane {
         if (current.timepoint > 0)
             detail.append(" · t ").append(current.timepoint + 1);
         unitDetail.setText(detail.toString());
-        unitState.setManaged(current.processed);
-        unitState.setVisible(current.processed);
-        if (current.isExcluded()) {
+        boolean waiting = !current.processed && current.error != null
+                && Files.exists(Bundle.maskPath(set.bundle(), current.annotationId));
+        unitState.setManaged(current.processed || waiting);
+        unitState.setVisible(current.processed || waiting);
+        if (waiting) {
+            unitState.setText("Saved on this computer, not on OMERO yet. Accept again to retry the upload.");
+            unitState.setStyle("-fx-text-fill: #c77700;");
+        } else if (current.isExcluded()) {
             unitState.setText("Excluded. Accept it to include it after all.");
             unitState.setStyle("-fx-text-fill: #c77700;");
         } else if (current.isAnnotated()) {
@@ -1197,8 +1219,11 @@ public final class TrainingSetPane extends BorderPane {
                     Dialogs.showWarningNotification("Not on OMERO yet", "Your work on " + row.imageName
                             + " is safe on this computer, but OMERO could not be updated. Upload it later from "
                             + "the set's overview.");
-                    warn("OMERO could not be updated: " + outcome.message());
-                    advance();
+                    frame.setName("Saved here, not on OMERO yet (" + row.category + ")");
+                    warn("Your work on " + row.imageName + " is saved on this computer, but OMERO could not be "
+                            + "updated (" + plain(outcome.message()) + "). Press Skip to go on, or finish the session; "
+                            + "the upload can be repeated from the set's overview.");
+                    updateSessionView();
                 }
                 default -> advance();
             }
@@ -1227,6 +1252,12 @@ public final class TrainingSetPane extends BorderPane {
         ImageData<BufferedImage> imageData = imageDataOfCurrent();
         if (imageData != null)
             saveImage(imageData);
+        if (row.processed) { // a saved or excluded image: nothing to hand back, just go on
+            handled.add(row.annotationId);
+            say(row.imageName + " is left as it was.");
+            advance();
+            return;
+        }
         background("Skipping…", () -> {
             running.skip(row);
             return null;

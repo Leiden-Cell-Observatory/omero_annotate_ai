@@ -3,6 +3,7 @@ package qupath.ext.omeroannotate.omero;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.omeroannotate.core.RemoteStore;
+import qupath.ext.omeroannotate.core.TimeLimitedStore;
 import qupath.lib.images.servers.ImageServer;
 
 import java.lang.reflect.Method;
@@ -28,6 +29,8 @@ public final class OmeroAccess {
     private static final Logger logger = LoggerFactory.getLogger(OmeroAccess.class);
     private static final String CLIENT_CLASS = "qupath.ext.omero.core.Client";
     private static final String GATEWAY_CLASS = "omero.gateway.Gateway";
+    /** How long one call to OMERO may take before it counts as failed. */
+    private static final long CALL_SECONDS = 60;
 
     private OmeroAccess() {}
 
@@ -139,7 +142,8 @@ public final class OmeroAccess {
         Exception last = null;
         for (String[] address : addresses) {
             try {
-                return Connector.connect(address[0], Integer.parseInt(address[1]), login.sessionId());
+                return TimeLimitedStore.wrap(
+                        Connector.connect(address[0], Integer.parseInt(address[1]), login.sessionId()), CALL_SECONDS);
             } catch (Exception | LinkageError e) {
                 logger.debug("OMERO not reached at {}:{}", address[0], address[1], e);
                 last = e instanceof Exception ex ? ex : new IllegalStateException(e);

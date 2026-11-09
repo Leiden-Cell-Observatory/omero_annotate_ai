@@ -56,3 +56,15 @@ flowchart LR
   `tests/test_trainingset.py`, `tests/test_session.py`, `tests/test_reconcile.py`, ...) and use the in-memory OMERO in
   `tests/fakes.py`, which can fail or "crash" any call; `tests/test_functional_workflow.py`
   runs the whole workflow against a Docker OMERO and is the acceptance suite.
+
+## The QuPath extension
+
+`qupath-extension/` is a separate Gradle project (Java) that reads and writes the same
+training sets without Python. It mirrors, class by class, the parts above that define
+the formats and the write order: `rows.py`, the config schema, `bundle.py`,
+`sources/uri.py`, `session.py`, `claims.py` and the OMERO table and upload functions
+(the mapping is in `qupath-extension/README.md`). A change to a table column, a config
+key, the pixel digest or the write order of a unit must be made on both sides; the
+extension's `FormatsTest` holds reference values computed by this package, and
+`tests/test_qupath_extension_formats.py` checks from this side that a set written by
+QuPath still loads.

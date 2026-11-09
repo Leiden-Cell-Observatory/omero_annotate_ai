@@ -573,6 +573,12 @@ public final class TrainingSet {
         }
     }
 
+    /** Remember that a unit's table row must still be written; always returns false. */
+    boolean markTablePending(Row row) {
+        tablePending.add(row.annotationId);
+        return false;
+    }
+
     /** Units saved in this folder that OMERO does not have (completely) yet. */
     public List<Row> unfinished() {
         List<Row> result = new ArrayList<>();

@@ -24,6 +24,7 @@ nav = [
     { "Prepare training data" = "tutorials/training-data-prep.md" },
     { "Share via the BioImage Archive" = "tutorials/bioimage-archive-export.md" },
     { "napari plugin (experimental)" = "napari-plugin.md" },
+    { "QuPath extension (experimental)" = "qupath-plugin.md" },
   ] },
   { "Reference" = [
     { "Configuration (YAML)" = "configuration.md" },

@@ -162,9 +162,10 @@ final class NewSetDialog {
         random.disableProperty().bind(patches.selectedProperty().not());
 
         // --- How many ---
-        int available = Math.max(context.projectImages, 4);
+        // Suggested counts fit the images there are (unknown for OMERO until it is asked).
+        int available = context.projectImages > 0 ? context.projectImages : 4;
         Spinner<Integer> train = spinner(0, 100000, Math.max(1, Math.min(3, available - 1)), 80);
-        Spinner<Integer> validate = spinner(0, 100000, 1, 80);
+        Spinner<Integer> validate = spinner(0, 100000, available >= 2 ? 1 : 0, 80);
         Spinner<Integer> test = spinner(0, 100000, 0, 80);
         CheckBox all = new CheckBox("Use all images:");
         all.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);

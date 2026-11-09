@@ -5,6 +5,7 @@ import qupath.ext.omeroannotate.core.Planning;
 import qupath.ext.omeroannotate.core.Row;
 import qupath.ext.omeroannotate.omero.OmeroAccess;
 import qupath.lib.gui.commands.ProjectCommands;
+import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServerProvider;
 import qupath.lib.projects.Project;
@@ -37,11 +38,20 @@ public final class Images {
             return Ids.omeroUri(omeroId);
         Collection<URI> uris = server.getURIs();
         String base = uris.isEmpty() ? server.getPath() : normalize(uris.iterator().next());
-        // A file holding several images (series): tell them apart by the image name.
-        String path = server.getPath();
-        if (path != null && path.contains("--series"))
-            return base + "#" + server.getMetadata().getName();
-        return base;
+        // A file holding several images (series): every image after the first carries its number.
+        int series = seriesOf(server.getPath());
+        return series > 0 ? base + SERIES + series : base;
+    }
+
+    private static final String SERIES = "#series=";
+    private static final java.util.regex.Pattern SERIES_ARG = java.util.regex.Pattern.compile("--series,\\s*(\\d+)");
+
+    /** The series number in a QuPath server path such as {@code ...file.lif[--series, 2]}; 0 if none. */
+    static int seriesOf(String serverPath) {
+        if (serverPath == null)
+            return 0;
+        java.util.regex.Matcher matcher = SERIES_ARG.matcher(serverPath);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
     }
 
     private static String normalize(URI uri) {
@@ -88,7 +98,9 @@ public final class Images {
                 continue;
             try {
                 for (URI uri : entry.getURIs()) {
-                    if (row.imageUri.equals(normalize(uri))) {
+                    String base = row.imageUri.contains(SERIES)
+                            ? row.imageUri.substring(0, row.imageUri.indexOf(SERIES)) : row.imageUri;
+                    if (base.equals(normalize(uri))) {
                         match = entry;
                         matches++;
                     }
@@ -116,6 +128,7 @@ public final class Images {
         if (entry != null)
             return entry;
         String location;
+        String[] args = new String[0];
         Long omeroId = Ids.parseOmeroUri(row.imageUri);
         if (omeroId != null) {
             if (webUri == null)
@@ -123,19 +136,25 @@ public final class Images {
                         + "(Extensions ▸ OMERO ▸ Browse server) so QuPath can open it.");
             location = OmeroAccess.imageLink(webUri, omeroId);
         } else {
-            location = row.imageUri.contains("#") ? row.imageUri.substring(0, row.imageUri.indexOf('#')) : row.imageUri;
+            int at = row.imageUri.indexOf(SERIES);
+            location = at < 0 ? row.imageUri : row.imageUri.substring(0, at);
+            if (at >= 0)
+                args = new String[]{"--series", row.imageUri.substring(at + SERIES.length())};
             if (!location.contains("://") && !java.nio.file.Files.exists(Path.of(location)))
                 throw new IOException("The image file is not on this computer: " + location);
         }
         ImageServer<BufferedImage> server;
         try {
-            server = ImageServerProvider.buildServer(location, BufferedImage.class);
+            server = ImageServerProvider.buildServer(location, BufferedImage.class, args);
         } catch (IOException | RuntimeException e) {
             throw new IOException("\"" + row.imageName + "\" could not be opened (" + location + "): "
                     + e.getMessage(), e);
         }
         try {
-            entry = ProjectCommands.addSingleImageToProject(project, server, null);
+            // Multi-channel images are fluorescence-like, so QuPath need not ask for each
+            // one; for colour images QuPath decides (or asks) as the user has set it up.
+            entry = ProjectCommands.addSingleImageToProject(project, server,
+                    server.isRGB() ? null : ImageData.ImageType.FLUORESCENCE);
         } finally {
             try {
                 server.close();

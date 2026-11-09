@@ -158,8 +158,15 @@ public final class AnnotationSession {
             return revise(row, mask);
 
         RemoteStore remote = set.remote();
+        String unreachable = null;
         if (remote != null) {
-            List<Map<String, Object>> now = remote.readRows(set.tableId(), List.of(row.annotationId));
+            List<Map<String, Object>> now = List.of();
+            try {
+                now = remote.readRows(set.tableId(), List.of(row.annotationId));
+            } catch (Exception e) {
+                // OMERO cannot be asked: the work is saved here first and uploaded later.
+                unreachable = e.getClass().getSimpleName() + ": " + e.getMessage();
+            }
             if (!now.isEmpty()) {
                 Row theirs = RowCodec.fromCells(now.get(0));
                 if (theirs.processed && !(theirs.isExcluded() && row.isExcluded())) {
@@ -187,6 +194,12 @@ public final class AnnotationSession {
         if (remote == null) {
             saved.add(row.annotationId);
             return new Result(Outcome.SAVED, null);
+        }
+        if (unreachable != null) {
+            row.processed = false;
+            row.error = unreachable;
+            set.saveLocalTable();
+            return new Result(Outcome.UPLOAD_FAILED, unreachable);
         }
         if (!set.uploadUnit(row, mask, tracer)) {
             releaseQuietly(row);
@@ -291,8 +304,14 @@ public final class AnnotationSession {
         if (review || row.isAnnotated())
             throw new IllegalStateException("An image that already has a saved mask cannot be excluded");
         RemoteStore remote = set.remote();
+        boolean reachable = true;
         if (remote != null) {
-            List<Map<String, Object>> now = remote.readRows(set.tableId(), List.of(row.annotationId));
+            List<Map<String, Object>> now = List.of();
+            try {
+                now = remote.readRows(set.tableId(), List.of(row.annotationId));
+            } catch (Exception e) {
+                reachable = false; // excluded here; the table follows when OMERO is back
+            }
             if (!now.isEmpty()) {
                 Row theirs = RowCodec.fromCells(now.get(0));
                 if (theirs.processed) {
@@ -303,7 +322,7 @@ public final class AnnotationSession {
             }
             // Uploads of an earlier, failed attempt would otherwise stay behind.
             for (Object[] part : new Object[][]{{"FileAnnotation", row.labelId}, {"Roi", row.roiId}}) {
-                if (part[1] == null)
+                if (part[1] == null || !reachable)
                     continue;
                 try {
                     remote.delete((String) part[0], List.of((Long) part[1]));
@@ -315,7 +334,7 @@ public final class AnnotationSession {
         row.markExcluded(id);
         Files.deleteIfExists(Bundle.maskPath(set.bundle(), row.annotationId));
         set.saveLocalTable();
-        if (remote != null && !set.writeTable(List.of(row)))
+        if (remote != null && !(reachable ? set.writeTable(List.of(row)) : set.markTablePending(row)))
             return new Result(Outcome.UPLOAD_FAILED, "The image is excluded in this folder, but the tracking "
                     + "table could not be updated. It will be completed the next time the set is opened.");
         return new Result(Outcome.EXCLUDED, null);

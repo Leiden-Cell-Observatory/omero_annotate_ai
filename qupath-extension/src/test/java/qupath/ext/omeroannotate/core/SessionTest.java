@@ -412,4 +412,59 @@ class SessionTest {
         assertThrows(IllegalArgumentException.class,
                 () -> TrainingSet.create(SetConfig.create(spec(false, 2)), plan(true, 2), null, home, "test"));
     }
+
+    @Test
+    void workIsSavedLocallyWhenOmeroDoesNotAnswerAtAll() throws Exception {
+        TrainingSet set = omeroSet(3);
+        long tableId = set.tableId();
+        AnnotationSession session = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = session.next();
+        Row other = session.next();
+        omero.failAlways = "readRows"; // the very first call of a save fails: the server is gone
+        AnnotationSession.Result result = session.commit(row, mask(1, 2), input());
+        assertEquals(AnnotationSession.Outcome.UPLOAD_FAILED, result.outcome());
+        assertTrue(Files.exists(Bundle.maskPath(set.bundle(), row.annotationId)), "the mask is on disk");
+        assertTrue(Files.exists(Bundle.inputPath(set.bundle(), row.annotationId)));
+        assertEquals(0, omero.files.size(), "nothing was uploaded");
+        AnnotationSession.Result excluded = session.exclude(other);
+        assertEquals(AnnotationSession.Outcome.UPLOAD_FAILED, excluded.outcome());
+        assertTrue(other.isExcluded(), "the exclusion is kept locally");
+        assertEquals(2, set.unfinished().size());
+
+        omero.failAlways = null; // the server is back
+        assertEquals(2, set.repair(TRACER));
+        assertEquals(true, omero.tableRow(tableId, row.annotationId).get("processed"));
+        assertEquals("excluded", omero.tableRow(tableId, other.annotationId).get("annotation_type"));
+        assertEquals(1, omero.files.size());
+        assertTrue(set.unfinished().isEmpty());
+    }
+
+    @Test
+    void aServerThatNeverAnswersFailsAfterItsTimeLimit() throws Exception {
+        FakeRemoteStore frozen = new FakeRemoteStore() {
+            @Override
+            public java.util.List<java.util.Map<String, Object>> readTable(long tableId) throws Exception {
+                Thread.sleep(60_000);
+                return super.readTable(tableId);
+            }
+        };
+        RemoteStore limited = TimeLimitedStore.wrap(frozen, 1);
+        long start = System.nanoTime();
+        Exception e = assertThrows(java.io.IOException.class, () -> limited.readTable(1));
+        assertTrue(e.getMessage().contains("did not answer"), e.getMessage());
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 5_000);
+        assertEquals("fake-4064", limited.serverSlug());
+        // Right after that, further calls fail at once instead of waiting again.
+        start = System.nanoTime();
+        assertThrows(java.io.IOException.class, () -> limited.readConfig(1));
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 500);
+
+        // A server that answers: errors keep their own message, ordinary calls pass through.
+        FakeRemoteStore healthy = new FakeRemoteStore();
+        RemoteStore wrapped = TimeLimitedStore.wrap(healthy, 5);
+        healthy.failAlways = "readConfig";
+        Exception inner = assertThrows(java.io.IOException.class, () -> wrapped.readConfig(1));
+        assertTrue(inner.getMessage().contains("not reachable"), inner.getMessage());
+        assertTrue(wrapped.listSets("dataset", 1).isEmpty());
+    }
 }

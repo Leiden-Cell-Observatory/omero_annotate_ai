@@ -164,4 +164,12 @@ class UnitsTest {
         assertTrue(rasterMs < 5000, "rasterising took " + rasterMs + " ms");
         assertTrue(traceMs < 20000, "tracing took " + traceMs + " ms");
     }
+
+    @Test
+    void seriesNumbersAreReadFromServerPaths() {
+        assertEquals(0, Images.seriesOf("BioFormatsImageServer: file:/data/a.tif[--series, 0]"));
+        assertEquals(3, Images.seriesOf("BioFormatsImageServer: file:/data/a.lif[--series, 3]"));
+        assertEquals(0, Images.seriesOf("ImageJServer: file:/data/a.tif"));
+        assertEquals(0, Images.seriesOf(null));
+    }
 }

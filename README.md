@@ -64,6 +64,19 @@ training sets on OMERO or in a local folder, saves each accepted image straight 
 and can review annotated images starting from their saved masks. See the
 [napari plugin guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/napari-plugin/).
 
+## QuPath extension (experimental)
+
+Prefer [QuPath](https://qupath.github.io)? The extension in
+[`qupath-extension/`](qupath-extension/) adds a **Training set** tab: make or open a
+training set, annotate it image by image with any QuPath tool (brush, cell detection,
+Cellpose, InstanSeg, StarDist, SAM) and accept. Sets are kept on OMERO or on your
+computer in the same formats, so a set started in a notebook can be annotated in QuPath
+and reviewed in napari, also by two people at once. No Python is needed on the QuPath
+side. See the
+[QuPath extension guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/qupath-plugin/).
+
+![Annotating a training set in QuPath](docs/images/qupath_annotating.jpg)
+
 ## Installation
 
 ```bash
