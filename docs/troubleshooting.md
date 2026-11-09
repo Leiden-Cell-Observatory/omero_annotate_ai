@@ -27,9 +27,15 @@ Check the server address in OMERO.insight or with your OMERO admin. Websocket ad
 often blocked outside the institute network.
 
 **My password is not remembered.**
-By design. In the Jupyter connection widget you can tick the option to store it in your
-system keychain (a Linux server without a desktop may have none); the napari plugin
-never stores it.
+By design: omero-annotate-ai never stores passwords. Enter it each time you connect;
+the Jupyter widget and the napari plugin only remember the server, port, username and
+group. Within one run a dropped connection is restored without asking again. To avoid
+typing a password, log in with a *session key* (e.g. from OMERO.web).
+
+**"The connection to OMERO was lost and its session has ended".**
+The connection dropped and could not be restored: usually a session-key login whose
+session expired (servers end idle sessions after some minutes). Connect again; work
+saved so far is kept, and an interrupted session is picked up when you open the set.
 
 ## Annotating
 

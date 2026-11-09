@@ -9,7 +9,6 @@ import pytest
 
 from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.core.annotation_config import SessionRecord
-from omero_annotate_ai.errors import ConnectionFailed
 from omero_annotate_ai.events import SessionStarted, UnitCommitted, UploadFailed
 from omero_annotate_ai.rows import Row
 from omero_annotate_ai.trainingset import TrainingSet, TrainingSetSummary, summarize
@@ -246,7 +245,6 @@ class TestOMEROConnectionWidgetCredentials:
         manager = Mock()
         manager.get_connection_list.return_value = []
         manager.load_config_files.return_value = {}
-        manager.load_password.return_value = None
         return manager
 
     @pytest.fixture
@@ -272,13 +270,88 @@ class TestOMEROConnectionWidgetCredentials:
         assert widget.port_widget in descendants
         assert widget.host_widget in descendants
 
+    def test_no_keychain_controls(self, widget):
+        """Passwords are never stored, so there is nothing to save or load."""
+        for name in (
+            "save_password_widget",
+            "expire_widget",
+            "load_keychain_button",
+            "_load_from_keychain",
+            "_keychain_password",
+        ):
+            assert not hasattr(widget, name)
+        config = widget.get_config()
+        assert "save_password" not in config
+        assert "expire_hours" not in config
+
+    def test_a_session_key_needs_no_username_or_password(self, conn_manager):
+        conn_manager.get_connection_list.return_value = []
+        conn_manager.create_connection_from_config.return_value = Mock()
+        with patch(
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
+            return_value=conn_manager,
+        ):
+            widget = OMEROConnectionWidget()
+        widget.host_widget.value = "omero.example.org"
+        widget.session_key_widget.value = "abc-123"
+
+        widget._connect(None)
+
+        config = conn_manager.create_connection_from_config.call_args.args[0]
+        assert config["session_key"] == "abc-123" and not config["username"]
+        assert widget.connection is not None
+        assert widget.session_key_widget.value == ""
+
+    def test_test_connection_clears_the_password(self, conn_manager):
+        conn_manager.get_connection_list.return_value = []
+        conn_manager.test_connection.return_value = (True, "ok")
+        with patch(
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
+            return_value=conn_manager,
+        ):
+            widget = OMEROConnectionWidget()
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "s3cret"
+
+        widget._test_connection(None)
+
+        assert conn_manager.test_connection.call_args.args[2] == "s3cret"
+        assert widget.password_widget.value == ""
+
+    def test_previous_connection_fills_everything_but_the_password(self, conn_manager):
+        conn_manager.get_connection_list.return_value = [
+            {
+                "host": "omero.example.org",
+                "username": "alice",
+                "group": "lab",
+                "port": 6064,
+                "display_name": "alice@omero.example.org",
+                "last_used_display": "today",
+            }
+        ]
+        with patch(
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
+            return_value=conn_manager,
+        ):
+            widget = OMEROConnectionWidget()
+        widget.password_widget.value = "typed-for-another-server"
+
+        widget.connection_dropdown.value = "omero.example.org:alice"
+
+        assert widget.host_widget.value == "omero.example.org"
+        assert widget.username_widget.value == "alice"
+        assert widget.group_widget.value == "lab"
+        assert widget.port_widget.value == 6064
+        assert widget.password_widget.value == ""
+
     def test_no_show_password_toggle(self, widget):
         """The plaintext show-password toggle must not come back."""
         assert not hasattr(widget, "show_password_widget")
         assert not hasattr(widget, "_toggle_password_visibility")
 
     def test_password_not_auto_loaded_on_construction(self, conn_manager):
-        """Constructing the widget must not read the keychain."""
+        """Constructing the widget pre-fills everything but the password."""
         conn_manager.load_config_files.return_value = {
             "host": "omero.example.org",
             "username": "alice",
@@ -291,7 +364,6 @@ class TestOMEROConnectionWidgetCredentials:
         ):
             widget = OMEROConnectionWidget()
 
-        conn_manager.load_password.assert_not_called()
         assert widget.password_widget.value == ""
         # host/username are still pre-populated, only the secret is withheld
         assert widget.host_widget.value == "omero.example.org"
@@ -341,49 +413,6 @@ class TestOMEROConnectionWidgetCredentials:
         widget.port_widget.value = 6064
         assert widget._get_widget_config()["port"] == 6064
 
-    def test_connect_reports_failed_keychain_save(self, widget, conn_manager, capsys):
-        """A keychain write that fails must not be reported as a success."""
-        conn_manager.create_connection_from_config.return_value = Mock()
-        conn_manager.save_password.return_value = False
-
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-        widget.password_widget.value = "s3cret"
-        widget.save_password_widget.value = True
-
-        widget._connect(Mock())
-
-        conn_manager.save_password.assert_called_once()
-        # Outside a live kernel, Output falls through to stdout
-        assert "could NOT be saved" in capsys.readouterr().out
-
-    def test_connect_reports_successful_keychain_save(
-        self, widget, conn_manager, capsys
-    ):
-        conn_manager.create_connection_from_config.return_value = Mock()
-        conn_manager.save_password.return_value = True
-
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-        widget.password_widget.value = "s3cret"
-        widget.save_password_widget.value = True
-
-        widget._connect(Mock())
-
-        assert "Password saved to keychain" in capsys.readouterr().out
-
-    def test_connect_does_not_save_password_unless_asked(self, widget, conn_manager):
-        conn_manager.create_connection_from_config.return_value = Mock()
-
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-        widget.password_widget.value = "s3cret"
-        assert widget.save_password_widget.value is False
-
-        widget._connect(Mock())
-
-        conn_manager.save_password.assert_not_called()
-
     def test_connect_closes_previous_connection(self, widget, conn_manager):
         """Reconnecting must not leak the previous gateway."""
         first, second = Mock(), Mock()
@@ -417,43 +446,6 @@ class TestOMEROConnectionWidgetCredentials:
         widget._connect(Mock())
 
         assert widget.password_widget.value == ""
-
-    def test_keychain_password_stays_out_of_the_field(self, widget, conn_manager):
-        """A keychain password is used for connecting but never put in the field."""
-        conn_manager.load_password.return_value = "from-keychain"
-        conn_manager.create_connection_from_config.return_value = Mock()
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-
-        widget._load_from_keychain(Mock())
-        assert widget.password_widget.value == ""
-
-        widget._connect(Mock())
-        sent = conn_manager.create_connection_from_config.call_args[0][0]
-        assert sent["password"] == "from-keychain"
-
-    def test_keychain_password_not_sent_to_another_server(self, widget, conn_manager):
-        conn_manager.load_password.return_value = "from-keychain"
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-        widget._load_from_keychain(Mock())
-
-        widget.host_widget.value = "other.example.org"
-
-        assert widget._get_widget_config()["password"] == ""
-
-    def test_stale_keychain_password_hint(self, widget, conn_manager, capsys):
-        conn_manager.load_password.return_value = "old"
-        conn_manager.create_connection_from_config.side_effect = ConnectionFailed(
-            "login failed"
-        )
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-        widget._load_from_keychain(Mock())
-
-        widget._connect(Mock())
-
-        assert "may be out of date" in capsys.readouterr().out
 
     @pytest.mark.parametrize(
         "host", ["wss://omero.example.org/omero-ws", "ws://omero.example.org/omero-ws"]

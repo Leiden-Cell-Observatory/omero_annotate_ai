@@ -1285,3 +1285,117 @@ class TestFrontEndRoutes:
         for opened in (by_id, by_folder):
             assert opened.table_id == ts.table_id
             assert all(unit.processed for unit in opened.units())
+
+
+def drop_network(conn) -> None:
+    """Close the Ice connection under the session, as a network outage does."""
+    conn.c.getRouter(conn.c.ic).ice_getConnection().close(True)
+
+
+def end_session(params, session_key: str) -> None:
+    """End a session on the server, as its idle timeout does."""
+    from omero.gateway import BlitzGateway
+
+    other = BlitzGateway(host=params["host"], port=params["port"], secure=True)
+    assert other.connect(sUuid=session_key)
+    other.close(hard=True)
+
+
+class TestReconnect:
+    """A dropped connection is restored (pins omero-py's BlitzGateway internals)."""
+
+    @pytest.fixture
+    def conn(self, docker_omero_server):
+        from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
+        p = docker_omero_server
+        conn = SimpleOMEROConnection().connect(
+            p["host"], p["user"], p["password"], port=p["port"], verbose=False
+        )
+        yield conn
+        conn.close()
+
+    def test_a_session_survives_a_network_drop(self, conn, omero_seed, tmp_path):
+        from omero_annotate_ai.trainingset import TrainingSet
+
+        ts = TrainingSet.create(
+            make_config(omero_seed, "reconnect"), conn, home=tmp_path
+        )
+        key = conn.getSession().getUuid().val
+        session = ts.start_session()
+        batch = session.next_batch()
+        drop_network(conn)
+        assert not conn.keepAlive()
+
+        session.commit(batch, scripted_masks(batch))
+        session.finish("after a drop")
+
+        assert conn.getSession().getUuid().val == key  # the same session, rejoined
+        rows = table_rows(conn, ts.table_id)
+        assert rows["processed"].all() and (rows["label_id"] > 0).all()
+
+    def test_an_ended_session_logs_in_again_from_memory(
+        self, conn, docker_omero_server
+    ):
+        from omero_annotate_ai.omero.simple_connection import ensure_connected
+
+        key = conn.getSession().getUuid().val
+        end_session(docker_omero_server, key)
+
+        ensure_connected(conn)
+
+        assert conn.getSession().getUuid().val != key
+        assert conn.getObject("Experimenter", conn.getUserId()) is not None
+
+    def test_a_session_key_login_cannot_outlive_its_session(
+        self, conn, docker_omero_server
+    ):
+        from omero_annotate_ai.errors import ConnectionFailed
+        from omero_annotate_ai.omero.simple_connection import (
+            SimpleOMEROConnection,
+            ensure_connected,
+        )
+
+        p = docker_omero_server
+        keyed = SimpleOMEROConnection().join_session(
+            p["host"], conn.getSession().getUuid().val, port=p["port"]
+        )
+        assert keyed.getObject("Experimenter", keyed.getUserId()) is not None
+        end_session(p, conn.getSession().getUuid().val)
+
+        with pytest.raises(ConnectionFailed, match="connect again"):
+            ensure_connected(keyed)
+
+    def test_closing_a_joined_session_leaves_it_running(
+        self, conn, docker_omero_server
+    ):
+        from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
+        p = docker_omero_server
+        joined = SimpleOMEROConnection().join_session(
+            p["host"], conn.getSession().getUuid().val, port=p["port"]
+        )
+        joined.close()
+
+        assert conn.keepAlive()  # the session it came from still works
+
+    def test_a_new_session_keeps_the_group(self, conn, docker_omero_server):
+        import uuid
+
+        from omero.model import ExperimenterGroupI, PermissionsI
+        from omero.rtypes import rbool, rstring
+
+        from omero_annotate_ai.omero.simple_connection import ensure_connected
+
+        group = ExperimenterGroupI()
+        group.name = rstring(f"oai-reconnect-{uuid.uuid4().hex[:8]}")
+        group.ldap = rbool(False)
+        group.details.permissions = PermissionsI("rw----")
+        other = conn.getAdminService().createGroup(group)
+        assert conn.setGroupForSession(other)  # root may enter any group
+        ensure_connected(conn)  # records the group the session works in
+        end_session(docker_omero_server, conn.getSession().getUuid().val)
+
+        ensure_connected(conn)
+
+        assert conn.getEventContext().groupId == other

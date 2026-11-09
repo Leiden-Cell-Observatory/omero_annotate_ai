@@ -1,4 +1,8 @@
-"""Simple OMERO connection management with keychain support."""
+"""Simple OMERO connection management.
+
+Passwords are never stored: only host, port, username and group are kept in the
+connection history.
+"""
 
 import configparser
 import contextlib
@@ -6,7 +10,7 @@ import json
 import logging
 import os
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,13 +18,6 @@ from dotenv import dotenv_values
 from omero.gateway import BlitzGateway
 
 from ..errors import ConnectionFailed
-
-try:
-    import keyring
-
-    KEYRING_AVAILABLE = True
-except ImportError:
-    KEYRING_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +29,75 @@ def is_url_host(host: str | None) -> bool:
     return bool(host) and bool(_URL_HOST.match(host.strip()))
 
 
-class SimpleOMEROConnection:
-    """Simple OMERO connection manager with keychain support for passwords."""
+KEEPALIVE_SECONDS = 60
 
-    SERVICE_NAME = "omero-annotate-ai"
+
+def ensure_connected(conn: Any) -> None:
+    """Make sure ``conn`` still works before remote work; reconnect if it dropped.
+
+    A dropped connection rejoins its OMERO session. If the session itself ended (an
+    idle timeout on the server), the gateway logs in again with the credentials it
+    holds in memory for this process; nothing is read from or written to disk. A
+    connection made from a session key has no credentials, so it can only rejoin.
+    Objects other than a ``BlitzGateway`` (test fakes) are left alone.
+
+    Raises:
+        ConnectionFailed: The connection could not be restored; connect again.
+    """
+    keep_alive = getattr(conn, "keepAlive", None)
+    if keep_alive is None:
+        return
+    if conn.c is None:  # closed on purpose (e.g. replaced by another login)
+        raise ConnectionFailed("This OMERO connection was closed; connect again")
+    # Without a session factory keepAlive() reconnects by itself but leaves the
+    # client's keep-alive pings off: handle that as a drop too.
+    if getattr(conn.c, "sf", None) is not None:
+        with contextlib.suppress(Exception):
+            if keep_alive():
+                # The group this session works in (cached by the gateway), to
+                # restore it should the session end.
+                conn.oai_session_group = conn.getEventContext().groupId
+                return
+    logger.warning("The connection to OMERO was lost; reconnecting")
+    group = getattr(conn, "oai_session_group", None)
+    try:
+        # A fresh client: the old one still believes it has a session, so connect()
+        # alone would report success. Private omero-py API, pinned by a Docker test.
+        conn._resetOmeroClient()
+        restored = conn.connect()
+        if restored and group is not None and conn.getEventContext().groupId != group:
+            conn.setGroupForSession(group)
+    except Exception as e:  # noqa: BLE001 - any gateway/Ice failure: not restored
+        raise ConnectionFailed(
+            f"The connection to OMERO was lost and could not be restored: {e}"
+        ) from e
+    if not restored:
+        raise ConnectionFailed(
+            "The connection to OMERO was lost and its session has ended; "
+            "connect again (with your password)"
+        )
+    if conn.c is not None:
+        conn.c.enableKeepAlive(KEEPALIVE_SECONDS)
+    logger.info("Reconnected to OMERO")
+
+
+class JoinedGateway(BlitzGateway):
+    """A gateway on a session someone else started (OMERO.web, a script, the CLI).
+
+    Closing it detaches: the session stays usable where it came from. (A plain
+    ``BlitzGateway.close()`` ends the session for everyone.)
+    """
+
+    def close(self, hard: bool = False) -> None:
+        super().close(hard=hard)
+
+
+class SimpleOMEROConnection:
+    """Simple OMERO connection manager; never stores passwords."""
 
     # Keys read from ~/.ezomero, mapped to their config names. A ``password``
-    # entry in that file is deliberately not listed: passwords belong in the
-    # keychain, and copying one into the config would spread it to every caller.
+    # entry in that file is deliberately not listed: passwords are never stored,
+    # and copying one into the config would spread it to every caller.
     EZOMERO_KEYS = {
         "host": "host",
         "user": "username",
@@ -51,181 +109,13 @@ class SimpleOMEROConnection:
         """Initialize the connection manager."""
         self.last_connection = None
 
-    @staticmethod
-    def keyring_backend() -> tuple[bool, str, str | None]:
-        """Inspect the active keyring backend.
-
-        Returns:
-            ``(usable, backend_name, warning)``. ``usable`` is False when there is
-            no keyring, or the backend stores nothing (fail/null backends, or a
-            priority below 1). ``warning`` is set for backends that keep the
-            password unencrypted on disk.
-        """
-        if not KEYRING_AVAILABLE:
-            return False, "none (keyring is not installed)", None
-
-        get_keyring = getattr(keyring, "get_keyring", None)
-        if get_keyring is None:
-            return True, "unknown", None
-
-        try:
-            backend = get_keyring()
-        except Exception as e:  # noqa: BLE001 - keyring backends raise backend-specific errors; pragma: no cover - backend discovery failed
-            return False, f"unavailable ({e})", None
-
-        cls = type(backend)
-        name = f"{cls.__module__}.{cls.__name__}"
-        module = cls.__module__.lower()
-        if module.endswith((".fail", ".null")):
-            return False, name, None
-        try:
-            priority = float(getattr(backend, "priority", 1))
-        except Exception:  # noqa: BLE001 - keyring backends raise backend-specific errors
-            priority = 0.0
-        if priority < 1:
-            return False, name, None
-
-        if "plaintext" in cls.__name__.lower():
-            return (
-                True,
-                name,
-                ("this keyring backend stores passwords unencrypted in a file"),
-            )
-        return True, name, None
-
-    def save_password(
-        self,
-        host: str,
-        username: str,
-        password: str,
-        expire_hours: int | None = None,
-    ) -> bool:
-        """Save password to keychain with optional expiration.
-
-        Args:
-            host: OMERO server host
-            username: OMERO username
-            password: OMERO password
-            expire_hours: Hours until password expires (None = never expires)
-
-        Returns:
-            True if saved successfully, False otherwise
-        """
-        usable, backend_name, warning = self.keyring_backend()
-        if not usable:
-            logger.warning(
-                f"Password not saved: no usable keyring backend ({backend_name}). "
-                "Enter the password each time, or configure a system keyring."
-            )
-            return False
-        if warning:
-            logger.warning(f"{warning} ({backend_name})")
-
-        try:
-            key = f"{host}:{username}"
-
-            # Create password data with optional expiration
-            password_data = {"password": password}
-            if expire_hours is not None:
-                expires_at = datetime.now(UTC) + timedelta(hours=expire_hours)
-                password_data["expires_at"] = expires_at.isoformat()
-
-            # Store in keychain, then read it back: some backends accept the
-            # write and silently keep nothing.
-            payload = json.dumps(password_data)
-            keyring.set_password(self.SERVICE_NAME, key, payload)
-            if keyring.get_password(self.SERVICE_NAME, key) != payload:
-                logger.warning(
-                    f"Password not saved: the keyring backend ({backend_name}) "
-                    "did not keep it"
-                )
-                return False
-
-            if expire_hours is not None:
-                logger.info(
-                    f"Password saved to keychain via {backend_name} "
-                    f"(expires in {expire_hours} hours)"
-                )
-            else:
-                logger.info(
-                    f"Password saved to keychain via {backend_name} (never expires)"
-                )
-            return True
-
-        except Exception as e:  # noqa: BLE001 - keyring backends raise backend-specific errors
-            logger.error(f"Failed to save password to keychain: {e}")
-            return False
-
-    def load_password(self, host: str, username: str) -> str | None:
-        """Load password from keychain and check expiration.
-
-        Args:
-            host: OMERO server host
-            username: OMERO username
-
-        Returns:
-            Password if found and not expired, None otherwise
-        """
-        if not KEYRING_AVAILABLE:
-            return None
-
-        try:
-            key = f"{host}:{username}"
-            stored_data = keyring.get_password(self.SERVICE_NAME, key)
-
-            if not stored_data:
-                return None
-
-            # Parse stored data
-            password_data = json.loads(stored_data)
-            password = password_data.get("password")
-            expires_at = password_data.get("expires_at")
-
-            # Check expiration
-            if expires_at:
-                expiry_time = datetime.fromisoformat(expires_at)
-                if datetime.now(UTC) > expiry_time:
-                    # Password expired, remove it
-                    self._delete_password(host, username)
-                    logger.info("Stored password has expired and was removed")
-                    return None
-                logger.info("Password loaded from keychain")
-            else:
-                logger.info("Password loaded from keychain (no expiration)")
-
-            return password
-
-        except Exception as e:  # noqa: BLE001 - keyring backends raise backend-specific errors
-            logger.error(f"Error loading password from keychain: {e}")
-            return None
-
-    def _delete_password(self, host: str, username: str) -> bool:
-        """Delete password from keychain.
-
-        Args:
-            host: OMERO server host
-            username: OMERO username
-
-        Returns:
-            True if deleted successfully, False otherwise
-        """
-        if not KEYRING_AVAILABLE:
-            return False
-
-        try:
-            key = f"{host}:{username}"
-            keyring.delete_password(self.SERVICE_NAME, key)
-            return True
-        except Exception:  # noqa: BLE001 - keyring backends raise backend-specific errors
-            return False
-
     def load_config_files(self) -> dict[str, Any]:
         """Load configuration from .env, connection history and .ezomero files.
 
         Priority order: .env -> connection history -> .ezomero
 
-        The returned dictionary never contains a password. Passwords are only
-        ever read from the keychain, via :meth:`load_password`.
+        The returned dictionary never contains a password: it is always
+        entered by the user.
 
         Returns:
             Dictionary with configuration parameters
@@ -427,7 +317,7 @@ class SimpleOMEROConnection:
 
                 # Keep the session alive while the user annotates.
                 if conn.c is not None:
-                    conn.c.enableKeepAlive(60)
+                    conn.c.enableKeepAlive(KEEPALIVE_SECONDS)
 
                 self.last_connection = conn
                 return conn
@@ -444,6 +334,9 @@ class SimpleOMEROConnection:
     ) -> Any:
         """Join an existing OMERO session by its key (e.g. from OMERO.web or a token).
 
+        The returned gateway never ends that session: closing it only detaches.
+        Without a password it cannot log in again once the session has ended.
+
         Raises:
             ConnectionFailed: The session does not exist (any more) or the server
                 cannot be reached.
@@ -455,10 +348,10 @@ class SimpleOMEROConnection:
             kwargs["port"] = port
         conn = None
         try:
-            conn = BlitzGateway(**kwargs)
+            conn = JoinedGateway(**kwargs)
             if conn.connect(sUuid=session_key):
                 if conn.c is not None:
-                    conn.c.enableKeepAlive(60)
+                    conn.c.enableKeepAlive(KEEPALIVE_SECONDS)
                 self.last_connection = conn
                 return conn
         except Exception as e:  # noqa: BLE001 - any gateway/Ice failure is a failed join
@@ -509,9 +402,10 @@ class SimpleOMEROConnection:
     def create_connection_from_config(self, widget_config: dict[str, Any]) -> Any:
         """Create connection from widget configuration.
 
-        The password is never persisted here. Callers that want to store it
-        must call :meth:`save_password` themselves, so that they can report
-        whether the keychain write actually succeeded.
+        The password is only used to log in: it is never written anywhere.
+        Host, username, group and port are saved to the connection history. With
+        a ``session_key`` (and a host) that session is joined instead, and nothing
+        is saved.
 
         Args:
             widget_config: Configuration dictionary from widget
@@ -526,13 +420,18 @@ class SimpleOMEROConnection:
         username = (widget_config.get("username") or "").strip()
         # Not stripped: whitespace can be part of a password.
         password = widget_config.get("password") or ""
+        session_key = (widget_config.get("session_key") or "").strip()
         group = (widget_config.get("group") or "").strip() or None
         secure = widget_config.get("secure", True)
         port = widget_config.get("port")
 
-        # Validate required fields
+        if host and session_key:
+            # Joins someone else's session: nothing is remembered for next time.
+            return self.join_session(host, session_key, port, secure)
         if not host or not username or not password:
-            raise ConnectionFailed("Host, username and password are required")
+            raise ConnectionFailed(
+                "Host, and username and password (or a session key), are required"
+            )
 
         # Create connection first to validate it works
         connection = self.connect(
@@ -586,7 +485,7 @@ class SimpleOMEROConnection:
     ) -> bool:
         """Save connection details to history file.
 
-        Never stores a password: only the keychain does that.
+        Never stores a password.
 
         Args:
             host: OMERO server host
@@ -686,15 +585,8 @@ class SimpleOMEROConnection:
         """
         try:
             connections_file = self._get_connections_file()
-
-            # The keychain entry goes regardless of the history: a password
-            # can be stored for a connection that was never saved to history.
-            password_deleted = self._delete_password(host, username)
-
             if not connections_file.exists():
-                if password_deleted:
-                    logger.info("Password deleted from keychain")
-                return password_deleted
+                return False
 
             # Load existing connections
             with connections_file.open() as f:
@@ -714,12 +606,9 @@ class SimpleOMEROConnection:
                 with connections_file.open("w") as f:
                     json.dump(connections, f, indent=2)
 
-                logger.info("Connection deleted from history and keychain")
+                logger.info("Connection deleted from history")
                 return True
-            if password_deleted:
-                logger.info("Connection not in history; password deleted from keychain")
-                return True
-            logger.warning("Connection not found in history or keychain")
+            logger.warning("Connection not found in history")
             return False
 
         except Exception as e:  # noqa: BLE001 - optional local config must never block connecting

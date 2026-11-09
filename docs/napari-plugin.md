@@ -26,7 +26,7 @@ message naming the one it needs.
 1. **Pick a training set.** Sets that have a folder in your home folder
    (`~/omero_annotate_ai`, or `$OMERO_ANNOTATE_AI_HOME`) are listed straight away;
    *Open folder…* opens any other set folder. For sets on OMERO, **connect** first
-   (host, user, password; the password is never stored), choose
+   (host, user and password, or a session key; nothing is stored), choose
    the container type and ID, and click *List sets*. Connecting runs in the
    background, so napari stays responsive. The summary shows progress per split and
    the last sessions with their notes; listing never changes anything. Tick

@@ -52,7 +52,6 @@ notebooks = [
     "ipykernel",
     "pixi-kernel>=0.6.6,<0.7",
     "marimo>=0.19.2,<0.20",
-    "keyring>=23.0.0",
 ]
 microsam = [
     "micro-sam>=1.8",  # brings napari; pixi takes micro_sam from conda-forge instead
