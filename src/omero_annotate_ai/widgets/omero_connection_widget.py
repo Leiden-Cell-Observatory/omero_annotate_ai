@@ -72,6 +72,12 @@ class OMEROConnectionWidget:
             style={"description_width": "initial"},
         )
 
+        self.session_key_widget = widgets.Password(
+            description="Session key:",
+            placeholder="instead of username and password (e.g. from OMERO.web)",
+            style={"description_width": "initial"},
+        )
+
         self.group_widget = widgets.Text(
             description="Group:",
             placeholder="Optional group name",
@@ -124,6 +130,7 @@ class OMEROConnectionWidget:
                 self.port_widget,
                 self.username_widget,
                 self.password_widget,
+                self.session_key_widget,
                 self.group_widget,
                 self.secure_widget,
             ]
@@ -273,6 +280,7 @@ class OMEROConnectionWidget:
 
         # Never carry a typed password over to another server
         self.password_widget.value = ""
+        self.session_key_widget.value = ""
 
     def _test_connection(self, button):
         """Test the OMERO connection."""
@@ -284,6 +292,13 @@ class OMEROConnectionWidget:
                     return
 
                 print("🔌 Testing connection...")
+                if config["session_key"]:
+                    joined = self.connection_manager.create_connection_from_config(
+                        config
+                    )
+                    joined.close()  # detaches: the session stays usable
+                    print("✅ The session key works")
+                    return
                 success, message = self.connection_manager.test_connection(
                     config["host"],
                     config["username"],
@@ -300,6 +315,7 @@ class OMEROConnectionWidget:
             finally:
                 # Not kept in the widget state (which a saved notebook may hold).
                 self.password_widget.value = ""
+                self.session_key_widget.value = ""
 
     def _connect(self, button):
         """Create the connection and save its details (never the password)."""
@@ -328,13 +344,17 @@ class OMEROConnectionWidget:
 
                 print("✅ Connection created and ready to use!")
                 self._print_connection_details()
-                print("💾 Connection details saved to history (password not stored)")
+                if not config["session_key"]:
+                    print(
+                        "💾 Server and username saved for next time (not the password)"
+                    )
 
             except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error creating connection: {e}")
             finally:
                 # Never leave a typed password sitting in the widget model
                 self.password_widget.value = ""
+                self.session_key_widget.value = ""
 
     def _close_existing_connection(self):
         """Close a connection this widget opened earlier, if any."""
@@ -367,6 +387,7 @@ class OMEROConnectionWidget:
             "username": self.username_widget.value.strip(),
             # Not stripped: whitespace can be a legitimate part of a password.
             "password": self.password_widget.value,
+            "session_key": self.session_key_widget.value.strip(),
             "group": self.group_widget.value.strip(),
             # URL hosts carry their own port; 4064 would override it.
             "port": None if url_host else self.port_widget.value,
@@ -378,6 +399,8 @@ class OMEROConnectionWidget:
         if not config["host"]:
             print("❌ Host is required")
             return False
+        if config["session_key"]:
+            return True
         if not config["username"]:
             print("❌ Username is required")
             return False
@@ -440,6 +463,7 @@ class OMEROConnectionWidget:
                 self.host_widget.value = ""
                 self.username_widget.value = ""
                 self.password_widget.value = ""
+                self.session_key_widget.value = ""
                 self.group_widget.value = ""
                 self.port_widget.value = self.DEFAULT_PORT
 

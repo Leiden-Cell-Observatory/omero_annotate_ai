@@ -54,7 +54,7 @@ from .bundle import (
     mask_path,
     pixel_digest,
 )
-from .errors import Cancelled
+from .errors import Cancelled, ConnectionFailed
 from .events import (
     BatchPrepared,
     BatchReleased,
@@ -367,6 +367,7 @@ class AnnotationSession:
 
         Returns None when nothing is left to hand out.
         """
+        self._set.ensure_connected()
         chosen = self._choose()
         if not chosen:
             return None
@@ -409,6 +410,7 @@ class AnnotationSession:
             TableWriteError: The tracking table could not be updated (the uploads
                 are saved locally and tagged; resuming repairs the table).
         """
+        self._set.ensure_connected()
         waiting = self._open.get(batch.index, set())
         by_id = {a.annotation_id: a for a in self._set.rows}
         todo = [i.annotation_id for i in batch.items if i.annotation_id in result]
@@ -529,6 +531,7 @@ class AnnotationSession:
         Raises:
             ValueError: The unit was not handed out and saved in this session.
         """
+        self._set.ensure_connected()
         row = self._saved_row(annotation_id)
         if not self._set.is_local:
             theirs = self._set.current_rows([annotation_id]).get(annotation_id)
@@ -571,6 +574,7 @@ class AnnotationSession:
             TableWriteError: The tracking table could not be updated (the exclusion
                 is saved locally; resuming writes it to the table).
         """
+        self._set.ensure_connected()
         if self.review:
             raise ValueError("A review session cannot exclude units")
         waiting = self._open.get(batch.index, set())
@@ -634,6 +638,9 @@ class AnnotationSession:
 
     def release(self, batch: Batch) -> None:
         """Hand back the batch's uncommitted units (they stay pending) and clean up."""
+        # Also offline: what the session did is recorded locally either way.
+        with contextlib.suppress(ConnectionFailed):
+            self._set.ensure_connected()
         left = self._open.get(batch.index, set())
         if left:
             self._unclaim(left)
@@ -659,6 +666,9 @@ class AnnotationSession:
 
         Returns the number of units annotated. Calling it again does nothing.
         """
+        # Also offline: what the session did is recorded locally either way.
+        with contextlib.suppress(ConnectionFailed):
+            self._set.ensure_connected()
         if self._finished:
             return self.annotated
         self._finished = True

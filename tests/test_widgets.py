@@ -284,6 +284,24 @@ class TestOMEROConnectionWidgetCredentials:
         assert "save_password" not in config
         assert "expire_hours" not in config
 
+    def test_a_session_key_needs_no_username_or_password(self, conn_manager):
+        conn_manager.get_connection_list.return_value = []
+        conn_manager.create_connection_from_config.return_value = Mock()
+        with patch(
+            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
+            return_value=conn_manager,
+        ):
+            widget = OMEROConnectionWidget()
+        widget.host_widget.value = "omero.example.org"
+        widget.session_key_widget.value = "abc-123"
+
+        widget._connect(None)
+
+        config = conn_manager.create_connection_from_config.call_args.args[0]
+        assert config["session_key"] == "abc-123" and not config["username"]
+        assert widget.connection is not None
+        assert widget.session_key_widget.value == ""
+
     def test_test_connection_clears_the_password(self, conn_manager):
         conn_manager.get_connection_list.return_value = []
         conn_manager.test_connection.return_value = (True, "ok")

@@ -266,6 +266,9 @@ class OMEROAnnotateDock(QWidget):
         self.user = QLineEdit()
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.session_key = QLineEdit()
+        self.session_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.session_key.setPlaceholderText("or a session key (e.g. from OMERO.web)")
         history = SimpleOMEROConnection().load_connection_history()
         if history:
             self.host.setText(str(history[0].get("host", "")))
@@ -275,6 +278,7 @@ class OMEROAnnotateDock(QWidget):
         form.addRow("Host", self.host)
         form.addRow("User", self.user)
         form.addRow("Password", self.password)
+        form.addRow("Session key", self.session_key)
         form.addRow(self.connect_button)
         self.container_type = QComboBox()
         self.container_type.addItems(CONTAINER_TYPES)
@@ -381,19 +385,26 @@ class OMEROAnnotateDock(QWidget):
     # --- start page ---------------------------------------------------------------
 
     def _connect(self) -> None:
-        host, user, password = (
+        host, user, password, key = (
             self.host.text().strip(),
             self.user.text().strip(),
             self.password.text(),
+            self.session_key.text().strip(),
         )
         self.password.clear()  # never kept, also not after a failed login
-        if not (host and user and password):
-            self._say("Fill in host, user and password.", error=True)
+        self.session_key.clear()
+        if not (host and (key or (user and password))):
+            self._say(
+                "Fill in host, and user and password or a session key.", error=True
+            )
             return
 
         def connect() -> Any:
-            # The password is never stored: it is asked for each time.
-            return SimpleOMEROConnection().connect(host, user, password, verbose=False)
+            # Nothing is stored: the password (or key) is asked for each time.
+            omero = SimpleOMEROConnection()
+            if key:
+                return omero.join_session(host, key)  # closing it only detaches
+            return omero.connect(host, user, password, verbose=False)
 
         def done(conn: Any) -> None:
             self._conn = conn

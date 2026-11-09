@@ -292,3 +292,74 @@ class TestConnectGatewayArgs:
         with pytest.raises(ConnectionFailed, match="router refused"):
             manager.connect("omero.example.org", "alice", "pw", verbose=False)
         gateway.return_value.close.assert_called_once()
+
+
+class FakeGateway:
+    """Enough of BlitzGateway for ensure_connected: alive, or reconnects (or not)."""
+
+    def __init__(self, alive=True, restores=True, keep_alive_raises=False):
+        self.alive, self.restores, self.raises = alive, restores, keep_alive_raises
+        self.resets = self.connects = 0
+        self.c = type("Client", (), {"enableKeepAlive": lambda _self, s: None})()
+
+    def keepAlive(self):  # noqa: N802 - BlitzGateway's name
+        if self.raises:
+            raise RuntimeError("Ice.ConnectionLostException")
+        return self.alive
+
+    def _resetOmeroClient(self):  # noqa: N802 - BlitzGateway's name
+        self.resets += 1
+
+    def connect(self):
+        self.connects += 1
+        return self.restores
+
+
+@pytest.mark.unit
+class TestEnsureConnected:
+    def test_a_live_connection_is_left_alone(self):
+        conn = FakeGateway()
+        sc.ensure_connected(conn)
+        assert (conn.resets, conn.connects) == (0, 0)
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_a_dropped_connection_is_restored_on_a_fresh_client(self, raises):
+        conn = FakeGateway(alive=False, keep_alive_raises=raises)
+        sc.ensure_connected(conn)
+        assert (conn.resets, conn.connects) == (1, 1)
+
+    def test_an_ended_session_that_cannot_be_resumed_is_reported(self):
+        conn = FakeGateway(alive=False, restores=False)
+        with pytest.raises(ConnectionFailed, match="connect again"):
+            sc.ensure_connected(conn)
+
+    def test_objects_that_are_not_a_gateway_are_left_alone(self):
+        sc.ensure_connected(object())
+
+
+@pytest.mark.unit
+class TestSessionKey:
+    def test_a_session_key_joins_and_remembers_nothing(self, manager, monkeypatch):
+        joined = []
+        monkeypatch.setattr(
+            manager, "join_session", lambda *args: joined.append(args) or "conn"
+        )
+        monkeypatch.setattr(
+            manager, "connect", lambda *a, **kw: pytest.fail("logged in with password")
+        )
+
+        conn = manager.create_connection_from_config(
+            {"host": "omero.example.org", "session_key": " abc-123 ", "port": 4064}
+        )
+
+        assert conn == "conn"
+        assert joined == [("omero.example.org", "abc-123", 4064, True)]
+        assert manager.load_connection_history() == []
+
+    def test_joined_gateways_detach_on_close(self):
+        import inspect
+
+        assert (
+            inspect.signature(sc.JoinedGateway.close).parameters["hard"].default
+            is False
+        )

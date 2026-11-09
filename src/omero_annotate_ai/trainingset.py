@@ -50,6 +50,7 @@ from .omero import omero_functions, tracking_table
 from .omero._untyped import ezomero
 from .omero.omero_functions import create_tracking_table as create_omero_tracking_table
 from .omero.omero_functions import replace_table_config
+from .omero.simple_connection import ensure_connected
 from .omero.tracking_table import is_supported, tag_for
 from .planning import (
     CoverageSpec,
@@ -956,12 +957,21 @@ class TrainingSet:
         frame = self.omero_writes.read_rows(self.conn, self.table_id, keys)
         return {r.annotation_id: r for r in rows_from_frame(frame)}
 
+    def ensure_connected(self) -> None:
+        """Before remote work: restore a dropped OMERO connection.
+
+        See :func:`omero_annotate_ai.omero.simple_connection.ensure_connected`.
+        """
+        if self.conn is not None:
+            ensure_connected(self.conn)
+
     def refresh(self) -> None:
         """Take over what other computers saved meanwhile (OMERO sets).
 
         Units another session annotated (or reviewed: a newer label file) get the
         table's row; rows another computer added are appended; claims are updated.
         """
+        self.ensure_connected()
         if self.is_local or self.table_id is None:
             return
         remote = {r.annotation_id: r for r in self._read_table_rows(self.table_id)}
@@ -1027,6 +1037,8 @@ class TrainingSet:
             ConfigError: ``config`` already belongs to a set (use :meth:`open`).
             SelectionError: Too few images for the requested counts.
         """
+        if conn is not None:
+            ensure_connected(conn)
         identity = config.identity
         if identity.table_id is not None or identity.local_uuid is not None:
             raise ConfigError(
@@ -1080,6 +1092,8 @@ class TrainingSet:
             ConfigError: The set has no config (on OMERO or in its folder).
             TableReadError: The tracking table cannot be read.
         """
+        if conn is not None:
+            ensure_connected(conn)
         writes = omero_writes if omero_writes is not None else OmeroWrites()
         root = home_dir(home)
         bundle: Path | None = None
@@ -1176,6 +1190,7 @@ class TrainingSet:
         Raises:
             ConfigError: A count is lower than the set already has.
         """
+        self.ensure_connected()
         if not self.is_local:
             self.refresh()  # rows other computers added count towards the targets
             self._merge_remote_config()
@@ -1244,6 +1259,7 @@ class TrainingSet:
 
         See :mod:`..session`; ``ids`` limits a session to those units.
         """
+        self.ensure_connected()
         if not self.rows:
             raise ValueError("The training set has no units")
         return AnnotationSession(
@@ -1424,6 +1440,7 @@ class TrainingSet:
         Raises:
             KeyError: The set has no such session.
         """
+        self.ensure_connected()
         if self.table_id is not None:
             self._merge_remote_config()
         self._session(session_id).note = note
@@ -1492,6 +1509,7 @@ class TrainingSet:
 
     def reconcile(self, *, prune_duplicates: bool = False) -> bool:
         """Repair what an interrupted session left (see :mod:`..reconcile`)."""
+        self.ensure_connected()
         if self.is_local:
             return False
         return reconcile(
@@ -1532,6 +1550,7 @@ class TrainingSet:
         ``annotation_output/`` only ever holds accepted masks, so drafts in
         ``external_output/`` are never uploaded by the repair on open.
         """
+        self.ensure_connected()
         pending = [r for r in self.rows if not r.processed]
         self._save_images_for_external(pending)
         (self.bundle_dir / EXTERNAL_OUTPUT).mkdir(parents=True, exist_ok=True)
@@ -1568,6 +1587,7 @@ class TrainingSet:
         OMERO sets the table is read first and the units claimed: units saved or
         claimed on another computer are skipped. Returns the number of units saved.
         """
+        self.ensure_connected()
         files: list[Path] = []
         folders = (
             list(self.bundle_dir.glob(folder))
@@ -1674,6 +1694,7 @@ def list_training_sets(
     conn: Any, container_type: str, container_id: int
 ) -> list[TrainingSetInfo]:
     """The training sets tracked on a container, newest first (read-only)."""
+    ensure_connected(conn)
     found: list[TrainingSetInfo] = []
     for table in omero_functions.list_annotation_tables(
         conn, container_type, container_id
@@ -1738,6 +1759,8 @@ def summarize(
 
     Unlike :meth:`TrainingSet.open` nothing is repaired or written.
     """
+    if conn is not None:
+        ensure_connected(conn)
     config = read_set_config(ref, conn)
     if isinstance(ref, int):
         rows = rows_from_frame(omero_functions.read_tracking_table(conn, ref))
