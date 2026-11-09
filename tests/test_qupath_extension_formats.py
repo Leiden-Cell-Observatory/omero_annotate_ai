@@ -27,7 +27,7 @@ QUPATH_SET = Path(__file__).parent / "data" / "qupath_set"
 @pytest.fixture
 def qupath_set(tmp_path) -> Path:
     """A copy of the set, so nothing is written into the repository."""
-    folder = tmp_path / "1603434b_qupath-fixture"
+    folder = tmp_path / "9a39f04e_qupath-fixture"
     shutil.copytree(QUPATH_SET, folder)
     return folder
 
@@ -43,7 +43,7 @@ class TestQuPathSet:
         config = AnnotationConfig.from_yaml(QUPATH_SET / "config.yaml")
         assert config.name == "QuPath fixture"
         assert config.storage == "local"
-        assert config.identity.local_uuid == "1603434b"
+        assert config.identity.local_uuid == "9a39f04e"
         assert config.identity.table_id is None
         assert config.training.seed == 42
         assert config.spatial_coverage.channels == [0]

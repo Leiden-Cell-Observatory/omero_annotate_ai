@@ -146,16 +146,24 @@ public final class TrainingSet {
                 throw new IOException("This OMERO training set's config has no table ID");
             if (remote == null)
                 throw new IOException("This training set is tracked on OMERO; connect to OMERO to open it");
+            checkSameSet(config, remote, tableId);
             rows = new ArrayList<>();
             for (Map<String, Object> cells : remote.readTable(tableId)) {
                 Row row = RowCodec.fromCells(cells);
                 Row mine = local.get(row.annotationId);
                 if (mine != null) {
                     // Kept locally only: the last error, and digests the table may not hold yet.
+                    boolean mineNewer = row.processed && mine.isAnnotated() && mine.labelId != null
+                            && (row.labelId == null || mine.labelId > row.labelId);
                     if (!row.processed && (mine.processed || mine.error != null)) {
                         row.copyFrom(mergePending(row, mine));
                         if (mine.processed)
                             pending.add(row.annotationId);
+                    } else if (mineNewer) {
+                        // A correction (or an accept after an exclusion) made here whose table
+                        // update did not get through: OMERO IDs only grow, so ours is the later one.
+                        row.copyFrom(mergePending(row, mine));
+                        pending.add(row.annotationId);
                     } else {
                         if (row.inputDigest == null)
                             row.inputDigest = mine.inputDigest;
@@ -168,10 +176,31 @@ public final class TrainingSet {
         }
         TrainingSet set = new TrainingSet(config, rows, folder, remote, softwareVersion);
         set.tablePending.addAll(pending);
+        set.releaseOwnClaims();
         set.closeOpenSessions();
         set.saveLocalTable();
         set.saveConfig();
         return set;
+    }
+
+    /**
+     * Refuse to mix up servers: a folder made for a set on one OMERO server must not be
+     * opened against another server that happens to have a table with the same ID (a
+     * test copy of the production server, for example). A server reached under another
+     * name is fine: the set on it must then carry this set's name and creation time.
+     */
+    private static void checkSameSet(SetConfig config, RemoteStore remote, long tableId) throws Exception {
+        if (config.server() == null || config.server().equals(remote.serverSlug()))
+            return;
+        String yaml = remote.readConfig(tableId);
+        SetConfig theirs = yaml == null ? null : SetConfig.parse(yaml);
+        boolean same = theirs != null && config.name().equals(theirs.name())
+                && String.valueOf(config.root().get("created")).equals(String.valueOf(theirs.root().get("created")));
+        if (!same)
+            throw new IOException("This training set belongs to the OMERO server \"" + config.server()
+                    + "\", but QuPath is connected to \"" + remote.serverSlug() + "\", where table " + tableId
+                    + " is " + (theirs == null ? "not a training set with a config" : "another set (\""
+                    + theirs.name() + "\")") + ". Log in to the right server in the OMERO extension.");
     }
 
     /** A unit saved locally whose table row is still open: keep the local state, with the table's claim. */
@@ -386,6 +415,34 @@ public final class TrainingSet {
         return isLive(holder, claimedAt, hours);
     }
 
+    /**
+     * Release the claims an earlier run of this user on this computer left (a crash, a
+     * dropped connection), so they do not keep other computers away until they expire.
+     */
+    private void releaseOwnClaims() {
+        if (remote == null)
+            return;
+        String suffix = "@" + owner();
+        List<String> held = new ArrayList<>();
+        for (Row row : rows)
+            if (row.claimedBy != null && row.claimedBy.endsWith(suffix))
+                held.add(row.annotationId);
+        if (held.isEmpty())
+            return;
+        try {
+            remote.updateCells(config.tableId(), held, cells -> str(cells.get("claimed_by")).endsWith(suffix)
+                    ? Map.of("claimed_by", "", "claimed_at", "") : null);
+            for (Row row : rows) {
+                if (held.contains(row.annotationId)) {
+                    row.claimedBy = "";
+                    row.claimedAt = "";
+                }
+            }
+        } catch (Exception e) {
+            // not released now: own claims never block this computer, and they expire
+        }
+    }
+
     /** Try to claim one unit for a session; false if another computer holds or saved it. */
     public boolean claim(Row row, String token, boolean annotated) throws Exception {
         if (remote == null)
@@ -494,10 +551,10 @@ public final class TrainingSet {
         try {
             if (row.imageId == null)
                 throw new IllegalStateException("The image of this unit is not on OMERO");
-            if (row.labelId == null && row.roiId == null) {
+            if (row.labelId == null || row.roiId == null) {
                 RemoteStore.Tagged tagged = remote.findTagged(row.imageId, tag(row.annotationId));
-                if (!tagged.labelIds().isEmpty()) {
-                    long labelId = tagged.labelIds().get(0);
+                if (row.labelId == null && !tagged.labelIds().isEmpty()) {
+                    long labelId = tagged.labelIds().get(tagged.labelIds().size() - 1);
                     byte[] file = remote.downloadFile(labelId);
                     if (file == null || !TiffIO.decode(file).digest().equals(mask.digest())) {
                         row.processed = false;
@@ -507,8 +564,12 @@ public final class TrainingSet {
                         return false;
                     }
                     row.labelId = labelId;
-                    row.roiId = tagged.roiIds().isEmpty() ? null : tagged.roiIds().get(0);
                     saveLocalTable();
+                }
+                if (row.roiId == null && !tagged.roiIds().isEmpty()) {
+                    // ROIs of an attempt that was cut off (its answer never arrived). They are
+                    // drawn again from the mask below, so the leftovers go: never two sets.
+                    remote.delete("Roi", tagged.roiIds());
                 }
             }
             String description = uploadDescription(row);
@@ -573,6 +634,19 @@ public final class TrainingSet {
         }
     }
 
+    /** Remove uploads that a newer save of {@code row} replaced (never the ones it uses now). */
+    void deleteSuperseded(Long labelId, Long roiId, Row row) {
+        for (Object[] old : new Object[][]{{"FileAnnotation", labelId, row.labelId}, {"Roi", roiId, row.roiId}}) {
+            if (old[1] == null || old[1].equals(old[2]))
+                continue;
+            try {
+                remote.delete((String) old[0], List.of((Long) old[1]));
+            } catch (Exception e) {
+                // an old upload that could not be deleted is superseded by the newer one
+            }
+        }
+    }
+
     /** Remember that a unit's table row must still be written; always returns false. */
     boolean markTablePending(Row row) {
         tablePending.add(row.annotationId);
@@ -608,6 +682,17 @@ public final class TrainingSet {
             List<Map<String, Object>> now = remote.readRows(config.tableId(), List.of(row.annotationId));
             if (!now.isEmpty()) {
                 Row theirs = RowCodec.fromCells(now.get(0));
+                boolean oursNewer = row.isAnnotated() && row.labelId != null
+                        && (theirs.labelId == null || row.labelId > theirs.labelId);
+                if (theirs.processed && oursNewer) {
+                    // Our correction (or accept after an exclusion) is the later one; only its
+                    // table update is missing. Write it, then remove what it replaced.
+                    if (writeTable(List.of(row))) {
+                        deleteSuperseded(theirs.labelId, theirs.roiId, row);
+                        repaired++;
+                    }
+                    continue;
+                }
                 if (theirs.processed) { // saved elsewhere meanwhile: theirs stands
                     if (theirs.inputDigest == null)
                         theirs.inputDigest = row.inputDigest;

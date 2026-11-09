@@ -3,7 +3,10 @@ package qupath.ext.omeroannotate.core;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.AbstractConstruct;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
+import org.yaml.snakeyaml.nodes.Node;
+import org.yaml.snakeyaml.nodes.ScalarNode;
 import org.yaml.snakeyaml.nodes.Tag;
 import org.yaml.snakeyaml.representer.Representer;
 import org.yaml.snakeyaml.resolver.Resolver;
@@ -20,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * A training set's definition and history: the {@code config.yaml} of the Python package
@@ -83,20 +87,88 @@ public final class SetConfig {
         dump.setWidth(4096);
         dump.setSplitLines(false);
         LoaderOptions load = new LoaderOptions();
-        return new Yaml(new SafeConstructor(load), new Representer(dump), dump, load, new NoTimestampResolver());
+        return new Yaml(new PyConstructor(load), new PyRepresenter(dump), dump, load, new PyResolver());
     }
 
-    /** Dates are read and written as plain text, so they survive a round trip unchanged. */
-    private static final class NoTimestampResolver extends Resolver {
+    /**
+     * A date or time exactly as it is written in the file. Python reads it as a datetime;
+     * here it is only carried along, so it comes out the way it went in.
+     */
+    public record Stamp(String text) {
+        @Override
+        public String toString() {
+            return text;
+        }
+    }
+
+    private static final Tag VALUE_TAG = new Tag(Tag.PREFIX + "value");
+
+    /**
+     * Decides which plain scalars are numbers, dates and so on, the way PyYAML does. The
+     * two libraries must agree, or a text one of them writes without quotes (an ID such
+     * as {@code 1234e567}, a note such as {@code 2026-11-09}) is read by the other as a
+     * number or a date.
+     */
+    private static final class PyResolver extends Resolver {
+        private static final Pattern PY_FLOAT = Pattern.compile(
+                "^(?:[-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+][0-9]+)?"
+                        + "|\\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?"
+                        + "|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*"
+                        + "|[-+]?\\.(?:inf|Inf|INF)"
+                        + "|\\.(?:nan|NaN|NAN))$");
+
         @Override
         protected void addImplicitResolvers() {
             addImplicitResolver(Tag.BOOL, BOOL, "yYnNtTfFoO", 10);
             addImplicitResolver(Tag.INT, INT, "-+0123456789");
-            addImplicitResolver(Tag.FLOAT, FLOAT, "-+0123456789.");
+            addImplicitResolver(Tag.FLOAT, PY_FLOAT, "-+0123456789.");
             addImplicitResolver(Tag.MERGE, MERGE, "<", 10);
             addImplicitResolver(Tag.NULL, NULL, "~nN\0", 10);
             addImplicitResolver(Tag.NULL, EMPTY, null, 10);
+            addImplicitResolver(Tag.TIMESTAMP, TIMESTAMP, "0123456789", 50);
+            addImplicitResolver(VALUE_TAG, VALUE, "=", 10);
         }
+    }
+
+    /** Dates stay text ({@link Stamp}); a lone "=" is ordinary text. */
+    private static final class PyConstructor extends SafeConstructor {
+        PyConstructor(LoaderOptions options) {
+            super(options);
+            this.yamlConstructors.put(Tag.TIMESTAMP, new AbstractConstruct() {
+                @Override
+                public Object construct(Node node) {
+                    return new Stamp(((ScalarNode) node).getValue());
+                }
+            });
+            this.yamlConstructors.put(VALUE_TAG, new AbstractConstruct() {
+                @Override
+                public Object construct(Node node) {
+                    return ((ScalarNode) node).getValue();
+                }
+            });
+        }
+    }
+
+    /** Writes dates back unquoted, and numbers in a form PyYAML reads as numbers. */
+    private static final class PyRepresenter extends Representer {
+        PyRepresenter(DumperOptions options) {
+            super(options);
+            this.representers.put(Stamp.class, data ->
+                    representScalar(Tag.TIMESTAMP, ((Stamp) data).text(), DumperOptions.ScalarStyle.PLAIN));
+            this.representers.put(Double.class, data -> representScalar(Tag.FLOAT, pythonFloat((Double) data)));
+            this.representers.put(Float.class, data ->
+                    representScalar(Tag.FLOAT, pythonFloat(((Float) data).doubleValue())));
+        }
+    }
+
+    /** A number as PyYAML reads a float: always with a dot, never Java's {@code 1.0E10}. */
+    static String pythonFloat(double value) {
+        if (Double.isNaN(value))
+            return ".nan";
+        if (Double.isInfinite(value))
+            return value > 0 ? ".inf" : "-.inf";
+        String text = new java.math.BigDecimal(Double.toString(value)).toPlainString();
+        return text.contains(".") ? text : text + ".0";
     }
 
     // --- Tree access ----------------------------------------------------------------
@@ -315,8 +387,8 @@ public final class SetConfig {
     }
 
     /** The current local time as PyYAML writes a datetime. */
-    public static String now() {
-        return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS"));
+    public static Stamp now() {
+        return new Stamp(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
     }
 
     // --- A new set ------------------------------------------------------------------
@@ -386,15 +458,20 @@ public final class SetConfig {
 
         Map<String, Object> training = new LinkedHashMap<>();
         training.put("split_unit", "image");
-        training.put("train_n", spec.trainN);
-        training.put("validate_n", spec.validateN);
-        training.put("test_n", spec.testN);
+        if (!spec.useAllImages) { // with "all images" the counts mean nothing (Python warns about them)
+            training.put("train_n", spec.trainN);
+            training.put("validate_n", spec.validateN);
+            training.put("test_n", spec.testN);
+        }
         training.put("segment_all", spec.useAllImages);
         if (spec.useAllImages) {
             training.put("validation_fraction", spec.validationFraction);
             training.put("test_fraction", spec.testFraction);
-            training.put("train_fraction",
-                    Math.max(0.0, Math.round((1.0 - spec.validationFraction - spec.testFraction) * 1000) / 1000.0));
+            // Python requires the three fractions to add up to at most 1, in floating point.
+            double train = Math.max(0.0, Math.floor((1.0 - spec.validationFraction - spec.testFraction) * 1000) / 1000.0);
+            while (train > 0 && train + spec.validationFraction + spec.testFraction > 1.0)
+                train = Math.max(0.0, Math.round((train - 0.001) * 1000) / 1000.0);
+            training.put("train_fraction", train);
         }
         training.put("seed", spec.seed);
         root.put("training", training);

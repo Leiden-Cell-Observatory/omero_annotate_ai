@@ -467,4 +467,165 @@ class SessionTest {
         assertTrue(inner.getMessage().contains("not reachable"), inner.getMessage());
         assertTrue(wrapped.listSets("dataset", 1).isEmpty());
     }
+
+    @Test
+    void aChangedMaskAfterAHalfUploadReplacesTheHalfUpload() throws Exception {
+        TrainingSet set = omeroSet(2);
+        long tableId = set.tableId();
+        AnnotationSession session = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = session.next();
+        omero.failOnce = "uploadRois"; // the label file goes up, the ROI does not
+        assertEquals(AnnotationSession.Outcome.UPLOAD_FAILED, session.commit(row, mask(1, 2), input()).outcome());
+        Long firstLabel = row.labelId;
+        assertNotNull(firstLabel);
+        assertNull(row.roiId);
+
+        // The annotator corrects the objects and accepts again.
+        assertEquals(AnnotationSession.Outcome.SAVED, session.commit(row, mask(1, 2, 3), null).outcome());
+        assertNotEquals(firstLabel, row.labelId, "the label of the old mask is not kept");
+        assertFalse(omero.files.containsKey(firstLabel));
+        assertEquals(1, omero.files.size());
+        assertEquals(mask(1, 2, 3).digest(), TiffIO.decode(omero.files.get(row.labelId)).digest());
+        assertEquals(3, omero.roiPolygons.get(row.roiId));
+        assertEquals(row.labelId, omero.tableRow(tableId, row.annotationId).get("label_id"));
+    }
+
+    @Test
+    void theSameMaskAfterAHalfUploadOnlyAddsWhatIsMissing() throws Exception {
+        TrainingSet set = omeroSet(2);
+        AnnotationSession session = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = session.next();
+        omero.failOnce = "uploadRois";
+        session.commit(row, mask(1, 2), input());
+        Long firstLabel = row.labelId;
+        assertEquals(AnnotationSession.Outcome.SAVED, session.commit(row, mask(1, 2), null).outcome());
+        assertEquals(firstLabel, row.labelId, "the label already uploaded is used");
+        assertEquals(1, omero.files.size());
+        assertNotNull(row.roiId);
+    }
+
+    @Test
+    void aCorrectionWhoseTableUpdateFailsIsCompletedNotReverted() throws Exception {
+        TrainingSet set = omeroSet(2);
+        long tableId = set.tableId();
+        AnnotationSession first = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = first.next();
+        first.commit(row, mask(1, 2), input());
+        first.finish(null, false);
+        long oldLabel = row.labelId, oldRoi = row.roiId;
+
+        AnnotationSession review = new AnnotationSession(set, true, "QuPath", TRACER);
+        Row again = review.next();
+        omero.failAlways = "writeRows";
+        assertEquals(AnnotationSession.Outcome.UPLOAD_FAILED, review.commit(again, mask(1, 2, 3), null).outcome());
+        omero.failAlways = null;
+        long newLabel = again.labelId;
+        assertNotEquals(oldLabel, newLabel);
+        assertTrue(omero.files.containsKey(oldLabel), "the label the table still names is kept");
+        assertEquals(oldLabel, omero.tableRow(tableId, row.annotationId).get("label_id"));
+
+        // Reopening (QuPath was closed in between) keeps the correction and completes it.
+        TrainingSet reopened = TrainingSet.open(tableId, omero, home, "test");
+        Row pending = reopened.row(row.annotationId);
+        assertEquals(newLabel, pending.labelId, "the folder's newer row is not thrown away");
+        assertEquals(1, reopened.unfinished().size());
+        assertEquals(1, reopened.repair(TRACER));
+        assertEquals(newLabel, omero.tableRow(tableId, row.annotationId).get("label_id"));
+        assertEquals(mask(1, 2, 3).digest(), omero.tableRow(tableId, row.annotationId).get("mask_digest"));
+        assertFalse(omero.files.containsKey(oldLabel), "the replaced label is removed once the table is right");
+        assertFalse(omero.roiDescriptions.containsKey(oldRoi));
+        assertEquals(1, omero.files.size());
+        assertTrue(reopened.unfinished().isEmpty());
+    }
+
+    @Test
+    void aReviewDoesNotOverwriteANewerCorrectionFromElsewhere() throws Exception {
+        TrainingSet set = omeroSet(2);
+        long tableId = set.tableId();
+        AnnotationSession first = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = first.next();
+        first.commit(row, mask(1, 2), input());
+        first.finish(null, false);
+
+        AnnotationSession review = new AnnotationSession(set, true, "QuPath", TRACER);
+        Row mine = review.next();
+        // Meanwhile a colleague corrects the same unit (their label has a higher ID).
+        Row theirs = mine.copy();
+        theirs.labelId = omero.uploadLabel(mine.imageId, TiffIO.encode(mask(5), true), "x.tif", set.uploadDescription(mine));
+        theirs.maskDigest = mask(5).digest();
+        theirs.session = 9;
+        omero.writeRows(tableId, List.of(theirs));
+        int files = omero.files.size();
+
+        AnnotationSession.Result result = review.commit(mine, mask(1, 2, 3), null);
+        assertEquals(AnnotationSession.Outcome.SAVED_ELSEWHERE, result.outcome());
+        assertEquals(files, omero.files.size(), "nothing was uploaded over their correction");
+        assertEquals(theirs.labelId, mine.labelId);
+        assertEquals(theirs.labelId, omero.tableRow(tableId, row.annotationId).get("label_id"));
+        assertTrue(Files.exists(Bundle.conflictPath(set.bundle(), row.annotationId, review.id())));
+    }
+
+    @Test
+    void aMaskWithOtherLabelNumbersIsTheSameMask() throws Exception {
+        // Cellpose and micro-SAM number objects in their own order; QuPath from the top left.
+        TrainingSet set = localSet(2);
+        AnnotationSession first = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = first.next();
+        first.commit(row, mask(7, 7, 3, 0, 9), input());
+        first.finish(null, false);
+        AnnotationSession review = new AnnotationSession(set, true, "QuPath", TRACER);
+        Row again = review.next();
+        assertEquals(AnnotationSession.Outcome.UNCHANGED, review.commit(again, mask(1, 1, 2, 0, 3), null).outcome());
+        assertEquals(1, again.session);
+        // Two objects merged into one, or one split in two, is a change.
+        assertEquals(AnnotationSession.Outcome.REVISED, review.commit(again, mask(1, 1, 1, 0, 3), null).outcome());
+        assertEquals(AnnotationSession.Outcome.REVISED, review.commit(again, mask(1, 2, 3, 0, 4), null).outcome());
+    }
+
+    @Test
+    void leftoverRoisOfACutOffUploadAreNotDuplicated() throws Exception {
+        TrainingSet set = omeroSet(2);
+        AnnotationSession session = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = session.next();
+        // The ROI upload reaches OMERO, but its answer never arrives: the ID is not known here.
+        FakeRemoteStore real = omero;
+        omero.failOnce = "uploadRois";
+        session.commit(row, mask(1, 2), input());
+        real.roiDescriptions.put(900L, set.uploadDescription(row));
+        real.roiImages.put(900L, row.imageId);
+        real.roiPolygons.put(900L, 2);
+        assertEquals(AnnotationSession.Outcome.SAVED, session.commit(row, mask(1, 2), null).outcome());
+        assertEquals(1, real.roiDescriptions.size(), "one set of ROIs, not two");
+        assertFalse(real.roiDescriptions.containsKey(900L));
+    }
+
+    @Test
+    void aFolderOfAnotherServerIsRefused() throws Exception {
+        TrainingSet set = omeroSet(2);
+        long tableId = set.tableId();
+        // A second server (a test copy) with a table of the same ID holding another set.
+        FakeRemoteStore staging = new FakeRemoteStore() {
+            @Override public String serverSlug() { return "staging-4064"; }
+        };
+        staging.tables.put(tableId, omero.readTable(tableId));
+        SetConfig other = SetConfig.parse(omero.configs.get(tableId));
+        other.root().put("name", "something else");
+        staging.configs.put(tableId, other.toYaml());
+        Exception e = assertThrows(java.io.IOException.class, () -> TrainingSet.open(set.bundle(), staging, "test"));
+        assertTrue(e.getMessage().contains("staging-4064"), e.getMessage());
+        // The same server under another name (same set on it) is fine.
+        staging.configs.put(tableId, omero.configs.get(tableId));
+        assertEquals(2, TrainingSet.open(set.bundle(), staging, "test").rows().size());
+    }
+
+    @Test
+    void ownClaimsLeftByACrashAreReleasedOnOpen() throws Exception {
+        TrainingSet set = omeroSet(2);
+        long tableId = set.tableId();
+        AnnotationSession crashed = new AnnotationSession(set, false, "QuPath", TRACER);
+        Row row = crashed.next();
+        assertNotEquals("", omero.tableRow(tableId, row.annotationId).get("claimed_by"));
+        TrainingSet.open(tableId, omero, home, "test");
+        assertEquals("", omero.tableRow(tableId, row.annotationId).get("claimed_by"));
+    }
 }

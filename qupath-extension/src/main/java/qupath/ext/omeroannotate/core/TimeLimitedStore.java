@@ -25,6 +25,15 @@ public final class TimeLimitedStore {
     /** Calls that never wait for the server. */
     private static final Set<String> LOCAL = Set.of("close", "serverSlug", "userName", "toString", "hashCode", "equals");
 
+    /**
+     * Calls that send or remove data and may rightly take long (thousands of ROIs, a
+     * large table). They get more time, because giving up on one that is still running
+     * is worse than waiting.
+     */
+    private static final Set<String> SLOW = Set.of("uploadLabel", "uploadRois", "delete", "createTable",
+            "replaceConfig", "writeRows");
+    private static final long SLOW_FACTOR = 5;
+
     private static final ExecutorService CALLS = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "omero-annotate-ai-call");
         thread.setDaemon(true);
@@ -54,11 +63,13 @@ public final class TimeLimitedStore {
                         throw new IOException("The OMERO server is not answering");
                     Future<Object> call = CALLS.submit(() -> method.invoke(store, args));
                     try {
-                        return call.get(seconds, TimeUnit.SECONDS);
+                        return call.get(SLOW.contains(method.getName()) ? seconds * SLOW_FACTOR : seconds,
+                                TimeUnit.SECONDS);
                     } catch (TimeoutException e) {
                         call.cancel(true);
                         lastTimeout[0] = System.nanoTime();
-                        throw new IOException("The OMERO server did not answer within " + seconds + " seconds");
+                        throw new IOException("The OMERO server did not answer within "
+                                + (SLOW.contains(method.getName()) ? seconds * SLOW_FACTOR : seconds) + " seconds");
                     } catch (ExecutionException e) {
                         Throwable cause = e.getCause();
                         throw cause instanceof InvocationTargetException target ? target.getCause() : cause;

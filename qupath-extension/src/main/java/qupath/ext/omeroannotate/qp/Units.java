@@ -116,7 +116,9 @@ public final class Units {
     /**
      * The objects that make up a unit's mask: every object with an area on the frame's
      * plane whose centre lies inside the frame. Frames themselves, objects with an
-     * "ignored" class (name ending in *) and regions enclosing the frame are left out.
+     * "ignored" class (name ending in *) are left out, and so are regions that are not
+     * objects themselves: one that covers the frame, or one that holds several of the
+     * other objects (a tissue outline with the cells found inside it).
      */
     public static List<PathObject> objectsInFrame(PathObjectHierarchy hierarchy, PathObject frame) {
         ROI frameRoi = frame.getROI();
@@ -154,6 +156,15 @@ public final class Units {
                 continue;
             result.add(object);
         }
+        // A region that holds several of the other objects (a tissue outline with the cells
+        // detected inside it) is the place the objects are in, not an object itself.
+        java.util.Map<PathObject, Integer> inside = new java.util.HashMap<>();
+        java.util.Set<PathObject> accepted = new java.util.HashSet<>(result);
+        for (PathObject object : result)
+            for (PathObject p = object.getParent(); p != null; p = p.getParent())
+                if (accepted.contains(p))
+                    inside.merge(p, 1, Integer::sum);
+        result.removeIf(object -> object.isAnnotation() && inside.getOrDefault(object, 0) >= 2);
         return result;
     }
 
@@ -279,7 +290,10 @@ public final class Units {
             return new PixelArray("u1", width, height, 3, bytes);
         }
         WritableRaster raster = image.getRaster();
-        int band = Math.max(0, Math.min(row.channel, raster.getNumBands() - 1));
+        if (row.channel >= raster.getNumBands())
+            throw new IOException("The training set annotates channel " + (row.channel + 1) + ", but this image has "
+                    + raster.getNumBands() + (raster.getNumBands() == 1 ? " channel" : " channels"));
+        int band = Math.max(0, row.channel);
         PixelType type = server.getPixelType();
         String dtype = switch (type) {
             case UINT8 -> "u1";

@@ -50,19 +50,50 @@ public final class Ids {
         return patch < 0 ? base : base + "_" + patch;
     }
 
+    private static String hostId;
+
     /** Short, stable ID of this computer (a hash: the host name itself is not stored). */
-    public static String hostId() {
-        return hex("SHA-256", hostName().getBytes(StandardCharsets.UTF_8)).substring(0, 8);
+    public static synchronized String hostId() {
+        if (hostId == null)
+            hostId = hex("SHA-256", hostName().getBytes(StandardCharsets.UTF_8)).substring(0, 8);
+        return hostId;
     }
 
+    /**
+     * The computer's own name, as Python's {@code socket.gethostname()} gives it, so that
+     * QuPath and napari on one computer count as the same computer. Asked from the
+     * operating system; a name-server lookup is only the last resort.
+     */
     private static String hostName() {
+        // The "hostname" command answers like gethostname() on Linux, macOS and Windows.
+        try {
+            Process process = new ProcessBuilder("hostname").redirectErrorStream(true).start();
+            String value = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+            if (process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && process.exitValue() == 0
+                    && !value.isEmpty() && !value.contains("\n"))
+                return value;
+        } catch (Exception e) {
+            // try the next source
+        }
+        try {
+            java.nio.file.Path file = java.nio.file.Path.of("/etc/hostname");
+            if (java.nio.file.Files.isReadable(file)) {
+                String value = java.nio.file.Files.readString(file).strip();
+                if (!value.isEmpty())
+                    return value;
+            }
+        } catch (Exception e) {
+            // try the next source
+        }
+        for (String variable : new String[]{"HOSTNAME", "COMPUTERNAME"}) {
+            String value = System.getenv(variable);
+            if (value != null && !value.isBlank())
+                return value.strip();
+        }
         try {
             return InetAddress.getLocalHost().getHostName();
         } catch (Exception e) {
-            String env = System.getenv("COMPUTERNAME");
-            if (env == null)
-                env = System.getenv("HOSTNAME");
-            return env == null ? "unknown" : env;
+            return "unknown-" + System.getProperty("user.name", "");
         }
     }
 

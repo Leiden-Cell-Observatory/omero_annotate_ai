@@ -108,6 +108,15 @@ public final class TiffIO {
 
     /** The image in a TIFF file's first page. */
     public static PixelArray decode(byte[] file) throws IOException {
+        try {
+            return decodeChecked(file);
+        } catch (IndexOutOfBoundsException | java.nio.BufferUnderflowException | NegativeArraySizeException
+                 | IllegalArgumentException e) {
+            throw new IOException("damaged TIFF file", e);
+        }
+    }
+
+    private static PixelArray decodeChecked(byte[] file) throws IOException {
         if (file.length < 8)
             throw new IOException("not a TIFF file");
         ByteOrder order;
@@ -185,6 +194,8 @@ public final class TiffIO {
             }
             position += expected;
         }
+        if (predictor == 2 && bytesPer > 4)
+            throw new IOException("TIFF files with a predictor and " + bits[0] + "-bit values are not supported");
         if (predictor == 2)
             undoHorizontalDifferencing(pixels, width, height, samples, bytesPer, order);
         else if (predictor != 1)

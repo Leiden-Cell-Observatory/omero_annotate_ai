@@ -119,9 +119,15 @@ public final class TrainingSetPane extends BorderPane {
     /** Units accepted, skipped or excluded in this session (a review counts images looked at). */
     private final Set<String> handled = new LinkedHashSet<>();
     private PathObjectHierarchy watched;
+    private final java.util.concurrent.atomic.AtomicBoolean countQueued =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private final PathObjectHierarchyListener objectListener = event -> {
-        if (!event.isChanging())
-            Platform.runLater(this::updateObjectCount);
+        // Tools add objects by the thousand; one recount per burst is enough.
+        if (!event.isChanging() && countQueued.compareAndSet(false, true))
+            Platform.runLater(() -> {
+                countQueued.set(false);
+                updateObjectCount();
+            });
     };
 
     // Shared widgets
@@ -134,6 +140,7 @@ public final class TrainingSetPane extends BorderPane {
     // Chooser widgets
     private final ListView<SetChoice> choices = new ListView<>();
     private final Label omeroStatus = new Label();
+    private final Button loginButton = new Button("Log in to OMERO…");
 
     // Session widgets
     private final Label unitTitle = new Label();
@@ -516,8 +523,8 @@ public final class TrainingSetPane extends BorderPane {
         MenuButton more = new MenuButton("More", null, openFolder, byTable, new SeparatorMenuItem(), showHome);
 
         omeroStatus.setWrapText(true);
-        Button loginButton = new Button("Log in to OMERO…");
         loginButton.setOnAction(e -> openOmeroBrowser());
+        loginButton.managedProperty().bind(loginButton.visibleProperty());
         TextField address = new TextField();
         address.setPromptText("host:port (leave empty: found automatically)");
         address.textProperty().bindBidirectional(omeroAddress);
@@ -553,13 +560,22 @@ public final class TrainingSetPane extends BorderPane {
                     RemoteStore store = connect();
                     omero = "Connected as " + store.userName() + " (" + login.label() + ").";
                     if (openImage != null) {
+                        // Sets that already have a folder here are listed once. The server may
+                        // be known under another name in that folder (web address, alias), so
+                        // table ID and set name together identify the set.
                         Set<Long> known = new LinkedHashSet<>();
-                        for (SetChoice choice : found)
-                            if (choice.isOnOmero() && store.serverSlug().equals(choice.server()))
+                        Set<String> knownByName = new LinkedHashSet<>();
+                        for (SetChoice choice : found) {
+                            if (!choice.isOnOmero())
+                                continue;
+                            if (store.serverSlug().equals(choice.server()))
                                 known.add(choice.tableId());
+                            knownByName.add(choice.tableId() + "|" + choice.name());
+                        }
                         for (String[] container : store.containersOfImage(openImage)) {
                             for (RemoteStore.SetInfo info : store.listSets(container[0], Long.parseLong(container[1]))) {
-                                if (known.add(info.tableId()))
+                                if (!knownByName.contains(info.tableId() + "|" + info.name())
+                                        && known.add(info.tableId()))
                                     found.add(new SetChoice(info.name(), null, info.tableId(), store.serverSlug(),
                                             "On OMERO (" + container[0] + " \"" + container[2] + "\", table "
                                                     + info.tableId() + ")"));
@@ -569,16 +585,18 @@ public final class TrainingSetPane extends BorderPane {
                         omero += " Open an OMERO image to see the training sets of its dataset.";
                     }
                 } catch (Exception e) {
-                    remote = null;
+                    dropConnection();
                     omero = message(e);
                 }
             }
-            return new Object[]{found, omero};
+            return new Object[]{found, omero, remote != null};
         }, result -> {
             @SuppressWarnings("unchecked")
             List<SetChoice> found = (List<SetChoice>) result[0];
             choices.getItems().setAll(found);
             omeroStatus.setText((String) result[1]);
+            // Offered only while it helps: with the OMERO extension installed and no login in use.
+            loginButton.setVisible(!(Boolean) result[2] && OmeroAccess.hasOmeroExtension());
         });
     }
 
@@ -892,8 +910,16 @@ public final class TrainingSetPane extends BorderPane {
         TrainingSet target = set;
         background("Starting…", () -> {
             AnnotationSession started = new AnnotationSession(target, review, "QuPath", Units.TRACER);
-            Row first = started.next();
-            return new Object[]{started, first};
+            try {
+                return new Object[]{started, started.next()};
+            } catch (Exception e) {
+                try { // the session is on record already: close it, do not leave it open
+                    started.finish(null, true);
+                } catch (Exception ignored) {
+                    // it is closed as interrupted the next time the set is opened
+                }
+                throw e;
+            }
         }, result -> {
             session = (AnnotationSession) result[0];
             handled.clear();
@@ -1108,7 +1134,13 @@ public final class TrainingSetPane extends BorderPane {
         current = row;
         confirmEmpty = false;
         updateSessionView();
-        Project<BufferedImage> project = qupath.getProject();
+        Project<BufferedImage> project;
+        try {
+            project = ensureProject();
+        } catch (Exception e) {
+            fail("The QuPath project of this set could not be opened", e);
+            return;
+        }
         String web = webUri();
         background("Opening " + row.imageName + "…", () -> Images.findOrAdd(project, row, web), entry -> {
             qupath.refreshProject();
@@ -1157,6 +1189,20 @@ public final class TrainingSetPane extends BorderPane {
             PathObjectHierarchy hierarchy = imageData.getHierarchy();
             int[] r = Units.region(row, imageData.getServer());
             List<PathObject> old = Units.objectsInFrame(hierarchy, frame);
+            if (!old.isEmpty() && !frame.getMetadata().containsKey(Units.META_DIGEST)) {
+                // Objects that were in this image before the training set came to it: they are
+                // the user's own work and are not thrown away without asking.
+                boolean replace = Dialogs.showYesNoDialog("Saved mask", "This image already has "
+                        + count(old.size(), "object") + " in the frame, and the training set has a saved mask "
+                        + "for it.\n\nShow the saved mask instead? Your " + count(old.size(), "object")
+                        + " in the frame will be removed from this QuPath project.\n\nChoose No to keep them; "
+                        + "accepting then saves them as the corrected mask.");
+                if (!replace) {
+                    frame.getMetadata().put(Units.META_DIGEST, "kept by the user");
+                    updateSessionView();
+                    return;
+                }
+            }
             if (!old.isEmpty())
                 hierarchy.removeObjects(old, true);
             List<PathObject> objects = Units.objectsFromMask(mask, r[0], r[1], Units.plane(row));
@@ -1243,6 +1289,18 @@ public final class TrainingSetPane extends BorderPane {
         }
         Row row = current;
         PathObject frame = currentFrame(imageData);
+        int[] expected = Units.region(row, imageData.getServer());
+        if (!java.util.Arrays.equals(expected, Units.bounds(frame))) {
+            // The frame says which pixels the mask covers; it is fixed by the training set.
+            imageData.getHierarchy().removeObject(frame, true);
+            frame = currentFrame(imageData);
+            frame.setName(frameName(row));
+            imageData.getHierarchy().getSelectionModel().setSelectedObject(frame);
+            warn("The frame had been moved or resized. It is back in its place; check the objects and "
+                    + "accept again.");
+            return;
+        }
+        PathObject theFrame = frame;
         List<PathObject> objects = Units.objectsInFrame(imageData.getHierarchy(), frame);
         if (objects.isEmpty() && !confirmEmpty) {
             confirmEmpty = true;
@@ -1265,8 +1323,8 @@ public final class TrainingSetPane extends BorderPane {
             handled.add(row.annotationId);
             switch (outcome.outcome()) {
                 case SAVED, REVISED, UNCHANGED -> {
-                    frame.getMetadata().put(Units.META_DIGEST, mask.digest());
-                    frame.setName(frameName(row));
+                    theFrame.getMetadata().put(Units.META_DIGEST, mask.digest());
+                    theFrame.setName(frameName(row));
                     saveImage(imageData);
                     int n = Units.countLabels(mask);
                     say(switch (outcome.outcome()) {
@@ -1287,7 +1345,7 @@ public final class TrainingSetPane extends BorderPane {
                     Dialogs.showWarningNotification("Not on OMERO yet", "Your work on " + row.imageName
                             + " is safe on this computer, but OMERO could not be updated. Upload it later from "
                             + "the set's overview.");
-                    frame.setName("Saved here, not on OMERO yet (" + row.category + ")");
+                    theFrame.setName("Saved here, not on OMERO yet (" + row.category + ")");
                     warn("Your work on " + row.imageName + " is saved on this computer, but OMERO could not be "
                             + "updated (" + plain(outcome.message()) + "). Press Skip to go on, or finish the session; "
                             + "the upload can be repeated from the set's overview.");
@@ -1408,7 +1466,7 @@ public final class TrainingSetPane extends BorderPane {
             int saved = running.savedCount();
             endSessionUi();
             showOverview();
-            say("Session finished: " + saved + (saved == 1 ? " image" : " images") + " saved.");
+            say("Session finished: " + count(saved, unitNoun()) + " saved.");
         }, error -> {
             endSessionUi();
             showOverview();

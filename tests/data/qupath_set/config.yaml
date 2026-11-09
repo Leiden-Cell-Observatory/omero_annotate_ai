@@ -1,7 +1,7 @@
 schema_version: 3
 name: QuPath fixture
 authors: []
-created: 2026-11-09 22:35:20.293567
+created: 2026-11-09 22:57:09.872705
 annotation_methodology:
   annotation_type: segmentation_mask
   annotation_method: semi_automatic
@@ -38,12 +38,12 @@ storage: local
 identity:
   server: null
   table_id: null
-  local_uuid: 1603434b
+  local_uuid: 9a39f04e
 sessions:
 - id: 1
   kind: annotate
-  started: 2026-11-09 22:35:20.342403
-  ended: 2026-11-09 22:35:20.417275
+  started: 2026-11-09 22:57:09.921676
+  ended: 2026-11-09 22:57:10.003972
   status: finished
   user: root
   host: 5bce98f7

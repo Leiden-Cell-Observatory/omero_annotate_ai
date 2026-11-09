@@ -425,42 +425,58 @@ public final class OmeroGatewayStore implements RemoteStore {
     }
 
     private static void link(IUpdatePrx update, String type, long parentId, long annotationId) throws Exception {
-        FileAnnotationI child = new FileAnnotationI(annotationId, false);
-        IObject link;
+        update.saveAndReturnObject(newLink(type, parentId, new FileAnnotationI(annotationId, false)));
+    }
+
+    /** A link attaching a file annotation (saved already, or new) to an object. */
+    private static IObject newLink(String type, long parentId, FileAnnotationI child) {
         switch (type) {
             case "Dataset" -> {
                 DatasetAnnotationLinkI l = new DatasetAnnotationLinkI();
                 l.setParent(new DatasetI(parentId, false));
                 l.setChild(child);
-                link = l;
+                return l;
             }
             case "Project" -> {
                 ProjectAnnotationLinkI l = new ProjectAnnotationLinkI();
                 l.setParent(new ProjectI(parentId, false));
                 l.setChild(child);
-                link = l;
+                return l;
             }
             case "Plate" -> {
                 PlateAnnotationLinkI l = new PlateAnnotationLinkI();
                 l.setParent(new PlateI(parentId, false));
                 l.setChild(child);
-                link = l;
+                return l;
             }
             case "Screen" -> {
                 ScreenAnnotationLinkI l = new ScreenAnnotationLinkI();
                 l.setParent(new ScreenI(parentId, false));
                 l.setChild(child);
-                link = l;
+                return l;
             }
             case "Image" -> {
                 ImageAnnotationLinkI l = new ImageAnnotationLinkI();
                 l.setParent(new ImageI(parentId, false));
                 l.setChild(child);
-                link = l;
+                return l;
             }
             default -> throw new IllegalArgumentException("Cannot attach a file to a " + type);
         }
-        update.saveAndReturnObject(link);
+    }
+
+    private static long childId(IObject link) {
+        if (link instanceof DatasetAnnotationLinkI l)
+            return l.getChild().getId().getValue();
+        if (link instanceof ProjectAnnotationLinkI l)
+            return l.getChild().getId().getValue();
+        if (link instanceof PlateAnnotationLinkI l)
+            return l.getChild().getId().getValue();
+        if (link instanceof ScreenAnnotationLinkI l)
+            return l.getChild().getId().getValue();
+        if (link instanceof ImageAnnotationLinkI l)
+            return l.getChild().getId().getValue();
+        throw new IllegalStateException("Unexpected link type " + link.getClass().getSimpleName());
     }
 
     @Override
@@ -649,9 +665,10 @@ public final class OmeroGatewayStore implements RemoteStore {
         if (description != null)
             annotation.setDescription(rstring(description));
         annotation.setFile(new OriginalFileI(file.getId().getValue(), false));
-        long id = update.saveAndReturnObject(annotation).getId().getValue();
-        link(update, parentType, parentId, id);
-        return id;
+        // The annotation is saved together with its link, so there is never an attached
+        // file that hangs on nothing (and that a later search by tag could not find).
+        IObject saved = update.saveAndReturnObject(newLink(parentType, parentId, annotation));
+        return childId(saved);
     }
 
     /** File annotations with a namespace on an object, with their files loaded. */
@@ -811,7 +828,11 @@ public final class OmeroGatewayStore implements RemoteStore {
         Response response;
         try {
             CmdCallbackI callback = gateway.submit(context, Requests.delete().target(type).id(ids).build());
-            response = callback.loop(1200, 500);
+            try {
+                response = callback.loop(1200, 500);
+            } finally {
+                callback.close(true);
+            }
         } catch (Exception e) {
             throw e;
         } catch (Throwable t) {

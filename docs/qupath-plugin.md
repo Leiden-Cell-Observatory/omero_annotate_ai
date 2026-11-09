@@ -45,8 +45,10 @@ Nothing else is needed: no Python, no napari.
 - For each image the extension draws a locked **frame**: the whole image, or a patch of
   it. **Every object whose centre lies inside the frame becomes one object of the
   mask**, whether it is an annotation, a detection or a cell, drawn by hand or found by a
-  tool. Objects with a class ending in `*` (such as `Ignore*`) are left out, and so is a
-  region that encloses the frame (a tissue outline).
+  tool. Left out are objects with a class ending in `*` (such as `Ignore*`) and regions
+  that are not objects themselves: one that covers the frame, or one that holds several
+  of the other objects (a tissue outline with the cells detected inside it). The panel
+  shows how many objects it counts, so you can check before you accept.
 - **Accept** saves the mask and goes to the next image. Nothing else needs saving.
 - The set is kept **on this computer** (a folder) or **on OMERO** (masks and ROIs are
   uploaded, a table on the dataset tracks progress, colleagues can join in).
@@ -97,7 +99,8 @@ accepted is saved, the rest stays for next time.
 **Review** on the overview page goes through the annotated images again, also those
 annotated in napari: their saved masks come back as editable objects. A changed mask
 replaces the earlier one (on OMERO: the new upload first, then the old one is removed);
-an unchanged one is left alone.
+an unchanged one is left alone. If the image already holds objects of your own that the
+training set did not put there, the panel asks before it shows the saved mask instead.
 
 ### 3. Use the result
 
@@ -153,12 +156,13 @@ For every accepted image the extension uploads, exactly like the Python package:
 
 **Several people, one set.** The image you are looking at is claimed in the table, so a
 colleague annotating the same set (in QuPath or napari) gets other images. An image
-somebody else saved first is not uploaded twice: your mask is kept in the set's folder
-and the panel names the file.
+somebody else saved or corrected first is not overwritten: your mask is kept in the
+set's folder and the panel names the file.
 
 **If OMERO is not reachable** when you accept an image, nothing is lost: the mask is
-saved in the set's folder and the panel says so. The set's overview then shows
-*Upload now*; a save that was cut off half-way is completed, not repeated.
+saved in the set's folder and the panel says so (after a minute at most, if the server
+does not answer at all). The set's overview then shows *Upload now*; a save that was cut
+off half-way is completed, not repeated.
 
 If the panel cannot find your server (OMERO.web and the OMERO server are on different
 machines, or the port is not 4064), enter `host:port` under *OMERO server address*.
@@ -192,6 +196,8 @@ set gets its own project in its folder.
 - A whole image must be smaller than 100 megapixels to be annotated in one piece; use
   patches for larger ones.
 - Where objects overlap, the smaller one stays on top in the mask.
+- The frame belongs to the training set: if it is moved or resized, it is put back
+  before anything is saved.
 - A set kept on this computer whose images are local files can be exported and
   summarised by the Python package, but not annotated further in napari (napari reads
   images from OMERO or OME-Zarr).

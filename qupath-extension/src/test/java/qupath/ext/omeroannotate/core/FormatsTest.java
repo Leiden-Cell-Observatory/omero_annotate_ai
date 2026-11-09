@@ -350,4 +350,75 @@ class FormatsTest {
             assertEquals(1, list.count());
         }
     }
+
+    @Test
+    void yamlScalarsAreReadAndWrittenAsPyYamlDoes() {
+        // What PyYAML writes without quotes must stay text here, and the other way round.
+        String yaml = """
+                schema_version: 3
+                name: 2024-05-01
+                created: 2025-01-14 10:30:00.123456
+                notes: '2026-11-09'
+                identity:
+                  local_uuid: 1234e567
+                  table_id: null
+                sessions:
+                - id: 1
+                  host: 12345e67
+                  started: 2025-01-14 10:31:00
+                  note: '='
+                workflow:
+                  claim_hours: 6.0
+                """;
+        SetConfig config = SetConfig.parse(yaml);
+        assertEquals("1234e567", config.localUuid(), "a hex ID is text, not a number");
+        assertEquals("12345e67", config.sessions().get(0).get("host"));
+        assertEquals("2026-11-09", config.root().get("notes"));
+        assertEquals("=", config.sessions().get(0).get("note"));
+        assertEquals(6.0, config.claimHours());
+        String out = config.toYaml();
+        assertTrue(out.contains("local_uuid: 1234e567"), out);
+        assertTrue(out.contains("host: 12345e67"), out);
+        assertTrue(out.contains("created: 2025-01-14 10:30:00.123456"), out);
+        assertTrue(out.contains("started: 2025-01-14 10:31:00"), out);
+        assertTrue(out.contains("notes: '2026-11-09'"), "a date-like text keeps its quotes: " + out);
+        assertTrue(out.contains("note: '='"), out);
+        assertTrue(out.contains("claim_hours: 6.0"), out);
+        assertEquals(config.root(), SetConfig.parse(out).root());
+
+        // Text typed in QuPath that looks like a date or a number is quoted when written.
+        SetConfig.NewSet spec = new SetConfig.NewSet();
+        spec.name = "2024-05-01";
+        spec.criteria = "=";
+        String made = SetConfig.create(spec).toYaml();
+        assertTrue(made.contains("name: '2024-05-01'"), made);
+        assertTrue(made.contains("annotation_criteria: '='"), made);
+        assertTrue(made.matches("(?s).*created: \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{6}\n.*"), made);
+    }
+
+    @Test
+    void floatsAreWrittenTheWayPythonReadsThem() {
+        assertEquals("6.0", SetConfig.pythonFloat(6.0));
+        assertEquals("0.2", SetConfig.pythonFloat(0.2));
+        assertEquals("10000000000.0", SetConfig.pythonFloat(1e10));
+        assertEquals("0.000010", SetConfig.pythonFloat(1e-5));
+        assertEquals(".inf", SetConfig.pythonFloat(Double.POSITIVE_INFINITY));
+    }
+
+    @Test
+    void fractionsNeverAddUpToMoreThanOne() {
+        for (int v = 0; v < 100; v++) {
+            for (int t = 0; v + t < 100; t++) {
+                SetConfig.NewSet spec = new SetConfig.NewSet();
+                spec.useAllImages = true;
+                spec.validationFraction = v / 100.0;
+                spec.testFraction = t / 100.0;
+                Map<?, ?> training = (Map<?, ?>) SetConfig.create(spec).root().get("training");
+                double sum = ((Number) training.get("train_fraction")).doubleValue() + spec.validationFraction
+                        + spec.testFraction;
+                assertTrue(sum <= 1.0, v + "/" + t + " gives " + sum);
+                assertTrue(sum > 0.99, v + "/" + t + " gives " + sum);
+            }
+        }
+    }
 }

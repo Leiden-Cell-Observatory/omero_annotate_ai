@@ -228,8 +228,8 @@ final class NewSetDialog {
                     problem = "Enter the ID of the OMERO " + containerType.getValue() + " (the number shown in OMERO).";
                 }
             }
-            if (problem == null && !all.isSelected() && train.getValue() + validate.getValue() + test.getValue() == 0)
-                problem = "Choose at least one image to annotate.";
+            if (problem == null && !all.isSelected() && train.getValue() < 1)
+                problem = "A training set needs at least one training image.";
             if (problem == null && all.isSelected() && valPercent.getValue() + testPercent.getValue() >= 100)
                 problem = "Validation and test together must leave images for training.";
             if (problem != null) {

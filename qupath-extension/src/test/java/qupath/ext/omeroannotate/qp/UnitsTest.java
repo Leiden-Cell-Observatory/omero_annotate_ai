@@ -172,4 +172,30 @@ class UnitsTest {
         assertEquals(0, Images.seriesOf("ImageJServer: file:/data/a.tif"));
         assertEquals(0, Images.seriesOf(null));
     }
+
+    @Test
+    void aRegionHoldingSeveralObjectsIsNotAnObject() {
+        PathObjectHierarchy hierarchy = new PathObjectHierarchy();
+        PathObject frame = frame(hierarchy, 0, 0, 500, 500);
+        // A tissue outline drawn inside the frame, with cells detected inside it.
+        PathObject tissue = rect(50, 50, 300, 300);
+        hierarchy.addObject(tissue);
+        List<PathObject> cells = new ArrayList<>();
+        for (int i = 0; i < 4; i++)
+            cells.add(PathObjects.createDetectionObject(ROIs.createEllipseROI(80 + 60 * i, 100, 20, 20, ImagePlane.getDefaultPlane())));
+        tissue.addChildObjects(cells);
+        // A hand-drawn cell with one nucleus inside: both are objects.
+        PathObject cell = rect(400, 400, 60, 60);
+        hierarchy.addObject(cell);
+        PathObject nucleus = rect(420, 420, 15, 15);
+        cell.addChildObject(nucleus);
+        hierarchy.fireHierarchyChangedEvent(this);
+
+        List<PathObject> found = Units.objectsInFrame(hierarchy, frame);
+        assertFalse(found.contains(tissue), "the region around the cells is context");
+        assertTrue(found.containsAll(cells));
+        assertTrue(found.contains(cell));
+        assertTrue(found.contains(nucleus));
+        assertEquals(6, found.size());
+    }
 }
