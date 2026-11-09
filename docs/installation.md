@@ -26,8 +26,7 @@ Jupyter in that environment:
 pixi run jupyter lab
 ```
 
-The `notebooks` extra adds the Jupyter widgets, [marimo](https://marimo.io) and keychain
-support. Start a marimo notebook with `pixi run marimo edit <notebook>.py`.
+The `notebooks` extra adds the Jupyter widgets and [marimo](https://marimo.io). Start a marimo notebook with `pixi run marimo edit <notebook>.py`.
 
 ## Install with conda and pip
 

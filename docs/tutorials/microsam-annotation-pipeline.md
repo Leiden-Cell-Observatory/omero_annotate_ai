@@ -32,8 +32,8 @@ Fill in the server address, your username and password, and click **Connect**.
 ![OMERO connection widget](../images/widget_connect.png)
 
 The widget remembers the server and username for next time (in
-`~/.omero-annotate-ai/connections.json`), but never your password unless you tick the
-option to store it in your system keychain.
+`~/.omero-annotate-ai/connections.json`), but never your password: you type it each
+time.
 
 Then, in the next cell:
 
