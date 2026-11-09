@@ -47,15 +47,26 @@ def ensure_connected(conn: Any) -> None:
     keep_alive = getattr(conn, "keepAlive", None)
     if keep_alive is None:
         return
-    with contextlib.suppress(Exception):
-        if keep_alive():
-            return
+    if conn.c is None:  # closed on purpose (e.g. replaced by another login)
+        raise ConnectionFailed("This OMERO connection was closed; connect again")
+    # Without a session factory keepAlive() reconnects by itself but leaves the
+    # client's keep-alive pings off: handle that as a drop too.
+    if getattr(conn.c, "sf", None) is not None:
+        with contextlib.suppress(Exception):
+            if keep_alive():
+                # The group this session works in (cached by the gateway), to
+                # restore it should the session end.
+                conn.oai_session_group = conn.getEventContext().groupId
+                return
     logger.warning("The connection to OMERO was lost; reconnecting")
+    group = getattr(conn, "oai_session_group", None)
     try:
         # A fresh client: the old one still believes it has a session, so connect()
         # alone would report success. Private omero-py API, pinned by a Docker test.
         conn._resetOmeroClient()
         restored = conn.connect()
+        if restored and group is not None and conn.getEventContext().groupId != group:
+            conn.setGroupForSession(group)
     except Exception as e:  # noqa: BLE001 - any gateway/Ice failure: not restored
         raise ConnectionFailed(
             f"The connection to OMERO was lost and could not be restored: {e}"

@@ -971,9 +971,9 @@ class TrainingSet:
         Units another session annotated (or reviewed: a newer label file) get the
         table's row; rows another computer added are appended; claims are updated.
         """
-        self.ensure_connected()
         if self.is_local or self.table_id is None:
             return
+        self.ensure_connected()
         remote = {r.annotation_id: r for r in self._read_table_rows(self.table_id)}
         for position, row in enumerate(self.rows):
             theirs = remote.pop(row.annotation_id, None)
@@ -1440,7 +1440,8 @@ class TrainingSet:
         Raises:
             KeyError: The set has no such session.
         """
-        self.ensure_connected()
+        if not self.is_local:  # a local set's note and masks need no OMERO
+            self.ensure_connected()
         if self.table_id is not None:
             self._merge_remote_config()
         self._session(session_id).note = note
@@ -1587,7 +1588,8 @@ class TrainingSet:
         OMERO sets the table is read first and the units claimed: units saved or
         claimed on another computer are skipped. Returns the number of units saved.
         """
-        self.ensure_connected()
+        if not self.is_local:  # a local set's note and masks need no OMERO
+            self.ensure_connected()
         files: list[Path] = []
         folders = (
             list(self.bundle_dir.glob(folder))

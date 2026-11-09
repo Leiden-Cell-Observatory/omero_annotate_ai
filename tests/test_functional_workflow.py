@@ -1378,3 +1378,24 @@ class TestReconnect:
         joined.close()
 
         assert conn.keepAlive()  # the session it came from still works
+
+    def test_a_new_session_keeps_the_group(self, conn, docker_omero_server):
+        import uuid
+
+        from omero.model import ExperimenterGroupI, PermissionsI
+        from omero.rtypes import rbool, rstring
+
+        from omero_annotate_ai.omero.simple_connection import ensure_connected
+
+        group = ExperimenterGroupI()
+        group.name = rstring(f"oai-reconnect-{uuid.uuid4().hex[:8]}")
+        group.ldap = rbool(False)
+        group.details.permissions = PermissionsI("rw----")
+        other = conn.getAdminService().createGroup(group)
+        assert conn.setGroupForSession(other)  # root may enter any group
+        ensure_connected(conn)  # records the group the session works in
+        end_session(docker_omero_server, conn.getSession().getUuid().val)
+
+        ensure_connected(conn)
+
+        assert conn.getEventContext().groupId == other

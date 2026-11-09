@@ -300,7 +300,16 @@ class FakeGateway:
     def __init__(self, alive=True, restores=True, keep_alive_raises=False):
         self.alive, self.restores, self.raises = alive, restores, keep_alive_raises
         self.resets = self.connects = 0
-        self.c = type("Client", (), {"enableKeepAlive": lambda _self, s: None})()
+        self.group, self.switched_to = 5, None
+        self.c = type(
+            "Client", (), {"sf": object(), "enableKeepAlive": lambda _self, s: None}
+        )()
+
+    def getEventContext(self):  # noqa: N802 - BlitzGateway's name
+        return type("Ctx", (), {"groupId": self.group})()
+
+    def setGroupForSession(self, group):  # noqa: N802 - BlitzGateway's name
+        self.switched_to = group
 
     def keepAlive(self):  # noqa: N802 - BlitzGateway's name
         if self.raises:
@@ -332,6 +341,26 @@ class TestEnsureConnected:
         conn = FakeGateway(alive=False, restores=False)
         with pytest.raises(ConnectionFailed, match="connect again"):
             sc.ensure_connected(conn)
+
+    def test_a_closed_connection_is_not_logged_back_in(self):
+        conn = FakeGateway()
+        conn.c = None
+        with pytest.raises(ConnectionFailed, match="closed"):
+            sc.ensure_connected(conn)
+        assert conn.connects == 0
+
+    def test_a_client_without_session_factory_counts_as_dropped(self):
+        conn = FakeGateway()
+        conn.c.sf = None  # keepAlive() would reconnect without keep-alive pings
+        sc.ensure_connected(conn)
+        assert (conn.resets, conn.connects) == (1, 1)
+
+    def test_a_new_session_returns_to_the_group_the_old_one_worked_in(self):
+        conn = FakeGateway()
+        sc.ensure_connected(conn)  # alive: records group 5
+        conn.alive, conn.group = False, 3  # session ended; a new one starts in 3
+        sc.ensure_connected(conn)
+        assert conn.switched_to == 5
 
     def test_objects_that_are_not_a_gateway_are_left_alone(self):
         sc.ensure_connected(object())

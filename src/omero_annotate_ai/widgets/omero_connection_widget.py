@@ -400,6 +400,10 @@ class OMEROConnectionWidget:
             print("❌ Host is required")
             return False
         if config["session_key"]:
+            if config["group"]:
+                print(
+                    "ℹ️ Group is not used with a session key: the session keeps its own"
+                )
             return True
         if not config["username"]:
             print("❌ Username is required")
@@ -500,6 +504,7 @@ class OMEROConnectionWidget:
         config = self._get_widget_config()
         if not include_password:
             config.pop("password", None)
+            config.pop("session_key", None)
         return config
 
 
