@@ -118,6 +118,27 @@ and the BioImage Archive bundle on top.
     annotated with this extension can be passed to its training script as it is (objects
     found as detections must be turned into annotations first).
 
+## Working with detection tools
+
+The extension does not care how objects get into the frame; these were tried with it:
+
+| Tool | How | Tried with |
+|---|---|---|
+| **Cellpose** | *Detect objects ▸ Cellpose…* asks for the model and object diameter and runs the [BIOP Cellpose extension](https://github.com/BIOP/qupath-extension-cellpose) on the frame, on the channel the set annotates. Set the Cellpose Python path in QuPath's preferences first, as that extension describes. | Cellpose 3.1 (`cyto3`), BIOP extension 0.11.3 (QuPath 0.6) and 0.12.1 (QuPath 0.7) |
+| **QuPath cell detection** | *Detect objects ▸ QuPath cell detection…* opens QuPath's own dialog for the frame. | QuPath 0.6 and 0.7 |
+| **SAM** | Prompt inside the frame with the [SAM extension](https://github.com/ksugar/qupath-extension-sam); its annotations count like any other. | masks of a `samapi` 0.7.1 server (SAM 2 tiny) |
+| **InstanSeg, StarDist, your own script** | Run it on the selected frame. | |
+| **By hand** | Brush, wand, polygon. | |
+
+Cellpose and the other detectors make objects for you to check, not finished masks:
+delete what is wrong and draw what is missing before you accept.
+
+!!! note "SAM extension and the OMERO Java libraries"
+    With SAM extension 0.9.1, its requests failed in a QuPath that also had the OMERO
+    Java libraries installed (both bring their own, different version of the Apache HTTP
+    client). If you see `NoSuchMethodError … httpclient5` in the log, use SAM in a QuPath
+    without the OMERO libraries, with sets kept on this computer.
+
 ## Sets on OMERO
 
 Log in with the OMERO extension first (*Extensions ▸ OMERO ▸ Browse server*); the panel

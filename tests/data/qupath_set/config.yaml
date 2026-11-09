@@ -1,0 +1,60 @@
+schema_version: 3
+name: QuPath fixture
+authors: []
+created: 2026-11-09 22:35:20.293567
+annotation_methodology:
+  annotation_type: segmentation_mask
+  annotation_method: semi_automatic
+  annotation_criteria: every nucleus
+  annotation_coverage: representative
+  annotation_tool:
+    name: QuPath
+    version: 0.6.0
+    mode: interactive
+    parameters: null
+spatial_coverage:
+  channels:
+  - 0
+  timepoints:
+  - 0
+  timepoint_mode: specific
+  z_slices:
+  - 0
+  z_slice_mode: specific
+  three_d: false
+  use_patches: false
+training:
+  split_unit: image
+  train_n: 2
+  validate_n: 1
+  test_n: 0
+  segment_all: false
+  seed: 42
+omero:
+  container_type: dataset
+  container_id: 0
+source: omero
+storage: local
+identity:
+  server: null
+  table_id: null
+  local_uuid: 1603434b
+sessions:
+- id: 1
+  kind: annotate
+  started: 2026-11-09 22:35:20.342403
+  ended: 2026-11-09 22:35:20.417275
+  status: finished
+  user: root
+  host: 5bce98f7
+  software_version: qupath-extension-omero-annotate-ai 0.1.0 (QuPath 0.6.0)
+  model: QuPath
+  batch_size: 1
+  n_annotated: 1
+  note: nuclei only
+tags:
+- qupath
+custom_metadata:
+  qupath:
+    extension_version: 0.1.0
+workflow: {}

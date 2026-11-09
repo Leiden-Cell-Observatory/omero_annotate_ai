@@ -317,18 +317,85 @@ public final class TrainingSetPane extends BorderPane {
 
     /** Join the OMERO extension's login if not connected yet. Background thread. */
     private RemoteStore connect() throws Exception {
-        if (remote != null)
-            return remote;
+        return connect(null);
+    }
+
+    /**
+     * Join the OMERO extension's login. Background thread.
+     * <p>
+     * A connection made earlier is used again as long as the OMERO extension is still
+     * logged in with it and the server answers; otherwise a new one is made, so logging
+     * in again (or as someone else) in the OMERO extension is picked up here.
+     *
+     * @param server folder name of the server a set belongs to, to pick the right login
+     *               when QuPath is logged in to several servers; may be null
+     */
+    private RemoteStore connect(String server) throws Exception {
         String missing = OmeroAccess.missing();
         if (missing != null)
             throw new IllegalStateException(missing);
         List<OmeroAccess.Login> logins = OmeroAccess.logins();
-        if (logins.isEmpty())
+        if (logins.isEmpty()) {
+            dropConnection();
             throw new IllegalStateException("You are not logged in to OMERO. Log in with "
                     + "Extensions ▸ OMERO ▸ Browse server, then try again.");
-        login = logins.get(0);
-        remote = OmeroAccess.connect(login, omeroAddress.get());
+        }
+        if (remote != null) {
+            boolean sameLogin = login != null
+                    && logins.stream().anyMatch(l -> l.sessionId().equals(login.sessionId()));
+            boolean rightServer = server == null || server.equals(remote.serverSlug()) || logins.size() == 1;
+            if (sameLogin && rightServer) {
+                try {
+                    remote.containersOfImage(-1); // a cheap question: is the server still there?
+                    return remote;
+                } catch (Exception e) {
+                    logger.debug("The OMERO connection is gone; connecting again", e);
+                }
+            }
+            dropConnection();
+        }
+        Exception last = null;
+        RemoteStore first = null;
+        OmeroAccess.Login firstLogin = null;
+        for (OmeroAccess.Login candidate : logins) {
+            RemoteStore store;
+            try {
+                store = OmeroAccess.connect(candidate, omeroAddress.get());
+            } catch (Exception e) {
+                last = e;
+                continue;
+            }
+            if (server == null || server.equals(store.serverSlug())) {
+                if (first != null)
+                    first.close();
+                login = candidate;
+                remote = store;
+                return remote;
+            }
+            if (first == null) {
+                first = store;
+                firstLogin = candidate;
+            } else {
+                store.close();
+            }
+        }
+        if (first == null)
+            throw last;
+        login = firstLogin; // no login matches the set's server name: the first one that works
+        remote = first;
         return remote;
+    }
+
+    private void dropConnection() {
+        RemoteStore old = remote;
+        remote = null;
+        if (old != null) {
+            try {
+                old.close();
+            } catch (RuntimeException e) {
+                logger.debug("Closing a dead OMERO connection", e);
+            }
+        }
     }
 
     private void disconnect() {
@@ -522,9 +589,10 @@ public final class TrainingSetPane extends BorderPane {
             TrainingSet opened;
             if (choice.folder() != null) {
                 SetConfig config = SetConfig.load(choice.folder().resolve(Bundle.CONFIG));
-                opened = TrainingSet.open(choice.folder(), config.isLocal() ? null : connect(), softwareVersion());
+                opened = TrainingSet.open(choice.folder(), config.isLocal() ? null : connect(config.server()),
+                        softwareVersion());
             } else {
-                opened = TrainingSet.open(choice.tableId(), connect(), home(), softwareVersion());
+                opened = TrainingSet.open(choice.tableId(), connect(choice.server()), home(), softwareVersion());
             }
             return opened;
         }, opened -> {
