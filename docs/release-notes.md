@@ -13,7 +13,8 @@ Newest first. The full list of pull requests per version is on
   versions stay in the OS keychain under the service name `omero-annotate-ai`, with
   the key `<host>:<username>`. Remove them with your system's keychain tool (Seahorse
   on Linux, Keychain Access on macOS, Credential Manager on Windows) or with
-  `keyring del omero-annotate-ai <host>:<username>`.
+  `pipx run keyring del omero-annotate-ai <host>:<username>` (`keyring` itself is no
+  longer installed with the package).
 
 ## 0.5.2
 

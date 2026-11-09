@@ -203,9 +203,17 @@ class TestCreateConnectionFromConfig:
 
         assert seen["password"] == "  s3 cret  "
 
-    def test_never_persists_the_password(self, manager, monkeypatch, tmp_path):
-        """No file written while connecting holds the password."""
+    def test_never_persists_the_password(
+        self, manager, monkeypatch, tmp_path, caplog, capsys
+    ):
+        """No file, keychain, log record or printed line holds the password."""
+        import sys
+        from unittest.mock import MagicMock
+
+        keyring = MagicMock()
+        monkeypatch.setitem(sys.modules, "keyring", keyring)
         monkeypatch.setattr(manager, "connect", lambda *a, **kw: object())
+        caplog.set_level(logging.DEBUG)
 
         manager.create_connection_from_config(
             {
@@ -219,10 +227,15 @@ class TestCreateConnectionFromConfig:
         assert written, "the connection history should have been written"
         for path in written:
             assert b"s3cret-pw" not in path.read_bytes(), path
+        assert not keyring.mock_calls
+        assert "s3cret-pw" not in caplog.text
+        assert "s3cret-pw" not in capsys.readouterr().out
 
     def test_has_no_password_storage_api(self, manager):
-        for name in ("save_password", "load_password", "_delete_password"):
-            assert not hasattr(manager, name)
+        import inspect
+
+        assert "keyring" not in inspect.getsource(sc)
+        assert not [name for name in dir(manager) if "password" in name.lower()]
 
 
 class TestHistoryMessage:
