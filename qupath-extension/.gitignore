@@ -1,0 +1,7 @@
+build/
+.gradle/
+gradle.properties
+.idea/
+*.iml
+out/
+hs_err*.log
