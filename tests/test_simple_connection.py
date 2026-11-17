@@ -1,7 +1,8 @@
 """Tests for SimpleOMEROConnection credential and config handling.
 
 These are unit tests: no OMERO server is contacted. They focus on the paths
-where a secret could escape - the keychain, ``.env`` and ``~/.ezomero``.
+where a secret could escape - the connection history, ``.env`` and
+``~/.ezomero``. Passwords are never stored anywhere.
 """
 
 import json
@@ -31,39 +32,6 @@ pytestmark = [
 ]
 
 
-class FakeKeyring:
-    """In-memory stand-in for the ``keyring`` module."""
-
-    def __init__(self):
-        self.store = {}
-
-    def set_password(self, service, key, value):
-        self.store[(service, key)] = value
-
-    def get_password(self, service, key):
-        return self.store.get((service, key))
-
-    def delete_password(self, service, key):
-        del self.store[(service, key)]
-
-    def get_keyring(self):
-        return self.backend
-
-
-class _GoodBackend:
-    priority = 5
-
-
-@pytest.fixture
-def fake_keyring(monkeypatch):
-    """Replace the real OS keyring with an in-memory one."""
-    keyring = FakeKeyring()
-    keyring.backend = _GoodBackend()
-    monkeypatch.setattr(sc, "keyring", keyring, raising=False)
-    monkeypatch.setattr(sc, "KEYRING_AVAILABLE", True)
-    return keyring
-
-
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     """A connection manager with an isolated home directory.
@@ -76,40 +44,6 @@ def manager(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
 
     return sc.SimpleOMEROConnection()
-
-
-class TestKeychain:
-    """Passwords are stored in the keychain and honour their expiry."""
-
-    def test_save_and_load_round_trip(self, manager, fake_keyring):
-        assert manager.save_password("omero.example.org", "alice", "  s3 cret  ")
-
-        loaded = manager.load_password("omero.example.org", "alice")
-        assert loaded == "  s3 cret  "
-
-    def test_expired_password_is_dropped_and_deleted(self, manager, fake_keyring):
-        manager.save_password("omero.example.org", "alice", "s3cret", expire_hours=-1)
-
-        assert manager.load_password("omero.example.org", "alice") is None
-        # The expired secret must be purged, not just hidden
-        assert fake_keyring.store == {}
-
-    def test_unexpired_password_survives(self, manager, fake_keyring):
-        manager.save_password("omero.example.org", "alice", "s3cret", expire_hours=24)
-
-        assert manager.load_password("omero.example.org", "alice") == "s3cret"
-
-    def test_delete_connection_purges_the_password(self, manager, fake_keyring):
-        manager.save_connection_details("omero.example.org", "alice")
-        manager.save_password("omero.example.org", "alice", "s3cret")
-
-        assert manager.delete_connection("omero.example.org", "alice")
-        assert fake_keyring.store == {}
-
-    def test_save_reports_failure_without_a_keyring(self, manager, monkeypatch):
-        monkeypatch.setattr(sc, "KEYRING_AVAILABLE", False)
-
-        assert manager.save_password("omero.example.org", "alice", "s3cret") is False
 
 
 class TestEnvConfig:
@@ -204,16 +138,33 @@ class TestEzomeroConfig:
 class TestConnectionHistory:
     """Connection history stores metadata only, never a password."""
 
-    def test_history_file_holds_no_secret(self, manager, fake_keyring):
-        manager.save_connection_details("omero.example.org", "alice", "lab", 6064)
-        manager.save_password("omero.example.org", "alice", "s3cret")
+    def test_history_file_holds_no_secret(self, manager, monkeypatch):
+        monkeypatch.setattr(manager, "connect", lambda *a, **kw: object())
+
+        manager.create_connection_from_config(
+            {
+                "host": "omero.example.org",
+                "username": "alice",
+                "password": "s3cret",
+                "group": "lab",
+                "port": 6064,
+            }
+        )
 
         raw = (Path.home() / ".omero-annotate-ai" / "connections.json").read_text()
-
         assert "s3cret" not in raw
         entry = json.loads(raw)[0]
+        assert "password" not in entry
         assert entry["host"] == "omero.example.org"
         assert entry["port"] == 6064
+        assert all("password" not in conn for conn in manager.load_connection_history())
+
+    def test_delete_connection_removes_the_history_entry(self, manager):
+        manager.save_connection_details("omero.example.org", "alice")
+
+        assert manager.delete_connection("omero.example.org", "alice") is True
+        assert manager.load_connection_history() == []
+        assert manager.delete_connection("omero.example.org", "alice") is False
 
     def test_history_round_trips_the_port(self, manager):
         manager.save_connection_details("omero.example.org", "alice", None, 6064)
@@ -252,86 +203,39 @@ class TestCreateConnectionFromConfig:
 
         assert seen["password"] == "  s3 cret  "
 
-    def test_does_not_write_to_the_keychain(self, manager, fake_keyring, monkeypatch):
-        """Persisting the password is the caller's job, so it can report failures."""
+    def test_never_persists_the_password(
+        self, manager, monkeypatch, tmp_path, caplog, capsys
+    ):
+        """No file, keychain, log record or printed line holds the password."""
+        import sys
+        from unittest.mock import MagicMock
+
+        keyring = MagicMock()
+        monkeypatch.setitem(sys.modules, "keyring", keyring)
         monkeypatch.setattr(manager, "connect", lambda *a, **kw: object())
+        caplog.set_level(logging.DEBUG)
 
         manager.create_connection_from_config(
             {
                 "host": "omero.example.org",
                 "username": "alice",
-                "password": "s3cret",
-                "save_password": True,
-                "expire_hours": 24,
+                "password": "s3cret-pw",
             }
         )
 
-        assert fake_keyring.store == {}
+        written = [p for p in tmp_path.rglob("*") if p.is_file()]
+        assert written, "the connection history should have been written"
+        for path in written:
+            assert b"s3cret-pw" not in path.read_bytes(), path
+        assert not keyring.mock_calls
+        assert "s3cret-pw" not in caplog.text
+        assert "s3cret-pw" not in capsys.readouterr().out
 
+    def test_has_no_password_storage_api(self, manager):
+        import inspect
 
-def _backend(module, name="Keyring", priority=1):
-    cls = type(name, (), {"priority": priority})
-    cls.__module__ = module
-    return cls()
-
-
-class TestKeyringBackendChecks:
-    """Saving refuses backends that keep nothing, and warns for plaintext ones."""
-
-    @pytest.mark.parametrize(
-        "backend",
-        [
-            _backend("keyring.backends.fail", priority=0),
-            _backend("keyring.backends.null", priority=-1),
-            _backend("some.thirdparty", priority=0.5),
-        ],
-    )
-    def test_unusable_backend_refuses_to_save(
-        self, manager, fake_keyring, backend, caplog
-    ):
-        fake_keyring.backend = backend
-
-        with caplog.at_level(logging.INFO, logger=LOGGER):
-            assert (
-                manager.save_password("omero.example.org", "alice", "s3cret") is False
-            )
-        assert fake_keyring.store == {}
-        assert "no usable keyring backend" in caplog.text
-
-    def test_plaintext_backend_saves_with_warning(self, manager, fake_keyring, caplog):
-        fake_keyring.backend = _backend("keyrings.alt.file", "PlaintextKeyring")
-
-        with caplog.at_level(logging.INFO, logger=LOGGER):
-            assert manager.save_password("omero.example.org", "alice", "s3cret") is True
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert any("unencrypted" in r.getMessage() for r in warnings)
-        assert "keyrings.alt.file.PlaintextKeyring" in caplog.text
-
-    def test_read_back_mismatch_is_not_reported_as_saved(
-        self, manager, fake_keyring, monkeypatch, caplog
-    ):
-        monkeypatch.setattr(fake_keyring, "set_password", lambda *a: None)
-
-        with caplog.at_level(logging.INFO, logger=LOGGER):
-            assert (
-                manager.save_password("omero.example.org", "alice", "s3cret") is False
-            )
-        assert "did not keep it" in caplog.text
-
-    def test_success_names_the_backend(self, manager, fake_keyring, caplog):
-        with caplog.at_level(logging.INFO, logger=LOGGER):
-            assert manager.save_password("omero.example.org", "alice", "s3cret") is True
-        assert "_GoodBackend" in caplog.text
-
-
-class TestForgetPassword:
-    def test_delete_without_history_row_still_removes_password(
-        self, manager, fake_keyring
-    ):
-        manager.save_password("omero.example.org", "alice", "s3cret")
-
-        assert manager.delete_connection("omero.example.org", "alice") is True
-        assert fake_keyring.store == {}
+        assert "keyring" not in inspect.getsource(sc)
+        assert not [name for name in dir(manager) if "password" in name.lower()]
 
 
 class TestHistoryMessage:
@@ -388,3 +292,103 @@ class TestConnectGatewayArgs:
         with pytest.raises(ConnectionFailed, match="router refused"):
             manager.connect("omero.example.org", "alice", "pw", verbose=False)
         gateway.return_value.close.assert_called_once()
+
+
+class FakeGateway:
+    """Enough of BlitzGateway for ensure_connected: alive, or reconnects (or not)."""
+
+    def __init__(self, alive=True, restores=True, keep_alive_raises=False):
+        self.alive, self.restores, self.raises = alive, restores, keep_alive_raises
+        self.resets = self.connects = 0
+        self.group, self.switched_to = 5, None
+        self.c = type(
+            "Client", (), {"sf": object(), "enableKeepAlive": lambda _self, s: None}
+        )()
+
+    def getEventContext(self):  # noqa: N802 - BlitzGateway's name
+        return type("Ctx", (), {"groupId": self.group})()
+
+    def setGroupForSession(self, group):  # noqa: N802 - BlitzGateway's name
+        self.switched_to = group
+
+    def keepAlive(self):  # noqa: N802 - BlitzGateway's name
+        if self.raises:
+            raise RuntimeError("Ice.ConnectionLostException")
+        return self.alive
+
+    def _resetOmeroClient(self):  # noqa: N802 - BlitzGateway's name
+        self.resets += 1
+
+    def connect(self):
+        self.connects += 1
+        return self.restores
+
+
+@pytest.mark.unit
+class TestEnsureConnected:
+    def test_a_live_connection_is_left_alone(self):
+        conn = FakeGateway()
+        sc.ensure_connected(conn)
+        assert (conn.resets, conn.connects) == (0, 0)
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_a_dropped_connection_is_restored_on_a_fresh_client(self, raises):
+        conn = FakeGateway(alive=False, keep_alive_raises=raises)
+        sc.ensure_connected(conn)
+        assert (conn.resets, conn.connects) == (1, 1)
+
+    def test_an_ended_session_that_cannot_be_resumed_is_reported(self):
+        conn = FakeGateway(alive=False, restores=False)
+        with pytest.raises(ConnectionFailed, match="connect again"):
+            sc.ensure_connected(conn)
+
+    def test_a_closed_connection_is_not_logged_back_in(self):
+        conn = FakeGateway()
+        conn.c = None
+        with pytest.raises(ConnectionFailed, match="closed"):
+            sc.ensure_connected(conn)
+        assert conn.connects == 0
+
+    def test_a_client_without_session_factory_counts_as_dropped(self):
+        conn = FakeGateway()
+        conn.c.sf = None  # keepAlive() would reconnect without keep-alive pings
+        sc.ensure_connected(conn)
+        assert (conn.resets, conn.connects) == (1, 1)
+
+    def test_a_new_session_returns_to_the_group_the_old_one_worked_in(self):
+        conn = FakeGateway()
+        sc.ensure_connected(conn)  # alive: records group 5
+        conn.alive, conn.group = False, 3  # session ended; a new one starts in 3
+        sc.ensure_connected(conn)
+        assert conn.switched_to == 5
+
+    def test_objects_that_are_not_a_gateway_are_left_alone(self):
+        sc.ensure_connected(object())
+
+
+@pytest.mark.unit
+class TestSessionKey:
+    def test_a_session_key_joins_and_remembers_nothing(self, manager, monkeypatch):
+        joined = []
+        monkeypatch.setattr(
+            manager, "join_session", lambda *args: joined.append(args) or "conn"
+        )
+        monkeypatch.setattr(
+            manager, "connect", lambda *a, **kw: pytest.fail("logged in with password")
+        )
+
+        conn = manager.create_connection_from_config(
+            {"host": "omero.example.org", "session_key": " abc-123 ", "port": 4064}
+        )
+
+        assert conn == "conn"
+        assert joined == [("omero.example.org", "abc-123", 4064, True)]
+        assert manager.load_connection_history() == []
+
+    def test_joined_gateways_detach_on_close(self):
+        import inspect
+
+        assert (
+            inspect.signature(sc.JoinedGateway.close).parameters["hard"].default
+            is False
+        )

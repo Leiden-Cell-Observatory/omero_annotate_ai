@@ -15,6 +15,36 @@ Newest first. The full list of pull requests per version is on
 - **New extras:** `omero-annotate-ai[cellpose]` and `omero-annotate-ai[biapy]`.
 - The package now imports without ipywidgets installed.
 
+## 0.5.3
+
+- **Passwords are no longer stored anywhere.** The Jupyter connection widget lost its
+  "Save password to keychain" option and its **Load from Keychain** button, and
+  `SimpleOMEROConnection.save_password` / `load_password` are gone; `keyring` is no
+  longer a dependency. Enter the password each time you connect; the connection history
+  still remembers server, port, username and group. Passwords saved by earlier
+  versions stay in the OS keychain under the service name `omero-annotate-ai`, with
+  the key `<host>:<username>`. Remove them with your system's keychain tool (Seahorse
+  on Linux, Keychain Access on macOS, Credential Manager on Windows) or with
+  `pipx run keyring del omero-annotate-ai <host>:<username>` (`keyring` itself is no
+  longer installed with the package).
+- **The connection widget has no Test Connection button any more.** It cleared the
+  password, which then had to be typed again for **Connect**; Connect reports the same
+  errors. `SimpleOMEROConnection.test_connection` is removed with it.
+- **The BioImage Archive notebook no longer invents study metadata.**
+  `omero-table-to-bioimage-archive.ipynb` filled an empty title, author, funding
+  statement, organism and accession with example values; it now keeps what the config
+  holds and stops until the required fields are filled in.
+- **A dropped connection is restored.** Before remote work (opening a set, each batch,
+  each save, listing sets) the connection is checked; if the network dropped it
+  rejoins its OMERO session, and if the session itself ended (the server's idle
+  timeout) it logs in again with the credentials held in memory for this run (never
+  on disk). Only when that fails are you asked to connect again.
+- **Log in with a session key** instead of username and password: a *Session key*
+  field in the Jupyter connection widget and the napari plugin (and `session_key` in
+  `create_connection_from_config`), e.g. for a session started in OMERO.web or
+  BIOMERO. Closing such a connection only detaches; the session stays usable where it
+  came from. A session-key connection cannot log in again once its session has ended.
+
 ## 0.5.2
 
 - **Session numbers start at 1.** A new training set numbered its first session 0
