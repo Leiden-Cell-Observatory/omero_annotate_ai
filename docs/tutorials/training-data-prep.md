@@ -79,9 +79,17 @@ strongly recommended.
 ```python
 from omero_annotate_ai import train
 
-result = train(export["base_dir"], "microsam", "models/hela", model_name="hela_v1", epochs=50)
+result = train(
+    export["base_dir"], "microsam", "models/hela", model_name="hela_v1", epochs=50
+)
 result = train(export["base_dir"], "cellpose", "models/hela", epochs=100)
-result = train(export["base_dir"], "biapy", "models/hela", epochs=100, config={"MODEL": {"ARCHITECTURE": "resunet"}})
+result = train(
+    export["base_dir"],
+    "biapy",
+    "models/hela",
+    epochs=100,
+    config={"MODEL": {"ARCHITECTURE": "resunet"}},
+)
 print(result.model_path)
 ```
 
