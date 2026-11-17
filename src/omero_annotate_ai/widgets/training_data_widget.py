@@ -1,14 +1,17 @@
-"""Jupyter widget to pick a training set and export it for training.
+"""Jupyter widget to pick a training set, export it and train on the export.
 
 The widget holds form state only: it lists the sets on a container (and the local
 sets), shows the picked set's progress, and calls
 :func:`~omero_annotate_ai.processing.training_functions.export_training_set` with the
-chosen output folder, channels and normalisation.
+chosen output folder, channels and normalisation. Training is started from a notebook
+cell with :meth:`TrainingDataWidget.train`, so its log is visible and it can be
+interrupted.
 """
 
 from __future__ import annotations
 
 import html
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,7 @@ from ..bundle import home_dir
 from ..core.annotation_config import AnnotationConfig
 from ..errors import OmeroAnnotateAIError
 from ..planning import parse_indices
+from ..processing.trainers import TRAINERS, TrainingResult, train
 from ..processing.training_functions import default_export_dir, export_training_set
 from ..trainingset import read_set_config, summarize, training_set_choices
 from .workflow_widget import (
@@ -35,10 +39,11 @@ NORMALIZATION = (
     ("Keep native bit depth (record the normalisation)", False),
     ("Apply the normalisation at export (float32)", True),
 )
+TRAINER_LABELS = {"microsam": "micro-SAM", "cellpose": "Cellpose", "biapy": "BiaPy"}
 
 
 class TrainingDataWidget:
-    """Pick a training set (OMERO or local) and export it into the training layout."""
+    """Pick a training set (OMERO or local), export it and train on the export."""
 
     def __init__(
         self,
@@ -51,6 +56,7 @@ class TrainingDataWidget:
         self.show_export = show_export
         self.home = home_dir(home)
         self.result: dict[str, Any] | None = None
+        self.training: TrainingResult | None = None
         self._config: AnnotationConfig | None = None
         self._build()
         self._load_containers()
@@ -99,7 +105,28 @@ class TrainingDataWidget:
             self.normalization,
             self.export_button,
         )
-        export_card.layout.display = None if self.show_export else "none"
+        self.trainer = widgets.Dropdown(
+            options=[(TRAINER_LABELS[name], name) for name in TRAINERS],
+            description="Trainer",
+            style=_LABEL,
+        )
+        self.epochs = widgets.BoundedIntText(
+            description="Epochs", min=1, max=100_000, style=_LABEL
+        )
+        self.model_name = widgets.Text(description="Model name", style=_LABEL)
+        self.trainer.observe(lambda _: self._on_trainer(), names="value")
+        self._on_trainer()
+        train_card = _card(
+            "Train",
+            widgets.HBox([self.trainer, self.epochs]),
+            self.model_name,
+            widgets.HTML(
+                "<span class='oai-muted'>Export first, then run "
+                "<code>training_widget.train()</code> in the next cell.</span>"
+            ),
+        )
+        for card in (export_card, train_card):
+            card.layout.display = None if self.show_export else "none"
         self.main = widgets.VBox(
             [
                 widgets.HTML(_STYLE),
@@ -110,6 +137,7 @@ class TrainingDataWidget:
                     self.summary,
                 ),
                 export_card,
+                train_card,
                 self.status,
             ]
         )
@@ -161,6 +189,7 @@ class TrainingDataWidget:
         )
         self.label_channel.value = coverage.get_label_channel()
         self.normalization.value = bool(config.normalization.apply_at_export)
+        self.model_name.value = config.name
         # A local set exports the channels its folder holds.
         local = not isinstance(ref, int)
         self.training_channels.disabled = self.label_channel.disabled = local
@@ -223,6 +252,28 @@ class TrainingDataWidget:
         finally:
             self.export_button.disabled = False
 
+    def _on_trainer(self) -> None:
+        """Show the picked trainer's own default number of epochs."""
+        signature = inspect.signature(TRAINERS[self.trainer.value].train)
+        self.epochs.value = signature.parameters["epochs"].default
+
+    def train(self, **params: Any) -> TrainingResult:
+        """Train on the last export with the form's trainer, epochs and model name.
+
+        The model goes to ``<export folder>/model``. ``params`` are passed on to the
+        trainer and override the form (e.g. ``batch_size=1``, ``n_iterations=10``).
+        """
+        if self.result is None:
+            raise ValueError("Export the training set first")
+        base = Path(self.result["base_dir"])
+        options = {
+            "model_name": self.model_name.value.strip(),
+            "epochs": int(self.epochs.value),
+            **params,
+        }
+        self.training = train(base, self.trainer.value, base / "model", **options)
+        return self.training
+
     def _error(self, text: str) -> None:
         self.status.value = f"<span class='oai-error'>{html.escape(text)}</span>"
 
@@ -246,7 +297,7 @@ def create_training_data_widget(
 ) -> TrainingDataWidget:
     """Create the training-data widget (call ``.display()`` to show it).
 
-    ``show_export=False`` keeps only the set picker, for notebooks that export
-    differently (e.g. a BioImage Archive submission).
+    ``show_export=False`` keeps only the set picker (no export or training options),
+    for notebooks that export differently (e.g. a BioImage Archive submission).
     """
     return TrainingDataWidget(connection, home=home, show_export=show_export)

@@ -12,6 +12,9 @@ Newest first. The full list of pull requests per version is on
 - **The exported training-data folder is a documented format**
   ([training data format](training-data-format.md)). `load_training_data` validates it
   and returns a `TrainingData`, so folders written by other tools work too.
+- **Train from the Jupyter training-data widget**: a **Train** box (trainer, epochs,
+  model name) and `training_widget.train()`; `omero-training-export.ipynb` trains
+  micro-SAM, Cellpose or BiaPy on the export.
 - **New extras:** `omero-annotate-ai[cellpose]` and `omero-annotate-ai[biapy]`.
 - The package now imports without ipywidgets installed.
 
