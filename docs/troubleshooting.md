@@ -27,9 +27,9 @@ Check the server address in OMERO.insight or with your OMERO admin. Websocket ad
 often blocked outside the institute network.
 
 **My password is not remembered.**
-By design. In the Jupyter connection widget you can tick the option to store it in your
-system keychain (a Linux server without a desktop may have none); the napari plugin
-never stores it.
+By design: omero-annotate-ai never stores passwords. Enter it each time you connect;
+the Jupyter widget and the napari plugin only remember the server, port, username and
+group.
 
 ## Annotating
 

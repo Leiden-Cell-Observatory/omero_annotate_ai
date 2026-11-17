@@ -683,7 +683,7 @@ class TestDock:
         self, tmp_path, make_dock, qtbot, monkeypatch
     ):
         """The real connect() runs against a fake gateway; nothing reaches the
-        keychain or the connection history, and the field is cleared."""
+        connection history, and the field is cleared."""
         from unittest.mock import MagicMock
 
         from omero_annotate_ai.omero import simple_connection as sc
@@ -692,8 +692,6 @@ class TestDock:
         widget = make_dock(home, source)[0]
         history = sc.SimpleOMEROConnection()._get_connections_file()
         before = history.read_bytes() if history.exists() else None
-        keyring = MagicMock()
-        monkeypatch.setattr(sc, "keyring", keyring, raising=False)
         monkeypatch.setattr(sc, "BlitzGateway", MagicMock())
         widget.host.setText("omero.example.org")
         widget.user.setText("someone")
@@ -701,7 +699,6 @@ class TestDock:
         widget.connect_button.click()
         assert widget.password.text() == ""
         qtbot.waitUntil(lambda: widget.list_button.isEnabled(), timeout=5000)
-        assert not keyring.set_password.called
         assert (history.read_bytes() if history.exists() else None) == before
 
 
