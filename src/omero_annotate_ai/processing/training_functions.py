@@ -251,7 +251,6 @@ def prepare_training_data_from_table(
     created_dirs, stats = write_training_layout(
         records,
         output_dir,
-        layout="split",
         clean_existing=clean_existing,
         include_test=include_test,
         uses_separate_channels=uses_separate_channels,
@@ -616,7 +615,6 @@ def reorganize_local_data_for_training(
     created_dirs, stats = write_training_layout(
         records,
         output_dir,
-        layout="split",
         file_mode=file_mode,
         clean_existing=clean_existing,
         include_test=include_test,

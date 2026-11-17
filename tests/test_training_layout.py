@@ -21,7 +21,7 @@ class TestLayoutFolders:
     """Folder names for each layout."""
 
     def test_split_layout_single_channel(self):
-        assert layout_folders("split") == [
+        assert layout_folders() == [
             "train_input",
             "train_label",
             "val_input",
@@ -29,24 +29,16 @@ class TestLayoutFolders:
         ]
 
     def test_split_layout_separate_channels(self):
-        folders = layout_folders("split", uses_separate_channels=True)
+        folders = layout_folders(uses_separate_channels=True)
 
         assert "train_annotation_input" in folders
         assert "val_annotation_input" in folders
 
     def test_split_layout_with_test(self):
-        folders = layout_folders("split", include_test=True)
+        folders = layout_folders(include_test=True)
 
         assert "test_input" in folders
         assert "test_label" in folders
-
-    def test_cellpose_layout_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            layout_folders("cellpose")
-
-    def test_unknown_layout_raises(self):
-        with pytest.raises(ValueError, match="Unknown layout"):
-            layout_folders("nonsense")
 
 
 @pytest.mark.unit
@@ -58,12 +50,12 @@ class TestCleanLayout:
         stale.parent.mkdir(parents=True)
         stale.write_bytes(b"stale")
 
-        clean_layout(tmp_path, "split")
+        clean_layout(tmp_path)
 
         assert not stale.exists()
 
     def test_safe_when_absent(self, tmp_path):
-        clean_layout(tmp_path, "split", uses_separate_channels=True)
+        clean_layout(tmp_path, uses_separate_channels=True)
 
 
 @pytest.mark.unit

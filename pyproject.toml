@@ -57,6 +57,9 @@ notebooks = [
 microsam = [
     "micro-sam>=1.8",  # brings napari; pixi takes micro_sam from conda-forge instead
 ]
+cellpose = [
+    "cellpose>=4",
+]
 # Experimental napari plugin; pinned to the micro-SAM minor version whose annotator
 # internals it drives (see napari_plugin/_controller.py).
 napari = [

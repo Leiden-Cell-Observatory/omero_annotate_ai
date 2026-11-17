@@ -1,5 +1,6 @@
 """Tests for training data preparation functions."""
 
+import json
 import shutil
 import sys
 import types
@@ -829,6 +830,7 @@ def _export(
     test: bool = False,
     sidecar: bool = True,
     dtype: type = np.uint16,
+    applied_at_export: bool = False,
 ) -> Path:
     """Write a training export (image/label pairs named <id>.tif) and return its root."""
     root = tmp_path / "export"
@@ -844,13 +846,20 @@ def _export(
             label = np.zeros(label_shape, np.uint16)
             label[..., :4, :4] = 1
             label[..., 8:12, 8:12] = 2
-            tifffile.imwrite(
-                root / f"{split}_input" / f"{next_id}.tif", np.ones(shape, dtype)
-            )
+            image = np.ones(shape, np.float32 if applied_at_export else dtype)
+            if applied_at_export:
+                image *= 0.5
+            tifffile.imwrite(root / f"{split}_input" / f"{next_id}.tif", image)
             tifffile.imwrite(root / f"{split}_label" / f"{next_id}.tif", label)
             next_id += 1
     if sidecar:
-        write_native_sidecar(create_default_config().normalization, root)
+        norm = create_default_config().normalization
+        if applied_at_export:
+            (root / SIDECAR_NAME).write_text(
+                json.dumps({"applied_at_export": True, "method": "percentile"})
+            )
+        else:
+            write_native_sidecar(norm, root)
     return root
 
 
@@ -989,7 +998,7 @@ def _stub_microsam(monkeypatch, calls):
 @pytest.mark.unit
 class TestTrain:
     def test_unknown_trainer_lists_names(self, tmp_path):
-        with pytest.raises(ValueError, match="microsam"):
+        with pytest.raises(ValueError, match="microsam, cellpose"):
             train(_export(tmp_path), "stardist", tmp_path / "out")
 
     def test_accepts_folder_or_training_data(self, tmp_path, monkeypatch):
@@ -1066,3 +1075,80 @@ class TestMicroSamTrainer:
         with pytest.raises(RuntimeError, match="no checkpoint"):
             train(_export(tmp_path), "microsam", tmp_path / "out", n_iterations=1)
         assert "train_sam" not in calls
+
+
+def _stub_cellpose(monkeypatch, calls):
+    """Install fake cellpose / cellpose.models / cellpose.train / torch modules."""
+
+    class CellposeModel:
+        def __init__(self, gpu=False, pretrained_model=""):
+            calls["model"] = {"gpu": gpu, "pretrained_model": pretrained_model}
+            self.net = "net"
+
+    def train_seg(net, **kwargs):
+        calls["train_seg"] = kwargs
+        path = Path(kwargs["save_path"]) / "models" / kwargs["model_name"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"weights")
+        return path, [1.0], [1.0]
+
+    cellpose = types.ModuleType("cellpose")
+    cellpose.version = "4.0.5"
+    models = types.ModuleType("cellpose.models")
+    models.CellposeModel = CellposeModel
+    train_mod = types.ModuleType("cellpose.train")
+    train_mod.train_seg = train_seg
+    cellpose.models = models
+    cellpose.train = train_mod
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    for name, module in {
+        "cellpose": cellpose,
+        "cellpose.models": models,
+        "cellpose.train": train_mod,
+        "torch": torch,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    return calls
+
+
+@pytest.mark.unit
+class TestCellposeTrainer:
+    def test_passes_arrays_and_names(self, tmp_path, monkeypatch):
+        calls = _stub_cellpose(monkeypatch, {})
+        r = train(
+            _export(tmp_path), "cellpose", tmp_path / "out", model_name="cp", epochs=2
+        )
+        kw = calls["train_seg"]
+        assert len(kw["train_data"]) == 2 and len(kw["test_data"]) == 1
+        assert kw["train_data"][0].shape == (32, 32)
+        assert kw["train_labels"][0].dtype.kind in "iu"
+        assert kw["n_epochs"] == 2 and kw["normalize"] is True
+        assert kw["model_name"] == "cp"
+        assert r.model_path.exists() and r.package_version == "4.0.5"
+
+    def test_normalised_export_turns_cellpose_normalisation_off(
+        self, tmp_path, monkeypatch
+    ):
+        calls = _stub_cellpose(monkeypatch, {})
+        root = _export(tmp_path, applied_at_export=True)
+        r = train(root, "cellpose", tmp_path / "out")
+        assert calls["train_seg"]["normalize"] is False
+        assert r.params["normalize"] is False
+
+    def test_volume_is_sliced_into_planes(self, tmp_path, monkeypatch):
+        calls = _stub_cellpose(monkeypatch, {})
+        r = train(_export(tmp_path, shape=(4, 32, 32)), "cellpose", tmp_path / "out")
+        assert len(calls["train_seg"]["train_data"]) == 8
+        assert calls["train_seg"]["train_data"][0].shape == (32, 32)
+        assert r.extras["n_planes"] == 8
+
+    def test_more_than_three_channels_refused(self, tmp_path, monkeypatch):
+        _stub_cellpose(monkeypatch, {})
+        with pytest.raises(InvalidTrainingData, match="3 channels"):
+            train(_export(tmp_path, shape=(32, 32, 4)), "cellpose", tmp_path / "out")
+
+    def test_missing_package_names_the_extra(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(sys.modules, "cellpose", None)
+        with pytest.raises(ImportError, match=r"omero-annotate-ai\[cellpose\]"):
+            train(_export(tmp_path), "cellpose", tmp_path / "out")

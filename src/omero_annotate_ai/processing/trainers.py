@@ -6,6 +6,7 @@ trainer consumes.
 """
 
 import datetime
+import importlib.metadata
 import json
 import logging
 import shutil
@@ -13,7 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from tifffile import TiffFile
+import numpy as np
+from tifffile import TiffFile, imread
 
 from ..errors import InvalidTrainingData
 from .normalization import SIDECAR_NAME, microsam_raw_transform
@@ -362,8 +364,141 @@ class MicroSamTrainer:
         )
 
 
+class CellposeTrainer:
+    """Fine-tune Cellpose (``pip install omero-annotate-ai[cellpose]``)."""
+
+    name = "cellpose"
+
+    def train(
+        self,
+        data: TrainingData,
+        output_dir: Path,
+        *,
+        model_name: str = "",
+        pretrained_model: str = "cpsam",
+        epochs: int = 100,
+        learning_rate: float = 1e-5,
+        batch_size: int = 1,
+        weight_decay: float = 0.1,
+        min_train_masks: int = 5,
+    ) -> TrainingResult:
+        """Train Cellpose on ``data`` with ``cellpose.train.train_seg``.
+
+        Cellpose trains on 2D planes: ``ZYX``/``ZYXC`` volumes are sliced along the
+        first axis (``extras["n_planes"]`` counts the training planes). Cellpose
+        normalises images itself unless the export already did.
+
+        Raises:
+            InvalidTrainingData: ``data`` has more than 3 channels.
+            ImportError: Cellpose is not installed.
+        """
+        if data.n_channels > 3:
+            raise InvalidTrainingData(
+                f"Cellpose trains on up to 3 channels, the data has {data.n_channels}"
+            )
+        try:
+            import cellpose
+            import cellpose.models
+            import cellpose.train
+            import torch
+        except ImportError as e:
+            raise ImportError(
+                "Cellpose is not installed. Install with: "
+                "pip install omero-annotate-ai[cellpose]"
+            ) from e
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if not model_name.strip():
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_name = f"cellpose_{stamp}"
+        normalize = not data.normalization.get("applied_at_export", False)
+        sliced = data.axes.startswith("Z")
+
+        def load(split: str) -> tuple[list[np.ndarray], list[np.ndarray]]:
+            images: list[np.ndarray] = []
+            labels: list[np.ndarray] = []
+            for image_path, label_path in data.pairs(split):
+                image, label = imread(image_path), imread(label_path)
+                if sliced:
+                    images.extend(image)
+                    labels.extend(label)
+                else:
+                    images.append(image)
+                    labels.append(label)
+            return images, labels
+
+        train_images, train_labels = load("train")
+        val_images, val_labels = load("val")
+
+        use_gpu = bool(torch.cuda.is_available())
+        logger.info(
+            "Cellpose training %s from %s on %s, %d training planes",
+            model_name,
+            pretrained_model,
+            "gpu" if use_gpu else "cpu",
+            len(train_images),
+        )
+        model = cellpose.models.CellposeModel(
+            gpu=use_gpu, pretrained_model=pretrained_model
+        )
+        try:
+            model_path, train_losses, test_losses = cellpose.train.train_seg(
+                model.net,
+                train_data=train_images,
+                train_labels=train_labels,
+                test_data=val_images,
+                test_labels=val_labels,
+                n_epochs=epochs,
+                learning_rate=learning_rate,
+                batch_size=batch_size,
+                weight_decay=weight_decay,
+                min_train_masks=min_train_masks,
+                normalize=normalize,
+                save_path=str(output_dir),
+                model_name=model_name,
+            )
+        except Exception:
+            logger.exception("Cellpose training failed")
+            raise
+
+        return TrainingResult(
+            trainer=self.name,
+            package_version=_package_version(cellpose),
+            model_path=Path(model_path),
+            output_dir=output_dir,
+            params={
+                "model_name": model_name,
+                "pretrained_model": pretrained_model,
+                "epochs": epochs,
+                "learning_rate": learning_rate,
+                "batch_size": batch_size,
+                "weight_decay": weight_decay,
+                "min_train_masks": min_train_masks,
+                "normalize": normalize,
+            },
+            data_root=data.root,
+            extras={
+                "train_losses": list(train_losses),
+                "test_losses": list(test_losses),
+                "n_planes": len(train_images),
+            },
+        )
+
+
+def _package_version(module: Any) -> str:
+    """The module's ``version`` attribute, else its installed distribution version."""
+    version = getattr(module, "version", None)
+    if isinstance(version, str):
+        return version
+    return importlib.metadata.version(module.__name__)
+
+
 # Concrete trainers take typed keyword parameters, so they are not typed as the Protocol.
-TRAINERS: dict[str, type[Any]] = {"microsam": MicroSamTrainer}
+TRAINERS: dict[str, type[Any]] = {
+    "microsam": MicroSamTrainer,
+    "cellpose": CellposeTrainer,
+}
 
 
 def train(
