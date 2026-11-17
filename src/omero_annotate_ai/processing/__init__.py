@@ -9,6 +9,10 @@ from .image_functions import (
     mask_to_contour,
     process_label_plane,
 )
+from .trainers import (
+    TrainingData,
+    load_training_data,
+)
 from .training_functions import (
     export_training_set,
     prepare_training_data_from_table,
@@ -35,6 +39,9 @@ __all__ = [
     "prepare_training_data_from_table",
     "reorganize_local_data_for_training",
     "export_training_set",
+    # trainers
+    "TrainingData",
+    "load_training_data",
     # training_utils
     "setup_training",
     "run_training",

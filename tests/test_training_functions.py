@@ -1,17 +1,22 @@
 """Tests for training data preparation functions."""
 
+import shutil
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
+import tifffile
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     create_default_config,
 )
+from omero_annotate_ai.errors import InvalidTrainingData
 from omero_annotate_ai.processing import training_functions as tf
+from omero_annotate_ai.processing.normalization import write_native_sidecar
+from omero_annotate_ai.processing.trainers import load_training_data
 from omero_annotate_ai.processing.training_functions import (
     reorganize_local_data_for_training,
 )
@@ -897,3 +902,115 @@ class TestDefaultExportDir:
         assert len({omero_a, omero_b, local_a, local_b}) == 4
         assert local_a.name == "ab12_nuclei"
         assert all(p.parent == tmp_path / "exports" for p in (omero_a, local_b))
+
+
+def _export(
+    tmp_path: Path,
+    *,
+    shape: tuple[int, ...] = (32, 32),
+    n_train: int = 2,
+    n_val: int = 1,
+    test: bool = False,
+    sidecar: bool = True,
+    dtype: type = np.uint16,
+) -> Path:
+    """Write a training export (image/label pairs named <id>.tif) and return its root."""
+    root = tmp_path / "export"
+    label_shape = shape[:-1] if len(shape) >= 3 and shape[-1] <= 4 else shape
+    splits = {"train": n_train, "val": n_val, "test": 1 if test else 0}
+    next_id = 0
+    for split, count in splits.items():
+        if split == "test" and not test:
+            continue
+        (root / f"{split}_input").mkdir(parents=True, exist_ok=True)
+        (root / f"{split}_label").mkdir(parents=True, exist_ok=True)
+        for _ in range(count):
+            label = np.zeros(label_shape, np.uint16)
+            label[..., :4, :4] = 1
+            label[..., 8:12, 8:12] = 2
+            tifffile.imwrite(
+                root / f"{split}_input" / f"{next_id}.tif", np.ones(shape, dtype)
+            )
+            tifffile.imwrite(root / f"{split}_label" / f"{next_id}.tif", label)
+            next_id += 1
+    if sidecar:
+        write_native_sidecar(create_default_config().normalization, root)
+    return root
+
+
+@pytest.mark.unit
+class TestLoadTrainingData:
+    def test_reads_layout_axes_dtype_and_sidecar(self, tmp_path):
+        data = load_training_data(_export(tmp_path))
+        assert data.axes == "YX" and data.n_channels == 1 and data.dtype == "uint16"
+        assert data.normalization["applied_at_export"] is False
+        assert len(data.pairs("train")) == 2 and len(data.pairs("val")) == 1
+        assert data.test_input is None
+
+    def test_axes_for_channels_and_volumes(self, tmp_path):
+        assert (
+            load_training_data(_export(tmp_path / "c", shape=(32, 32, 3))).axes == "YXC"
+        )
+        assert (
+            load_training_data(_export(tmp_path / "z", shape=(8, 32, 32))).axes == "ZYX"
+        )
+        assert (
+            load_training_data(
+                _export(tmp_path / "zc", shape=(8, 32, 32, 2))
+            ).n_channels
+            == 2
+        )
+
+    def test_missing_sidecar_is_empty_dict(self, tmp_path):
+        assert load_training_data(_export(tmp_path, sidecar=False)).normalization == {}
+
+    def test_missing_val_pair_is_refused(self, tmp_path):
+        with pytest.raises(InvalidTrainingData, match="val_input"):
+            load_training_data(_export(tmp_path, n_val=0))
+
+    def test_unpaired_file_is_refused(self, tmp_path):
+        root = _export(tmp_path)
+        (root / "train_label" / "extra.tif").write_bytes(b"")
+        with pytest.raises(InvalidTrainingData, match="extra.tif"):
+            load_training_data(root)
+
+    def test_half_test_split_is_refused(self, tmp_path):
+        root = _export(tmp_path, test=True)
+        shutil.rmtree(root / "test_label")
+        with pytest.raises(InvalidTrainingData, match="test_label"):
+            load_training_data(root)
+
+    def test_shape_mismatch_is_refused(self, tmp_path):
+        root = _export(tmp_path)
+        first = sorted((root / "train_label").glob("*.tif"))[0]
+        tifffile.imwrite(first, np.zeros((16, 16), np.uint16))
+        with pytest.raises(InvalidTrainingData, match=first.name):
+            load_training_data(root)
+
+    def test_local_export_copies_tracking_table(self, tmp_path):
+        annotation_dir = tmp_path / "project"
+        (annotation_dir / "annotation_input").mkdir(parents=True)
+        (annotation_dir / "annotation_output").mkdir()
+        (annotation_dir / "annotation_input" / "0.tif").write_bytes(b"ann")
+        (annotation_dir / "annotation_output" / "0_mask.tif").write_bytes(b"lbl")
+        config = create_default_config()
+        config.spatial_coverage.channels = [0]
+        config.spatial_coverage.label_channel = None
+        config.spatial_coverage.training_channels = None
+        _write_rows(
+            annotation_dir,
+            [
+                Row(
+                    image_id=100,
+                    image_name="img_0",
+                    annotation_id="0",
+                    category="training",
+                    processed=True,
+                )
+            ],
+        )
+        output_dir = tmp_path / "project_training"
+        reorganize_local_data_for_training(
+            config=config, annotation_dir=annotation_dir, output_dir=output_dir
+        )
+        assert (output_dir / "tracking_table.csv").exists()

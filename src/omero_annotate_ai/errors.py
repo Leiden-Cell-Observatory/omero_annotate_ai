@@ -60,3 +60,7 @@ class RemovedConfigKey(ConfigError):
 
 class ConnectionFailed(OmeroAnnotateAIError):
     """Connecting or logging in to OMERO failed; the message says why."""
+
+
+class InvalidTrainingData(OmeroAnnotateAIError, ValueError):
+    """A training-data folder is missing a split, has unpaired files, or mismatched shapes."""
