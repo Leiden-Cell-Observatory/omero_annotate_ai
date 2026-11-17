@@ -2,6 +2,7 @@
 
 import importlib
 import importlib.util
+import subprocess
 import sys
 from unittest.mock import Mock, patch
 
@@ -926,3 +927,25 @@ class TestTrainingDataWidget:
             widget.sets.value = 42
         assert "session expired" in widget.status.value
         assert widget.selected_config() is None
+
+
+@pytest.mark.unit
+class TestLazyWidgetImport:
+    """The package root imports without the notebooks extra."""
+
+    def test_root_imports_without_ipywidgets(self):
+        code = (
+            "import sys; sys.modules['ipywidgets'] = None; sys.modules['IPython'] = None; "
+            "import omero_annotate_ai; print('ok')"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=False
+        )
+        assert out.returncode == 0, out.stderr
+        assert "ok" in out.stdout
+
+    def test_widget_factories_still_exported(self):
+        import omero_annotate_ai as pkg
+
+        assert callable(pkg.create_workflow_widget)
+        assert "create_workflow_widget" in pkg.__all__
