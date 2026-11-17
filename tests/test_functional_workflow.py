@@ -2,7 +2,7 @@
 
 Everything runs through the public API — ``create_pipeline`` and its workflows,
 ``collect_annotations_from_disk``, ``prepare_training_data_from_table``,
-``setup_training``/``run_training``, ``delete_training_set``, the workflow widget and
+``train``, ``delete_training_set``, the workflow widget and
 a YAML file loaded with ``load_config_from_yaml`` — on the seeded test
 server (tests/omero_seed.py). Only the interactive step is replaced: the pipeline gets
 a :class:`~omero_annotate_ai.annotators.ScriptedAnnotator` instead of micro-SAM in
@@ -636,13 +636,9 @@ class TestTrainingData:
         assert "test_input" in result
         assert len(list(Path(result["test_input"]).glob("*.tif"))) == 1
 
-    def _training_config(self, conn, table_id, config, out):
-        from omero_annotate_ai.processing.training_utils import setup_training
-
-        result = self._export(conn, table_id, config, out)
+    def _train_kwargs(self):
         # Two iterations keep a real training run short enough for CPU.
-        return setup_training(
-            result,
+        return dict(
             model_name="functional_test",
             model_type="vit_b_lm",
             epochs=1,
@@ -656,7 +652,7 @@ class TestTrainingData:
     def test_training_loaders_feed_microsam_ready_batches(
         self, omero_conn, finished_set, tmp_path, monkeypatch
     ):
-        """The real run_training up to micro-SAM's train_sam, which is replaced by a check.
+        """The real train() up to micro-SAM's train_sam, which is replaced by a check.
 
         Covers export -> normalization.json -> raw transform -> torch_em loaders: the
         batches micro-SAM would train on must be in [0, 255] and carry labels.
@@ -664,13 +660,14 @@ class TestTrainingData:
         pytest.importorskip("micro_sam")
         import micro_sam.training as sam_training
 
-        from omero_annotate_ai.processing.training_utils import run_training
+        from omero_annotate_ai import load_training_data, train
 
         table_id, config = finished_set
-        training = self._training_config(
-            omero_conn, table_id, config, tmp_path / "train"
+        result = self._export(omero_conn, table_id, config, tmp_path / "train")
+        assert (
+            load_training_data(result["base_dir"]).normalization["applied_at_export"]
+            is False
         )
-        assert training["normalization"]["applied_at_export"] is False
 
         seen = {}
 
@@ -682,7 +679,12 @@ class TestTrainingData:
 
         monkeypatch.setattr(sam_training, "train_sam", check_train_sam)
         with pytest.raises(RuntimeError, match="stop after checking"):
-            run_training(training)
+            train(
+                result["base_dir"],
+                "microsam",
+                tmp_path / "model",
+                **self._train_kwargs(),
+            )
 
         for name in ("train", "val"):
             low, high, label_max = seen[name]
@@ -698,15 +700,14 @@ class TestTrainingData:
             pytest.skip(
                 "micro-SAM vit_b_lm weights not cached (training would download them)"
             )
-        from omero_annotate_ai.processing.training_utils import run_training
+        from omero_annotate_ai import train
 
         table_id, config = finished_set
-        outcome = run_training(
-            self._training_config(omero_conn, table_id, config, tmp_path / "train")
+        result = self._export(omero_conn, table_id, config, tmp_path / "train")
+        outcome = train(
+            result["base_dir"], "microsam", tmp_path / "model", **self._train_kwargs()
         )
-        assert Path(outcome["final_model_path"]).exists() or outcome.get(
-            "checkpoint_folder"
-        )
+        assert outcome.model_path.exists()
 
 
 class TestBioImageArchiveExport:

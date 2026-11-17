@@ -360,6 +360,7 @@ def _(mo):
 
 @app.cell
 def _(
+    Path,
     batch_size,
     epochs,
     mo,
@@ -367,8 +368,7 @@ def _(
     model_type,
     n_iterations,
     patch_shape,
-    run_training,
-    setup_training,
+    train,
     train_button,
     training_result,
 ):
@@ -377,15 +377,22 @@ def _(
         mo.md("Click 'Start Training' to begin micro-SAM fine-tuning"),
     )
 
-    training_config = None
     training_results = None
     if training_result is None:
         mo.output.replace(mo.md("**Error:** Prepare training data first"))
     else:
         try:
             _patch = parse_patch_size(patch_shape.value)
-            training_config = setup_training(
-                training_result,
+            mo.output.replace(
+                mo.md(
+                    f"**Training started...** This may take a while.\n\n- Model: {model_name.value}\n- Epochs: {epochs.value}\n- Iterations: {int(n_iterations.value) or 'from epochs'}"
+                )
+            )
+
+            training_results = train(
+                training_result["base_dir"],
+                "microsam",
+                Path(training_result["base_dir"]) / "model",
                 model_name=model_name.value,
                 epochs=epochs.value,
                 n_iterations=int(n_iterations.value) or None,
@@ -397,26 +404,18 @@ def _(
             )
 
             mo.output.replace(
-                mo.md(
-                    f"**Training started...** This may take a while.\n\n- Model: {model_name.value}\n- Epochs: {epochs.value}\n- Iterations: {training_config['n_iterations']}"
-                )
-            )
-
-            training_results = run_training(training_config, framework="microsam")
-
-            mo.output.replace(
                 mo.md(f"""
             **Training completed!**
 
-            - Model name: {training_results["model_name"]}
-            - Final model: `{training_results.get("final_model_path", "N/A")}`
-            - Checkpoints: {len(training_results.get("checkpoints", []))}
-            - Output: `{training_results["output_dir"]}`
+            - Model name: {training_results.params["model_name"]}
+            - Final model: `{training_results.model_path}`
+            - Checkpoints: {len(training_results.extras["checkpoints"])}
+            - Output: `{training_results.output_dir}`
             """)
             )
         except Exception as e:
             mo.output.replace(mo.md(f"**Error during training:** {str(e)}"))
-    return training_config, training_results
+    return (training_results,)
 
 
 @app.cell
@@ -452,7 +451,6 @@ def _(
     bioimageio_description,
     export_button,
     mo,
-    training_config,
     training_result,
     training_results,
 ):
@@ -464,17 +462,19 @@ def _(
     _images = sorted(Path(training_result["val_input"]).glob("*.tif"))
     _labels = sorted(Path(training_result["val_label"]).glob("*.tif"))
     _checkpoint = (
-        training_results["best_checkpoint"] or training_results["latest_checkpoint"]
+        training_results.extras["best_checkpoint"] or training_results.model_path
     )
     mo.stop(not (_images and _labels), mo.md("**No validation data to use as test.**"))
-    mo.stop(_checkpoint is None, mo.md("**No checkpoint found from training.**"))
+    mo.stop(
+        not Path(_checkpoint).exists(), mo.md("**No checkpoint found from training.**")
+    )
     _name, _, _affiliation = bioimageio_authors.value.partition(";")
-    _out = Path(training_results["output_dir"]) / "bioimage_io_model"
+    _out = training_results.output_dir / "bioimage_io_model"
     export_sam_model(
         image=tifffile.imread(_images[0]),
         label_image=tifffile.imread(_labels[0]),
-        model_type=training_config["model_type"],
-        name=training_config["model_name"],
+        model_type=training_results.params["model_type"],
+        name=training_results.params["model_name"],
         output_path=str(_out),
         checkpoint_path=str(_checkpoint),
         authors=[{"name": _name.strip(), "affiliation": _affiliation.strip()}],
@@ -502,8 +502,7 @@ def _():
 def _():
     from omero_annotate_ai import (
         export_training_set,
-        run_training,
-        setup_training,
+        train,
     )
     from omero_annotate_ai.planning import parse_indices
     from omero_annotate_ai.processing.training_functions import default_export_dir
@@ -526,9 +525,8 @@ def _():
         export_training_set,
         parse_indices,
         read_set_config,
-        run_training,
-        setup_training,
         summarize,
+        train,
         training_set_choices,
     )
 

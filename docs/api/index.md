@@ -13,8 +13,8 @@ from omero_annotate_ai import (
     export_training_set,  # training data (OMERO or local set)
     prepare_training_data_from_table,
     reorganize_local_data_for_training,
-    setup_training,
-    run_training,  # micro-SAM training
+    train,  # train a model on exported training data
+    load_training_data,
     prepare_bia_data_from_table,  # BioImage Archive export
 )
 ```
@@ -24,7 +24,7 @@ from omero_annotate_ai import (
 | [Configuration](config.md) | `AnnotationConfig` and its sections, loading and saving YAML |
 | [Training sets](pipeline.md) | `TrainingSet`, sessions, rows, and the deprecated `create_pipeline` |
 | [Widgets](widgets.md) | Jupyter widgets for connecting, creating or opening a training set, and selecting tables |
-| [Training data](training.md) | Preparing training folders, micro-SAM training, BioImage Archive export |
+| [Training data](training.md) | Preparing training folders, training, BioImage Archive export |
 | [OMERO helpers](omero.md) | Connections, tracking tables, downloading configs |
 
 This reference is generated from the docstrings in the source code.

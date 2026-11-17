@@ -32,7 +32,6 @@ def split_folders_for(category: str) -> tuple:
 
 
 def layout_folders(
-    layout: str = "split",
     uses_separate_channels: bool = False,
     include_test: bool = False,
 ) -> list[str]:
@@ -40,25 +39,13 @@ def layout_folders(
     Return every folder name a layout writes, relative to the output directory.
 
     Args:
-        layout: "split" (micro-SAM, BiaPy) or "cellpose" (not yet implemented)
         uses_separate_channels: Whether the annotation channel is carried along
         include_test: Whether a test split is written
 
     Returns:
         Folder names in a stable order
 
-    Raises:
-        NotImplementedError: For layout="cellpose"
-        ValueError: For an unknown layout
     """
-    if layout == "cellpose":
-        raise NotImplementedError(
-            "The cellpose layout (image and {id}_masks.tif in one folder) is "
-            "specified but not implemented. Use layout='split'."
-        )
-    if layout != "split":
-        raise ValueError(f"Unknown layout: {layout}. Expected 'split' or 'cellpose'.")
-
     categories = ["training", "validation"]
     if include_test:
         categories.append("test")
@@ -75,12 +62,11 @@ def layout_folders(
 
 def clean_layout(
     output_dir: Path,
-    layout: str = "split",
     uses_separate_channels: bool = False,
     include_test: bool = False,
 ) -> None:
     """Remove the folders this layout writes, so a run cannot inherit stale data."""
-    for folder_name in layout_folders(layout, uses_separate_channels, include_test):
+    for folder_name in layout_folders(uses_separate_channels, include_test):
         folder_path = output_dir / folder_name
         if folder_path.exists():
             shutil.rmtree(folder_path)
@@ -248,7 +234,6 @@ _STATS_PREFIX = {"training": "training", "validation": "val", "test": "test"}
 def write_training_layout(
     records: list[AnnotationRecord],
     output_dir: Path,
-    layout: str = "split",
     file_mode: str = "copy",
     clean_existing: bool = True,
     include_test: bool = False,
@@ -264,7 +249,6 @@ def write_training_layout(
     Args:
         records: Annotation records to write
         output_dir: Target directory (must not be inside the annotation directory)
-        layout: "split" or "cellpose"
         file_mode: "copy", "move" or "symlink" (ignored by ArraySource records)
         clean_existing: Remove the layout's folders before writing
         include_test: Write the test split; test records are skipped when False
@@ -277,9 +261,9 @@ def write_training_layout(
     output_dir = Path(output_dir)
 
     if clean_existing:
-        clean_layout(output_dir, layout, uses_separate_channels, include_test)
+        clean_layout(output_dir, uses_separate_channels, include_test)
 
-    folder_names = layout_folders(layout, uses_separate_channels, include_test)
+    folder_names = layout_folders(uses_separate_channels, include_test)
     created_dirs = {}
     for folder_name in folder_names:
         folder_path = output_dir / folder_name

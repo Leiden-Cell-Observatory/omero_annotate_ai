@@ -25,8 +25,7 @@ def _():
         TrainingSet,
         load_config_from_yaml,
         reorganize_local_data_for_training,
-        run_training,
-        setup_training,
+        train,
     )
 
     return (
@@ -38,8 +37,7 @@ def _():
         pd,
         reorganize_local_data_for_training,
         requests,
-        run_training,
-        setup_training,
+        train,
     )
 
 
@@ -267,8 +265,7 @@ def _(
     epochs,
     mo,
     reorganize_local_data_for_training,
-    run_training,
-    setup_training,
+    train,
     train_button,
     ts,
 ):
@@ -281,18 +278,19 @@ def _(
         mo.md("**No annotations yet.** Run step 4 first."),
     )
     _data = reorganize_local_data_for_training(ts.config, annotation_dir=ts.bundle_dir)
-    _training = setup_training(
-        _data,
+    _result = train(
+        _data["base_dir"],
+        "microsam",
+        _data["base_dir"] / "model",
         model_name=f"idr_microsam_{datetime.now():%Y%m%d_%H%M%S}",
         model_type="vit_b_lm",
         epochs=int(epochs.value),
         batch_size=1,
         patch_shape=(512, 512),
     )
-    _result = run_training(_training, framework="microsam")
     mo.md(f"""
-    **Training finished.** Model: `{_result.get("final_model_path", "-")}`
-    (output in `{_result["output_dir"]}`)
+    **Training finished.** Model: `{_result.model_path}`
+    (output in `{_result.output_dir}`)
     """)
     return
 

@@ -56,6 +56,12 @@ notebooks = [
 microsam = [
     "micro-sam>=1.8",  # brings napari; pixi takes micro_sam from conda-forge instead
 ]
+cellpose = [
+    "cellpose>=4",
+]
+biapy = [
+    "biapy>=3.6",
+]
 # Experimental napari plugin; pinned to the micro-SAM minor version whose annotator
 # internals it drives (see napari_plugin/_controller.py).
 napari = [
@@ -81,6 +87,9 @@ provenance = ["iscc-lib>=0.7,<0.8"]
 all = [
     "omero-annotate-ai[notebooks,microsam,zarr,provenance]",
 ]
+
+[project.scripts]
+omero-annotate-ai = "omero_annotate_ai.cli:main"
 
 [project.entry-points."napari.manifest"]
 omero-annotate-ai = "omero_annotate_ai.napari_plugin:napari.yaml"

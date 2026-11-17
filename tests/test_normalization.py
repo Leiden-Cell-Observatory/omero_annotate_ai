@@ -75,7 +75,7 @@ class TestBiapyNormalization:
     def test_applied_at_export_is_identity(self):
         block = biapy_normalization(NormalizationConfig(apply_at_export=True))
         assert block["TYPE"] == "zero_mean_unit_variance"
-        assert block["ZERO_MEAN_UNIT_VAR"] == {"MEAN_VAL": 0.0, "STD_VAL": 1.0}
+        assert block["ZERO_MEAN_UNIT_VAR"] == {"MEAN_VAL": [0.0], "STD_VAL": [1.0]}
         assert block["PERC_CLIP"]["ENABLE"] is False
 
     def test_trainer_side_percentiles_avoid_bit_depth_guessing(self):
@@ -188,19 +188,15 @@ class TestMicroSamRawTransform:
         with pytest.raises(ValueError, match="0-255"):
             transform(np.array([[0, 4000]], dtype=np.uint16))
 
-    def test_setup_training_reads_sidecar(self, tmp_path):
+    def test_load_training_data_reads_sidecar(self, tmp_path):
         from omero_annotate_ai.processing.normalization import write_native_sidecar
-        from omero_annotate_ai.processing.training_utils import setup_training
+        from omero_annotate_ai.processing.trainers import load_training_data
 
         for name in ("train_input", "train_label", "val_input", "val_label"):
             (tmp_path / name).mkdir()
+            imwrite(tmp_path / name / "0.tif", np.ones((8, 8), np.uint16))
         write_native_sidecar(NormalizationConfig(percentile_high=99.0), tmp_path)
-        result = {
-            name: tmp_path / name
-            for name in ("train_input", "train_label", "val_input", "val_label")
-        }
-        result["output_dir"] = tmp_path
 
-        config = setup_training(result)
-        assert config["normalization"]["percentile_high"] == 99.0
-        assert config["normalization"]["applied_at_export"] is False
+        data = load_training_data(tmp_path)
+        assert data.normalization["percentile_high"] == 99.0
+        assert data.normalization["applied_at_export"] is False

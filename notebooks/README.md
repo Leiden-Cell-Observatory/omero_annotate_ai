@@ -23,7 +23,7 @@ Notebooks with ipywidgets forms. Run with `jupyter lab`.
 | Notebook | What it does |
 |---|---|
 | `annotation/omero-annotate-ai-annotation-widget.ipynb` | The widget workflow: connect, create or open a training set, annotate with micro-SAM, add a session note |
-| `training/omero-training-export.ipynb` | Export a training set for BiaPy or DL4MicEverywhere |
+| `training/omero-training-export.ipynb` | Export a training set, then train micro-SAM, Cellpose or BiaPy (or export for DL4MicEverywhere) |
 | `inference/omero-test_model-microsam.ipynb` | Run a fine-tuned micro-SAM model on OMERO images |
 | `export_annotations/omero-table-to-bioimage-archive.ipynb` | Build a BioImage Archive submission from a training set on OMERO |
 | `export_annotations/prepare_bioimage_archive.ipynb` | Build a BioImage Archive submission from a local training set (runs offline on demo data) |

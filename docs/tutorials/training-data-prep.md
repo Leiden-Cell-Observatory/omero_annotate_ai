@@ -4,17 +4,10 @@ Once you have annotations, turn them into a training dataset: pairs of images an
 masks, split into training, validation and (if you annotated one) test folders. The same layout works for micro-SAM,
 BiaPy, DL4MicEverywhere and most other segmentation tools.
 
-```text
-my_training_data/
-├── train_input/    4ba674d4_0_0.tif   ← image
-├── train_label/    4ba674d4_0_0.tif   ← label mask with the same name
-├── val_input/
-├── val_label/
-├── test_input/     ← only when the set has test units
-└── test_label/
-```
-
-Labels are instance masks: 0 is background, and each object has its own number.
+The folder holds `train_input/`, `train_label/`, `val_input/`, `val_label/` and, when the
+set has test units, `test_input/` and `test_label/`, plus `normalization.json`. Images and
+labels have the same file name. The [training data format](../training-data-format.md)
+describes it in full.
 
 ## Export a training set
 
@@ -25,9 +18,9 @@ folder for a local set (offline).
 ```python
 from omero_annotate_ai import export_training_set
 
-result = export_training_set(table_id, "my_training_data", conn)  # OMERO set
-result = export_training_set(ts.bundle_dir, "my_training_data")  # local set
-print(result["stats"])
+export = export_training_set(table_id, "my_training_data", conn)  # OMERO set
+export = export_training_set(ts.bundle_dir, "my_training_data")  # local set
+print(export["stats"])
 ```
 
 Only finished units with a mask are used. Each unit goes to the split recorded in the
@@ -62,6 +55,9 @@ the set's folder name for a local set),
 the channels and the normalisation, then click **Export**. The result is in
 `training_widget.result`. The marimo training notebook offers the same choices.
 
+To train on the export, pick the trainer, epochs and model name in the widget's **Train**
+box and run `training_widget.train()` in the next cell (see [Train a model](#train-a-model)).
+
 !!! note "Things to know"
     - Images keep their original bit depth unless you apply the normalisation at
       export. `normalization.json` records how to scale them; micro-SAM training applies
@@ -76,60 +72,52 @@ the channels and the normalisation, then click **Export**. The result is in
 
 ## Train a model
 
-### micro-SAM
-
-Fine-tune micro-SAM on your annotations so its suggestions fit your images better. A
-CUDA GPU is strongly recommended.
+One call trains on the exported folder. micro-SAM, Cellpose and BiaPy are supported; each
+needs its extra (`omero-annotate-ai[microsam]`, `[cellpose]` or `[biapy]`). A CUDA GPU is
+strongly recommended.
 
 ```python
-from omero_annotate_ai import setup_training, run_training
+from omero_annotate_ai import train
 
-training_config = setup_training(
-    result,  # from export_training_set
-    model_name="hela_nuclei_v1",
-    model_type="vit_b_lm",  # start from this pretrained model
-    epochs=50,
-    batch_size=2,
-    patch_shape=(512, 512),
+result = train(
+    export["base_dir"], "microsam", "models/hela", model_name="hela_v1", epochs=50
 )
-training_results = run_training(training_config, framework="microsam")
+result = train(export["base_dir"], "cellpose", "models/hela", epochs=100)
+result = train(
+    export["base_dir"],
+    "biapy",
+    "models/hela",
+    epochs=100,
+    config={"MODEL": {"ARCHITECTURE": "resunet"}},
+)
+print(result.model_path)
 ```
 
-`epochs` sets the training length. Pass `n_iterations=` instead for a fixed number of
-steps, for example `n_iterations=10` for a quick check that everything runs; it
-overrides `epochs`.
+Here `export` is the result of `export_training_set` above. From a shell:
 
-The trained model is saved as `<output_dir>/<model_name>_final.pt`, with checkpoints in
-`<output_dir>/checkpoints/`. Load it in the micro-SAM napari plugin by choosing the
-checkpoint as a custom model. Export to the [BioImage Model Zoo](https://bioimage.io) format with micro-SAM's own tools.
-
-Notebook: [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
-
-### BiaPy
-
-[BiaPy](https://biapy.readthedocs.io) trains instance segmentation models (U-Net and
-others) from a YAML file. Point its data paths at the prepared folders:
-
-```yaml
-DATA:
-  TRAIN:
-    PATH: my_training_data/train_input
-    GT_PATH: my_training_data/train_label
-  VAL:
-    FROM_TRAIN: False
-    PATH: my_training_data/val_input
-    GT_PATH: my_training_data/val_label
+```bash
+omero-annotate-ai train my_training_data --trainer cellpose --output models/hela --set epochs=100
 ```
 
-Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
+Parameters, what each trainer does with the normalisation and where the model is saved
+are in the [training data format](../training-data-format.md#trainers) page.
+
+- micro-SAM: pass `n_iterations=` instead of `epochs` for a fixed number of steps, for
+  example `n_iterations=10` for a quick check. The model is saved as
+  `<output>/<model_name>_final.pt`; load it in the micro-SAM napari plugin as a custom
+  model, or export to the [BioImage Model Zoo](https://bioimage.io) format with
+  micro-SAM's own tools.
+- BiaPy writes its log to `<output>/<model_name>/logs/`.
+
+Notebooks: [export and train (Jupyter)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb), [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
 
 ### DL4MicEverywhere
 
 [DL4MicEverywhere](https://github.com/HenriquesLab/DL4MicEverywhere) runs ZeroCostDL4Mic
-notebooks (StarDist, Cellpose, U-Net, …) in containers. Give it the prepared folder as
+notebooks (StarDist, Cellpose, U-Net, ...) in containers. Give it the export folder as
 its data directory.
 
-Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
+Notebook: [export and train](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
 
 ## Tips
 
