@@ -22,6 +22,7 @@ nav = [
     { "Annotate with Cellpose" = "tutorials/cellpose-integration.md" },
     { "Resume or repeat a run" = "tutorials/resume-and-repeat.md" },
     { "Prepare training data" = "tutorials/training-data-prep.md" },
+    { "Training data format" = "training-data-format.md" },
     { "Share via the BioImage Archive" = "tutorials/bioimage-archive-export.md" },
     { "napari plugin (experimental)" = "napari-plugin.md" },
   ] },

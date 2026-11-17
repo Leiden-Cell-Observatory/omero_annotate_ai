@@ -15,7 +15,7 @@ on GitHub. Download the one you need, or clone the repository.
 | Run from a YAML file (OMERO or OME-Zarr) | | [from YAML][mo-yaml] | [guide](tutorials/resume-and-repeat.md) |
 | Try on public data | | [IDR OME-Zarr demo][mo-idr], [OME-Zarr from YAML][mo-yaml] | [guide](tutorials/public-data-idr.md) |
 | Train micro-SAM | | [micro-SAM][mo-tr] | [guide](tutorials/training-data-prep.md) |
-| Export for BiaPy or DL4MicEverywhere | [export][gh-export] | | [guide](tutorials/training-data-prep.md#biapy) |
+| Export for BiaPy or DL4MicEverywhere | [export][gh-export] | | [guide](tutorials/training-data-prep.md#train-a-model) |
 | Apply a trained micro-SAM model | [inference][gh-inf] | | |
 | Export to the BioImage Archive | [from OMERO][gh-bia], [from a local set][gh-bia-local] | | [guide](tutorials/bioimage-archive-export.md) |
 | Delete a training set from OMERO | [cleanup][gh-clean] | | |

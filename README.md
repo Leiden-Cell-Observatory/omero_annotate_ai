@@ -31,7 +31,7 @@ flowchart LR
     A[OMERO<br/>project · dataset · plate · screen] --> B[Select images<br/>train / val / test split]
     B --> C[Annotate in napari<br/>micro-SAM or Cellpose]
     C --> D[Back to OMERO<br/>masks · ROIs · tracking table]
-    D --> E[Training data<br/>micro-SAM · BiaPy · DL4MicEverywhere]
+    D --> E[Training data and training<br/>micro-SAM · Cellpose · BiaPy · DL4MicEverywhere]
     D --> F[BioImage Archive<br/>MIFA export]
 ```
 
@@ -39,7 +39,7 @@ flowchart LR
 - **Resumable and crash-safe:** each mask is saved locally, uploaded with a tag and then recorded in the tracking table, so an interrupted run continues where it stopped without duplicate uploads; pixel digests flag files that changed afterwards.
 - **Review and correct** earlier annotations with their saved masks; record a note per session.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
-- **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
+- **Training-ready output and training:** one documented folder layout for micro-SAM, Cellpose, BiaPy and DL4MicEverywhere, with images and labels paired by name, and one `train()` call (or `omero-annotate-ai train`) for micro-SAM, Cellpose and BiaPy.
 - **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).
 - **Local-only storage** (`storage: local`) for data you cannot write to, such as public [IDR](https://idr.openmicroscopy.org) OME-Zarr.
 
@@ -78,6 +78,8 @@ pip install "omero-annotate-ai[notebooks]"
 
 # Or: pip only (micro-SAM and napari from PyPI)
 pip install "omero-annotate-ai[microsam,notebooks]" jupyterlab
+
+# Training extras: omero-annotate-ai[cellpose] and omero-annotate-ai[biapy]
 ```
 
 See the [installation guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation/) for details and troubleshooting.

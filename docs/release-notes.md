@@ -3,6 +3,18 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## 0.6.0
+
+- **Breaking: `setup_training` and `run_training` are removed.** Use
+  `train(folder, "microsam", output_dir, ...)` instead.
+- **One `train()` call and `omero-annotate-ai train` command** train micro-SAM, Cellpose
+  and BiaPy on an exported folder; each returns a `TrainingResult` with the model path.
+- **The exported training-data folder is a documented format**
+  ([training data format](training-data-format.md)). `load_training_data` validates it
+  and returns a `TrainingData`, so folders written by other tools work too.
+- **New extras:** `omero-annotate-ai[cellpose]` and `omero-annotate-ai[biapy]`.
+- The package now imports without ipywidgets installed.
+
 ## 0.5.2
 
 - **Session numbers start at 1.** A new training set numbered its first session 0

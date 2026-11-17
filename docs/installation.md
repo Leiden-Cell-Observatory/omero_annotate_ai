@@ -77,8 +77,10 @@ If this prints a version number, you are ready. Continue with
 |---|---|
 | Export annotations to the BioImage Archive | `pip install "git+https://github.com/BioImage-Archive/bia-mifa-models.git@v1.1.5"` |
 | Record ISCC content codes (how much an image or mask changed) | `pip install "omero-annotate-ai[provenance]"` (included in the pixi environments) |
-| Train micro-SAM models | nothing extra; a CUDA GPU is strongly recommended |
-| Train with BiaPy or DL4MicEverywhere | install those tools separately; this package only prepares the data |
+| Train micro-SAM models | `pip install "omero-annotate-ai[microsam]"`; a CUDA GPU is strongly recommended |
+| Train Cellpose models | `pip install "omero-annotate-ai[cellpose]"` |
+| Train BiaPy models | `pip install "omero-annotate-ai[biapy]"` |
+| Train with DL4MicEverywhere | install it separately; this package only prepares the data |
 
 ## GPU or CPU?
 
