@@ -3,8 +3,8 @@
 import json
 
 import pytest
+from bioimage_annotation_schema import check_documents, read_records, read_set
 from bioimage_annotation_schema import datamodel as bas
-from bioimage_annotation_schema import read_records, read_set
 from bioimage_annotation_schema.crate import METADATA_FILE, SPEC, build_ro_crate
 
 from omero_annotate_ai import provenance
@@ -247,3 +247,25 @@ class TestSchemaDocuments:
         set_path, records_path = write_schema_documents(config, rows, tmp_path)
         assert read_set(set_path).schema_version == "0.1.0"
         assert read_records(records_path)[0].status == "pending"
+
+    def test_iscc_codes_come_with_how_they_were_made(self, tmp_path):
+        ts, _, _, by_id = _crate(tmp_path)
+
+        described = read_set(ts.bundle_dir)
+        region = described.content_codes.region
+        assert (region.code_type, region.bits) == ("image_code", 64)
+        assert region.preparation == provenance.PREPARATION
+        assert region.implementation.startswith("omero-annotate-ai ")
+        assert check_documents(described, read_records(ts.bundle_dir)) == []
+        row = next(r for r in ts.rows if r.processed)
+        mask = by_id[f"annotation_output/{row.annotation_id}_mask.tif"]
+        code = next(
+            i
+            for i in _many(mask["identifier"])
+            if by_id[i["@id"]]["propertyID"] == "iscc"
+        )
+        assert "image_code" in by_id[code["@id"]]["name"]
+
+    def test_no_codes_declared_without_codes(self):
+        rows = [Row(image_uri="omero:image:1", image_name="a", annotation_id="a_0")]
+        assert annotation_set(create_default_config(), rows).content_codes is None

@@ -15,11 +15,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from bioimage_annotation_schema import RECORDS_FILE, SET_FILE, write_records, write_set
+from bioimage_annotation_schema import (
+    RECORDS_FILE,
+    SET_FILE,
+    SchemaError,
+    check_documents,
+    write_records,
+    write_set,
+)
 from bioimage_annotation_schema import datamodel as bas
 from bioimage_annotation_schema.crate import write_ro_crate as _write_ro_crate
 from bioimage_annotation_schema.mifa import save_bia_package as _save_bia_package
 
+from . import provenance
 from .bundle import input_path, mask_path
 from .core.annotation_config import AnnotationConfig, SessionRecord
 from .rows import Row
@@ -92,9 +100,12 @@ def _tools(config: AnnotationConfig) -> list[bas.Tool]:
     ]
 
 
-def annotation_set(config: AnnotationConfig) -> bas.AnnotationSet:
+def annotation_set(
+    config: AnnotationConfig, rows: Sequence[Row] = ()
+) -> bas.AnnotationSet:
     """The config as an :class:`AnnotationSet`: its schema sections plus the
-    sessions, normalisation and tools the tool recorded."""
+    sessions, normalisation and tools the tool recorded, and, when ``rows`` carry
+    ISCC codes, how those codes were made."""
     norm = config.normalization
     methodology = config.methodology.model_copy(
         update={"tools": _tools(config) or None}
@@ -132,6 +143,9 @@ def annotation_set(config: AnnotationConfig) -> bas.AnnotationSet:
             )
         ),
         sessions=[_session(s) for s in config.sessions] or None,
+        content_codes=bas.ContentCodes(region=provenance.code_method())
+        if any(r.input_iscc or r.mask_iscc for r in rows)
+        else None,
         extensions=config.extensions or None,
     )
 
@@ -218,11 +232,14 @@ def write_schema_documents(
     config: AnnotationConfig, rows: Sequence[Row], folder: str | Path
 ) -> tuple[Path, Path]:
     """Write ``annotation-set.yaml`` and ``annotation-records.csv`` into ``folder``
-    (validated against the schema); returns their paths."""
+    (validated against the schema, and against each other); returns their paths."""
     folder = Path(folder)
+    described, records = annotation_set(config, rows), annotation_records(rows)
+    if problems := check_documents(described, records):
+        raise SchemaError("The set and its records", problems)
     return (
-        write_set(annotation_set(config), folder / SET_FILE),
-        write_records(annotation_records(rows), folder / RECORDS_FILE),
+        write_set(described, folder / SET_FILE),
+        write_records(records, folder / RECORDS_FILE),
     )
 
 
@@ -232,7 +249,7 @@ def write_ro_crate(
     """Write the schema documents and ``ro-crate-metadata.json`` into a set's folder."""
     write_schema_documents(config, rows, folder)
     return _write_ro_crate(
-        annotation_set(config),
+        annotation_set(config, rows),
         annotation_records(rows),
         folder,
         metadata_files=(SET_FILE, RECORDS_FILE, "config.yaml", "tracking_table.csv"),
@@ -256,7 +273,7 @@ def save_bia_package(
     Raises ``MifaNotReady`` naming the fields MIFA requires that the config lacks.
     """
     return _save_bia_package(
-        annotation_set(config),
+        annotation_set(config, rows),
         annotation_records(rows),
         data_dir,
         dest_dir,
