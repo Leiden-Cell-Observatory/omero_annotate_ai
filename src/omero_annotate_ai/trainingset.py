@@ -74,6 +74,27 @@ from .sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 
 logger = logging.getLogger(__name__)
 
+DESCRIPTION_FIELDS = frozenset(
+    {
+        "description",
+        "license",
+        "version",
+        "changes",
+        "previous_version",
+        "authors",
+        "keywords",
+        "links",
+        "ai_models_trained",
+        "study",
+        "source_dataset",
+        "methodology",
+        "classes",
+        "notes",
+        "extensions",
+    }
+)
+"""Config fields :meth:`TrainingSet.describe` may change after a set is created."""
+
 # Where external tools (e.g. Cellpose) write masks for collect_masks.
 EXTERNAL_OUTPUT = "external_output"
 
@@ -220,6 +241,7 @@ class TrainingSet:
         # Notes set here on sessions of other computers, kept over their copy on
         # OMERO until published (see _merge_remote_config).
         self._note_edits: dict[int, str] = {}
+        self._description_edits: set[str] = set()
         # A session being started: renumbered if another computer took its number.
         self._starting: SessionRecord | None = None
         _ = self._seed  # generate and store the seed before anything is planned
@@ -1003,6 +1025,7 @@ class TrainingSet:
             self._config.omero.get_primary_container_id(),
         )
         self._note_edits.clear()
+        self._description_edits.clear()
         return file_id
 
     # --- Creating and opening ----------------------------------------------------
@@ -1329,6 +1352,9 @@ class TrainingSet:
           renumbered (no rows carry it yet).
         - Image counts only grow (:meth:`extend`), so the larger count wins.
 
+        - Description fields (:meth:`describe`): OMERO's copy, except fields set
+          here.
+
         Everything else in a set's config is fixed once it is created.
         """
         if self.table_id is None:
@@ -1352,6 +1378,8 @@ class TrainingSet:
             if session_id in merged:
                 merged[session_id].note = note
         self._config.sessions = sorted(merged.values(), key=lambda s: s.id)
+        for name in DESCRIPTION_FIELDS - self._description_edits:
+            setattr(self._config, name, getattr(remote, name))
         training = self._config.training
         for key in ("train_n", "validate_n", "test_n"):
             setattr(
@@ -1443,6 +1471,37 @@ class TrainingSet:
             self._merge_remote_config()
         self._session(session_id).note = note
         self._note_edits[session_id] = note
+        self.save_config()
+        self.publish_config()
+
+    def describe(self, **fields: Any) -> None:
+        """Change the set's description, locally and on OMERO.
+
+        Takes the description fields of the config (see :data:`DESCRIPTION_FIELDS`),
+        e.g. ``ts.describe(version="1", keywords=["nuclei"])``: what a publication or
+        a MIFA export needs and is often only known after annotating. What to
+        annotate and how it is split (``sampling``, ``split``) is fixed once the
+        set exists. A field set here wins over another computer's copy on OMERO.
+
+        Raises:
+            ValueError: A field is not a description field, or a value is invalid.
+        """
+        unknown = set(fields) - DESCRIPTION_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Not description fields: {sorted(unknown)}; describe() takes "
+                f"{sorted(DESCRIPTION_FIELDS)}"
+            )
+        if not self.is_local:
+            self.ensure_connected()
+        if self.table_id is not None:
+            self._merge_remote_config()
+        updated = AnnotationConfig.model_validate(
+            {**self._config.model_dump(), **fields}
+        )
+        for name in fields:
+            setattr(self._config, name, getattr(updated, name))
+        self._description_edits |= set(fields)
         self.save_config()
         self.publish_config()
 

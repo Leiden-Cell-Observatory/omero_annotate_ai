@@ -142,6 +142,28 @@ class TestExtendAndNotes:
         assert record.note == "nuclei only, small objects skipped"
         assert record.user == "tester"
 
+    def test_describe_changes_the_description_locally_and_on_omero(self, tmp_path):
+        from bioimage_annotation_schema import datamodel as bas
+
+        ts, _, omero = new(tmp_path)
+        ts.describe(
+            version="1",
+            keywords=["nuclei"],
+            study=bas.Study(title="T", description="D", funding_statement="None."),
+        )
+
+        assert ts.config.version == "1"
+        assert "funding_statement: None." in omero.config_text[ts.table_id]
+        saved = AnnotationConfig.from_yaml(ts.bundle_dir / "config.yaml")
+        assert saved.keywords == ["nuclei"]
+
+    def test_describe_refuses_planning_fields(self, tmp_path):
+        ts, _, _ = new(tmp_path)
+        with pytest.raises(ValueError, match="sampling"):
+            ts.describe(sampling={"label_channel": 1})
+        with pytest.raises(ValueError):
+            ts.describe(license="MIT")
+
 
 class TestExternalTool:
     def test_units_stay_pending_until_their_masks_are_collected(self, tmp_path):
