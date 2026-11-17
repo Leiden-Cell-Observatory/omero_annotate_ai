@@ -560,7 +560,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.1.5-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/61/80af914168131784d5970171b800791bfe3747657c1aab902a586cc83d46/returns-0.30.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/38/0c/b54a4fdd7f90a3af8b02ebc9ce6712c2c208b7926a2f7bad95c33ebbe943/uvicorn-0.54.0-py3-none-any.whl
@@ -1008,7 +1008,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/61/80af914168131784d5970171b800791bfe3747657c1aab902a586cc83d46/returns-0.30.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/38/0c/b54a4fdd7f90a3af8b02ebc9ce6712c2c208b7926a2f7bad95c33ebbe943/uvicorn-0.54.0-py3-none-any.whl
@@ -1504,7 +1504,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/61/80af914168131784d5970171b800791bfe3747657c1aab902a586cc83d46/returns-0.30.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/34/79/1cf725694125051e866066d74e6199206838d1465cbfc35081dc29b6e366/msgspec-0.22.0-cp311-cp311-macosx_11_0_arm64.whl
@@ -1980,7 +1980,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0d/61/80af914168131784d5970171b800791bfe3747657c1aab902a586cc83d46/returns-0.30.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/38/0c/b54a4fdd7f90a3af8b02ebc9ce6712c2c208b7926a2f7bad95c33ebbe943/uvicorn-0.54.0-py3-none-any.whl
@@ -2556,7 +2556,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
@@ -3048,7 +3048,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/03/59/fdcb3af72f750a8de2bcf39d62ada70b5eb17b06d7f63860e0a679cb656b/msgspec-0.20.0-cp311-cp311-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
@@ -3586,7 +3586,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
@@ -3622,6 +3622,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/d7/f6/4dfa6a706222470ca070765fa00bbe921bbad05386f9c5120ba105dfdad1/iscc_lib-0.7.0-cp310-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/dc/1e/fb11174c9eaebcec27d36e9e994b90ffa168bc3226925900b9dbbf16c9da/pytest-logging-2015.11.4.tar.gz
+      - pypi: https://files.pythonhosted.org/packages/dc/4b/8b10f6c9d0a18413301ae8dd2af9d180a81bb738b1b731d944a37404c523/ruff-0.17.5-py3-none-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/e1/67/921ec3024056483db83953ae8e48079ad62b92db7880013ca77632921dd0/readme_renderer-44.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e5/90/0d93963711f811efe528e3cead2f2bfb78c196df74d8a24fe8d655288e50/jsonasobj2-1.0.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/c4/813bb09f0985cb21e959f21f2464169eca882656849adf727ac7bb7e1767/jaraco_functools-4.4.0-py3-none-any.whl
@@ -4103,7 +4104,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
@@ -4710,7 +4711,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.1.5-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/42/77/de194443bf38daed9452139e960c632b0ef9f9a5dd9ce605fdf18ca9f1b1/id-1.6.1-py3-none-any.whl
@@ -5186,7 +5187,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/0a/12/dd158708378866e8b53e145a465dbc51a7cccb9fa197a74d67eaedde7234/ruff-0.17.4-py3-none-macosx_10_12_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/13/3e/aef8cf8e0419b530c95e96ae93a5078e9b36c1e6613eeb1df03a80d5194e/nh3-0.3.3-cp38-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
@@ -5708,7 +5709,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/13/3e/aef8cf8e0419b530c95e96ae93a5078e9b36c1e6613eeb1df03a80d5194e/nh3-0.3.3-cp38-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl
@@ -5722,6 +5723,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b9/fa/123043af240e49752f1c4bd24da5053b6bd00cad78c2be53c0d1e8b975bc/backports.tarfile-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/dc/4b/8b10f6c9d0a18413301ae8dd2af9d180a81bb738b1b731d944a37404c523/ruff-0.17.5-py3-none-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/e1/67/921ec3024056483db83953ae8e48079ad62b92db7880013ca77632921dd0/readme_renderer-44.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fd/c4/813bb09f0985cb21e959f21f2464169eca882656849adf727ac7bb7e1767/jaraco_functools-4.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ff/9a/9afaade874b2fa6c752c36f1548f718b5b83af81ed9b76628329dab81c1b/rfc3986-2.0.0-py2.py3-none-any.whl
@@ -6209,7 +6211,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/42/77/de194443bf38daed9452139e960c632b0ef9f9a5dd9ce605fdf18ca9f1b1/id-1.6.1-py3-none-any.whl
@@ -6775,7 +6777,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zarr-3.1.5-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a8/d1/b4d178512460c2a4a3134119ae799e119aafac32660f20f9809f9d17acb8/omero_py-5.23.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
@@ -7218,7 +7220,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/3b/84/0a67490741867eacdfa37bc18df96e08a9d579583b419010d7f3da8ff503/opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a8/d1/b4d178512460c2a4a3134119ae799e119aafac32660f20f9809f9d17acb8/omero_py-5.23.0-py3-none-any.whl
@@ -7709,7 +7711,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a8/d1/b4d178512460c2a4a3134119ae799e119aafac32660f20f9809f9d17acb8/omero_py-5.23.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
@@ -8180,7 +8182,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: ./
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a8/d1/b4d178512460c2a4a3134119ae799e119aafac32660f20f9809f9d17acb8/omero_py-5.23.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b4/cf/102d7c157dff39cb404b691933c3233bfed43c4bcd13c76b22effb182b83/ezomero-3.2.3-py3-none-any.whl
@@ -8730,7 +8732,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl
@@ -9183,7 +9185,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl
@@ -9680,7 +9682,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl
@@ -10158,7 +10160,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: ./
       - pypi: git+https://github.com/BioImage-Archive/bia-mifa-models.git?tag=v1.1.5#565ada3a46720a34af49df7ec9ea3dd257c3dbab
-      - pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+      - pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
       - pypi: https://files.pythonhosted.org/packages/00/cc/7fbd75d3362e939eb98bcf9bd22f3f7df8c237a85148899ed3d38e5614e5/json_flattener-0.1.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/c2/6604a71269e0c1bd75656d5a001432d16f2cc5b8c057140ec797155c295e/rdflib-7.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl
@@ -11216,7 +11218,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/frozenlist?source=compressed-mapping
+  - pkg:pypi/frozenlist?source=hash-mapping
   run_exports: {}
   size: 61626
   timestamp: 1792669247092
@@ -15315,7 +15317,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/multidict?source=compressed-mapping
+  - pkg:pypi/multidict?source=hash-mapping
   run_exports: {}
   size: 280703
   timestamp: 1793018014570
@@ -16181,7 +16183,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/propcache?source=compressed-mapping
+  - pkg:pypi/propcache?source=hash-mapping
   run_exports: {}
   size: 60915
   timestamp: 1792906355852
@@ -17638,7 +17640,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/ukkonen?source=compressed-mapping
+  - pkg:pypi/ukkonen?source=hash-mapping
   run_exports: {}
   size: 17720
   timestamp: 1793037120005
@@ -22025,7 +22027,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/pre-commit?source=compressed-mapping
+  - pkg:pypi/pre-commit?source=hash-mapping
   run_exports: {}
   size: 202137
   timestamp: 1791899603121
@@ -34896,8 +34898,7 @@ packages:
   - __osx >=11.0
   license: MIT
   license_family: MIT
-  purls:
-  - pkg:pypi/ruff?source=compressed-mapping
+  purls: []
   run_exports: {}
   size: 8160218
   timestamp: 1793942670923
@@ -42064,7 +42065,7 @@ packages:
   requires_dist:
   - linkml-runtime>=1.1.24,<2.0.0
   requires_python: '>=3.9,<4.0'
-- pypi: git+ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#a083d77f28d6bfdd970fc2a66d49d4c53f093097
+- pypi: git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git?branch=main#7d82882880f1df4a9b20ffc62e2754e1af8fbd78
   name: bioimage-annotation-schema
   version: 0.1.0
   requires_dist:
@@ -42852,6 +42853,11 @@ packages:
   sha256: cec5c85ecf18aab7b2ead5498a31b9f758680ef5a902b9054ab3f2bdbb77c896
   requires_dist:
   - pytest>=2.8.1
+- pypi: https://files.pythonhosted.org/packages/dc/4b/8b10f6c9d0a18413301ae8dd2af9d180a81bb738b1b731d944a37404c523/ruff-0.17.5-py3-none-macosx_11_0_arm64.whl
+  name: ruff
+  version: 0.17.5
+  sha256: 6f0db748508f04a04e3fbebcc636a5c8b3bd76274f8ed28f497c44d75c2ea2d7
+  requires_python: '>=3.7'
 - pypi: https://files.pythonhosted.org/packages/de/3d/8161f7711c017e01ac9f008dfddd9410dff3674334c233bde66e7ba65bbf/pywin32_ctypes-0.2.3-py3-none-any.whl
   name: pywin32-ctypes
   version: 0.2.3

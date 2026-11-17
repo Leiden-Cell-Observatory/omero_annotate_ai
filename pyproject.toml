@@ -231,7 +231,7 @@ mifa = ["mifa"]
 [tool.pixi.pypi-dependencies]
 omero-annotate-ai = { path = ".", editable = true }
 # Not on PyPI yet: the schema library comes from its (private) GitHub repository.
-bioimage-annotation-schema = { git = "ssh://git@github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git", branch = "main" }
+bioimage-annotation-schema = { git = "https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git", branch = "main" }
 
 [tool.pixi.tasks]
 # Testing
