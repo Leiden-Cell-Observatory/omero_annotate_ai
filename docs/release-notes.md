@@ -27,6 +27,9 @@ Newest first. The full list of pull requests per version is on
   (version, keywords, study, links, ...), locally and on OMERO. `sampling` and `split`
   are fixed once the set exists. `ts.config` is a copy; changing it does not change
   the set.
+- **Split report with every export.** `ts.write_ro_crate()` and `save_bia_package`
+  write `split-report.yaml`: the images, wells and conditions per split, those found
+  in more than one split and the conditions that miss a split.
 - **Exports come from the schema library.** `ts.write_ro_crate()` now also writes
   `annotation-set.yaml` and `annotation-records.csv` (checked against the schema) into
   the set's folder. `save_bia_package` moved to `omero_annotate_ai.schema_export`; it

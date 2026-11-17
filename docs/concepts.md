@@ -129,6 +129,7 @@ Each training set has one folder on your disk, with the same layout in every mod
     ├── model_input/                  training channel(s), if different from the annotated one
     ├── annotation-set.yaml           the set as a Bioimage Annotation Schema document, written by ts.write_ro_crate()
     ├── annotation-records.csv        one schema record per unit, written with it
+    ├── split-report.yaml             images, wells and conditions per split, written with it
     ├── ro-crate-metadata.json        RO-Crate description, written by ts.write_ro_crate()
     └── .scratch/                     micro-SAM's files for the current batch only
 ```

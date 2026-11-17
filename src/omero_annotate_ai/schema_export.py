@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
 from bioimage_annotation_schema import (
     RECORDS_FILE,
     SET_FILE,
@@ -30,20 +31,23 @@ from bioimage_annotation_schema.mifa import save_bia_package as _save_bia_packag
 from . import provenance
 from .bundle import input_path, mask_path
 from .core.annotation_config import AnnotationConfig, SessionRecord
-from .rows import Row
+from .rows import Row, split_report, split_summary
 
 SCHEMA_VERSION = "0.1.0"
 SOFTWARE = "omero-annotate-ai"
+SPLIT_REPORT_FILE = "split-report.yaml"
 _ANNOTATION_TYPES = {t.value for t in bas.AnnotationType}
 _TOOL_NAMES = {"micro_sam": "micro-sam", "cellpose": "cellpose"}
 
 __all__ = [
     "SCHEMA_VERSION",
+    "SPLIT_REPORT_FILE",
     "annotation_records",
     "annotation_set",
     "save_bia_package",
     "write_ro_crate",
     "write_schema_documents",
+    "write_split_report",
 ]
 
 
@@ -228,15 +232,42 @@ def annotation_records(rows: Sequence[Row]) -> list[bas.AnnotationRecord]:
     return records
 
 
+def write_split_report(
+    config: AnnotationConfig, rows: Sequence[Row], folder: str | Path
+) -> Path:
+    """Write ``split-report.yaml`` into ``folder``: per split the number of images,
+    wells and strata, and those that are in several splits or miss one (see
+    :func:`~omero_annotate_ai.rows.split_report`), with a one-paragraph summary.
+
+    Excluded rows are left out. Returns the path of the file.
+    """
+    split = config.split
+    report = split_report(
+        [r for r in rows if not r.excluded],
+        split.unit or "image",
+        split.stratify_by or (),
+        split.rationale,
+    )
+    report["summary"] = split_summary(report)
+    path = Path(folder) / SPLIT_REPORT_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(report, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+    return path
+
+
 def write_schema_documents(
     config: AnnotationConfig, rows: Sequence[Row], folder: str | Path
 ) -> tuple[Path, Path]:
     """Write ``annotation-set.yaml`` and ``annotation-records.csv`` into ``folder``
-    (validated against the schema, and against each other); returns their paths."""
+    (validated against the schema, and against each other); returns their paths.
+    The split report (``split-report.yaml``) is written next to them."""
     folder = Path(folder)
     described, records = annotation_set(config, rows), annotation_records(rows)
     if problems := check_documents(described, records):
         raise SchemaError("The set and its records", problems)
+    write_split_report(config, rows, folder)
     return (
         write_set(described, folder / SET_FILE),
         write_records(records, folder / RECORDS_FILE),
@@ -252,7 +283,13 @@ def write_ro_crate(
         annotation_set(config, rows),
         annotation_records(rows),
         folder,
-        metadata_files=(SET_FILE, RECORDS_FILE, "config.yaml", "tracking_table.csv"),
+        metadata_files=(
+            SET_FILE,
+            RECORDS_FILE,
+            SPLIT_REPORT_FILE,
+            "config.yaml",
+            "tracking_table.csv",
+        ),
     )
 
 
@@ -270,9 +307,12 @@ def save_bia_package(
     folder, or one filled by
     :func:`~omero_annotate_ai.processing.bia_data.prepare_bia_data_from_table`).
 
+    The bundle also gets ``split-report.yaml``, the split report of the annotated
+    rows (key ``split_report`` of the returned summary).
+
     Raises ``MifaNotReady`` naming the fields MIFA requires that the config lacks.
     """
-    return _save_bia_package(
+    summary = _save_bia_package(
         annotation_set(config, rows),
         annotation_records(rows),
         data_dir,
@@ -280,3 +320,7 @@ def save_bia_package(
         accession=accession,
         move_data=move_data,
     )
+    summary["split_report"] = write_split_report(
+        config, [r for r in rows if r.processed], summary["dir"]
+    )
+    return summary

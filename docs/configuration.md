@@ -280,10 +280,14 @@ split:
     treated as independent.
 ```
 
-The unit and rationale are added to the MIFA annotation method.
+The unit and rationale are added to the MIFA annotation method. Every export also
+writes a split report, `split-report.yaml`: `ts.write_ro_crate()` puts it in the set's
+folder and `save_bia_package` in the bundle. It lists per split the number of images,
+wells and conditions, the images and wells with annotations in more than one split,
+and the conditions that miss a split, followed by a summary in a few sentences. The
+same report is available in Python as
 `omero_annotate_ai.rows.split_report(rows, split_unit, stratify_by, split_rationale)`
-lists which images and wells have annotations in more than one split, and
-`split_summary(report)` puts this in a few sentences.
+and `split_summary(report)`.
 
 **Stratified splits.** `stratify_by` divides the units over the splits per condition,
 so that validation and test cover every condition instead of whatever a random draw
@@ -306,7 +310,7 @@ training:
   validation first.
 
 When a condition has too few units to reach every split (for example one well per
-condition with `unit: well`), the split still runs with a warning, and `split_report`
+condition with `unit: well`), the split still runs with a warning, and the split report
 lists the conditions that miss a split. A key that no image has is an error, as it is
 most likely a typo. Images lacking a key that others have form their own `(missing)`
 group.

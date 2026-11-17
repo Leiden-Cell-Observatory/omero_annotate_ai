@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import yaml
 from bioimage_annotation_schema import check_documents, read_records, read_set
 from bioimage_annotation_schema import datamodel as bas
 from bioimage_annotation_schema.crate import METADATA_FILE, SPEC, build_ro_crate
@@ -15,9 +16,11 @@ from omero_annotate_ai.core.annotation_config import (
 )
 from omero_annotate_ai.rows import Row
 from omero_annotate_ai.schema_export import (
+    SPLIT_REPORT_FILE,
     annotation_records,
     annotation_set,
     write_schema_documents,
+    write_split_report,
 )
 from tests.fakes import annotate, create_set, omero_set
 
@@ -100,6 +103,7 @@ class TestRoCrate:
         assert {
             "annotation-set.yaml",
             "annotation-records.csv",
+            "split-report.yaml",
             "config.yaml",
             "tracking_table.csv",
         } <= set(parts)
@@ -149,7 +153,7 @@ class TestRoCrate:
     def test_local_set_and_rewrite(self, tmp_path):
         ts, path, _, by_id = _crate(tmp_path, storage="local", limit=None)
 
-        assert ts.is_local and len(by_id["./"]["hasPart"]) == 4 + 2 * 3
+        assert ts.is_local and len(by_id["./"]["hasPart"]) == 5 + 2 * 3
         ts.write_ro_crate()  # writing again replaces the file
         assert json.loads(path.read_text(encoding="utf-8"))["@graph"][1]["@id"] == "./"
 
@@ -247,6 +251,46 @@ class TestSchemaDocuments:
         set_path, records_path = write_schema_documents(config, rows, tmp_path)
         assert read_set(set_path).schema_version == "0.1.0"
         assert read_records(records_path)[0].status == "pending"
+        assert (tmp_path / SPLIT_REPORT_FILE).is_file()
+
+    def test_split_report_leaves_excluded_units_out(self, tmp_path):
+        config = create_default_config()
+        config.split.unit = "well"
+        config.split.rationale = "fields of one well share the same cells"
+        rows = [
+            Row(
+                image_uri=f"omero:image:{i}",
+                image_name=f"img{i}",
+                annotation_id=f"a{i}",
+                well="A1",
+                category=category,
+            )
+            for i, category in enumerate(["training", "validation"])
+        ]
+        left_out = Row(
+            image_uri="omero:image:9",
+            image_name="img9",
+            annotation_id="a9",
+            well="B2",
+            category="test",
+        )
+        left_out.mark_excluded(session=1)
+        rows.append(left_out)
+        write_split_report(config, rows, tmp_path)
+
+        report = yaml.safe_load(
+            (tmp_path / SPLIT_REPORT_FILE).read_text(encoding="utf-8")
+        )
+        assert report["split_unit"] == "well"
+        assert report["wells"]["spanning_splits"] == ["A1"]  # excluded B2 left out
+        assert report["wells"]["total"] == 1
+        assert "1 of 1 wells" in report["summary"]
+        assert "share the same cells" in report["summary"]
+
+    def test_split_report_is_listed_in_the_crate(self, tmp_path):
+        ts, _, _, by_id = _crate(tmp_path)
+        assert (ts.bundle_dir / SPLIT_REPORT_FILE).is_file()
+        assert SPLIT_REPORT_FILE in by_id
 
     def test_iscc_codes_come_with_how_they_were_made(self, tmp_path):
         ts, _, _, by_id = _crate(tmp_path)

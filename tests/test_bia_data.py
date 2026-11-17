@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
+import yaml
 from tifffile import imread, imwrite
 
 from omero_annotate_ai.core.annotation_config import (
@@ -494,6 +495,9 @@ def test_local_set_bundle_holds_only_annotated_units(tmp_path):
     assert result["missing"] == 0
     assert len(list((tmp_path / "bia" / "annotations").glob("*_mask.tif"))) == 2
     assert len(list(ts.bundle_dir.glob("annotation_output/*_mask.tif"))) == 2  # copied
+    report = yaml.safe_load(result["split_report"].read_text(encoding="utf-8"))
+    assert result["split_report"] == tmp_path / "bia" / "split-report.yaml"
+    assert report["images"]["total"] == 2  # annotated rows only
 
 
 def test_local_set_bundle_leaves_excluded_units_out(tmp_path):
