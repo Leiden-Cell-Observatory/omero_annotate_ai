@@ -32,6 +32,14 @@ Newest first. The full list of pull requests per version is on
   `create_connection_from_config`), e.g. for a session started in OMERO.web or
   BIOMERO. Closing such a connection only detaches; the session stays usable where it
   came from. A session-key connection cannot log in again once its session has ended.
+- **`import omero_annotate_ai` works without the `notebooks` extra.** `python-dotenv`
+  is now a base dependency, and the widget factories are imported on first use; without
+  `ipywidgets` they raise an error naming `omero-annotate-ai[notebooks]` (#110).
+- **A local set opens from its folder without an OMERO connection**:
+  `TrainingSet.open(folder)` no longer needs one for `storage: local` sets with OMERO
+  images; the connection is asked for only when an image is read (#112).
+- `spatial_coverage.patch_size` is documented as `[height, width]`, which is how it has
+  always been read (#111).
 
 ## 0.5.2
 

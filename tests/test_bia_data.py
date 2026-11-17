@@ -262,6 +262,7 @@ def test_skipped_rows_are_pruned_from_the_config(mock_conn, mock_ezomero, tmp_pa
     The BIA file lists are built from every annotation in the config, so a skipped row
     left in place would put a path to a file we never downloaded into the submission.
     """
+    pytest.importorskip("bia_mifa_models")
     mock_ezomero.get_table.return_value = build_table(
         [
             annotation(image_id=101, label_id=555),  # exported

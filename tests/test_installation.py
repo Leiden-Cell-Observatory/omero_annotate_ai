@@ -1,6 +1,8 @@
 """Test package installation and basic imports with modern package structure."""
 
 import importlib.util
+import subprocess
+import sys
 
 import pytest
 
@@ -68,6 +70,25 @@ def test_public_api():
 
     for name in ("TrainingSet", "Row", "AnnotationConfig", "create_pipeline"):
         assert hasattr(omero_annotate_ai, name), name
+
+
+def test_package_imports_without_the_notebooks_extra():
+    """Without ipywidgets/IPython the package imports; only the widgets ask for them."""
+    code = (
+        "import sys\n"
+        "sys.modules['ipywidgets'] = sys.modules['IPython'] = None\n"
+        "import omero_annotate_ai\n"
+        "try:\n"
+        "    omero_annotate_ai.create_workflow_widget\n"
+        "except ImportError as exc:\n"
+        "    assert 'omero-annotate-ai[notebooks]' in str(exc), exc\n"
+        "else:\n"
+        "    raise SystemExit('widget imported without ipywidgets')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_optional_dependencies():

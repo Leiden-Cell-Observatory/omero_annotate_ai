@@ -1,7 +1,9 @@
 """OMERO Annotate AI: AI-assisted image annotation and segmentation with OMERO."""
 
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from typing import TYPE_CHECKING, Any
 
 from .core.annotation_config import (
     AnnotationConfig,
@@ -24,9 +26,33 @@ from .processing.training_functions import (
 from .processing.training_utils import run_training, setup_training
 from .rows import Row
 from .trainingset import OmeroWrites, TrainingSet
-from .widgets.omero_connection_widget import create_omero_connection_widget
-from .widgets.training_data_widget import create_training_data_widget
-from .widgets.workflow_widget import create_workflow_widget
+
+if TYPE_CHECKING:
+    from .widgets.omero_connection_widget import create_omero_connection_widget
+    from .widgets.training_data_widget import create_training_data_widget
+    from .widgets.workflow_widget import create_workflow_widget
+
+# The widgets need ipywidgets and IPython (the "notebooks" extra), so they are
+# imported on first use; scripts and headless servers can import the package without.
+_WIDGET_MODULES = {
+    "create_omero_connection_widget": "omero_connection_widget",
+    "create_training_data_widget": "training_data_widget",
+    "create_workflow_widget": "workflow_widget",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _WIDGET_MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        return getattr(import_module(f".widgets.{module}", __name__), name)
+    except ModuleNotFoundError as exc:
+        raise ImportError(
+            f"{name} needs the notebook packages: "
+            "pip install 'omero-annotate-ai[notebooks]'"
+        ) from exc
+
 
 try:
     __version__ = _pkg_version("omero-annotate-ai")
