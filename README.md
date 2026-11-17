@@ -82,6 +82,12 @@ pip install "omero-annotate-ai[microsam,notebooks]" jupyterlab
 
 See the [installation guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation/) for details and troubleshooting.
 
+The development version (this repository's `main`) depends on the
+[Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema),
+which is not on PyPI yet. Install it first:
+`pip install "git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema"`.
+A clone with `pixi install` gets it automatically.
+
 ## Quick start
 
 **With widgets** (in Jupyter):
