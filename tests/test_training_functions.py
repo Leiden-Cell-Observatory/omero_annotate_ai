@@ -13,6 +13,7 @@ import pytest
 import tifffile
 import yaml
 
+from omero_annotate_ai.cli import main, parse_set
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
     create_default_config,
@@ -1251,3 +1252,97 @@ class TestBiaPyTrainer:
         monkeypatch.setitem(sys.modules, "biapy", None)
         with pytest.raises(ImportError, match=r"omero-annotate-ai\[biapy\]"):
             train(_export(tmp_path), "biapy", tmp_path / "out")
+
+
+@pytest.mark.unit
+class TestTrainCli:
+    def test_parse_set_types_and_nesting(self):
+        assert parse_set(
+            ["epochs=5", "learning_rate=1e-4", "flag=true", "name=abc"]
+        ) == {"epochs": 5, "learning_rate": 1e-4, "flag": True, "name": "abc"}
+        assert parse_set(["MODEL.ARCHITECTURE=resunet", "TRAIN.BATCH_SIZE=4"]) == {
+            "config": {"MODEL": {"ARCHITECTURE": "resunet"}, "TRAIN": {"BATCH_SIZE": 4}}
+        }
+
+    def test_train_writes_result_json(self, tmp_path, monkeypatch, capsys):
+        calls = _stub_microsam(monkeypatch, {})
+        root = _export(tmp_path)
+        code = main(
+            [
+                "train",
+                str(root),
+                "--trainer",
+                "microsam",
+                "--output",
+                str(tmp_path / "out"),
+                "--set",
+                "n_iterations=2",
+                "--set",
+                "model_name=m",
+            ]
+        )
+        assert code == 0
+        result = json.loads((tmp_path / "out" / "training_result.json").read_text())
+        assert result["trainer"] == "microsam"
+        assert result["model_path"].endswith("m_final.pt")
+        assert calls["train_sam"]["n_iterations"] == 2
+
+    def test_params_file_then_set_overrides(self, tmp_path, monkeypatch):
+        calls = _stub_microsam(monkeypatch, {})
+        (tmp_path / "p.yaml").write_text("n_iterations: 9\nbatch_size: 3\n")
+        main(
+            [
+                "train",
+                str(_export(tmp_path)),
+                "--trainer",
+                "microsam",
+                "--output",
+                str(tmp_path / "out"),
+                "--params",
+                str(tmp_path / "p.yaml"),
+                "--set",
+                "n_iterations=1",
+            ]
+        )
+        assert calls["train_sam"]["n_iterations"] == 1
+        assert calls["loader"][0]["batch_size"] == 3
+
+    def test_bad_trainer_exits_2(self, tmp_path):
+        with pytest.raises(SystemExit) as e:
+            main(
+                [
+                    "train",
+                    str(tmp_path),
+                    "--trainer",
+                    "stardist",
+                    "--output",
+                    str(tmp_path / "o"),
+                ]
+            )
+        assert e.value.code == 2
+
+    def test_invalid_export_exits_1_with_message(self, tmp_path, capsys):
+        code = main(
+            [
+                "train",
+                str(tmp_path),
+                "--trainer",
+                "microsam",
+                "--output",
+                str(tmp_path / "o"),
+            ]
+        )
+        assert code == 1
+        assert "train_input" in capsys.readouterr().err
+
+    def test_cli_module_does_not_import_omero(self):
+        import subprocess
+
+        code = (
+            "import sys; sys.modules['ezomero']=None; sys.modules['omero']=None; "
+            "import omero_annotate_ai.cli; print('ok')"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True
+        )
+        assert out.returncode == 0, out.stderr

@@ -89,6 +89,9 @@ all = [
     "omero-annotate-ai[notebooks,microsam,zarr,provenance]",
 ]
 
+[project.scripts]
+omero-annotate-ai = "omero_annotate_ai.cli:main"
+
 [project.entry-points."napari.manifest"]
 omero-annotate-ai = "omero_annotate_ai.napari_plugin:napari.yaml"
 
