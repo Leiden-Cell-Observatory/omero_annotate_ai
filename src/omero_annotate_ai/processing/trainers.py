@@ -15,10 +15,16 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+import yaml
 from tifffile import TiffFile, imread
 
 from ..errors import InvalidTrainingData
-from .normalization import SIDECAR_NAME, microsam_raw_transform
+from .normalization import (
+    SIDECAR_NAME,
+    biapy_normalization,
+    microsam_raw_transform,
+    normalization_config,
+)
 from .training_layout import split_folders_for
 
 logger = logging.getLogger(__name__)
@@ -486,6 +492,131 @@ class CellposeTrainer:
         )
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """``base`` with ``override`` merged in: dicts recursively, anything else replaced."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+class BiaPyTrainer:
+    """Train a BiaPy instance-segmentation model (``pip install omero-annotate-ai[biapy]``)."""
+
+    name = "biapy"
+
+    def train(
+        self,
+        data: TrainingData,
+        output_dir: Path,
+        *,
+        model_name: str = "",
+        epochs: int = 100,
+        patch_size: tuple[int, ...] | None = None,
+        architecture: str = "unet",
+        config: dict[str, Any] | None = None,
+    ) -> TrainingResult:
+        """Write a BiaPy config from ``data`` and run ``BiaPy(...).run_job()``.
+
+        ``patch_size`` is spatial only (``(y, x)`` or ``(z, y, x)``); the channel count
+        is appended. ``config`` is a nested dict deep-merged over the generated one.
+        BiaPy writes its logs to ``extras["log_dir"]``.
+
+        Raises:
+            ImportError: BiaPy is not installed.
+            RuntimeError: The job failed or produced no checkpoint.
+        """
+        try:
+            import biapy
+            import torch
+        except ImportError as e:
+            raise ImportError(
+                "BiaPy is not installed. Install with: "
+                "pip install omero-annotate-ai[biapy]"
+            ) from e
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if not model_name.strip():
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_name = f"biapy_{stamp}"
+        volume = data.axes.startswith("Z")
+        spatial = patch_size or ((16, 128, 128) if volume else (256, 256))
+        base: dict[str, Any] = {
+            "PROBLEM": {
+                "TYPE": "INSTANCE_SEG",
+                "NDIM": "3D" if volume else "2D",
+                # foreground + contour; checked against BiaPy 3.6.8
+                "INSTANCE_SEG": {"DATA_CHANNELS": ["F", "C"]},
+            },
+            "DATA": {
+                "PATCH_SIZE": [*spatial, data.n_channels],
+                "TRAIN": {
+                    "PATH": str(data.train_input.resolve()),
+                    "GT_PATH": str(data.train_label.resolve()),
+                },
+                "VAL": {
+                    "FROM_TRAIN": False,
+                    "PATH": str(data.val_input.resolve()),
+                    "GT_PATH": str(data.val_label.resolve()),
+                },
+                "TEST": {"ENABLE": False},
+                "NORMALIZATION": biapy_normalization(
+                    normalization_config(data.normalization)
+                ),
+            },
+            "MODEL": {"ARCHITECTURE": architecture},
+            "TRAIN": {"ENABLE": True, "EPOCHS": epochs},
+            "TEST": {"ENABLE": False},
+        }
+        merged = _deep_merge(base, config or {})
+        config_path = output_dir / "biapy.yaml"
+        config_path.write_text(yaml.safe_dump(merged, sort_keys=False))
+
+        log_dir = output_dir / model_name / "logs"
+        model_path = (
+            output_dir
+            / model_name
+            / "checkpoints"
+            / f"{model_name}_1-checkpoint-best.pth"
+        )
+        gpu = "0" if torch.cuda.is_available() else None
+        logger.info("BiaPy training %s on %s", model_name, "gpu" if gpu else "cpu")
+        try:
+            biapy.BiaPy(
+                str(config_path),
+                result_dir=str(output_dir),
+                name=model_name,
+                run_id=1,
+                gpu=gpu,
+            ).run_job()
+        except Exception as e:
+            raise RuntimeError(f"BiaPy training failed, see {log_dir}: {e}") from e
+        if not model_path.exists():
+            raise RuntimeError(
+                f"BiaPy finished without a best checkpoint at {model_path}, see {log_dir}"
+            )
+
+        return TrainingResult(
+            trainer=self.name,
+            package_version=str(biapy.__version__),
+            model_path=model_path,
+            output_dir=output_dir,
+            params={
+                "model_name": model_name,
+                "epochs": epochs,
+                "patch_size": merged["DATA"]["PATCH_SIZE"],
+                "architecture": architecture,
+                "config": config or {},
+            },
+            data_root=data.root,
+            extras={"config_path": config_path, "log_dir": log_dir},
+        )
+
+
 def _package_version(module: Any) -> str:
     """The module's ``version`` attribute, else its installed distribution version."""
     version = getattr(module, "version", None)
@@ -498,6 +629,7 @@ def _package_version(module: Any) -> str:
 TRAINERS: dict[str, type[Any]] = {
     "microsam": MicroSamTrainer,
     "cellpose": CellposeTrainer,
+    "biapy": BiaPyTrainer,
 }
 
 

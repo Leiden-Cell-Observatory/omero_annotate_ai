@@ -60,6 +60,9 @@ microsam = [
 cellpose = [
     "cellpose>=4",
 ]
+biapy = [
+    "biapy>=3.6",
+]
 # Experimental napari plugin; pinned to the micro-SAM minor version whose annotator
 # internals it drives (see napari_plugin/_controller.py).
 napari = [

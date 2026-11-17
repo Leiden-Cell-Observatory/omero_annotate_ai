@@ -42052,6 +42052,8 @@ packages:
   - marimo>=0.19.2,<0.20 ; extra == 'notebooks'
   - keyring>=23.0.0 ; extra == 'notebooks'
   - micro-sam>=1.8 ; extra == 'microsam'
+  - cellpose>=4 ; extra == 'cellpose'
+  - biapy>=3.6 ; extra == 'biapy'
   - micro-sam>=1.8,<1.9 ; extra == 'napari'
   - qtpy>=2.4 ; extra == 'napari'
   - pytest>=6.0 ; extra == 'dev'

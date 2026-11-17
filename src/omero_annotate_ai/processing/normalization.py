@@ -164,6 +164,26 @@ def biapy_normalization(spec: Any) -> dict[str, Any]:
     }
 
 
+def normalization_config(spec: Any) -> Any:
+    """A :class:`NormalizationConfig` from a config, a dict or ``normalization.json``.
+
+    ``applied_at_export`` is accepted as an alias of ``apply_at_export``; ``None`` and
+    ``{}`` give the defaults.
+    """
+    from omero_annotate_ai.core.annotation_config import NormalizationConfig
+
+    if isinstance(spec, dict):
+        spec = dict(spec)
+        if "applied_at_export" in spec:
+            spec["apply_at_export"] = spec.pop("applied_at_export")
+        return NormalizationConfig.model_validate(
+            {k: v for k, v in spec.items() if k in NormalizationConfig.model_fields}
+        )
+    if spec is None:
+        return NormalizationConfig()
+    return spec
+
+
 def microsam_raw_transform(spec: Any) -> Callable[[np.ndarray], np.ndarray]:
     """Raw transform for micro-SAM training, which requires inputs in [0, 255].
 
@@ -178,17 +198,7 @@ def microsam_raw_transform(spec: Any) -> Callable[[np.ndarray], np.ndarray]:
         spec: A :class:`NormalizationConfig`, an equivalent dict, or the content of
             ``normalization.json`` (``applied_at_export`` is accepted as an alias).
     """
-    from omero_annotate_ai.core.annotation_config import NormalizationConfig
-
-    if isinstance(spec, dict):
-        spec = dict(spec)
-        if "applied_at_export" in spec:
-            spec["apply_at_export"] = spec.pop("applied_at_export")
-        spec = NormalizationConfig.model_validate(
-            {k: v for k, v in spec.items() if k in NormalizationConfig.model_fields}
-        )
-    elif spec is None:
-        spec = NormalizationConfig()
+    spec = normalization_config(spec)
 
     if spec.apply_at_export:
         return _unit_range_to_8bit

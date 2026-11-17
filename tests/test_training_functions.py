@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import tifffile
+import yaml
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
@@ -998,7 +999,7 @@ def _stub_microsam(monkeypatch, calls):
 @pytest.mark.unit
 class TestTrain:
     def test_unknown_trainer_lists_names(self, tmp_path):
-        with pytest.raises(ValueError, match="microsam, cellpose"):
+        with pytest.raises(ValueError, match="microsam, cellpose, biapy"):
             train(_export(tmp_path), "stardist", tmp_path / "out")
 
     def test_accepts_folder_or_training_data(self, tmp_path, monkeypatch):
@@ -1152,3 +1153,101 @@ class TestCellposeTrainer:
         monkeypatch.setitem(sys.modules, "cellpose", None)
         with pytest.raises(ImportError, match=r"omero-annotate-ai\[cellpose\]"):
             train(_export(tmp_path), "cellpose", tmp_path / "out")
+
+
+def _stub_biapy(monkeypatch, calls, *, write_checkpoint=True):
+    """Install fake biapy / torch modules."""
+
+    class BiaPy:
+        def __init__(self, config, result_dir, name, run_id, gpu):
+            calls["init"] = {
+                "config": config,
+                "result_dir": result_dir,
+                "name": name,
+                "run_id": run_id,
+                "gpu": gpu,
+            }
+            self._result_dir, self._name = result_dir, name
+
+        def run_job(self):
+            if write_checkpoint:
+                ckpt = Path(self._result_dir) / self._name / "checkpoints"
+                ckpt.mkdir(parents=True, exist_ok=True)
+                (ckpt / f"{self._name}_1-checkpoint-best.pth").write_bytes(b"w")
+
+    biapy = types.ModuleType("biapy")
+    biapy.__version__ = "3.6.8"
+    biapy.BiaPy = BiaPy
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    monkeypatch.setitem(sys.modules, "biapy", biapy)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    return calls
+
+
+@pytest.mark.unit
+class TestBiaPyTrainer:
+    def test_writes_config_and_runs_job(self, tmp_path, monkeypatch):
+        calls = _stub_biapy(monkeypatch, {})
+        r = train(
+            _export(tmp_path), "biapy", tmp_path / "out", model_name="bp", epochs=3
+        )
+        cfg = yaml.safe_load((tmp_path / "out" / "biapy.yaml").read_text())
+        assert cfg["PROBLEM"]["TYPE"] == "INSTANCE_SEG"
+        assert cfg["PROBLEM"]["NDIM"] == "2D"
+        assert cfg["DATA"]["TRAIN"]["PATH"] == str(tmp_path / "export" / "train_input")
+        assert cfg["DATA"]["VAL"]["FROM_TRAIN"] is False
+        assert cfg["TRAIN"]["EPOCHS"] == 3
+        assert cfg["DATA"]["NORMALIZATION"]["PERC_CLIP"]["ENABLE"] is True
+        assert calls["init"]["name"] == "bp" and calls["init"]["run_id"] == 1
+        assert calls["init"]["gpu"] is None
+        assert r.model_path == (
+            tmp_path / "out" / "bp" / "checkpoints" / "bp_1-checkpoint-best.pth"
+        )
+        assert r.package_version == "3.6.8"
+        assert r.extras["log_dir"] == tmp_path / "out" / "bp" / "logs"
+
+    def test_volume_and_channels_set_ndim_and_patch(self, tmp_path, monkeypatch):
+        _stub_biapy(monkeypatch, {})
+        train(_export(tmp_path, shape=(8, 32, 32, 2)), "biapy", tmp_path / "out")
+        cfg = yaml.safe_load((tmp_path / "out" / "biapy.yaml").read_text())
+        assert cfg["PROBLEM"]["NDIM"] == "3D"
+        assert cfg["DATA"]["PATCH_SIZE"] == [16, 128, 128, 2]
+
+    def test_user_patch_size_is_spatial_only(self, tmp_path, monkeypatch):
+        _stub_biapy(monkeypatch, {})
+        train(_export(tmp_path), "biapy", tmp_path / "out", patch_size=(64, 64))
+        cfg = yaml.safe_load((tmp_path / "out" / "biapy.yaml").read_text())
+        assert cfg["DATA"]["PATCH_SIZE"] == [64, 64, 1]
+
+    def test_user_config_overrides_nested_keys(self, tmp_path, monkeypatch):
+        _stub_biapy(monkeypatch, {})
+        train(
+            _export(tmp_path),
+            "biapy",
+            tmp_path / "out",
+            config={"MODEL": {"ARCHITECTURE": "resunet"}, "TRAIN": {"BATCH_SIZE": 4}},
+        )
+        cfg = yaml.safe_load((tmp_path / "out" / "biapy.yaml").read_text())
+        assert cfg["MODEL"]["ARCHITECTURE"] == "resunet"
+        assert cfg["TRAIN"]["EPOCHS"] == 100 and cfg["TRAIN"]["BATCH_SIZE"] == 4
+
+    def test_missing_checkpoint_names_log_dir(self, tmp_path, monkeypatch):
+        _stub_biapy(monkeypatch, {}, write_checkpoint=False)
+        with pytest.raises(RuntimeError, match="logs"):
+            train(_export(tmp_path), "biapy", tmp_path / "out", model_name="bp")
+
+    def test_job_failure_names_log_dir(self, tmp_path, monkeypatch):
+        _stub_biapy(monkeypatch, {})
+        monkeypatch.setattr(
+            sys.modules["biapy"].BiaPy,
+            "run_job",
+            lambda self: (_ for _ in ()).throw(ValueError("boom")),
+        )
+        with pytest.raises(RuntimeError, match="logs"):
+            train(_export(tmp_path), "biapy", tmp_path / "out", model_name="bp")
+
+    def test_missing_package_names_the_extra(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(sys.modules, "biapy", None)
+        with pytest.raises(ImportError, match=r"omero-annotate-ai\[biapy\]"):
+            train(_export(tmp_path), "biapy", tmp_path / "out")
