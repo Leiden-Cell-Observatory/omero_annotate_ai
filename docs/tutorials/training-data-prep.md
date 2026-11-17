@@ -82,17 +82,19 @@ Fine-tune micro-SAM on your annotations so its suggestions fit your images bette
 CUDA GPU is strongly recommended.
 
 ```python
-from omero_annotate_ai import setup_training, run_training
+from omero_annotate_ai import train
 
-training_config = setup_training(
-    result,  # from export_training_set
+training_results = train(
+    result["base_dir"],  # from export_training_set
+    "microsam",
+    result["base_dir"] / "model",
     model_name="hela_nuclei_v1",
     model_type="vit_b_lm",  # start from this pretrained model
     epochs=50,
     batch_size=2,
     patch_shape=(512, 512),
 )
-training_results = run_training(training_config, framework="microsam")
+print(training_results.model_path)
 ```
 
 `epochs` sets the training length. Pass `n_iterations=` instead for a fixed number of
@@ -100,7 +102,7 @@ steps, for example `n_iterations=10` for a quick check that everything runs; it
 overrides `epochs`.
 
 The trained model is saved as `<output_dir>/<model_name>_final.pt`, with checkpoints in
-`<output_dir>/checkpoints/`. Load it in the micro-SAM napari plugin by choosing the
+`<output_dir>/<model_name>/`. Load it in the micro-SAM napari plugin by choosing the
 checkpoint as a custom model. Export to the [BioImage Model Zoo](https://bioimage.io) format with micro-SAM's own tools.
 
 Notebook: [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)

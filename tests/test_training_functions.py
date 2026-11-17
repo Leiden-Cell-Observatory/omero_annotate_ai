@@ -1,6 +1,8 @@
 """Tests for training data preparation functions."""
 
 import shutil
+import sys
+import types
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,8 +17,11 @@ from omero_annotate_ai.core.annotation_config import (
 )
 from omero_annotate_ai.errors import InvalidTrainingData
 from omero_annotate_ai.processing import training_functions as tf
-from omero_annotate_ai.processing.normalization import write_native_sidecar
-from omero_annotate_ai.processing.trainers import load_training_data
+from omero_annotate_ai.processing.normalization import (
+    SIDECAR_NAME,
+    write_native_sidecar,
+)
+from omero_annotate_ai.processing.trainers import load_training_data, train
 from omero_annotate_ai.processing.training_functions import (
     reorganize_local_data_for_training,
 )
@@ -229,28 +234,6 @@ class TestReorganizeOntoRecords:
         stats = result["stats"]
         assert stats["n_training_annotation_input"] == 1
         assert stats["n_val_annotation_input"] == 1
-
-    def test_result_satisfies_setup_training_contract(self, tmp_path):
-        """Both producers must emit the keys setup_training requires.
-
-        The old suite checked this across both producers; afterwards only the OMERO
-        one was covered. reorganize used to return validation_input/validation_label,
-        so feeding it to setup_training raised ValueError.
-        """
-        annotation_dir = tmp_path / "project"
-        annotation_dir.mkdir()
-        self._populate(annotation_dir, [0, 1])
-        config = self._config(annotation_dir, ["training", "validation"])
-
-        result = reorganize_local_data_for_training(
-            config=config,
-            annotation_dir=annotation_dir,
-            output_dir=tmp_path / "project_training",
-        )
-
-        for key in ("train_input", "train_label", "val_input", "val_label"):
-            assert key in result, f"setup_training requires {key}"
-            assert result[key].exists()
 
     def test_separate_channels_route_model_and_annotation(self, tmp_path):
         """model_input/ feeds train_input/; annotation_input/ feeds train_annotation_input/."""
@@ -593,17 +576,6 @@ class TestPrepareFromTableRecords:
         images = sorted(p.name for p in result["train_input"].glob("*.tif"))
         assert images == ["0.tif", "1.tif"]
 
-    def test_result_keys_feed_setup_training(self, tmp_path):
-        table = self._table()
-        table.loc[1, "category"] = "validation"
-
-        result = self._run(tmp_path, table)
-
-        for key in ("train_input", "train_label", "val_input", "val_label"):
-            assert key in result, f"setup_training requires {key}"
-        assert (result["val_input"] / "1.tif").exists()
-        assert (result["val_input"] / "1.tif").exists()
-
     def test_test_rows_get_their_own_folders(self, tmp_path):
         table = self._table()
         table.loc[1, "category"] = "test"
@@ -745,62 +717,6 @@ class TestChannelParsing:
 
         with pytest.raises(ValueError, match="Unparseable channel"):
             _channel_from_row(pd.Series({"channel": "not-a-channel"}))
-
-
-@pytest.mark.unit
-class TestRunTrainingLength:
-    """How long micro-SAM trains: epochs, or n_iterations when given."""
-
-    def _result(self, tmp_path):
-        folders = {}
-        for key in ("train_input", "train_label", "val_input", "val_label"):
-            folders[key] = tmp_path / key
-            folders[key].mkdir()
-        return folders
-
-    def test_epochs_zero_without_iterations_is_rejected(self, tmp_path):
-        from omero_annotate_ai.processing.training_utils import setup_training
-
-        with pytest.raises(ValueError, match="epochs > 0"):
-            setup_training(self._result(tmp_path), epochs=0)
-
-    def test_n_iterations_reaches_train_sam(self, tmp_path, monkeypatch):
-        sam_training = pytest.importorskip("micro_sam.training")
-        from omero_annotate_ai.processing.training_utils import (
-            run_training,
-            setup_training,
-        )
-
-        seen = {}
-        monkeypatch.setattr(sam_training, "default_sam_loader", lambda **_: object())
-        monkeypatch.setattr(
-            sam_training, "train_sam", lambda **kwargs: seen.update(kwargs)
-        )
-
-        config = setup_training(self._result(tmp_path), epochs=5, n_iterations=3)
-        outcome = run_training(config)
-
-        assert seen["n_iterations"] == 3
-        assert seen["n_epochs"] == 5  # micro-SAM ignores it when n_iterations is set
-        assert outcome["training_stats"]["n_iterations"] == 3
-
-    def test_epochs_only_leaves_iterations_unset(self, tmp_path, monkeypatch):
-        sam_training = pytest.importorskip("micro_sam.training")
-        from omero_annotate_ai.processing.training_utils import (
-            run_training,
-            setup_training,
-        )
-
-        seen = {}
-        monkeypatch.setattr(sam_training, "default_sam_loader", lambda **_: object())
-        monkeypatch.setattr(
-            sam_training, "train_sam", lambda **kwargs: seen.update(kwargs)
-        )
-
-        run_training(setup_training(self._result(tmp_path), epochs=2))
-
-        assert seen["n_epochs"] == 2
-        assert seen["n_iterations"] is None
 
 
 @pytest.mark.unit
@@ -1014,3 +930,128 @@ class TestLoadTrainingData:
             config=config, annotation_dir=annotation_dir, output_dir=output_dir
         )
         assert (output_dir / "tracking_table.csv").exists()
+
+    def test_train_split_without_pairs_is_refused(self, tmp_path):
+        with pytest.raises(InvalidTrainingData, match="train_input"):
+            load_training_data(_export(tmp_path, n_train=0))
+
+    def test_unreadable_tiff_names_the_file(self, tmp_path):
+        root = _export(tmp_path)
+        first = sorted((root / "train_input").glob("*.tif"))[0]
+        first.write_bytes(b"not a tiff")
+        with pytest.raises(InvalidTrainingData, match=first.name):
+            load_training_data(root)
+
+    def test_broken_sidecar_names_the_file(self, tmp_path):
+        root = _export(tmp_path)
+        (root / SIDECAR_NAME).write_text("{not json")
+        with pytest.raises(InvalidTrainingData, match=SIDECAR_NAME):
+            load_training_data(root)
+
+
+def _stub_microsam(monkeypatch, calls):
+    """Install fake micro_sam.training / torch / torch_em modules recording calls."""
+    calls["loader"] = []
+
+    def default_sam_loader(**kwargs):
+        calls["loader"].append(kwargs)
+        return object()
+
+    def train_sam(**kwargs):
+        calls["train_sam"] = kwargs
+        best = Path(kwargs["save_root"]) / kwargs["name"] / "best.pt"
+        best.parent.mkdir(parents=True, exist_ok=True)
+        best.write_bytes(b"weights")
+
+    micro_sam = types.ModuleType("micro_sam")
+    micro_sam.__version__ = "1.8.2"
+    training = types.ModuleType("micro_sam.training")
+    training.default_sam_loader = default_sam_loader
+    training.train_sam = train_sam
+    micro_sam.training = training
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    torch_em = types.ModuleType("torch_em")
+    torch_em_data = types.ModuleType("torch_em.data")
+    torch_em_data.MinInstanceSampler = lambda **kwargs: ("sampler", kwargs)
+    torch_em.data = torch_em_data
+    for name, module in {
+        "micro_sam": micro_sam,
+        "micro_sam.training": training,
+        "torch": torch,
+        "torch_em": torch_em,
+        "torch_em.data": torch_em_data,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    return calls
+
+
+@pytest.mark.unit
+class TestTrain:
+    def test_unknown_trainer_lists_names(self, tmp_path):
+        with pytest.raises(ValueError, match="microsam"):
+            train(_export(tmp_path), "stardist", tmp_path / "out")
+
+    def test_accepts_folder_or_training_data(self, tmp_path, monkeypatch):
+        _stub_microsam(monkeypatch, {})
+        r1 = train(_export(tmp_path / "a"), "microsam", tmp_path / "o1", n_iterations=1)
+        r2 = train(
+            load_training_data(_export(tmp_path / "b")),
+            "microsam",
+            tmp_path / "o2",
+            n_iterations=1,
+        )
+        assert r1.trainer == r2.trainer == "microsam"
+
+    def test_result_to_json_has_string_paths(self, tmp_path, monkeypatch):
+        _stub_microsam(monkeypatch, {})
+        r = train(_export(tmp_path), "microsam", tmp_path / "out", n_iterations=1)
+        assert isinstance(r.to_json()["model_path"], str)
+
+
+@pytest.mark.unit
+class TestMicroSamTrainer:
+    def test_calls_train_sam_with_loaders_and_sidecar_transform(
+        self, tmp_path, monkeypatch
+    ):
+        calls = _stub_microsam(monkeypatch, {})
+        r = train(
+            _export(tmp_path),
+            "microsam",
+            tmp_path / "out",
+            model_name="m",
+            n_iterations=3,
+            patch_shape=(64, 64),
+        )
+        assert calls["train_sam"]["n_iterations"] == 3
+        assert calls["train_sam"]["save_root"] == str(tmp_path / "out")
+        assert calls["loader"][0]["patch_shape"] == (64, 64)
+        assert callable(calls["loader"][0]["raw_transform"])
+        assert r.model_path == tmp_path / "out" / "m_final.pt" and r.model_path.exists()
+        assert r.package_version == "1.8.2" and r.params["model_type"] == "vit_b_lm"
+
+    def test_refuses_multichannel(self, tmp_path, monkeypatch):
+        _stub_microsam(monkeypatch, {})
+        with pytest.raises(InvalidTrainingData, match="one channel"):
+            train(_export(tmp_path, shape=(32, 32, 3)), "microsam", tmp_path / "out")
+
+    def test_volume_passes_patch_shape_through(self, tmp_path, monkeypatch):
+        calls = _stub_microsam(monkeypatch, {})
+        train(
+            _export(tmp_path, shape=(4, 32, 32)),
+            "microsam",
+            tmp_path / "out",
+            n_iterations=1,
+            patch_shape=(2, 16, 16),
+        )
+        assert calls["loader"][0]["patch_shape"] == (2, 16, 16)
+
+    def test_epochs_zero_without_iterations_is_refused(self, tmp_path, monkeypatch):
+        _stub_microsam(monkeypatch, {})
+        with pytest.raises(ValueError, match="epochs"):
+            train(_export(tmp_path), "microsam", tmp_path / "out", epochs=0)
+
+    def test_missing_package_names_the_extra(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(sys.modules, "micro_sam", None)
+        with pytest.raises(ImportError, match="microsam"):
+            train(_export(tmp_path), "microsam", tmp_path / "out")

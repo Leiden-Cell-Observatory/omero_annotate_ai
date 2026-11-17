@@ -18,12 +18,19 @@ from .omero import omero_utils
 
 # Processing functions
 from .processing.bia_data import prepare_bia_data_from_table
+from .processing.trainers import (
+    TRAINERS,
+    Trainer,
+    TrainingData,
+    TrainingResult,
+    load_training_data,
+    train,
+)
 from .processing.training_functions import (
     export_training_set,
     prepare_training_data_from_table,
     reorganize_local_data_for_training,
 )
-from .processing.training_utils import run_training, setup_training
 from .rows import Row
 from .trainingset import OmeroWrites, TrainingSet
 
@@ -70,8 +77,12 @@ __all__ = [
     "prepare_training_data_from_table",
     "export_training_set",
     "prepare_bia_data_from_table",
-    "setup_training",
-    "run_training",
+    "train",
+    "load_training_data",
+    "TrainingData",
+    "TrainingResult",
+    "Trainer",
+    "TRAINERS",
     "omero_utils",
     "reorganize_local_data_for_training",
 ]

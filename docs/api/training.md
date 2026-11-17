@@ -10,11 +10,17 @@
 
 ::: omero_annotate_ai.processing.training_functions.reorganize_local_data_for_training
 
-## micro-SAM training
+## Training
 
-::: omero_annotate_ai.processing.training_utils.setup_training
+::: omero_annotate_ai.processing.trainers.load_training_data
 
-::: omero_annotate_ai.processing.training_utils.run_training
+::: omero_annotate_ai.processing.trainers.train
+
+::: omero_annotate_ai.processing.trainers.TrainingData
+
+::: omero_annotate_ai.processing.trainers.TrainingResult
+
+::: omero_annotate_ai.processing.trainers.Trainer
 
 ## BioImage Archive export
 

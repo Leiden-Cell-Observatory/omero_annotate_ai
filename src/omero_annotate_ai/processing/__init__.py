@@ -10,17 +10,17 @@ from .image_functions import (
     process_label_plane,
 )
 from .trainers import (
+    TRAINERS,
+    Trainer,
     TrainingData,
+    TrainingResult,
     load_training_data,
+    train,
 )
 from .training_functions import (
     export_training_set,
     prepare_training_data_from_table,
     reorganize_local_data_for_training,
-)
-from .training_utils import (
-    run_training,
-    setup_training,
 )
 from .utils import (
     validate_table_schema,
@@ -40,9 +40,10 @@ __all__ = [
     "reorganize_local_data_for_training",
     "export_training_set",
     # trainers
+    "TRAINERS",
+    "Trainer",
     "TrainingData",
+    "TrainingResult",
     "load_training_data",
-    # training_utils
-    "setup_training",
-    "run_training",
+    "train",
 ]
