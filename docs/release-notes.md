@@ -15,6 +15,13 @@ Newest first. The full list of pull requests per version is on
   on Linux, Keychain Access on macOS, Credential Manager on Windows) or with
   `pipx run keyring del omero-annotate-ai <host>:<username>` (`keyring` itself is no
   longer installed with the package).
+- **The connection widget has no Test Connection button any more.** It cleared the
+  password, which then had to be typed again for **Connect**; Connect reports the same
+  errors. `SimpleOMEROConnection.test_connection` is removed with it.
+- **The BioImage Archive notebook no longer invents study metadata.**
+  `omero-table-to-bioimage-archive.ipynb` filled an empty title, author, funding
+  statement, organism and accession with example values; it now keeps what the config
+  holds and stops until the required fields are filled in.
 - **A dropped connection is restored.** Before remote work (opening a set, each batch,
   each save, listing sets) the connection is checked; if the network dropped it
   rejoins its OMERO session, and if the session itself ended (the server's idle

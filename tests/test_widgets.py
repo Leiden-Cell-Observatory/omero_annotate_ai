@@ -302,23 +302,6 @@ class TestOMEROConnectionWidgetCredentials:
         assert widget.connection is not None
         assert widget.session_key_widget.value == ""
 
-    def test_test_connection_clears_the_password(self, conn_manager):
-        conn_manager.get_connection_list.return_value = []
-        conn_manager.test_connection.return_value = (True, "ok")
-        with patch(
-            "omero_annotate_ai.widgets.omero_connection_widget.SimpleOMEROConnection",
-            return_value=conn_manager,
-        ):
-            widget = OMEROConnectionWidget()
-        widget.host_widget.value = "omero.example.org"
-        widget.username_widget.value = "alice"
-        widget.password_widget.value = "s3cret"
-
-        widget._test_connection(None)
-
-        assert conn_manager.test_connection.call_args.args[2] == "s3cret"
-        assert widget.password_widget.value == ""
-
     def test_previous_connection_fills_everything_but_the_password(self, conn_manager):
         conn_manager.get_connection_list.return_value = [
             {

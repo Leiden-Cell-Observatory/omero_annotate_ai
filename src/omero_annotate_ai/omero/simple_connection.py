@@ -370,35 +370,6 @@ class SimpleOMEROConnection:
         ):  # closing a dead gateway may raise anything
             conn.close()
 
-    def test_connection(
-        self,
-        host: str,
-        username: str,
-        password: str,
-        group: str | None = None,
-        secure: bool = True,
-        port: int | None = None,
-    ) -> tuple[bool, str]:
-        """Test OMERO connection without keeping it open.
-
-        Args:
-            host: OMERO server host
-            username: OMERO username
-            password: OMERO password
-            group: OMERO group (optional)
-            secure: Use secure connection (default True)
-            port: OMERO server port (optional)
-
-        Returns:
-            Tuple of (success, message)
-        """
-        try:
-            conn = self.connect(host, username, password, group, secure, port=port)
-        except ConnectionFailed as e:
-            return False, str(e)
-        conn.close()
-        return True, "Connection successful"
-
     def create_connection_from_config(self, widget_config: dict[str, Any]) -> Any:
         """Create connection from widget configuration.
 
