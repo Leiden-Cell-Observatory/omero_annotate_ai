@@ -363,14 +363,21 @@ def _(
         _config.training.train_n = int(train_n.value)
         _config.training.validate_n = int(validate_n.value)
         _config.training.test_n = int(test_n.value)
-        _config.training.seed = int(seed.value) if seed.value.strip() else None
-        _config.spatial_coverage.channels = [int(channel.value)]
-        _config.spatial_coverage.timepoints = _ints(timepoints.value)
-        _config.spatial_coverage.z_slices = _ints(z_slices.value)
-        _config.spatial_coverage.three_d = three_d.value
-        _config.spatial_coverage.use_patches = use_patches.value
-        _config.spatial_coverage.patch_size = _ints(patch_size.value)
-        _config.spatial_coverage.patches_per_image = int(patches_per_image.value)
+        _config.split.seed = int(seed.value) if seed.value.strip() else None
+        _patch = _ints(patch_size.value) or [512]  # one value: square patches
+        _config.sampling = {
+            "label_channel": int(channel.value),
+            "timepoints": {"mode": "specific", "values": _ints(timepoints.value)},
+            "z_slices": {"mode": "specific", "values": _ints(z_slices.value)},
+            "volumetric": three_d.value,
+            "patches": {
+                "width": _patch[0],
+                "height": _patch[-1],
+                "per_image": int(patches_per_image.value),
+            }
+            if use_patches.value
+            else None,
+        }
         _config.ai_model.pretrained_from = model_type.value
         if tool.value == "Cellpose GUI":
             _config.ai_model.framework = "cellpose"

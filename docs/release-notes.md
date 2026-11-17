@@ -3,6 +3,39 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## Unreleased
+
+- **Config version 4: sets are described with the Bioimage Annotation Schema.** The
+  config's description sections are now the models of the
+  [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
+  (`bioimage_annotation_schema.datamodel`): `name`, `license`, `version`, `authors`,
+  `keywords`, `links`, `study`, `source_dataset`, `methodology`, `classes`,
+  `sampling`, `split`, `notes` and `extensions`. The tool sections (`omero`, `zarr`,
+  `storage`, `training`, `normalization`, `ai_model`, `workflow`, `identity`,
+  `sessions`) stay, plus a new `display` section for context channels. Configs start
+  with `config_version: 4`; version 3 configs are not read, and every moved key raises
+  `RemovedConfigKey` naming its new place (`spatial_coverage` → `sampling`,
+  `annotation_methodology` → `methodology`, `dataset` → `source_dataset` and
+  `license`, `feature_types` → `classes`, `training.seed` / `split_unit` /
+  `stratify_by` → `split`, `custom_metadata` → `extensions`, ...). See the
+  [migration table](configuration.md#migrating-from-config-version-3). Annotation
+  types use MIFA's names (`segmentation_mask`, `point_annotations`, ...); the licence
+  is `CC-BY-4.0` or `CC0-1.0`. `config.label_channel()`, `config.training_channels()`
+  and `config.uses_separate_channels()` replace the `spatial_coverage` methods.
+- **`TrainingSet.describe(**fields)`** changes the description of an existing set
+  (version, keywords, study, links, ...), locally and on OMERO. `sampling` and `split`
+  are fixed once the set exists. `ts.config` is a copy; changing it does not change
+  the set.
+- **Exports come from the schema library.** `ts.write_ro_crate()` now also writes
+  `annotation-set.yaml` and `annotation-records.csv` (checked against the schema) into
+  the set's folder. `save_bia_package` moved to `omero_annotate_ai.schema_export`; it
+  no longer takes `funding_statement=` and does not fill in placeholders: it raises
+  `MifaNotReady` listing the MIFA fields the config lacks (study description and
+  funding statement, keywords, a link, version). The modules
+  `omero_annotate_ai.crate` and `omero_annotate_ai.core.mifa_export` are removed; the
+  MIFA functions (`save_mifa`, `check_mifa`, `save_bia_package`) live in
+  `bioimage_annotation_schema.mifa`.
+
 ## 0.5.3
 
 - **Passwords are no longer stored anywhere.** The Jupyter connection widget lost its

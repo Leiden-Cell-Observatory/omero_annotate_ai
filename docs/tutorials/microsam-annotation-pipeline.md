@@ -183,23 +183,22 @@ Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
 
 ??? example "Annotate one channel, train on another"
     Draw nuclei on a fluorescent channel but train a model that predicts them from
-    brightfield: set `label_channel` to the fluorescent channel and `training_channels`
-    to the brightfield channel. The brightfield images are saved in `model_input/`.
+    brightfield: set `sampling.label_channel` to the fluorescent channel and
+    `sampling.input_channels` to the brightfield channel. The brightfield images are
+    saved in `model_input/`.
 
     ```yaml
-    spatial_coverage:
-      channels: [0, 1]
+    sampling:
       label_channel: 0
-      training_channels: [1]
+      input_channels: [1]
     ```
 
 ??? example "Show extra channels for context"
-    `context_channels` are shown in napari next to the channel you annotate (e.g. a
-    membrane stain while you draw cytoplasm) but never used for training.
+    `display.context_channels` are shown in napari next to the channel you annotate
+    (e.g. a membrane stain while you draw cytoplasm) but never used for training.
 
     ```yaml
-    spatial_coverage:
-      channels: [0]
+    display:
       context_channels: [1, 2]
       context_channel_names: [membrane, actin]
     ```
@@ -218,9 +217,9 @@ Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
 
 ??? example "3D volumes"
     ```yaml
-    spatial_coverage:
-      three_d: true
-      z_slices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]   # the range of the volume
+    sampling:
+      volumetric: true
+      z_slices: {mode: specific, values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}   # the range of the volume
     ```
     Each timepoint becomes one volumetric unit and opens in micro-SAM's 3D annotator.
 

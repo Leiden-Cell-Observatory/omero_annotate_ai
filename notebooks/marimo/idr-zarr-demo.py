@@ -134,9 +134,7 @@ def _(example, mo):
     wells = mo.ui.text(
         value=", ".join(example.zarr.wells or []), label="Wells (empty = all)"
     )
-    channel = mo.ui.number(
-        value=example.spatial_coverage.channels[0], start=0, label="Channel"
-    )
+    channel = mo.ui.number(value=example.label_channel(), start=0, label="Channel")
     level = mo.ui.number(value=example.zarr.level, start=0, label="Resolution level")
     train_n = mo.ui.number(
         value=example.training.train_n, start=1, label="Training images"
@@ -144,7 +142,7 @@ def _(example, mo):
     validate_n = mo.ui.number(
         value=example.training.validate_n, start=0, label="Validation images"
     )
-    seed = mo.ui.number(value=example.training.seed or 42, label="Seed")
+    seed = mo.ui.number(value=example.split.seed or 42, label="Seed")
     mo.vstack(
         [
             plate_url,
@@ -172,10 +170,10 @@ def _(
     config.zarr.uris = [plate_url.value.strip()]
     config.zarr.wells = [w.strip() for w in wells.value.split(",") if w.strip()] or None
     config.zarr.level = int(level.value)
-    config.spatial_coverage.channels = [int(channel.value)]
+    config.sampling.label_channel = int(channel.value)
     config.training.train_n = int(train_n.value)
     config.training.validate_n = int(validate_n.value)
-    config.training.seed = int(seed.value)
+    config.split.seed = int(seed.value)
     return (config,)
 
 

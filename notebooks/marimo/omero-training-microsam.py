@@ -196,13 +196,9 @@ def _(mo):
 
 @app.cell
 def _(annotation_config, mo):
-    _coverage = annotation_config.spatial_coverage
+    _patches = annotation_config.sampling.patches
     _default_model = annotation_config.ai_model.pretrained_from or "vit_b_lm"
-    _default_patch = (
-        f"{_coverage.patch_size[0]}, {_coverage.patch_size[1]}"
-        if _coverage.patch_size
-        else "512, 512"
-    )
+    _default_patch = f"{_patches.width}, {_patches.height}" if _patches else "512, 512"
     _default_name = annotation_config.name
 
     model_name = mo.ui.text(value=_default_name, label="Model Name")
@@ -250,7 +246,6 @@ def _(mo):
 
 @app.cell
 def _(annotation_config, default_export_dir, mo, training_set):
-    _coverage = annotation_config.spatial_coverage
     _local = not isinstance(training_set.value, int)  # a local set keeps its channels
     export_directory = mo.ui.text(
         value=str(default_export_dir(training_set.value, annotation_config.name)),
@@ -258,12 +253,12 @@ def _(annotation_config, default_export_dir, mo, training_set):
         full_width=True,
     )
     training_channels = mo.ui.text(
-        value=", ".join(map(str, _coverage.get_training_channels())),
+        value=", ".join(map(str, annotation_config.training_channels())),
         label="Training channels",
         disabled=_local,
     )
     label_channel = mo.ui.number(
-        value=_coverage.get_label_channel(),
+        value=annotation_config.label_channel(),
         start=0,
         label="Label channel",
         disabled=_local,
