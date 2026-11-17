@@ -1,4 +1,13 @@
-"""Configuration management for OMERO AI annotation workflows."""
+"""Configuration of a training set: what to annotate, how, and its history.
+
+The config has two kinds of sections. The **schema sections** (name, licence,
+authors, study, source dataset, methodology, classes, sampling, split, ...) are the
+models of the Bioimage Annotation Schema (``bioimage_annotation_schema``), so a set's
+description follows that schema and exports to MIFA, RO-Crate and the BioImage
+Archive without translation. The **tool sections** (omero, zarr, storage, workflow,
+training, normalization, ai_model, display, identity, sessions) hold what
+omero-annotate-ai needs to run.
+"""
 
 import json
 import logging
@@ -8,6 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from bioimage_annotation_schema import datamodel as bas
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -21,312 +31,62 @@ from ..errors import ConfigError, RemovedConfigKey
 
 logger = logging.getLogger(__name__)
 
-# Sub-models for the configuration
 
-
+# Tool sections of the configuration
 class _Section(BaseModel):
     """A config section: unknown keys are errors, so a typo never goes unnoticed."""
 
     model_config = ConfigDict(extra="forbid")
 
 
-class FeatureType(_Section):
-    """An annotation class (e.g. cell, nucleus, background)."""
-
-    name: str
-    color: str  # hex color, e.g. "#FF0000"
-
-
-class AuthorInfo(_Section):
-    """Author information compatible with bioimage.io"""
-
-    name: str | None = Field(default=None, description="Full name of the author")
-    affiliation: str | None = Field(default=None, description="Institution affiliation")
-    email: str | None = Field(None, description="Contact email")
-    orcid: HttpUrl | None = Field(None, description="ORCID identifier")
-
-
-class AnnotationTool(_Section):
-    """Tool configuration for annotation workflows"""
-
-    name: str = Field(description="Tool name (e.g., 'micro-sam', 'cellpose')")
-    version: str | None = Field(default=None, description="Tool version")
-    mode: Literal["automatic", "interactive", "human_in_the_loop"] = Field(
-        default="interactive", description="Annotation mode"
-    )
-    parameters: dict[str, Any] | None = Field(
-        default=None, description="Tool-specific parameters"
-    )
-
-
-class AnnotationMethodology(_Section):
-    """MIFA-compatible annotation methodology"""
-
-    annotation_type: Literal[
-        "segmentation_mask",
-        "bounding_box",
-        "point",
-        "classification",
-        "semantic_segmentation",
-    ] = "segmentation_mask"
-    annotation_method: Literal["manual", "semi_automatic", "automatic"] | None = Field(
-        default=None, description="How annotations were produced"
-    )
-    annotation_criteria: str = Field(description="Criteria used for annotation")
-    annotation_coverage: Literal["all", "representative", "partial"] = "representative"
-    annotation_tool: AnnotationTool | None = Field(
-        default=None, description="Tool used for annotation"
-    )
-
-
 _CONTEXT_COLORMAP_CYCLE = ["blue", "magenta", "green", "yellow", "cyan"]
 
 
-class SpatialCoverage(_Section):
-    """Spatial scope of annotations (MIFA requirement)"""
+class DisplayConfig(_Section):
+    """What napari shows next to the annotated channel. Display only: context
+    channels never enter SAM embeddings or training data."""
 
-    channels: list[int] = Field(
-        default_factory=lambda: [0], description="Channel indices processed"
-    )
-    timepoints: list[int] = Field(
-        default_factory=lambda: [0], description="Timepoints as list"
-    )
-    n_timepoints: int | None = Field(
-        default=None,
-        description="Number of timepoints to randomly select (used when timepoint_mode='random'). "
-        "If not specified, uses the length of timepoints list for backward compatibility.",
-    )
-    timepoint_mode: Literal["all", "random", "specific"] = "specific"
-    z_slices: list[int] = Field(
-        default_factory=lambda: [0], description="Z-slices as list"
-    )
-    # Number of slices/timepoints for random mode (optional, defaults to list length)
-    n_slices: int | None = Field(
-        default=None,
-        description="Number of z-slices to randomly select (used when z_slice_mode='random'). "
-        "If not specified, uses the length of z_slices list for backward compatibility.",
-    )
-    z_slice_mode: Literal["all", "random", "specific"] = "specific"
-    three_d: bool = Field(default=False, description="3D volumetric processing mode")
-
-    # 3D volumetric processing fields (used when three_d=True)
-    z_range_start: int | None = Field(
-        default=None, description="Starting z-slice for 3D volumes (when three_d=True)"
-    )
-    z_range_end: int | None = Field(
-        default=None, description="Ending z-slice for 3D volumes (when three_d=True)"
-    )
-
-    # Multi-channel support for separate labeling and training channels
-    label_channel: int | None = Field(
-        default=None,
-        description="Channel index used for segmentation/labeling (e.g., fluorescence nuclei). "
-        "If not specified, defaults to channels[0] for backward compatibility.",
-    )
-    training_channels: list[int] | None = Field(
-        default=None,
-        description="Channel index(es) used for model training input (e.g., brightfield). "
-        "If not specified, defaults to [label_channel] for backward compatibility. "
-        "Multiple channels supported if the training model permits.",
-    )
-
-    # Display-only context channels shown alongside the label channel during annotation.
-    # Never enter SAM embeddings, never saved as training pairs.
     context_channels: list[int] = Field(
         default_factory=list,
-        description="Display-only channel indices shown alongside the annotation "
-        "channel in napari. "
-        "Never enter SAM embeddings or training data. OMERO channel index space.",
+        description="Channel indices shown alongside the annotation channel "
+        "(OMERO channel index space)",
     )
     context_channel_names: list[str] | None = Field(
         default=None,
-        description="Display names for context_channels. "
-        "Length must match context_channels when provided. Defaults to 'ch{idx}'.",
+        description="Display names for context_channels (same length). "
+        "Defaults to 'ch{idx}'.",
     )
     context_channel_colormaps: list[str] | None = Field(
         default=None,
-        description="Napari colormap names for context_channels. "
-        "Length must match context_channels when provided. "
+        description="Napari colormaps for context_channels (same length). "
         "Defaults to cycle ['blue', 'magenta', 'green', 'yellow', 'cyan'].",
     )
 
-    # Patch processing settings (moved from ProcessingConfig)
-    use_patches: bool = Field(
-        default=False, description="Extract patches vs full images"
-    )
-    patch_size: list[int] = Field(
-        default=[512, 512], description="Patch dimensions [width, height]"
-    )
-    patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
-    random_patches: bool = Field(
-        default=True, description="Use random patch extraction"
-    )
+    @model_validator(mode="after")
+    def _lengths_match(self) -> "DisplayConfig":
+        for name in ("context_channel_names", "context_channel_colormaps"):
+            values = getattr(self, name)
+            if values is not None and len(values) != len(self.context_channels):
+                raise ValueError(
+                    f"{name} length ({len(values)}) must match context_channels "
+                    f"length ({len(self.context_channels)})"
+                )
+        return self
 
-    @property
-    def primary_channel(self) -> int:
-        """Get the primary/first channel"""
-        return self.channels[0]
-
-    @property
-    def is_single_channel(self) -> bool:
-        """Check if only one channel is configured"""
-        return len(self.channels) == 1
-
-    def get_label_channel(self) -> int:
-        """Get the channel to use for labeling/segmentation.
-
-        Returns label_channel if explicitly set, otherwise falls back to
-        primary_channel (channels[0]).
-        """
-        return (
-            self.label_channel
-            if self.label_channel is not None
-            else self.primary_channel
-        )
-
-    def get_training_channels(self) -> list[int]:
-        """Get the channel(s) to use for training input.
-
-        Returns training_channels if explicitly set, otherwise falls back to [get_label_channel()]
-        for backward compatibility (same channel for both labeling and training).
-        """
-        return (
-            self.training_channels
-            if self.training_channels is not None
-            else [self.get_label_channel()]
-        )
-
-    def uses_separate_channels(self) -> bool:
-        """Check if separate channels are configured for labeling and training.
-
-        Returns True if label_channel differs from all training_channels.
-        """
-        if self.label_channel is None and self.training_channels is None:
-            return False
-        return self.get_label_channel() not in self.get_training_channels()
-
-    def uses_context_channels(self) -> bool:
-        """Return True if any context channels are configured."""
-        return bool(self.context_channels)
-
-    def get_context_channel_specs(self) -> list[tuple[int, str, str]]:
-        """Return [(channel_index, display_name, colormap), ...] for each context channel."""
-        specs = []
-        for i, ch_idx in enumerate(self.context_channels):
-            name = (
+    def specs(self) -> list[tuple[int, str, str]]:
+        """``[(channel_index, display_name, colormap), ...]`` per context channel."""
+        return [
+            (
+                ch,
                 self.context_channel_names[i]
-                if self.context_channel_names is not None
-                else f"ch{ch_idx}"
-            )
-            cmap = (
+                if self.context_channel_names
+                else f"ch{ch}",
                 self.context_channel_colormaps[i]
-                if self.context_channel_colormaps is not None
-                else _CONTEXT_COLORMAP_CYCLE[i % len(_CONTEXT_COLORMAP_CYCLE)]
+                if self.context_channel_colormaps
+                else _CONTEXT_COLORMAP_CYCLE[i % len(_CONTEXT_COLORMAP_CYCLE)],
             )
-            specs.append((ch_idx, name, cmap))
-        return specs
-
-    def get_z_range(self) -> tuple[int, int]:
-        """Get the z-range for volumetric processing"""
-        if (
-            self.three_d
-            and self.z_range_start is not None
-            and self.z_range_end is not None
-        ):
-            return (self.z_range_start, self.z_range_end)
-
-        # Fallback to z_slices if 3D mode is not enabled or range is not specified
-        if self.z_slices:
-            return (min(self.z_slices), max(self.z_slices))
-
-        return (0, 0)
-
-    def get_z_length(self) -> int:
-        """Get the number of z-slices for volumetric processing"""
-        if self.three_d:
-            z_start, z_end = self.get_z_range()
-            return z_end - z_start + 1
-        return 1
-
-    def model_dump(self, **kwargs):
-        """Override model_dump to exclude patch fields when use_patches is False."""
-        data = super().model_dump(**kwargs)
-
-        if not self.use_patches:
-            # Remove patch-related fields when patches are not used
-            data.pop("patch_size", None)
-            data.pop("patches_per_image", None)
-            data.pop("random_patches", None)
-
-        return data
-
-    @model_validator(mode="after")
-    def validate_3d_settings(self):
-        """Validate 3D configuration consistency"""
-        if self.three_d:
-            if self.z_range_start is None or self.z_range_end is None:
-                if not self.z_slices:
-                    raise ValueError(
-                        "three_d=True requires either "
-                        "z_range_start/z_range_end or z_slices"
-                    )
-                # Auto-set z_range from z_slices
-                self.z_range_start = min(self.z_slices)
-                self.z_range_end = max(self.z_slices)
-            elif self.z_range_start > self.z_range_end:
-                raise ValueError("z_range_start must be <= z_range_end")
-
-        return self
-
-    @model_validator(mode="after")
-    def validate_channel_settings(self):
-        """Validate channel configuration consistency.
-
-        Ensures that label_channel and training_channels are valid indices
-        that exist in the channels list.
-        """
-        all_channels = set(self.channels)
-
-        # Validate label_channel is in channels list
-        if self.label_channel is not None and self.label_channel not in all_channels:
-            raise ValueError(
-                f"label_channel ({self.label_channel}) must be in channels list ({self.channels})"
-            )
-
-        # Validate training_channels are in channels list
-        if self.training_channels is not None:
-            for tc in self.training_channels:
-                if tc not in all_channels:
-                    raise ValueError(
-                        f"training_channels ({tc}) must be in channels list ({self.channels})"
-                    )
-
-        # Validate context_channels do not overlap with label_channel
-        if self.context_channels:
-            label_ch = self.get_label_channel()
-            overlapping = [ch for ch in self.context_channels if ch == label_ch]
-            if overlapping:
-                raise ValueError(
-                    f"context_channels {overlapping} overlap with label_channel ({label_ch}). "
-                    "Context channels must be different from the label channel."
-                )
-            # Validate optional list lengths match
-            if self.context_channel_names is not None and len(
-                self.context_channel_names
-            ) != len(self.context_channels):
-                raise ValueError(
-                    f"context_channel_names length ({len(self.context_channel_names)}) "
-                    f"must match context_channels length ({len(self.context_channels)})"
-                )
-            if self.context_channel_colormaps is not None and len(
-                self.context_channel_colormaps
-            ) != len(self.context_channels):
-                raise ValueError(
-                    f"context_channel_colormaps length ({len(self.context_channel_colormaps)}) "
-                    f"must match context_channels length ({len(self.context_channels)})"
-                )
-
-        return self
+            for i, ch in enumerate(self.context_channels)
+        ]
 
 
 class NormalizationConfig(_Section):
@@ -362,35 +122,6 @@ class NormalizationConfig(_Section):
         return self
 
 
-class DatasetInfo(_Section):
-    """Dataset identification and linking (both schemas)"""
-
-    source_dataset_id: str | None = Field(
-        default=None, description="BioImage Archive accession or DOI"
-    )
-    source_dataset_url: HttpUrl | None = Field(
-        default=None, description="URL to source dataset"
-    )
-    source_description: str = Field(description="Human-readable source description")
-    license: str = Field(default="CC-BY-4.0", description="Data license")
-
-
-class StudyContext(_Section):
-    """Biological and experimental context (MIFA emphasis)"""
-
-    title: str = Field(description="Study/experiment title")
-    description: str = Field(description="Detailed study description")
-    keywords: list[str] = Field(default_factory=list, description="Study keywords/tags")
-    organism: str | None = Field(default=None, description="Organism studied")
-    imaging_method: str | None = Field(
-        default=None, description="Microscopy technique used"
-    )
-    funding_statement: str | None = Field(
-        default=None,
-        description="How the study was funded (required by MIFA Study metadata)",
-    )
-
-
 class AIModelConfig(_Section):
     """AI model configuration (bioimage.io compatible)"""
 
@@ -420,32 +151,8 @@ class AIModelConfig(_Section):
 
 
 class TrainingConfig(_Section):
-    """Quality metrics and validation (MIFA requirement)"""
-
-    validation_strategy: Literal[
-        "random_split", "expert_review", "cross_validation"
-    ] = "random_split"
-
-    # The level at which data are assigned to a split. Every annotation of one unit
-    # lands in the same split; counts and fractions below refer to units.
-    split_unit: Literal["image", "well"] = Field(
-        default="image",
-        description=(
-            "Unit of the train/validation/test split: 'image' (a field with all its "
-            "timepoints/z-slices) or 'well' (all fields of a plate well)"
-        ),
-    )
-    split_rationale: str | None = Field(
-        default=None,
-        description="Why this split unit was chosen, e.g. 'fields within a well do not overlap'",
-    )
-    stratify_by: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Well key-value pairs (e.g. ['cell_line', 'treatment']) or 'well' to split "
-            "within: each combination is divided over the splits separately"
-        ),
-    )
+    """How many units go to each split. Which unit is split, the stratification and
+    the seed are part of the description, in ``split``."""
 
     # Fraction-based splits (for segment_all=True)
     train_fraction: float = Field(
@@ -483,18 +190,6 @@ class TrainingConfig(_Section):
     )
 
     segment_all: bool = Field(default=False, description="Process all images vs subset")
-    seed: int | None = Field(
-        default=None,
-        ge=0,
-        description=(
-            "Seed for every random choice (split, timepoints, z-slices, patches, "
-            "extension), so the selection can be reproduced. Generated and stored "
-            "when the pipeline starts if left empty."
-        ),
-    )
-    quality_threshold: float | None = Field(
-        default=None, description="Minimum quality score"
-    )
 
     @model_validator(mode="after")
     def validate_splits(self):
@@ -660,7 +355,7 @@ class SessionRecord(_Section):
     note: str | None = None
 
 
-SCHEMA_VERSION = 3
+CONFIG_VERSION = 4
 
 # Keys earlier versions had, and where their meaning went. Loading a config that
 # still has one raises RemovedConfigKey naming the replacement (no silent migration).
@@ -670,15 +365,42 @@ _REMOVED_KEYS: dict[tuple[str, ...], str] = {
     ("output",): "each training set has its own folder under the home folder; pass "
     "home= or set $OMERO_ANNOTATE_AI_HOME",
     ("config_file_path",): "the config lives in the training set's folder",
-    ("version",): "schema_version",
+    ("schema_version",): "config_version: 4 (see the migration table in the docs)",
     ("workflow", "resume_from_table"): "open the set with TrainingSet.open(table_id), "
     "or set identity.table_id",
     ("workflow", "read_only_mode"): "storage: local",
     ("omero", "table_id"): "identity.table_id",
-    ("spatial_coverage", "normalization_method"): "normalization.method",
-    ("spatial_coverage", "percentile_low"): "normalization.percentile_low",
-    ("spatial_coverage", "percentile_high"): "normalization.percentile_high",
+    ("annotation_methodology",): "methodology (annotation_types, method, criteria, "
+    "coverage, tools)",
+    ("spatial_coverage",): "sampling (label_channel, input_channels, timepoints, "
+    "z_slices, volumetric, patches); context channels moved to display",
+    ("dataset",): "source_dataset (identifier, url, description) and license",
+    ("feature_types",): "classes",
+    ("tags",): "keywords",
+    ("documentation",): "links",
+    ("repository",): "links",
+    ("custom_metadata",): "extensions",
+    ("training", "validation_strategy"): "split.strategy",
+    ("training", "split_unit"): "split.unit",
+    ("training", "split_rationale"): "split.rationale",
+    ("training", "stratify_by"): "split.stratify_by",
+    ("training", "seed"): "split.seed",
+    ("training", "quality_threshold"): "methodology.confidence_level",
+    ("study", "keywords"): "keywords (top level)",
 }
+
+
+def _default_methodology() -> bas.Methodology:
+    return bas.Methodology.model_validate(
+        {"annotation_types": ["segmentation_mask"], "criteria": ""}
+    )
+
+
+def _default_sampling() -> bas.Sampling:
+    first_plane = {"mode": "specific", "values": [0]}
+    return bas.Sampling.model_validate(
+        {"timepoints": first_plane, "z_slices": first_plane}
+    )
 
 
 class AnnotationConfig(BaseModel):
@@ -690,8 +412,8 @@ class AnnotationConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    schema_version: int = Field(
-        default=SCHEMA_VERSION, description="Configuration schema version"
+    config_version: int = Field(
+        default=CONFIG_VERSION, description="Version of this configuration format"
     )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -705,33 +427,53 @@ class AnnotationConfig(BaseModel):
                 object.__setattr__(self, name, previous)
             raise
 
-    # Core identification (both schemas)
-    name: str = Field(description="Annotation workflow name")
-    authors: list[AuthorInfo] = Field(
-        default_factory=list, description="Workflow authors"
-    )
+    # --- Schema sections (Bioimage Annotation Schema) ---
+    name: str = Field(description="Short name of the training set")
+    description: str | None = None
     created: datetime = Field(
         default_factory=datetime.now, description="Creation timestamp"
     )
+    license: Literal["CC-BY-4.0", "CC0-1.0"] = Field(
+        default="CC-BY-4.0",
+        description="Licence of the annotations: CC-BY-4.0 or CC0-1.0",
+    )
+    version: str | None = Field(
+        default=None, description="Version of the set, e.g. '1' (needed for MIFA)"
+    )
+    changes: str | None = None
+    previous_version: str | None = None
+    authors: list[bas.Person] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    links: list[bas.Link] = Field(default_factory=list)
+    ai_models_trained: list[str] = Field(default_factory=list)
+    study: bas.Study | None = None
+    source_dataset: bas.SourceDataset | None = None
+    methodology: bas.Methodology = Field(default_factory=_default_methodology)
+    classes: list[bas.AnnotationClass] = Field(
+        default_factory=list,
+        description="Annotation classes (e.g. nucleus) with display colors",
+    )
+    sampling: bas.Sampling = Field(default_factory=_default_sampling)
+    split: bas.Split = Field(
+        default_factory=lambda: bas.Split.model_validate(
+            {"strategy": "random_split", "unit": "image"}
+        )
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Free-text notes about the set (context, caveats, known issues)",
+    )
+    extensions: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata the schema does not cover, under a "
+        "namespace key",
+    )
 
-    # Study context
-    study: StudyContext = Field(
-        default_factory=lambda: StudyContext(title="", description="")
-    )
-    dataset: DatasetInfo = Field(
-        default_factory=lambda: DatasetInfo(source_description="")
-    )
-
-    # Annotation specifics
-    annotation_methodology: AnnotationMethodology = Field(
-        default_factory=lambda: AnnotationMethodology(annotation_criteria="")
-    )
-    spatial_coverage: SpatialCoverage = Field(default_factory=SpatialCoverage)
+    # --- Tool sections (omero-annotate-ai) ---
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
-
-    # Technical configuration
     ai_model: AIModelConfig = Field(default_factory=AIModelConfig)
+    display: DisplayConfig = Field(default_factory=DisplayConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     omero: OMEROConfig = Field(default_factory=OMEROConfig)
     source: Literal["omero", "zarr"] = Field(
@@ -751,25 +493,6 @@ class AnnotationConfig(BaseModel):
         default_factory=list, description="Annotation sessions, oldest first"
     )
 
-    # Workflow metadata
-    documentation: HttpUrl | None = Field(default=None, description="Documentation URL")
-    repository: HttpUrl | None = Field(default=None, description="Code repository URL")
-    tags: list[str] = Field(default_factory=list, description="Classification tags")
-    feature_types: list[FeatureType] = Field(
-        default_factory=list,
-        description="Annotation classes (e.g. cell, nucleus) with display colors",
-    )
-
-    # Open fields for anything the structured schema does not cover
-    notes: str | None = Field(
-        default=None,
-        description="Free-text notes about the annotation set (context, caveats, known issues)",
-    )
-    custom_metadata: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Additional key-value metadata not covered by the schema",
-    )
-
     @model_validator(mode="before")
     @classmethod
     def _reject_removed_keys(cls, data: Any) -> Any:
@@ -781,14 +504,14 @@ class AnnotationConfig(BaseModel):
                 node = node.get(key) if isinstance(node, dict) else None
             if isinstance(node, dict) and path[-1] in node:
                 raise RemovedConfigKey(
-                    f"'{'.'.join(path)}' was removed in schema version "
-                    f"{SCHEMA_VERSION}: {replacement}"
+                    f"'{'.'.join(path)}' was removed in config version "
+                    f"{CONFIG_VERSION}: {replacement}"
                 )
-        version = data.get("schema_version", SCHEMA_VERSION)
-        if version != SCHEMA_VERSION:
+        version = data.get("config_version", CONFIG_VERSION)
+        if version != CONFIG_VERSION:
             raise ConfigError(
-                f"schema_version {version!r} is not supported; this version reads "
-                f"schema_version {SCHEMA_VERSION}"
+                f"config_version {version!r} is not supported; this version reads "
+                f"config_version {CONFIG_VERSION}"
             )
         return data
 
@@ -807,9 +530,49 @@ class AnnotationConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _check_sampling(self) -> "AnnotationConfig":
+        if self.split.unit not in (None, "image", "well"):
+            raise ValueError("split.unit must be 'image' or 'well'")
+        if self.label_channel() in self.display.context_channels:
+            raise ValueError(
+                f"display.context_channels overlap with the label channel "
+                f"({self.label_channel()}); context channels must differ from it"
+            )
+        return self
+
+    # --- Sampling, as the tool uses it ---
+
+    def label_channel(self) -> int:
+        """Channel the annotations are drawn on (default 0)."""
+        channel = self.sampling.label_channel
+        return 0 if channel is None else channel
+
+    def training_channels(self) -> list[int]:
+        """Channels the model is trained on (default: the label channel)."""
+        return list(self.sampling.input_channels or [self.label_channel()])
+
+    def uses_separate_channels(self) -> bool:
+        """Whether the model trains on other channels than the one annotated."""
+        return self.label_channel() not in self.training_channels()
+
+    def timepoint_values(self) -> list[int]:
+        return (
+            list(self.sampling.timepoints.values or [0])
+            if self.sampling.timepoints
+            else [0]
+        )
+
+    def z_values(self) -> list[int]:
+        return (
+            list(self.sampling.z_slices.values or [0])
+            if self.sampling.z_slices
+            else [0]
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
-        return self.model_dump()
+        return self.model_dump(exclude_none=True)
 
     def to_yaml(self, sort_keys: bool = False) -> str:
         """Convert configuration to a YAML string.
@@ -821,7 +584,7 @@ class AnnotationConfig(BaseModel):
         Returns:
             YAML string representation of the configuration.
         """
-        config_dict = self.model_dump()
+        config_dict = self.model_dump(exclude_none=True)
 
         # Custom YAML representer for Path objects (fallback)
         def path_representer(dumper, data):
@@ -935,62 +698,64 @@ def create_default_config() -> AnnotationConfig:
 
 def get_config_template() -> str:
     """Get a YAML template with comments for all configuration options."""
-    return """# omero-annotate-ai training-set configuration (schema version 3)
+    return """# omero-annotate-ai training-set configuration (config version 4)
+config_version: 4
 
-schema_version: 3
-
+# --- Description (Bioimage Annotation Schema sections) ---
 name: "micro_sam_nuclei_segmentation"
-authors: []
 created: "2025-01-14T10:30:00Z"
+license: "CC-BY-4.0"           # CC-BY-4.0 or CC0-1.0 (what the BioImage Archive accepts)
+version: "1"
+authors:
+  - first_name: "Jane"
+    last_name: "Example"
+    orcid: "https://orcid.org/0000-0002-1825-0097"
+    affiliations: [{name: "Example University"}]
+keywords: ["nuclei", "segmentation", "fluorescence"]
+links:
+  - {url: "https://github.com/example/project", description: "Analysis code"}
 
 study:
   title: "Automated nuclei segmentation in fluorescence microscopy"
   description: "Large-scale annotation of cell nuclei using micro-SAM for training"
-  keywords: ["nuclei", "segmentation", "fluorescence", "deep learning"]
   organism: "Homo sapiens"
   imaging_method: "fluorescence microscopy"
+  funding_statement: "Funded by ..."
 
-dataset:
-  source_dataset_id: "S-BIAD123"
-  source_dataset_url: "https://www.ebi.ac.uk/bioimaging/studies/S-BIAD123"
-  source_description: "HeLa cell imaging dataset"
-  license: "CC-BY-4.0"
+source_dataset:
+  identifier: "S-BIAD123"
+  url: "https://www.ebi.ac.uk/bioimaging/studies/S-BIAD123"
+  description: "HeLa cell imaging dataset"
 
-annotation_methodology:
-  annotation_type: "segmentation_mask"
-  annotation_method: "automatic"
-  annotation_criteria: "Complete nuclei boundaries based on DAPI staining"
-  annotation_coverage: "representative"
-  annotation_tool:
-    name: "micro-sam"
-    version: "1.0.0"
-    mode: "interactive"
-    parameters: null
+methodology:
+  annotation_types: ["segmentation_mask"]
+  mask_kind: "instance"        # instance or semantic
+  method: "semi_automatic"     # manual, semi_automatic or automatic
+  criteria: "Complete nuclei boundaries based on DAPI staining"
+  coverage: "all"              # all, representative or partial
+  tools:
+    - {name: "micro-sam", version: "1.8.0", mode: "interactive"}
 
-spatial_coverage:
-  channels: [0]
-  timepoints: [0]
-  timepoint_mode: "specific"
-  z_slices: [0]
-  z_slice_mode: "specific"
-  three_d: false
-  # 3D volumetric processing settings
-  z_range_start: null          # starting z-slice for 3D volumes
-  z_range_end: null            # ending z-slice for 3D volumes
-  # Patch processing settings
-  use_patches: true
-  patch_size: [512, 512]
-  patches_per_image: 4
-  random_patches: true
+classes:
+  - {name: "nucleus", color: "#0FA3B1"}
 
+sampling:
+  label_channel: 0
+  input_channels: [0]          # channels the model trains on
+  timepoints: {mode: "specific", values: [0]}   # mode: all, random (with n) or specific
+  z_slices: {mode: "specific", values: [0]}
+  volumetric: false            # true: one volume from the first to the last selected z-slice
+  patches: {width: 512, height: 512, per_image: 4, random: true}   # leave out for whole planes
+
+split:
+  strategy: "random_split"
+  unit: "image"                # image or well
+
+# --- omero-annotate-ai settings ---
 training:
-  validation_strategy: "random_split"
-  train_fraction: 0.7
   train_n: 3
-  validation_fraction: 0.3
   validate_n: 3
   segment_all: false
-  split_unit: "image"
 
 normalization:
   method: "percentile"         # "percentile" or "none" (raw intensities)
@@ -1007,13 +772,5 @@ storage: "omero"               # "omero": tracking table + uploads; "local": fol
 
 ai_model:
   framework: "micro_sam"
-  framework_version: null
-  model_name: ""
-  model_version: "latest"
-  model_url: null
-  model_doi: null
-  training_mode: "inference"
   pretrained_from: "vit_b_lm"
-
-tags: ["segmentation", "nuclei", "micro-sam", "AI-ready"]
 """

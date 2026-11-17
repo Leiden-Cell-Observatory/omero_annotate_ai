@@ -1,25 +1,37 @@
-"""RO-Crate description of a training set's folder."""
+"""A training set as Bioimage Annotation Schema documents, and its RO-Crate."""
 
 import json
 
 import pytest
+from bioimage_annotation_schema import datamodel as bas
+from bioimage_annotation_schema import read_records, read_set
+from bioimage_annotation_schema.crate import METADATA_FILE, SPEC, build_ro_crate
 
 from omero_annotate_ai import provenance
 from omero_annotate_ai.bundle import mask_path
 from omero_annotate_ai.core.annotation_config import (
-    AuthorInfo,
     SessionRecord,
     create_default_config,
 )
-from omero_annotate_ai.crate import METADATA_FILE, SOFTWARE_ID, SPEC, build_ro_crate
 from omero_annotate_ai.rows import Row
+from omero_annotate_ai.schema_export import (
+    annotation_records,
+    annotation_set,
+    write_schema_documents,
+)
 from tests.fakes import annotate, create_set, omero_set
 
 
 def _crate(tmp_path, *, n_images=3, limit=2, note="nuclei only", storage="omero"):
     config, source, omero = omero_set(tmp_path, n_images=n_images)
     config.storage = storage
-    config.authors = [AuthorInfo(name="A. Researcher", affiliation="Lab")]
+    config.authors = [
+        bas.Person(
+            first_name="A.",
+            last_name="Researcher",
+            affiliations=[bas.Organisation(name="Lab")],
+        )
+    ]
     ts = create_set(config, source, omero, tmp_path / "home")
     annotate(ts, limit=limit, note=note)
     path = ts.write_ro_crate()
@@ -85,7 +97,12 @@ class TestRoCrate:
         ts, _, _, by_id = _crate(tmp_path)
 
         parts = [p["@id"] for p in by_id["./"]["hasPart"]]
-        assert {"config.yaml", "tracking_table.csv"} <= set(parts)
+        assert {
+            "annotation-set.yaml",
+            "annotation-records.csv",
+            "config.yaml",
+            "tracking_table.csv",
+        } <= set(parts)
         assert all((ts.bundle_dir / p).is_file() for p in parts)
         done = [r for r in ts.rows if r.processed]
         assert len(done) == 2
@@ -123,7 +140,8 @@ class TestRoCrate:
         assert action["@type"] == "CreateAction"
         assert action["description"] == "nuclei only"
         assert action["actionStatus"] == "http://schema.org/CompletedActionStatus"
-        assert {"@id": SOFTWARE_ID} in _many(action["instrument"])
+        software = [by_id[i["@id"]]["name"] for i in _many(action["instrument"])]
+        assert any(name.startswith("omero-annotate-ai") for name in software)
         assert by_id[action["agent"]["@id"]]["@type"] == "Person"
         assert len(_many(action["result"])) == 2
         assert {"@id": action["@id"]} in _many(by_id["./"]["mentions"])
@@ -131,7 +149,7 @@ class TestRoCrate:
     def test_local_set_and_rewrite(self, tmp_path):
         ts, path, _, by_id = _crate(tmp_path, storage="local", limit=None)
 
-        assert ts.is_local and len(by_id["./"]["hasPart"]) == 2 + 2 * 3
+        assert ts.is_local and len(by_id["./"]["hasPart"]) == 4 + 2 * 3
         ts.write_ro_crate()  # writing again replaces the file
         assert json.loads(path.read_text(encoding="utf-8"))["@graph"][1]["@id"] == "./"
 
@@ -160,7 +178,9 @@ class TestRoCrate:
             Row(image_uri=local, image_name="0", annotation_id="a_0_0"),
             Row(image_uri=url, image_name="6001240.zarr", annotation_id="b_0_0"),
         ]
-        crate = build_ro_crate(create_default_config(), rows, tmp_path)
+        crate = build_ro_crate(
+            annotation_set(create_default_config()), annotation_records(rows), tmp_path
+        )
 
         text = json.dumps(crate)
         assert "/home/someone" not in text
@@ -175,7 +195,55 @@ class TestRoCrate:
             SessionRecord(id=1, started=started, user="a b"),
             SessionRecord(id=2, started=started, user="a-b"),
         ]
-        crate = build_ro_crate(config, [], tmp_path)
+        crate = build_ro_crate(annotation_set(config), [], tmp_path)
 
         people = [e for e in crate["@graph"] if e.get("@type") == "Person"]
         assert sorted(p["name"] for p in people) == ["a b", "a-b"]
+
+
+@pytest.mark.unit
+class TestSchemaDocuments:
+    """The set's folder holds the two schema documents, valid and complete."""
+
+    def test_round_trip_through_the_schema_library(self, tmp_path):
+        ts, _, _, _ = _crate(tmp_path, limit=2)
+
+        annotation_set_ = read_set(ts.bundle_dir)  # validated on read
+        records = read_records(ts.bundle_dir)
+        assert annotation_set_.name == ts.config.name
+        assert annotation_set_.sessions[0].note == "nuclei only"
+        assert len(records) == len(ts.rows)
+        by_id = {r.annotation_id: r for r in records}
+        for row in ts.rows:
+            record = by_id[row.annotation_id]
+            assert record.image_uri == row.image_uri
+            assert record.split == row.category
+            assert record.status == ("annotated" if row.processed else "pending")
+            if row.processed:
+                assert record.mask_digest == row.mask_digest
+                assert (ts.bundle_dir / record.mask_file).is_file()
+                assert (ts.bundle_dir / record.input_file).is_file()
+
+    def test_omero_ids_become_external_ids(self, tmp_path):
+        ts, _, _, _ = _crate(tmp_path, limit=1)
+        record = next(r for r in read_records(ts.bundle_dir) if r.status == "annotated")
+        row = next(r for r in ts.rows if r.annotation_id == record.annotation_id)
+        assert json.loads(record.external_ids)["omero_label_image"] == str(row.label_id)
+
+    def test_excluded_unit_has_status_and_no_mask(self, tmp_path):
+        rows = [Row(image_uri="omero:image:1", image_name="a", annotation_id="a_0")]
+        rows[0].mark_excluded(session=1)
+        (record,) = annotation_records(rows)
+        assert (record.status, record.mask_file) == ("excluded", None)
+
+    def test_tools_come_from_the_ai_model_when_not_described(self):
+        config = create_default_config()
+        (tool,) = annotation_set(config).methodology.tools
+        assert (tool.name, tool.model.name) == ("micro-sam", "vit_b_lm")
+
+    def test_written_documents_pass_the_schema(self, tmp_path):
+        config = create_default_config()
+        rows = [Row(image_uri="omero:image:1", image_name="a", annotation_id="a_0")]
+        set_path, records_path = write_schema_documents(config, rows, tmp_path)
+        assert read_set(set_path).schema_version == "0.1.0"
+        assert read_records(records_path)[0].status == "pending"

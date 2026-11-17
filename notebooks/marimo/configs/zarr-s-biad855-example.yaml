@@ -8,10 +8,10 @@ zarr:
   level: 1          # half resolution (260 x 348); masks and coordinates use this grid
   fields: first
   wells: [B2, C5, D10]
-spatial_coverage:
-  channels: [2]     # Hoechst
-  timepoints: [0]
-  z_slices: [0]
+sampling:
+  label_channel: 2  # Hoechst
+  timepoints: {mode: specific, values: [0]}
+  z_slices: {mode: specific, values: [0]}
 training:
   segment_all: false
   train_n: 2

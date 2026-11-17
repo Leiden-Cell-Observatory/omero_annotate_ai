@@ -9,17 +9,17 @@ zarr:
   level: 0          # full resolution (1024 x 1344)
   fields: first
   wells: [A1, B2, C3, D4]
-spatial_coverage:
-  channels: [0]     # GFP-tagged histone H2B: nuclei
-  timepoint_mode: random
-  n_timepoints: 1   # one random frame of each time-lapse
-  z_slices: [0]
+sampling:
+  label_channel: 0  # GFP-tagged histone H2B: nuclei
+  timepoints: {mode: random, n: 1}   # one random frame of each time-lapse
+  z_slices: {mode: specific, values: [0]}
+split:
+  seed: 42
 training:
   segment_all: false
   train_n: 2
   validate_n: 1
   test_n: 0
-  seed: 42
 ai_model:
   framework: micro_sam
   pretrained_from: vit_b_lm

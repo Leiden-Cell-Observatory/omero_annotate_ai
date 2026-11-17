@@ -28,7 +28,7 @@ class TestCreate:
         )
         saved = AnnotationConfig.from_yaml(ts.bundle_dir / "config.yaml")
         assert saved.identity.table_id == ts.table_id
-        assert saved.training.seed is not None
+        assert saved.split.seed is not None
         assert omero.configs == [ts.table_id]
         assert len(pd.read_csv(ts.bundle_dir / "tracking_table.csv")) == 3
 

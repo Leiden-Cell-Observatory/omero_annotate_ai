@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import tifffile
+from bioimage_annotation_schema import datamodel as bas
 
 from omero_annotate_ai.annotators import ScriptedAnnotator
 from omero_annotate_ai.core.annotation_pipeline import OmeroWrites
@@ -127,7 +128,7 @@ def make_config(
     validate_n=1,
     test_n=1,
     batch_size=0,
-    **sc,
+    **sampling,
 ):
     from omero_annotate_ai.core.annotation_config import create_default_config
 
@@ -141,9 +142,8 @@ def make_config(
     config.training.validate_n = validate_n
     config.training.test_n = test_n
     config.workflow.batch_size = batch_size
-    config.spatial_coverage.channels = [0]
-    for key, value in sc.items():
-        setattr(config.spatial_coverage, key, value)
+    for key, value in sampling.items():  # fields of the schema's Sampling
+        setattr(config.sampling, key, value)
     return config
 
 
@@ -334,10 +334,7 @@ class TestSources:
             train_n=2,
             validate_n=1,
             test_n=0,
-            use_patches=True,
-            patch_size=[32, 32],
-            patches_per_image=2,
-            random_patches=False,
+            patches=bas.Patches(width=32, height=32, per_image=2, random=False),
         )
         scripted = annotator()
         _, table_id, _ = run_microsam(config, omero_conn, annotator)
@@ -354,10 +351,8 @@ class TestSources:
             train_n=1,
             validate_n=1,
             test_n=0,
-            three_d=True,
-            z_range_start=0,
-            z_range_end=2,
-            z_slice_mode="all",
+            volumetric=True,
+            z_slices=bas.PlaneSelection(mode="all"),
         )
         scripted = annotator()
         _, table_id, _ = run_microsam(config, omero_conn, annotator)
@@ -604,7 +599,7 @@ class TestTrainingData:
         widget.sets.value = table_id
         assert "annotated" in widget.summary.value
         assert widget.get_selected_table_id() == table_id
-        assert widget.label_channel.value == config.spatial_coverage.get_label_channel()
+        assert widget.label_channel.value == config.label_channel()
 
         widget.output_dir.value = str(tmp_path / "out")
         widget.export_button.click()
@@ -714,8 +709,9 @@ class TestBioImageArchiveExport:
         self, omero_conn, omero_seed, finished_set, tmp_path
     ):
         pytest.importorskip("bia_mifa_models")
-        from omero_annotate_ai.core.mifa_export import save_bia_package
         from omero_annotate_ai.processing.bia_data import prepare_bia_data_from_table
+        from omero_annotate_ai.schema_export import save_bia_package
+        from tests.fakes import make_mifa_ready
 
         table_id, config = finished_set
         staging, bundle = tmp_path / "staging", tmp_path / "bundle"
@@ -724,7 +720,11 @@ class TestBioImageArchiveExport:
         assert stats["n_images"] == stats["n_masks"] == len(rows) == 4
 
         result = save_bia_package(
-            config, stats["rows"], staging, bundle, accession="S-BIADTEST"
+            make_mifa_ready(config.model_copy(deep=True)),
+            stats["rows"],
+            staging,
+            bundle,
+            accession="S-BIADTEST",
         )
         assert result["missing"] == 0
         assert result["n_annotations"] == 4
@@ -1187,9 +1187,13 @@ class TestFrontEndRoutes:
         assert "✅" in widget.status.value, widget.status.value
         ts = widget.training_set()
         table_id = ts.table_id
-        coverage = ts.config.spatial_coverage
-        assert (coverage.channels, coverage.timepoint_mode, coverage.n_timepoints) == (
-            [1],
+        sampling = ts.config.sampling
+        assert (
+            ts.config.label_channel(),
+            sampling.timepoints.mode,
+            sampling.timepoints.n,
+        ) == (
+            1,
             "random",
             1,
         )
@@ -1244,16 +1248,15 @@ class TestFrontEndRoutes:
             "omero:\n"
             "  container_type: dataset\n"
             f"  container_id: {omero_seed.dataset_id}\n"
-            "spatial_coverage:\n"
-            "  channels: [0]\n"
-            "  use_patches: true\n"
-            "  patch_size: [16, 16]\n"
-            "  patches_per_image: 2\n"
+            "sampling:\n"
+            "  label_channel: 0\n"
+            "  patches: {width: 16, height: 16, per_image: 2}\n"
+            "split:\n"
+            "  seed: 7\n"
             "training:\n"
             "  train_n: 2\n"
             "  validate_n: 1\n"
             "  test_n: 0\n"
-            "  seed: 7\n"
             "ai_model:\n"
             "  pretrained_from: vit_b_lm\n"
             "workflow:\n"
@@ -1273,7 +1276,7 @@ class TestFrontEndRoutes:
         remote = OmeroWrites().read_config(omero_conn, ts.table_id)
         local = ts.config
         assert remote.identity.table_id == ts.table_id
-        for part in ("omero", "spatial_coverage", "training", "ai_model"):
+        for part in ("omero", "sampling", "split", "training", "ai_model"):
             assert getattr(remote, part) == getattr(local, part), part
         assert [s.note for s in remote.sessions] == ["from yaml"]
 

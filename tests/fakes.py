@@ -371,3 +371,16 @@ def reopen(ts, source, omero, events=None, **kwargs) -> TrainingSet:
 def annotate(ts, limit=None, **kwargs) -> int:
     """Annotate the pending units like a scripted user (``limit`` units at most)."""
     return ts.annotate(ScriptedAnnotator(image_mask, limit=limit), **kwargs)
+
+
+def make_mifa_ready(config):
+    """Fill the description fields MIFA requires (study, keywords, link, version)."""
+    from bioimage_annotation_schema import datamodel as bas
+
+    config.study = bas.Study(
+        title="Nuclei", description="Nuclei in a test screen", funding_statement="None."
+    )
+    config.keywords = ["nuclei"]
+    config.links = [bas.Link(url="https://example.org/set")]
+    config.version = "1"
+    return config

@@ -7,16 +7,12 @@ from unittest.mock import MagicMock, Mock, patch
 import numpy as np
 import pandas as pd
 import pytest
+from bioimage_annotation_schema import datamodel as bas
 
 from omero_annotate_ai.core.annotation_config import (
     AIModelConfig,
     AnnotationConfig,
-    AnnotationMethodology,
-    DatasetInfo,
-    FeatureType,
     OMEROConfig,
-    SpatialCoverage,
-    StudyContext,
     TrainingConfig,
     WorkflowConfig,
 )
@@ -403,15 +399,17 @@ class TestListAnnotationTablesSortsByCreated:
 def _make_test_config():
     return AnnotationConfig(
         name="test_workflow",
-        study=StudyContext(title="Test", description="Test"),
-        dataset=DatasetInfo(source_description="test"),
-        annotation_methodology=AnnotationMethodology(annotation_criteria="test"),
-        spatial_coverage=SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0]),
+        study=bas.Study(title="Test", description="Test"),
+        source_dataset=bas.SourceDataset(description="test"),
+        methodology=bas.Methodology(
+            annotation_types=["segmentation_mask"], criteria="test"
+        ),
+        sampling=bas.Sampling(label_channel=0),
         training=TrainingConfig(),
         ai_model=AIModelConfig(),
         workflow=WorkflowConfig(),
         omero=OMEROConfig(container_type="dataset", container_id=1),
-        feature_types=[FeatureType(name="cell", color="#FF0000")],
+        classes=[bas.AnnotationClass(name="cell", color="#FF0000")],
     )
 
 
@@ -445,7 +443,7 @@ class TestManifestPersistence:
         loaded = load_manifest_from_omero(conn, "dataset", 1, "test_set")
         assert loaded is not None
         assert loaded.name == "test_workflow"
-        assert len(loaded.feature_types) == 1
+        assert len(loaded.classes) == 1
 
     def test_load_manifest_not_found(self):
         dataset = MagicMock()

@@ -1,8 +1,7 @@
 """Download OMERO table data into the on-disk layout a BIA bundle is built from.
 
-:func:`omero_annotate_ai.core.mifa_export.save_bia_package` copies the referenced
-images and masks out of a data folder, using the paths
-:func:`omero_annotate_ai.core.mifa_export._file_ids` derives from each row:
+:func:`omero_annotate_ai.schema_export.save_bia_package` copies the referenced
+images and masks out of a data folder, at the paths each row's record names:
 
 - ``annotation_output/{annotation_id}_mask.tif``
 - ``annotation_input/{annotation_id}.tif`` - the annotated channel, also when the
@@ -109,7 +108,7 @@ def prepare_bia_data_from_table(
     - ``{output_dir}/annotation_input/{annotation_id}.tif`` - the image plane, patch or volume
     - ``{output_dir}/annotation_output/{annotation_id}_mask.tif`` - the mask FileAnnotation
 
-    which is the layout :func:`~omero_annotate_ai.core.mifa_export.save_bia_package`
+    which is the layout :func:`~omero_annotate_ai.schema_export.save_bia_package`
     copies from: pass it the returned ``rows`` and ``output_dir``.
 
     Images are written at their **native dtype** - no 8-bit rescaling.

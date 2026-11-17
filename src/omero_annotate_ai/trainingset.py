@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -37,7 +37,6 @@ from .bundle import (
     server_slug,
 )
 from .core.annotation_config import AnnotationConfig, SessionRecord
-from .crate import write_ro_crate
 from .errors import (
     ConfigError,
     OmeroAnnotateAIError,
@@ -56,6 +55,7 @@ from .planning import (
     CoverageSpec,
     ImageIdentity,
     ImageInfo,
+    Mode,
     SplitSpec,
     plan_extension,
     plan_split,
@@ -258,15 +258,15 @@ class TrainingSet:
 
     @property
     def annotation_type(self) -> str:
-        return self._config.annotation_methodology.annotation_type
+        return self._config.methodology.annotation_types[0]
 
     @property
     def _seed(self) -> int:
         """The training set's seed; generated and stored in the config when unset."""
-        seed = self._config.training.seed
+        seed = self._config.split.seed
         if seed is None:
             seed = secrets.randbelow(2**31)
-            self._config.training.seed = seed
+            self._config.split.seed = seed
         return seed
 
     def _server(self) -> str:
@@ -327,7 +327,7 @@ class TrainingSet:
           - 'annotation_input': serves both roles
         """
         folders = {"annotation_input": self.bundle_dir / "annotation_input"}
-        if self._config.spatial_coverage.uses_separate_channels():
+        if self._config.uses_separate_channels():
             folders["model_input"] = self.bundle_dir / "model_input"
         return folders
 
@@ -384,10 +384,10 @@ class TrainingSet:
         return ImageInfo(uri=uri, plate=plate, well=well, well_metadata=well_metadata)
 
     def _split_spec(self) -> SplitSpec:
-        training = self._config.training
+        training, split = self._config.training, self._config.split
         return SplitSpec(
-            split_unit=training.split_unit,
-            stratify_by=tuple(training.stratify_by),
+            split_unit="well" if split.unit == "well" else "image",
+            stratify_by=tuple(split.stratify_by or ()),
             segment_all=training.segment_all,
             train_n=training.train_n,
             validate_n=training.validate_n,
@@ -413,31 +413,35 @@ class TrainingSet:
         return dict(plan.assignment)
 
     def _coverage(self) -> CoverageSpec:
-        """What to annotate in each image, from ``config.spatial_coverage``."""
-        sc = self._config.spatial_coverage
+        """What to annotate in each image, from ``config.sampling``."""
+        config = self._config
+        sampling = config.sampling
+        spec = sampling.patches
 
         def patches(
             shape: tuple[int, int], rng
         ) -> tuple[list[tuple[int, int]], tuple[int, int]]:
+            assert spec is not None
             origins, (height, width) = generate_patch_coordinates(
                 image_shape=shape,
-                patch_size=sc.patch_size,
-                n_patches=sc.patches_per_image,
-                random_patch=sc.random_patches,
+                patch_size=[spec.height, spec.width],
+                n_patches=spec.per_image or 1,
+                random_patch=spec.random if spec.random is not None else True,
                 rng=rng,
             )
             return origins, (height, width)
 
+        timepoints, z_slices = sampling.timepoints, sampling.z_slices
         return CoverageSpec(
-            channel=sc.get_label_channel(),
-            timepoint_mode=sc.timepoint_mode,
-            timepoints=tuple(sc.timepoints),
-            n_timepoints=sc.n_timepoints,
-            z_slice_mode=sc.z_slice_mode,
-            z_slices=tuple(sc.z_slices),
-            n_slices=sc.n_slices,
-            three_d=sc.three_d,
-            patches=patches if sc.use_patches else None,
+            channel=config.label_channel(),
+            timepoint_mode=_mode(timepoints),
+            timepoints=tuple(config.timepoint_values()),
+            n_timepoints=timepoints.n if timepoints else None,
+            z_slice_mode=_mode(z_slices),
+            z_slices=tuple(config.z_values()),
+            n_slices=z_slices.n if z_slices else None,
+            three_d=bool(sampling.volumetric),
+            patches=patches if spec is not None else None,
         )
 
     def _identity(self, image_meta: ImageMeta) -> ImageIdentity:
@@ -498,14 +502,14 @@ class TrainingSet:
         self, index: int, items: Sequence[BatchItem], scratch: Path
     ) -> Batch:
         """A batch for the annotator, writing into its own ``scratch`` folder."""
-        specs = self._config.spatial_coverage.get_context_channel_specs()
+        specs = self._config.display.specs()
         return Batch(
             index=index,
             items=tuple(items),
             mask_dir=scratch,
             embedding_dir=scratch / "embeddings",
             model_type=self._config.ai_model.pretrained_from or "vit_b_lm",
-            is_volumetric=self._config.spatial_coverage.three_d,
+            is_volumetric=bool(self._config.sampling.volumetric),
             context_colormaps={name: cmap for _ch, name, cmap in specs},
         )
 
@@ -528,22 +532,17 @@ class TrainingSet:
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
         """Load the plane or volume an annotation unit refers to, cropped to its patch."""
         timepoint = metadata["timepoint"]
-        channel = metadata.get(
-            "channel_override", self._config.spatial_coverage.get_label_channel()
-        )
+        channel = metadata.get("channel_override", self._config.label_channel())
 
         region = None
-        if self._config.spatial_coverage.use_patches and "patch_x" in metadata:
+        patches = self._config.sampling.patches
+        if patches is not None and "patch_x" in metadata:
             # Use the actual patch dimensions from metadata instead of config
             region = (
                 metadata["patch_x"],
                 metadata["patch_y"],
-                metadata.get(
-                    "patch_width", self._config.spatial_coverage.patch_size[1]
-                ),
-                metadata.get(
-                    "patch_height", self._config.spatial_coverage.patch_size[0]
-                ),
+                metadata.get("patch_width", patches.width),
+                metadata.get("patch_height", patches.height),
             )
 
         if metadata.get("is_volumetric", False):
@@ -579,11 +578,9 @@ class TrainingSet:
 
     def _context_for(self, image_obj, meta: dict) -> dict[str, np.ndarray]:
         """Context channels shown next to the annotated one: ``{name: pixels}``."""
-        if not self._config.spatial_coverage.uses_context_channels():
-            return {}
         return {
             name: self._load_image_data(image_obj, {**meta, "channel_override": ch})
-            for ch, name, _cmap in self._config.spatial_coverage.get_context_channel_specs()
+            for ch, name, _cmap in self._config.display.specs()
         }
 
     def _save_inputs(
@@ -600,7 +597,7 @@ class TrainingSet:
             pixels, folders["annotation_input"] / f"{annotation_id}.tif"
         )
         if "model_input" in folders:
-            training_channels = self._config.spatial_coverage.get_training_channels()
+            training_channels = self._config.training_channels()
             train_meta = {**meta, "channel_override": training_channels[0]}
             self._save_training_image(
                 image_obj, train_meta, annotation_id, folders["model_input"]
@@ -1523,17 +1520,17 @@ class TrainingSet:
     def write_ro_crate(self) -> Path:
         """Describe the set's folder as an RO-Crate; returns the metadata file.
 
-        Writes ``ro-crate-metadata.json`` (see :mod:`omero_annotate_ai.crate`): the
-        files with their digests, the source images, and the sessions with their
-        notes. Call it before sharing or archiving the folder.
+        Writes the Bioimage Annotation Schema documents (``annotation-set.yaml``,
+        ``annotation-records.csv``) and ``ro-crate-metadata.json``: the files with
+        their digests, the source images, and the sessions with their notes (see
+        :mod:`omero_annotate_ai.schema_export`). Call it before sharing or archiving
+        the folder.
         """
-        from . import __version__
+        from .schema_export import write_ro_crate
 
         self.save_local_table()
         self.save_config()
-        return write_ro_crate(
-            self._config, self.rows, self.bundle_dir, software_version=__version__
-        )
+        return write_ro_crate(self._config, self.rows, self.bundle_dir)
 
     def next_batch_index(self) -> int:
         """Number of the next batch handed out (1, 2, ...)."""
@@ -1570,7 +1567,7 @@ class TrainingSet:
             if saved is None:
                 logger.warning("Could not save the image of %s", row.annotation_id)
             if "model_input" in folders:
-                channels = self._config.spatial_coverage.get_training_channels()
+                channels = self._config.training_channels()
                 stacked = self._load_and_stack_channels(image_obj, meta, channels)
                 folders["model_input"].mkdir(parents=True, exist_ok=True)
                 target = folders["model_input"] / f"{row.annotation_id}.tif"
@@ -1655,6 +1652,13 @@ class TrainingSet:
                 patch_height=annotation.patch_height,
             )
         return meta
+
+
+def _mode(selection: Any) -> Mode:
+    """The selection mode of a plane selection (``specific`` when not given)."""
+    mode = getattr(selection, "mode", None) or "specific"
+    mode = getattr(mode, "value", mode)  # an enum member, or its value
+    return cast(Mode, mode if mode in ("all", "random") else "specific")
 
 
 def _software_version() -> str | None:

@@ -501,9 +501,9 @@ class TestWorkflowWidget:
         assert isinstance(request, NewTrainingSet)
         config = request.config
         assert config.name == "nuclei"
-        assert config.spatial_coverage.channels == [1]
+        assert config.label_channel() == 1
         assert config.training.validate_n == 3
-        assert config.training.seed == 42
+        assert config.split.seed == 42
         assert config.storage == "local"
         assert widget.get_config() is not config  # a copy every time
 
@@ -519,17 +519,17 @@ class TestWorkflowWidget:
         widget.use_patches.value = True
         widget.patches_per_image.value = 4
 
-        coverage = widget.get_config().spatial_coverage
+        sampling = widget.get_config().sampling
 
-        assert (coverage.timepoint_mode, coverage.n_timepoints) == ("random", 3)
-        assert coverage.z_slice_mode == "specific"
-        assert coverage.z_slices == [2, 5, 6, 7]
-        assert coverage.n_slices is None
-        assert coverage.three_d
-        assert (coverage.use_patches, coverage.patches_per_image) == (True, 4)
+        assert (sampling.timepoints.mode, sampling.timepoints.n) == ("random", 3)
+        assert sampling.z_slices.mode == "specific"
+        assert sampling.z_slices.values == [2, 5, 6, 7]
+        assert sampling.z_slices.n is None
+        assert sampling.volumetric
+        assert sampling.patches is not None and sampling.patches.per_image == 4
 
         widget.z_slices.mode.value = "all"
-        assert widget.get_config().spatial_coverage.z_slice_mode == "all"
+        assert widget.get_config().sampling.z_slices.mode == "all"
 
     @pytest.mark.parametrize("text", ["", "a", "3-1", "-2"])
     def test_bad_plane_list_shows_an_inline_error(self, tmp_path, text):
@@ -819,7 +819,7 @@ class TestTrainingDataWidget:
         from omero_annotate_ai.widgets.training_data_widget import TrainingDataWidget
 
         config, _, _ = omero_set(tmp_path)
-        config.spatial_coverage.channels = [1]
+        config.sampling.label_channel = 1
         summary = TrainingSetSummary(
             name="nuclei", table_id=42, storage="omero", progress={}, sessions=()
         )

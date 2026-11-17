@@ -70,44 +70,43 @@ class TestExternalClassificationWorkflow:
 
         np.testing.assert_array_equal(imread(str(dst)), label)
 
-    def test_classification_annotation_type_is_valid(self):
-        """annotation_type='classification' and 'semantic_segmentation' are valid values."""
-        from omero_annotate_ai.core.annotation_config import AnnotationMethodology
+    def test_classification_and_semantic_masks_are_valid(self):
+        """MIFA's class_labels, and segmentation masks with mask_kind semantic."""
+        from bioimage_annotation_schema import datamodel as bas
 
-        m = AnnotationMethodology(
-            annotation_type="classification",
-            annotation_criteria="3-class cell type classification",
+        m = bas.Methodology(
+            annotation_types=["class_labels"],
+            criteria="3-class cell type classification",
         )
-        assert m.annotation_type == "classification"
+        assert m.annotation_types == ["class_labels"]
 
-        m2 = AnnotationMethodology(
-            annotation_type="semantic_segmentation",
-            annotation_criteria="semantic segmentation",
+        m2 = bas.Methodology(
+            annotation_types=["segmentation_mask"],
+            mask_kind="semantic",
+            criteria="semantic segmentation",
         )
-        assert m2.annotation_type == "semantic_segmentation"
+        assert m2.mask_kind == "semantic"
 
     def test_external_workflow_config_yaml_roundtrip(self):
         """Config describing the external classification workflow serializes to valid YAML."""
         import yaml
 
         config = AnnotationConfig(name="cell_classification_workflow")
-        config.spatial_coverage.channels = [0, 1, 2]
-        config.spatial_coverage.label_channel = 0
-        config.spatial_coverage.training_channels = [0]
-        config.annotation_methodology.annotation_type = "classification"
-        config.annotation_methodology.annotation_method = "automatic"
-        config.annotation_methodology.annotation_criteria = (
+        config.sampling.label_channel = 0
+        config.sampling.input_channels = [0]
+        config.methodology.annotation_types = ["class_labels"]
+        config.methodology.method = "automatic"
+        config.methodology.criteria = (
             "CellPose segmentation + intensity thresholding on Ch1/Ch2 into 3 classes"
         )
 
         yaml_str = config.to_yaml()
         config2 = AnnotationConfig.from_dict(yaml.safe_load(yaml_str))
 
-        assert config2.spatial_coverage.channels == [0, 1, 2]
-        assert config2.spatial_coverage.label_channel == 0
-        assert config2.spatial_coverage.training_channels == [0]
-        assert config2.annotation_methodology.annotation_type == "classification"
-        assert config2.annotation_methodology.annotation_method == "automatic"
+        assert config2.label_channel() == 0
+        assert config2.training_channels() == [0]
+        assert config2.methodology.annotation_types == ["class_labels"]
+        assert config2.methodology.method == "automatic"
 
 
 def _write_rows(folder, rows):
@@ -123,13 +122,11 @@ class TestReorganizeOntoRecords:
     def _config(self, tmp_path, categories, separate_channels=False):
         config = create_default_config()
         if separate_channels:
-            config.spatial_coverage.channels = [0, 1]
-            config.spatial_coverage.label_channel = 0
-            config.spatial_coverage.training_channels = [1]
+            config.sampling.label_channel = 0
+            config.sampling.input_channels = [1]
         else:
-            config.spatial_coverage.channels = [0]
-            config.spatial_coverage.label_channel = None
-            config.spatial_coverage.training_channels = None
+            config.sampling.label_channel = None
+            config.sampling.input_channels = None
         rows = [
             Row(
                 image_id=100 + i,
@@ -656,8 +653,8 @@ class TestEmptyTrainingSetIsLoud:
         (annotation_dir / "annotation_output").mkdir(parents=True)
 
         config = create_default_config()
-        config.spatial_coverage.label_channel = None
-        config.spatial_coverage.training_channels = None
+        config.sampling.label_channel = None
+        config.sampling.input_channels = None
         _write_rows(
             annotation_dir,
             [
@@ -693,8 +690,8 @@ class TestEmptyTrainingSetIsLoud:
         (annotation_dir / "annotation_output" / "0_mask.tif").write_bytes(b"lbl")
 
         config = create_default_config()
-        config.spatial_coverage.label_channel = None
-        config.spatial_coverage.training_channels = None
+        config.sampling.label_channel = None
+        config.sampling.input_channels = None
         _write_rows(
             annotation_dir,
             [
@@ -807,7 +804,7 @@ class TestExportTrainingSet:
 
         config = create_default_config()
         config.name = "nuclei"
-        config.spatial_coverage.channels = [2]
+        config.sampling.label_channel = 2
         with (
             patch("omero_annotate_ai.trainingset.read_set_config", return_value=config),
             patch.object(tf, "prepare_training_data_from_table") as prepare,
@@ -875,8 +872,8 @@ class TestExportTrainingSet:
             tf.export_training_set(
                 tmp_path / "set",
                 tmp_path / "out",
-                training_channels=config.spatial_coverage.get_training_channels(),
-                label_channel=config.spatial_coverage.get_label_channel(),
+                training_channels=config.training_channels(),
+                label_channel=config.label_channel(),
             )
         assert reorganize.called
 

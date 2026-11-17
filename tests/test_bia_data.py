@@ -3,6 +3,7 @@
 The OMERO connection, ``ezomero`` and the image source are faked - no live server.
 """
 
+import csv
 import warnings
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -14,9 +15,10 @@ from tifffile import imread, imwrite
 from omero_annotate_ai.core.annotation_config import (
     create_default_config,
 )
-from omero_annotate_ai.core.mifa_export import build_bia_file_lists, save_bia_package
 from omero_annotate_ai.processing.bia_data import prepare_bia_data_from_table
 from omero_annotate_ai.rows import Row, rows_to_frame
+from omero_annotate_ai.schema_export import save_bia_package
+from tests.fakes import make_mifa_ready
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -167,10 +169,9 @@ def test_separate_channels_still_write_the_annotated_channel(
     training concern and is not written here.
     """
     config = create_default_config()
-    config.spatial_coverage.channels = [0, 1]
-    config.spatial_coverage.label_channel = 0
-    config.spatial_coverage.training_channels = [1]
-    assert config.spatial_coverage.uses_separate_channels()
+    config.sampling.label_channel = 0
+    config.sampling.input_channels = [1]
+    assert config.uses_separate_channels()
 
     mock_ezomero.get_table.return_value = build_table([annotation()])
 
@@ -270,7 +271,7 @@ def test_skipped_rows_are_pruned_from_the_config(mock_conn, mock_ezomero, tmp_pa
         ]
     )
 
-    config = create_default_config()
+    config = make_mifa_ready(create_default_config())
     with pytest.warns(UserWarning):
         stats = prepare_bia_data_from_table(mock_conn, 42, tmp_path)
 
@@ -281,11 +282,14 @@ def test_skipped_rows_are_pruned_from_the_config(mock_conn, mock_ezomero, tmp_pa
     bundle = tmp_path / "submission"
     result = save_bia_package(config, rows, tmp_path, bundle, accession="S-BIAD999")
 
-    images_df, annotations_df = build_bia_file_lists(rows)
+    with (bundle / "file_list_images.tsv").open() as f:
+        images = list(csv.DictReader(f, delimiter="\t"))
+    with (bundle / "file_list_annotations.tsv").open() as f:
+        annotations = list(csv.DictReader(f, delimiter="\t"))
     referenced = (
-        set(images_df["Files"])
-        | set(annotations_df["Files"])
-        | set(annotations_df["source_image"])
+        {r["Files"] for r in images}
+        | {r["Files"] for r in annotations}
+        | {r["source_image"] for r in annotations}
     )
     assert referenced == {"images/101_0_0.tif", "annotations/101_0_0_mask.tif"}
     assert result["missing"] == 0
@@ -439,7 +443,9 @@ def test_without_clean_existing_previous_files_survive(
     assert stale.exists()
 
 
-def test_file_lists_carry_pixel_digests_and_iscc_codes_when_recorded():
+def test_file_lists_carry_pixel_digests_and_iscc_codes_when_recorded(tmp_path):
+    pytest.importorskip("bia_mifa_models")
+    digest = "ab" * 32
     rows = [
         Row(
             image_id=101,
@@ -447,20 +453,24 @@ def test_file_lists_carry_pixel_digests_and_iscc_codes_when_recorded():
             annotation_id="a_0",
             processed=True,
             label_id=5,
-            input_digest="in-sha",
-            mask_digest="mask-sha",
+            input_digest=digest,
+            mask_digest=digest,
             input_iscc="ISCC:EEA4XSZUGQ2MXS6B",
             mask_iscc="ISCC:EEA6IF2FC2OREY73",
         )
     ]
-    images_df, annotations_df = build_bia_file_lists(rows)
-    assert annotations_df.loc[0, "pixel_sha256"] == "mask-sha"
-    assert annotations_df.loc[0, "iscc"] == "ISCC:EEA6IF2FC2OREY73"
-    assert images_df.loc[0, "iscc"] == "ISCC:EEA4XSZUGQ2MXS6B"
-
-    plain = [Row(image_id=101, image_name="a", annotation_id="a_0", label_id=5)]
-    images_df, annotations_df = build_bia_file_lists(plain)
-    assert "iscc" not in annotations_df.columns and "iscc" not in images_df.columns
+    config = make_mifa_ready(create_default_config())
+    with pytest.warns(UserWarning):  # no files in tmp_path
+        save_bia_package(config, rows, tmp_path, tmp_path / "bia")
+    with (tmp_path / "bia" / "file_list_annotations.tsv").open() as f:
+        annotation = next(csv.DictReader(f, delimiter="\t"))
+    with (tmp_path / "bia" / "file_list_images.tsv").open() as f:
+        image = next(csv.DictReader(f, delimiter="\t"))
+    assert (annotation["pixel_sha256"], annotation["iscc"]) == (
+        digest,
+        "ISCC:EEA6IF2FC2OREY73",
+    )
+    assert image["iscc"] == "ISCC:EEA4XSZUGQ2MXS6B"
 
 
 # --------------------------------------------------------------------------- #
@@ -470,9 +480,10 @@ def test_file_lists_carry_pixel_digests_and_iscc_codes_when_recorded():
 
 def test_local_set_bundle_holds_only_annotated_units(tmp_path):
     pytest.importorskip("bia_mifa_models")
-    from tests.fakes import annotate, create_set, omero_set
+    from tests.fakes import annotate, create_set, make_mifa_ready, omero_set
 
     config, source, omero = omero_set(tmp_path, n_images=3)
+    make_mifa_ready(config)
     config.storage = "local"
     ts = create_set(config, source, omero, tmp_path / "home")
     assert annotate(ts, limit=2) == 2
@@ -487,9 +498,10 @@ def test_local_set_bundle_holds_only_annotated_units(tmp_path):
 
 def test_local_set_bundle_leaves_excluded_units_out(tmp_path):
     pytest.importorskip("bia_mifa_models")
-    from tests.fakes import annotate, create_set, omero_set
+    from tests.fakes import annotate, create_set, make_mifa_ready, omero_set
 
     config, source, omero = omero_set(tmp_path, n_images=3)
+    make_mifa_ready(config)
     config.storage = "local"
     ts = create_set(config, source, omero, tmp_path / "home")
     session = ts.start_session(batch_size=1)

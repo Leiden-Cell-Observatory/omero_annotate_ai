@@ -13,13 +13,6 @@ from omero_annotate_ai.core.annotation_config import (
     load_config,
     load_config_from_yaml,
 )
-from omero_annotate_ai.core.mifa_export import (
-    save_bia_package,
-    save_mifa,
-    to_mifa,
-    to_mifa_dicts,
-)
-from omero_annotate_ai.rows import Row
 
 
 @pytest.mark.unit
@@ -81,20 +74,26 @@ class TestAnnotationConfig:
         ]
         keys_in_yaml = [ln.split(":", 1)[0] for ln in lines]
 
-        # Expected order follows field declaration order of AnnotationConfig
-        # Note: processing was removed in schema v2.0.0
+        # Expected order follows field declaration order of AnnotationConfig:
+        # the schema sections first, then the tool sections (unset fields left out)
         expected_prefix_order = [
-            "schema_version",
+            "config_version",
             "name",
-            "authors",
             "created",
-            "study",
-            "dataset",
-            "annotation_methodology",
-            "spatial_coverage",
+            "license",
+            "authors",
+            "keywords",
+            "links",
+            "ai_models_trained",
+            "methodology",
+            "classes",
+            "sampling",
+            "split",
+            "extensions",
             "training",
             "normalization",
             "ai_model",
+            "display",
             "workflow",
             "omero",
             "source",
@@ -102,9 +101,6 @@ class TestAnnotationConfig:
             "storage",
             "identity",
             "sessions",
-            "documentation",
-            "repository",
-            "tags",
         ]
 
         # Only compare until we reach a non-top-level sequence scalar line
@@ -252,7 +248,15 @@ class TestConfigEdgeCases:
             ({"workflow": {"read_only_mode": True}}, "storage: local"),
             ({"workflow": {"resume_from_table": True}}, "TrainingSet.open"),
             ({"omero": {"table_id": 5}}, "identity.table_id"),
-            ({"spatial_coverage": {"percentile_low": 1}}, "normalization"),
+            ({"spatial_coverage": {"channels": [0]}}, "sampling"),
+            ({"annotation_methodology": {}}, "methodology"),
+            ({"dataset": {}}, "source_dataset"),
+            ({"feature_types": []}, "classes"),
+            ({"tags": []}, "keywords"),
+            ({"custom_metadata": {}}, "extensions"),
+            ({"training": {"seed": 1}}, "split.seed"),
+            ({"training": {"split_unit": "well"}}, "split.unit"),
+            ({"schema_version": 3}, "config_version: 4"),
         ],
     )
     def test_removed_keys_raise_naming_the_replacement(self, data, replacement):
@@ -269,31 +273,32 @@ class TestConfigEdgeCases:
         with pytest.raises(RemovedConfigKey, match="storage: local"):
             load_config_from_yaml(str(path))
 
-    def test_spatial_coverage_lists_default_to_first_plane(self):
-        # As documented: a YAML may leave out channels, timepoints and z_slices.
+    def test_sampling_defaults_to_first_plane_of_channel_0(self):
+        # As documented: a YAML may leave out the channels, timepoints and z-slices.
         config = AnnotationConfig.from_dict(
-            {"name": "x", "spatial_coverage": {"use_patches": True}}
+            {"name": "x", "sampling": {"patches": {"width": 64, "height": 64}}}
         )
-        coverage = config.spatial_coverage
-        assert (coverage.channels, coverage.timepoints, coverage.z_slices) == (
-            [0],
+        assert (
+            config.label_channel(),
+            config.timepoint_values(),
+            config.z_values(),
+        ) == (
+            0,
             [0],
             [0],
         )
 
-    def test_other_schema_versions_are_refused(self):
+    def test_other_config_versions_are_refused(self):
         from omero_annotate_ai.errors import ConfigError
 
-        with pytest.raises(ConfigError, match="schema_version"):
-            AnnotationConfig.from_dict({"name": "x", "schema_version": "2.0.0"})
+        with pytest.raises(ConfigError, match="config_version"):
+            AnnotationConfig.from_dict({"name": "x", "config_version": 3})
 
     def test_unknown_keys_and_assignments_are_rejected(self):
         with pytest.raises(ValueError):
             AnnotationConfig.from_dict({"name": "x", "colour": "red"})
-        with pytest.raises(ValueError, match="chanels"):  # a typo inside a section
-            AnnotationConfig.from_dict(
-                {"name": "x", "spatial_coverage": {"chanels": [1]}}
-            )
+        with pytest.raises(ValueError, match="label_chanel"):  # a typo in a section
+            AnnotationConfig.from_dict({"name": "x", "sampling": {"label_chanel": 1}})
         config = create_default_config()
         with pytest.raises(ValueError):
             config.storage = "cloud"
@@ -312,300 +317,6 @@ class TestConfigEdgeCases:
         assert again.identity.table_id == 12
         assert again.sessions[0].note == "nuclei only"
         assert again.sessions[0].status == "open"
-
-
-@pytest.mark.unit
-class TestMultiChannelSupport:
-    """Test multi-channel support with separate label and training channels."""
-
-    def test_get_label_channel_default(self):
-        """Test that get_label_channel() defaults to primary_channel (channels[0])."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1, 2]
-
-        # No label_channel set, should default to channels[0]
-        assert config.spatial_coverage.get_label_channel() == 0
-        assert (
-            config.spatial_coverage.get_label_channel()
-            == config.spatial_coverage.primary_channel
-        )
-
-    def test_get_label_channel_explicit(self):
-        """Test that explicit label_channel is used when set."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1, 2]
-        config.spatial_coverage.label_channel = 1
-
-        assert config.spatial_coverage.get_label_channel() == 1
-
-    def test_get_training_channels_default(self):
-        """Test that get_training_channels() defaults to [get_label_channel()]."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1, 2]
-
-        # No training_channels set, should default to [get_label_channel()] = [0]
-        assert config.spatial_coverage.get_training_channels() == [0]
-
-    def test_get_training_channels_explicit(self):
-        """Test that explicit training_channels is used when set."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1, 2]
-        config.spatial_coverage.training_channels = [1, 2]
-
-        assert config.spatial_coverage.get_training_channels() == [1, 2]
-
-    def test_uses_separate_channels_false_by_default(self):
-        """Test that uses_separate_channels() is False when neither field is configured."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1]
-
-        assert config.spatial_coverage.uses_separate_channels() is False
-
-    def test_uses_separate_channels_true_when_different(self):
-        """Test that uses_separate_channels() is True when label and training channels differ."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1]
-        config.spatial_coverage.label_channel = 0
-        config.spatial_coverage.training_channels = [1]
-
-        assert config.spatial_coverage.uses_separate_channels() is True
-
-    def test_uses_separate_channels_false_when_same(self):
-        """uses_separate_channels() is False when the label channel is a training channel."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1]
-        config.spatial_coverage.label_channel = 0
-        config.spatial_coverage.training_channels = [0, 1]
-
-        assert config.spatial_coverage.uses_separate_channels() is False
-
-
-@pytest.mark.unit
-class TestMultiChannelValidation:
-    """Test validation of channel configuration."""
-
-    def test_label_channel_must_be_in_channels(self):
-        """Test that label_channel must be in channels list."""
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        with pytest.raises(ValueError, match="label_channel"):
-            SpatialCoverage(
-                channels=[0, 1],
-                label_channel=2,  # Not in channels list
-                timepoints=[0],
-                z_slices=[0],
-            )
-
-    def test_training_channels_must_be_in_channels(self):
-        """Test that training_channels must be in channels list."""
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        with pytest.raises(ValueError, match="training_channel"):
-            SpatialCoverage(
-                channels=[0, 1],
-                training_channels=[2],  # Not in channels list
-                timepoints=[0],
-                z_slices=[0],
-            )
-
-    def test_valid_channel_configuration(self):
-        """Test that valid channel configuration passes validation."""
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        coverage = SpatialCoverage(
-            channels=[0, 1, 2],
-            label_channel=0,
-            training_channels=[1, 2],
-            timepoints=[0],
-            z_slices=[0],
-        )
-        assert coverage.label_channel == 0
-        assert coverage.training_channels == [1, 2]
-
-
-@pytest.mark.unit
-class TestContextChannelConfig:
-    """Tests for context_channels fields on SpatialCoverage."""
-
-    def test_defaults_empty(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        sc = SpatialCoverage(channels=[0, 1, 2], timepoints=[0], z_slices=[0])
-        assert sc.context_channels == []
-        assert sc.context_channel_names is None
-        assert sc.context_channel_colormaps is None
-        assert sc.get_context_channel_specs() == []
-
-    def test_uses_context_channels_false_by_default(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        sc = SpatialCoverage(channels=[0], timepoints=[0], z_slices=[0])
-        assert sc.uses_context_channels() is False
-
-    def test_uses_context_channels_true_when_set(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        sc = SpatialCoverage(
-            channels=[0, 1], timepoints=[0], z_slices=[0], context_channels=[1]
-        )
-        assert sc.uses_context_channels() is True
-
-    def test_get_context_channel_specs_defaults(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        sc = SpatialCoverage(
-            channels=[0, 1, 2], timepoints=[0], z_slices=[0], context_channels=[1, 2]
-        )
-        specs = sc.get_context_channel_specs()
-        assert len(specs) == 2
-        ch_idx0, name0, cmap0 = specs[0]
-        ch_idx1, name1, cmap1 = specs[1]
-        assert ch_idx0 == 1
-        assert ch_idx1 == 2
-        assert name0 == "ch1"
-        assert name1 == "ch2"
-        assert cmap0 == "blue"
-        assert cmap1 == "magenta"
-
-    def test_get_context_channel_specs_custom_names(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        sc = SpatialCoverage(
-            channels=[0, 1],
-            timepoints=[0],
-            z_slices=[0],
-            context_channels=[1],
-            context_channel_names=["DAPI"],
-        )
-        specs = sc.get_context_channel_specs()
-        assert specs[0][1] == "DAPI"
-
-    def test_get_context_channel_specs_custom_colormaps(self):
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        sc = SpatialCoverage(
-            channels=[0, 1],
-            timepoints=[0],
-            z_slices=[0],
-            context_channels=[1],
-            context_channel_colormaps=["magenta"],
-        )
-        specs = sc.get_context_channel_specs()
-        assert specs[0][2] == "magenta"
-
-    def test_validation_rejects_overlap_with_label_channel(self):
-        from pydantic import ValidationError
-
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        with pytest.raises(ValidationError, match="context_channels"):
-            SpatialCoverage(
-                channels=[0, 1],
-                timepoints=[0],
-                z_slices=[0],
-                label_channel=0,
-                context_channels=[0],
-            )
-
-    def test_validation_rejects_mismatched_names_length(self):
-        from pydantic import ValidationError
-
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        with pytest.raises(ValidationError):
-            SpatialCoverage(
-                channels=[0, 1, 2],
-                timepoints=[0],
-                z_slices=[0],
-                context_channels=[1, 2],
-                context_channel_names=["DAPI"],
-            )  # length 1, should be 2
-
-    def test_validation_rejects_mismatched_colormaps_length(self):
-        from pydantic import ValidationError
-
-        from omero_annotate_ai.core.annotation_config import SpatialCoverage
-
-        with pytest.raises(ValidationError):
-            SpatialCoverage(
-                channels=[0, 1, 2],
-                timepoints=[0],
-                z_slices=[0],
-                context_channels=[1, 2],
-                context_channel_colormaps=["blue"],
-            )  # length 1, should be 2
-
-    def test_yaml_round_trip(self):
-        from omero_annotate_ai.core.annotation_config import AnnotationConfig
-
-        config = AnnotationConfig(name="test")
-        config.spatial_coverage.channels = [0, 1]
-        config.spatial_coverage.context_channels = [1]
-        config.spatial_coverage.context_channel_names = ["DAPI"]
-        config.spatial_coverage.context_channel_colormaps = ["blue"]
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            config.save_yaml(f.name)
-            loaded = AnnotationConfig.from_yaml(f.name)
-        Path(f.name).unlink()
-        assert loaded.spatial_coverage.context_channels == [1]
-        assert loaded.spatial_coverage.context_channel_names == ["DAPI"]
-        assert loaded.spatial_coverage.context_channel_colormaps == ["blue"]
-
-
-@pytest.mark.unit
-class TestMultiChannelYamlSerialization:
-    """Test YAML serialization with channel fields."""
-
-    def test_yaml_roundtrip_with_channels(self):
-        """Test that channel fields survive YAML roundtrip."""
-        config = create_default_config()
-        config.spatial_coverage.channels = [0, 1, 2]
-        config.spatial_coverage.label_channel = 0
-        config.spatial_coverage.training_channels = [1, 2]
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            config.save_yaml(f.name)
-            loaded = AnnotationConfig.from_yaml(f.name)
-
-            assert loaded.spatial_coverage.channels == [0, 1, 2]
-            assert loaded.spatial_coverage.label_channel == 0
-            assert loaded.spatial_coverage.training_channels == [1, 2]
-
-        Path(f.name).unlink()
-
-    def test_yaml_backward_compatibility(self):
-        """Test that old YAML configs without new fields still work."""
-        yaml_str = """
-        name: test
-        spatial_coverage:
-          channels: [0]
-          timepoints: [0]
-          z_slices: [0]
-        """
-
-        config = AnnotationConfig.from_yaml(yaml_str)
-
-        # New methods should work with defaults
-        assert config.spatial_coverage.get_label_channel() == 0
-        assert config.spatial_coverage.get_training_channels() == [0]
-        assert config.spatial_coverage.uses_separate_channels() is False
-
-    def test_channels_without_explicit_roles(self):
-        """Test that channels list without explicit roles uses channels[0] for both."""
-        yaml_str = """
-        name: test
-        spatial_coverage:
-          channels: [0, 1]
-          timepoints: [0]
-          z_slices: [0]
-        """
-
-        config = AnnotationConfig.from_yaml(yaml_str)
-
-        # Should use channels[0] for both label and training
-        assert config.spatial_coverage.get_label_channel() == 0
-        assert config.spatial_coverage.get_training_channels() == [0]
-        assert config.spatial_coverage.uses_separate_channels() is False
 
 
 @pytest.mark.unit
@@ -730,56 +441,33 @@ class TestOMEROConfigMultiContainer:
 
 
 @pytest.mark.unit
-class TestFeatureType:
-    """Tests for FeatureType model."""
-
-    def test_create(self):
-        from omero_annotate_ai.core.annotation_config import FeatureType
-
-        ft = FeatureType(name="cell", color="#FF0000")
-        assert ft.name == "cell"
-        assert ft.color == "#FF0000"
-
-    def test_serialization_round_trip(self):
-        from omero_annotate_ai.core.annotation_config import FeatureType
-
-        ft = FeatureType(name="nucleus", color="#00FF00")
-        data = ft.model_dump()
-        ft2 = FeatureType(**data)
-        assert ft == ft2
-
-
-@pytest.mark.unit
 class TestAnnotationConfigJSON:
     """Tests for JSON serialization of AnnotationConfig."""
 
     def _make_config(self):
+        from bioimage_annotation_schema import datamodel as bas
+
         from omero_annotate_ai.core.annotation_config import (
             AIModelConfig,
             AnnotationConfig,
-            AnnotationMethodology,
-            DatasetInfo,
-            FeatureType,
             OMEROConfig,
-            SpatialCoverage,
-            StudyContext,
             TrainingConfig,
             WorkflowConfig,
         )
 
         return AnnotationConfig(
             name="test_workflow",
-            study=StudyContext(title="Test", description="Test study"),
-            dataset=DatasetInfo(source_description="test"),
-            annotation_methodology=AnnotationMethodology(annotation_criteria="test"),
-            spatial_coverage=SpatialCoverage(
-                channels=[0], timepoints=[0], z_slices=[0]
+            study=bas.Study(title="Test", description="Test study"),
+            source_dataset=bas.SourceDataset(description="test"),
+            methodology=bas.Methodology(
+                annotation_types=["segmentation_mask"], criteria="test"
             ),
+            sampling=bas.Sampling(label_channel=0),
             training=TrainingConfig(),
             ai_model=AIModelConfig(),
             workflow=WorkflowConfig(),
             omero=OMEROConfig(container_type="dataset", container_id=1),
-            feature_types=[FeatureType(name="cell", color="#FF0000")],
+            classes=[bas.AnnotationClass(name="cell", color="#FF0000")],
         )
 
     def test_to_json_returns_valid_json(self):
@@ -789,16 +477,16 @@ class TestAnnotationConfigJSON:
         json_str = config.to_json()
         data = json.loads(json_str)
         assert data["name"] == "test_workflow"
-        assert len(data["feature_types"]) == 1
-        assert data["feature_types"][0]["name"] == "cell"
+        assert len(data["classes"]) == 1
+        assert data["classes"][0]["name"] == "cell"
 
     def test_from_json_string(self):
         config = self._make_config()
         json_str = config.to_json()
         loaded = type(config).from_json(json_str)
         assert loaded.name == config.name
-        assert len(loaded.feature_types) == 1
-        assert loaded.feature_types[0].name == "cell"
+        assert len(loaded.classes) == 1
+        assert loaded.classes[0].name == "cell"
 
     def test_from_json_dict(self):
         import json
@@ -883,498 +571,6 @@ class TestTrainingConfigWarnings:
 
 
 @pytest.mark.unit
-class TestStudyContextFundingStatement:
-    """The StudyContext gains an optional funding_statement field for MIFA export."""
-
-    def test_funding_statement_defaults_to_none(self):
-        from omero_annotate_ai.core.annotation_config import StudyContext
-
-        study = StudyContext(title="t", description="d")
-        assert study.funding_statement is None
-
-    def test_funding_statement_is_settable(self):
-        from omero_annotate_ai.core.annotation_config import StudyContext
-
-        study = StudyContext(
-            title="t", description="d", funding_statement="Funded by X"
-        )
-        assert study.funding_statement == "Funded by X"
-
-    def test_funding_statement_round_trips_through_yaml(self, tmp_path):
-        config = create_default_config()
-        config.study.funding_statement = "Grant ABC-123"
-        yaml_path = tmp_path / "config.yaml"
-        config.save_yaml(yaml_path)
-        reloaded = AnnotationConfig.from_yaml(yaml_path)
-        assert reloaded.study.funding_statement == "Grant ABC-123"
-
-
-@pytest.mark.unit
-class TestMIFAExportHelpers:
-    """Pure mapping helpers in mifa_export (no upstream package needed)."""
-
-    def test_map_license(self):
-        from omero_annotate_ai.core.mifa_export import map_license
-
-        assert map_license("CC-BY-4.0") == "CC_BY"
-        assert map_license("CC-BY") == "CC_BY"
-        assert map_license("CC_BY") == "CC_BY"
-        assert map_license("CC0") == "CC0"
-        assert map_license("CC0-1.0") == "CC0"
-
-    def test_map_license_unknown_falls_back_with_warning(self):
-        from omero_annotate_ai.core.mifa_export import map_license
-
-        with pytest.warns(UserWarning, match="license"):
-            assert map_license("MIT") == "CC_BY"
-
-    @pytest.mark.parametrize(
-        "ours,mifa",
-        [
-            ("segmentation_mask", "segmentation_mask"),
-            ("semantic_segmentation", "segmentation_mask"),
-            ("bounding_box", "bounding_boxes"),
-            ("point", "point_annotations"),
-            ("classification", "class_labels"),
-        ],
-    )
-    def test_map_annotation_type(self, ours, mifa):
-        from omero_annotate_ai.core.mifa_export import map_annotation_type
-
-        assert map_annotation_type(ours) == mifa
-
-    def test_map_annotation_type_unknown_falls_back_to_other(self):
-        from omero_annotate_ai.core.mifa_export import map_annotation_type
-
-        with pytest.warns(UserWarning, match="annotation type"):
-            assert map_annotation_type("nonsense") == "other"
-
-    @pytest.mark.parametrize(
-        "name,expected",
-        [
-            ("Jane Doe", ("Jane", "Doe")),
-            ("Jane", ("Jane", ".")),
-            ("Jane van der Berg", ("Jane", "van der Berg")),
-            ("  Marie  Curie  ", ("Marie", "Curie")),
-            ("", None),
-            ("   ", None),
-            (None, None),
-        ],
-    )
-    def test_split_author_name(self, name, expected):
-        from omero_annotate_ai.core.mifa_export import split_author_name
-
-        assert split_author_name(name) == expected
-
-    def test_compose_overview_is_nonempty_and_mentions_name(self):
-        from omero_annotate_ai.core.mifa_export import compose_overview
-
-        config = create_default_config()
-        config.name = "my_nuclei_workflow"
-        overview = compose_overview(config)
-        assert isinstance(overview, str) and overview.strip()
-        assert "my_nuclei_workflow" in overview
-
-    def test_compose_method_is_nonempty_and_mentions_framework(self):
-        from omero_annotate_ai.core.mifa_export import compose_method
-
-        config = create_default_config()
-        method = compose_method(config)
-        assert isinstance(method, str) and method.strip()
-        assert "micro_sam" in method
-
-    def test_compose_overview_includes_notes(self):
-        from omero_annotate_ai.core.mifa_export import compose_overview
-
-        config = create_default_config()
-        config.notes = "Wells A1-B2 use the key 'celline'."
-        assert "Notes: Wells A1-B2 use the key 'celline'." in compose_overview(config)
-
-    def test_compose_method_describes_normalisation(self):
-        from omero_annotate_ai.core.mifa_export import compose_method
-
-        config = create_default_config()
-        config.normalization.apply_at_export = True
-        method = compose_method(config)
-        assert "per-image percentiles 1.0-99.8" in method
-        assert "applied at export (float32)" in method
-        config.normalization.method = "none"
-        assert "raw intensities" in compose_method(config)
-
-
-@pytest.mark.unit
-class TestMIFAExport:
-    rows: list = []
-    """Build MIFA documents from an AnnotationConfig (needs bia-mifa-models)."""
-
-    @pytest.fixture(autouse=True)
-    def _require_mifa(self):
-        pytest.importorskip("bia_mifa_models")
-
-    def _rich_config(self):
-        from omero_annotate_ai.core.annotation_config import AuthorInfo
-
-        config = create_default_config()
-        config.name = "nuclei_seg"
-        config.study.title = "Nuclei segmentation"
-        config.study.description = "Annotated nuclei for training."
-        config.study.keywords = ["nuclei", "segmentation"]
-        config.dataset.source_dataset_id = "S-BIAD123"
-        config.annotation_methodology.annotation_criteria = "In-focus nuclei only."
-        config.authors = [
-            AuthorInfo(
-                name="Jane Doe",
-                affiliation="EMBL-EBI",
-                email="jane@example.org",
-                orcid="https://orcid.org/0000-0002-1825-0097",
-            ),
-            AuthorInfo(name="", affiliation="Nowhere"),  # no name -> dropped
-        ]
-        self.rows = [
-            Row(
-                image_id=1,
-                image_name="a.tif",
-                annotation_id="1_0_0",
-                category="training",
-                timepoint=0,
-                z_slice=0,
-                channel=0,
-                annotation_type="segmentation_mask",
-                annotation_created_at="2026-06-22T11:00:00+00:00",
-            ),
-            Row(
-                image_id=2,
-                image_name="b.tif",
-                annotation_id="2_0_0",
-                category="validation",
-                timepoint=0,
-                z_slice=0,
-                channel=0,
-                annotation_type="segmentation_mask",
-            ),
-            Row(
-                image_id=3,
-                image_name="c.tif",
-                annotation_id="3_0_0",
-                category="training",
-                timepoint=0,
-                z_slice=0,
-                channel=0,
-                is_patch=True,
-                patch_x=10,
-                patch_y=20,
-                patch_width=128,
-                patch_height=128,
-                annotation_type="segmentation_mask",
-            ),
-        ]
-        return config
-
-    def test_to_mifa_returns_three_documents(self):
-        from bia_mifa_models.datamodel.bia_mifa_models import (
-            Annotations,
-            Study,
-            Version,
-        )
-
-        docs = to_mifa(
-            self._rich_config(),
-            self.rows,
-        )
-        assert isinstance(docs["study"], Study)
-        assert isinstance(docs["annotations"], Annotations)
-        assert isinstance(docs["version"], Version)
-
-    def test_annotations_required_fields_present(self):
-        ann = to_mifa(
-            self._rich_config(),
-            self.rows,
-        )["annotations"]
-        assert ann.annotation_overview.strip()
-        assert ann.annotation_method.strip()
-
-    def test_study_required_fields_present_from_blank_config(self):
-        # default config has blank study fields - fallbacks must satisfy MIFA requireds
-        st = to_mifa(
-            create_default_config(),
-            [],
-        )["study"]
-        assert st.title and st.description
-        assert st.keywords  # required, non-empty
-        assert str(st.license) in ("CC_BY", "CC0")
-        assert st.funding_statement
-        assert st.link_url  # required by the Links mixin, non-empty
-
-    def test_file_metadata_count_matches_annotations(self):
-        ann = to_mifa(
-            self._rich_config(),
-            self.rows,
-        )["annotations"]
-        assert len(ann.file_metadata) == 3
-
-    def test_file_metadata_local_ids(self):
-        ann = to_mifa(self._rich_config(), self.rows, file_id_source="local")[
-            "annotations"
-        ]
-        flm = ann.file_metadata[0]
-        assert flm.annotation_id == "annotations/1_0_0_mask.tif"
-        assert flm.source_image_id == "images/1_0_0.tif"
-
-    def test_file_metadata_omero_ids(self):
-        config = self._rich_config()
-        self.rows[0].label_id = 555
-        ann = to_mifa(config, self.rows, file_id_source="omero")["annotations"]
-        flm = ann.file_metadata[0]
-        assert flm.annotation_id == "555"
-        assert flm.source_image_id == "1"
-
-    def test_file_id_source_auto_is_per_record(self):
-        config = self._rich_config()
-        self.rows[0].label_id = 777  # uploaded -> omero ids
-        ann = to_mifa(config, self.rows, file_id_source="auto")["annotations"]
-        assert ann.file_metadata[0].annotation_id == "777"
-        # second record never uploaded -> local path
-        assert ann.file_metadata[1].annotation_id == "annotations/2_0_0_mask.tif"
-
-    def test_spatial_information_encodes_plane_and_patch(self):
-        ann = to_mifa(self._rich_config(), self.rows, file_id_source="local")[
-            "annotations"
-        ]
-        si0 = ann.file_metadata[0].spatial_information
-        assert "t=0" in si0 and "z=0" in si0 and "c=0" in si0
-        assert "patch" in ann.file_metadata[2].spatial_information.lower()
-
-    def test_annotation_creation_time_propagates(self):
-        ann = to_mifa(
-            self._rich_config(),
-            self.rows,
-        )["annotations"]
-        assert ann.file_metadata[0].annotation_creation_time is not None
-        assert ann.file_metadata[1].annotation_creation_time is None
-
-    def test_authors_mapped_and_blank_dropped(self):
-        ann = to_mifa(
-            self._rich_config(),
-            self.rows,
-        )["annotations"]
-        assert len(ann.authors) == 1
-        author = ann.authors[0]
-        assert author.author_first_name == "Jane"
-        assert author.author_last_name == "Doe"
-        assert str(author.orcid_id).endswith("0000-0002-1825-0097")
-        assert author.organisation[0].organisation_name == "EMBL-EBI"
-
-    def test_license_maps_to_mifa_code(self):
-        config = self._rich_config()
-        config.dataset.license = "CC0"
-        assert (
-            str(
-                to_mifa(
-                    config,
-                    self.rows,
-                )["study"].license
-            )
-            == "CC0"
-        )
-
-    def test_funding_statement_field_and_kwarg_override(self):
-        config = self._rich_config()
-        config.study.funding_statement = "Funded by EMBO."
-        assert (
-            to_mifa(
-                config,
-                self.rows,
-            )["study"].funding_statement
-            == "Funded by EMBO."
-        )
-        assert (
-            to_mifa(config, self.rows, funding_statement="Override")[
-                "study"
-            ].funding_statement
-            == "Override"
-        )
-
-    def test_no_annotations_still_builds_valid_annotations_doc(self):
-        ann = to_mifa(
-            create_default_config(),
-            [],
-        )["annotations"]
-        assert len(ann.file_metadata or []) == 0
-        assert ann.annotation_overview.strip()
-        assert ann.annotation_method.strip()
-
-    def test_save_mifa_writes_three_yaml_files_that_round_trip(self, tmp_path):
-        from bia_mifa_models.datamodel.bia_mifa_models import Annotations
-        from linkml_runtime.loaders import yaml_loader
-
-        paths = save_mifa(
-            self._rich_config(), self.rows, tmp_path, accession="S-BIAD123"
-        )
-        assert (tmp_path / "Study_S-BIAD123.yaml").exists()
-        assert (tmp_path / "Annotations_S-BIAD123.yaml").exists()
-        assert (tmp_path / "Version_S-BIAD123.yaml").exists()
-        assert set(paths) == {"study", "annotations", "version"}
-        loaded = yaml_loader.load(
-            str(tmp_path / "Annotations_S-BIAD123.yaml"), target_class=Annotations
-        )
-        assert len(loaded.file_metadata) == 3
-
-    def test_save_mifa_accession_fallback_naming(self, tmp_path):
-        # no source_dataset_id -> accession falls back to a slug of the name
-        save_mifa(create_default_config(), [], tmp_path)
-        assert (tmp_path / "Annotations_default_annotation_workflow.yaml").exists()
-
-    def test_to_mifa_metadata_returns_mifa_dicts(self):
-        result = to_mifa_dicts(create_default_config(), [])
-        assert set(result) == {"study", "annotations", "version"}
-        assert isinstance(result["annotations"], dict)
-        assert result["annotations"]["annotation_overview"]
-
-
-def _write_pipeline_layout(config, rows, root):
-    """Write dummy files for ``rows`` where a training set's folder keeps them."""
-    from omero_annotate_ai.bundle import input_path, mask_path
-
-    for ann in rows:
-        image = input_path(root, ann.annotation_id)
-        image.parent.mkdir(parents=True, exist_ok=True)
-        image.write_bytes(b"img")
-        if config.spatial_coverage.uses_separate_channels():
-            model = root / "model_input" / f"{ann.annotation_id}.tif"
-            model.parent.mkdir(parents=True, exist_ok=True)
-            model.write_bytes(b"model")
-        mask = mask_path(root, ann.annotation_id)
-        mask.parent.mkdir(parents=True, exist_ok=True)
-        mask.write_bytes(b"mask")
-
-
-@pytest.mark.unit
-class TestBIAExport:
-    """Build a BioImage Archive submission bundle (file lists + MIFA + data copy)."""
-
-    @pytest.fixture(autouse=True)
-    def _require_mifa(self):
-        pytest.importorskip("bia_mifa_models")
-
-    def _config_with_data(self, root):
-        """Config with 3 annotations and matching dummy tifs on disk under ``root``."""
-        config = create_default_config()
-        config.name = "bia_demo"
-        config.study.title = "BIA demo"
-        config.study.description = "desc"
-        config.study.keywords = ["demo"]
-        config.dataset.source_dataset_id = "S-BIAD999"
-        self.root = root
-        self.rows = [
-            Row(
-                image_id=i,
-                image_name=f"img{i}.tif",
-                annotation_id=f"{i}_0_0",
-                category=("training" if i % 2 else "validation"),
-                timepoint=0,
-                z_slice=0,
-                channel=0,
-                annotation_type="segmentation_mask",
-                processed=True,
-            )
-            for i in (1, 2, 3)
-        ]
-        _write_pipeline_layout(config, self.rows, root)
-        return config
-
-    def test_file_lists_headers_and_counts(self, tmp_path):
-        from omero_annotate_ai.core.mifa_export import build_bia_file_lists
-
-        images, annotations = build_bia_file_lists(
-            (self._config_with_data(tmp_path), self.rows)[1]
-        )
-        assert list(annotations.columns)[0] == "Files"
-        assert "source_image" in annotations.columns
-        assert len(annotations) == 3
-        assert annotations["Files"].iloc[0] == "annotations/1_0_0_mask.tif"
-        assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
-        assert list(images.columns)[0] == "Files"
-        assert len(images) == 3
-
-    def test_file_lists_drop_constant_optional_columns(self, tmp_path):
-        from omero_annotate_ai.core.mifa_export import build_bia_file_lists
-
-        _, annotations = build_bia_file_lists(
-            (self._config_with_data(tmp_path), self.rows)[1]
-        )
-        # constant optional columns dropped, varying ones kept, required always kept
-        assert "Channel" not in annotations.columns
-        assert "Timepoint" not in annotations.columns
-        assert "Category" in annotations.columns  # training/validation -> 2 distinct
-        assert "Files" in annotations.columns and "source_image" in annotations.columns
-
-    def test_separate_channel_image_still_lands_in_images(self, tmp_path):
-        """A label/training channel split is a pipeline detail: the bundle says images/.
-
-        The source image is the annotated channel (annotation_input/), not the model
-        channel the pipeline also writes to model_input/.
-        """
-        from omero_annotate_ai.core.mifa_export import build_bia_file_lists
-
-        store = tmp_path / "store"
-        config = self._config_with_data(store)
-        config.spatial_coverage.label_channel = 0
-        config.spatial_coverage.training_channels = [1]
-        _write_pipeline_layout(config, self.rows, store)
-
-        _, annotations = build_bia_file_lists(self.rows)
-        assert annotations["source_image"].iloc[0] == "images/1_0_0.tif"
-
-        result = save_bia_package(config, self.rows, self.root, tmp_path / "bundle")
-        assert (tmp_path / "bundle" / "images" / "1_0_0.tif").read_bytes() == b"img"
-        assert result["missing"] == 0
-
-    def test_save_bia_package_copies_data_and_writes_lists(self, tmp_path):
-        store = tmp_path / "store"
-        config = self._config_with_data(store)
-        dest = tmp_path / "bundle"
-        result = save_bia_package(
-            config, self.rows, self.root, dest, accession="S-BIAD999"
-        )
-        assert (dest / "file_list_images.tsv").exists()
-        assert (dest / "file_list_annotations.tsv").exists()
-        assert (dest / "metadata" / "Annotations_S-BIAD999.yaml").exists()
-        # pipeline's annotation_input/ + annotation_output/ become images/ + annotations/
-        assert (dest / "annotations" / "1_0_0_mask.tif").exists()
-        assert (dest / "images" / "1_0_0.tif").exists()
-        assert not (dest / "annotation_input").exists()
-        assert not (dest / "annotation_output").exists()
-        assert result["n_annotations"] == 3
-        assert result["missing"] == 0
-        # copy by default: the source data survives
-        assert (store / "annotation_input" / "1_0_0.tif").exists()
-        assert (store / "annotation_output" / "1_0_0_mask.tif").exists()
-
-    def test_save_bia_package_move_data_empties_the_staging_dir(self, tmp_path):
-        """move_data=True transfers rather than copies - for disposable staging dirs only."""
-        store = tmp_path / "store"
-        config = self._config_with_data(store)
-        dest = tmp_path / "bundle"
-
-        result = save_bia_package(
-            config, self.rows, self.root, dest, accession="S-BIAD999", move_data=True
-        )
-
-        assert result["missing"] == 0
-        assert (dest / "images" / "1_0_0.tif").exists()
-        assert (dest / "annotations" / "1_0_0_mask.tif").exists()
-        # the source files are gone - that is the point, and the hazard
-        assert not (store / "annotation_input" / "1_0_0.tif").exists()
-        assert not (store / "annotation_output" / "1_0_0_mask.tif").exists()
-
-    def test_save_bia_package_accession_fallback(self, tmp_path):
-        config = self._config_with_data(tmp_path / "store")
-        config.dataset.source_dataset_id = None
-        save_bia_package(config, self.rows, self.root, tmp_path / "bundle")
-        assert (tmp_path / "bundle" / "metadata" / "Annotations_bia_demo.yaml").exists()
-
-
-@pytest.mark.unit
 class TestZarrConfig:
     def test_default_source_is_omero(self):
         config = create_default_config()
@@ -1442,7 +638,7 @@ class TestZarrConfig:
         assert config.zarr.uris[0].startswith(
             "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/"
         )
-        assert config.spatial_coverage.timepoint_mode == "random"
+        assert config.sampling.timepoints.mode == "random"
 
 
 @pytest.mark.unit
@@ -1452,17 +648,119 @@ class TestOpenFields:
     def test_defaults_are_empty(self):
         config = create_default_config()
         assert config.notes is None
-        assert config.custom_metadata == {}
+        assert config.extensions == {}
 
     def test_yaml_round_trip(self, tmp_path):
         config = create_default_config()
         config.notes = "Some wells are out of focus."
-        config.custom_metadata = {"instrument": "Incucyte SX5", "objective": "10x"}
+        config.extensions = {"lab": {"instrument": "Incucyte SX5", "objective": "10x"}}
         path = tmp_path / "config.yaml"
         config.save_yaml(path)
         loaded = AnnotationConfig.from_yaml(path)
         assert loaded.notes == "Some wells are out of focus."
-        assert loaded.custom_metadata == {
-            "instrument": "Incucyte SX5",
-            "objective": "10x",
+        assert loaded.extensions == {
+            "lab": {"instrument": "Incucyte SX5", "objective": "10x"}
         }
+
+
+@pytest.mark.unit
+class TestSchemaSections:
+    """The description sections are the Bioimage Annotation Schema's own models."""
+
+    def test_template_sections_are_schema_models(self):
+        from bioimage_annotation_schema import datamodel as bas
+
+        config = AnnotationConfig.from_yaml(get_config_template())
+        assert isinstance(config.methodology, bas.Methodology)
+        assert isinstance(config.sampling, bas.Sampling)
+        assert config.authors[0].last_name == "Example"
+        assert config.methodology.annotation_types == ["segmentation_mask"]
+
+    def test_annotation_types_use_mifa_names(self):
+        with pytest.raises(ValueError):
+            AnnotationConfig.from_dict(
+                {
+                    "name": "x",
+                    "methodology": {"annotation_types": ["point"], "criteria": ""},
+                }
+            )
+        config = AnnotationConfig.from_dict(
+            {
+                "name": "x",
+                "methodology": {
+                    "annotation_types": ["point_annotations"],
+                    "criteria": "centre of each cell",
+                },
+            }
+        )
+        assert config.methodology.annotation_types == ["point_annotations"]
+
+    def test_licence_is_one_the_archive_accepts(self):
+        with pytest.raises(ValueError):
+            AnnotationConfig.from_dict({"name": "x", "license": "MIT"})
+
+    def test_yaml_leaves_out_unset_fields(self):
+        text = create_default_config().to_yaml()
+        assert "null" not in text
+
+
+@pytest.mark.unit
+class TestSampling:
+    """What the tool reads from ``sampling``."""
+
+    def test_training_channels_default_to_the_label_channel(self):
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "sampling": {"label_channel": 2}}
+        )
+        assert config.training_channels() == [2]
+        assert not config.uses_separate_channels()
+
+    def test_separate_training_channel(self):
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "sampling": {"label_channel": 0, "input_channels": [1]}}
+        )
+        assert config.uses_separate_channels()
+
+    def test_volume_takes_every_z_slice_by_default_mode(self):
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "sampling": {"volumetric": True, "z_slices": {"mode": "all"}}}
+        )
+        assert config.sampling.z_slices.mode == "all"
+
+
+@pytest.mark.unit
+class TestDisplayConfig:
+    """Context channels shown next to the annotated one."""
+
+    def test_specs_default_names_and_colormaps(self):
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "display": {"context_channels": [1, 2]}}
+        )
+        assert config.display.specs() == [(1, "ch1", "blue"), (2, "ch2", "magenta")]
+
+    def test_custom_names(self):
+        config = AnnotationConfig.from_dict(
+            {
+                "name": "x",
+                "display": {"context_channels": [1], "context_channel_names": ["DAPI"]},
+            }
+        )
+        assert config.display.specs() == [(1, "DAPI", "blue")]
+
+    def test_overlap_with_label_channel_is_rejected(self):
+        with pytest.raises(ValueError, match="overlap"):
+            AnnotationConfig.from_dict(
+                {"name": "x", "display": {"context_channels": [0]}}
+            )
+
+    def test_mismatched_lengths_are_rejected(self):
+        with pytest.raises(ValueError, match="length"):
+            AnnotationConfig.from_dict(
+                {
+                    "name": "x",
+                    "display": {
+                        "context_channels": [1],
+                        "context_channel_colormaps": ["red", "blue"],
+                    },
+                }
+            )
