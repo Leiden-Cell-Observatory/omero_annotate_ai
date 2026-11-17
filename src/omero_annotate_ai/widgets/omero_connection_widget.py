@@ -96,10 +96,6 @@ class OMEROConnectionWidget:
         )
 
         # Action buttons
-        self.test_button = widgets.Button(
-            description="Test Connection", button_style="info", icon="plug"
-        )
-
         self.connect_button = widgets.Button(
             description="Connect", button_style="success", icon="check"
         )
@@ -136,10 +132,12 @@ class OMEROConnectionWidget:
             ]
         )
 
-        buttons_row1 = widgets.HBox([self.test_button, self.connect_button])
-
-        buttons_row2 = widgets.HBox(
-            [self.save_connection_button, self.delete_connection_button]
+        buttons_row = widgets.HBox(
+            [
+                self.connect_button,
+                self.save_connection_button,
+                self.delete_connection_button,
+            ]
         )
 
         # Main container
@@ -152,8 +150,7 @@ class OMEROConnectionWidget:
                 widgets.HTML("<br><b>Connection Settings</b>"),
                 connection_fields,
                 widgets.HTML("<br>"),
-                buttons_row1,
-                buttons_row2,
+                buttons_row,
                 self.status_output,
             ]
         )
@@ -167,7 +164,6 @@ class OMEROConnectionWidget:
         self.host_widget.observe(self._on_host_changed, names="value")
 
         # Button callbacks
-        self.test_button.on_click(self._test_connection)
         self.connect_button.on_click(self._connect)
         self.save_connection_button.on_click(self._save_connection_only)
         self.delete_connection_button.on_click(self._delete_connection)
@@ -281,41 +277,6 @@ class OMEROConnectionWidget:
         # Never carry a typed password over to another server
         self.password_widget.value = ""
         self.session_key_widget.value = ""
-
-    def _test_connection(self, button):
-        """Test the OMERO connection."""
-        with self.status_output:
-            clear_output()
-            try:
-                config = self._get_widget_config()
-                if not self._validate_config(config):
-                    return
-
-                print("🔌 Testing connection...")
-                if config["session_key"]:
-                    joined = self.connection_manager.create_connection_from_config(
-                        config
-                    )
-                    joined.close()  # detaches: the session stays usable
-                    print("✅ The session key works")
-                    return
-                success, message = self.connection_manager.test_connection(
-                    config["host"],
-                    config["username"],
-                    config["password"],
-                    config["group"],
-                    config["secure"],
-                    config["port"],
-                )
-
-                print(f"{'✅' if success else '❌'} {message}")
-
-            except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
-                print(f"❌ Error testing connection: {e}")
-            finally:
-                # Not kept in the widget state (which a saved notebook may hold).
-                self.password_widget.value = ""
-                self.session_key_widget.value = ""
 
     def _connect(self, button):
         """Create the connection and save its details (never the password)."""
