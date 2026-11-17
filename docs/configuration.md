@@ -136,8 +136,9 @@ stratification and the seed are part of the description, in
       validate_n: 3
       test_n: 0
     ```
-    Images are drawn at random from the container. Counts are images, not units: with
-    patches or several z-slices, one image gives several units.
+    Images are drawn at random from the container. Counts are split units (images, or
+    wells with `split.unit: well`), not annotation units: with patches or several
+    z-slices, one image gives several annotation units.
 
 === "Annotate everything"
 

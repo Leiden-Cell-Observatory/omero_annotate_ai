@@ -50,8 +50,9 @@ that unit are named after it.
 
 Images are picked **at random** from the container and assigned to a **training**,
 **validation** or (optionally) **test** set. You either give counts (`train_n: 10`,
-`validate_n: 3`) or annotate everything and give fractions. Counts are in images, not
-units: one image with four patches gives four units.
+`validate_n: 3`) or annotate everything and give fractions. Counts and fractions are
+in split units (images, or wells with `split.unit: well`), not annotation units: one
+image with four patches gives four annotation units.
 
 ## The two storage modes: OMERO or local
 
@@ -83,7 +84,9 @@ training set's identity. The checksums let a resume or an export notice when a l
 mask no longer matches the one on OMERO. With the `provenance` extra each unit also
 gets an [ISCC](https://iscc.codes) Image-Code of image and mask, which tells *how much*
 a file changed: a touched-up mask is reported as a near-duplicate, a replaced one as
-different content.
+different content. These codes are made from a small, normalised version of the
+plane, so they match codes made by this package only; the exported
+`annotation-set.yaml` states exactly how (`content_codes.region`).
 
 ## Batches
 

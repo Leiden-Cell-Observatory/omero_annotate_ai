@@ -59,8 +59,9 @@ ts.describe(
 )
 ```
 
-When a required field is missing, `save_bia_package` raises `MifaNotReady` and lists
-the missing fields; it does not fill in placeholders.
+When a required field is missing, `save_bia_package` raises `MifaNotReady`
+(`from bioimage_annotation_schema.mifa import MifaNotReady`) and lists the missing
+fields; it does not fill in placeholders.
 
 ## 2. Export from OMERO
 
@@ -94,8 +95,15 @@ save_bia_package(
 
 The MIFA export comes from the
 [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
-library (`bioimage_annotation_schema.mifa`), which also offers `check_mifa` and a `bas`
-command line.
+library (`bioimage_annotation_schema.mifa`). Its `bas` command checks a set's folder
+after `ts.write_ro_crate()` has written `annotation-set.yaml` and
+`annotation-records.csv` there:
+
+```bash
+bas validate --mifa ~/omero_annotate_ai/local/<id>_hela_nuclei_v1
+```
+
+It says *Ready for MIFA* or lists what is missing.
 
 ## What is in the bundle
 
@@ -105,8 +113,8 @@ bia_bundle/
 │   ├── Study_<accession>.yaml
 │   ├── Annotations_<accession>.yaml
 │   └── Version_<accession>.yaml
-├── file_list_images.tsv
-├── file_list_annotations.tsv
+├── file_list_images.tsv          # with pixel_sha256 and iscc per file
+├── file_list_annotations.tsv     # with pixel_sha256 and iscc per file
 ├── images/<unit id>.tif
 └── annotations/<unit id>_mask.tif
 ```

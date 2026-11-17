@@ -78,6 +78,9 @@ yours is better, use `ts.review()` on that unit.
 Unknown keys are refused, so a typo never goes unnoticed; check the name against the
 [configuration reference](configuration.md). Keys from 0.4 that moved name their
 replacement in the error, see [migrating from 0.4](release-notes.md#migrating-from-04).
+A config from before config version 4 (`config_version: 3`, or keys such as
+`spatial_coverage`, `annotation_methodology`, `training.seed`) is refused the same
+way; see [migrating from config version 3](configuration.md#migrating-from-config-version-3).
 
 **Does running a training set change my YAML file?**
 No. A loaded YAML is a template; the set keeps its own `config.yaml` (with sessions and

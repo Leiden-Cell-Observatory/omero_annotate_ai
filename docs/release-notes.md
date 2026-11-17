@@ -8,7 +8,8 @@ Newest first. The full list of pull requests per version is on
 - **Config version 4: sets are described with the Bioimage Annotation Schema.** The
   config's description sections are now the models of the
   [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
-  (`bioimage_annotation_schema.datamodel`): `name`, `license`, `version`, `authors`,
+  (`bioimage_annotation_schema.datamodel`): `name`, `description`, `license`,
+  `version`, `changes`, `previous_version`, `ai_models_trained`, `authors`,
   `keywords`, `links`, `study`, `source_dataset`, `methodology`, `classes`,
   `sampling`, `split`, `notes` and `extensions`. The tool sections (`omero`, `zarr`,
   `storage`, `training`, `normalization`, `ai_model`, `workflow`, `identity`,
@@ -35,6 +36,15 @@ Newest first. The full list of pull requests per version is on
   `omero_annotate_ai.crate` and `omero_annotate_ai.core.mifa_export` are removed; the
   MIFA functions (`save_mifa`, `check_mifa`, `save_bia_package`) live in
   `bioimage_annotation_schema.mifa`.
+- **ISCC codes say how they were made.** When units carry ISCC codes, the exported
+  `annotation-set.yaml` has a `content_codes.region` block: code type (Image-Code,
+  64 bits), which pixels, how they were prepared, and the package and `iscc-lib`
+  versions. ISCC codes are only comparable when made the same way, so other tools
+  (for example iscc-bio, whose ISCC-SUMs cover the whole source image) can tell
+  whether a code is theirs. The export checks that the set and its records agree
+  (`bioimage_annotation_schema.check_documents`).
+- **Install:** `bioimage-annotation-schema` is a new dependency. Until it is on PyPI,
+  install it from GitHub (see [Installation](installation.md)).
 
 ## 0.5.3
 
@@ -185,7 +195,7 @@ extended; finish them with 0.4 or start a new training set.
 | `output.output_directory`, `config_file_path` | the set's folder: `home=` or `$OMERO_ANNOTATE_AI_HOME` |
 | `workflow.read_only_mode: true` | `storage: local` |
 | `workflow.resume_from_table`, `omero.table_id` | `TrainingSet.open(table_id)` (`identity.table_id` is written by the package) |
-| `version` | `schema_version` |
+| `version` | `schema_version` (config version 4 drops it again: `config_version: 4`, and `version` is now the set's own version) |
 | `spatial_coverage.normalization_method`, `percentile_*` | `normalization.*` |
 
 Unknown keys are refused, in every section, instead of ignored.

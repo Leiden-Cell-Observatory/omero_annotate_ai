@@ -101,6 +101,15 @@ objects. Tables made by 0.5.0 have no ISCC columns; they keep working, and the c
 stay in the local `tracking_table.csv`. The BioImage Archive export lists the digest
 and code of every file (`pixel_sha256`, `iscc`), so anyone can check a download.
 
+The codes are made from the plane reduced to 32 x 32 gray pixels (volumes by maximum
+projection), stretched between its minimum and maximum (masks: objects 255,
+background 0), with `iscc-lib`'s Image-Code. They compare with codes made by this
+package, not with ISCC codes other tools compute from the image file, such as the
+ISCC-SUM over all pixels that iscc-bio and omero-iscc make. The exported
+`annotation-set.yaml` records this in `content_codes.region`. The SHA-256 digests are
+of this package's own form (`<dtype>|<shape>|` then the pixels, little-endian), not
+the IMAGEWALK bytes of IEP-0018.
+
 If a mask in your folder and its upload on OMERO differ, the unit is marked
 `needs review` and left out of new sessions. Decide which one is right:
 
