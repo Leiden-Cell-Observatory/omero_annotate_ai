@@ -16,6 +16,7 @@ my_training_data/
 ├── test_label/
 ├── train_annotation_input/   ← optional, the annotation channel when it differs
 ├── val_annotation_input/
+├── test_annotation_input/
 ├── normalization.json        ← how intensities were or should be scaled
 └── table_<id>.csv            ← provenance (tracking_table.csv for a local set)
 ```
@@ -82,8 +83,8 @@ for image_path, label_path in data.pairs("train"):
 ```
 
 `load_training_data` raises `InvalidTrainingData` if a required folder is missing, files
-are unpaired, train or val is empty, a file cannot be read, or the first label does not
-match the shape of the first image. It returns a `TrainingData` with:
+are unpaired, train or val is empty, a file cannot be read, or a label does not
+match the shape of its image (checked for every pair from the TIFF metadata). It returns a `TrainingData` with:
 
 | Field | Content |
 |---|---|
@@ -129,7 +130,7 @@ output folder.
 
 | Trainer | Install | Channels | 2D / 3D | Normalisation | Model |
 |---|---|---|---|---|---|
-| `microsam` | `omero-annotate-ai[microsam]` | 1 | 2D | Raw transform to [0, 255] when loading: from [0, 1] if applied at export, percentile bounds if `percentile`, none only accepts data already in [0, 255] | `<output>/<model_name>_final.pt`, checkpoints in `<output>/<model_name>/` |
+| `microsam` | `omero-annotate-ai[microsam]` | 1 | 2D | Raw transform to [0, 255] when loading: from [0, 1] if applied at export, percentile bounds if `percentile`, none only accepts data already in [0, 255] | `<output>/<model_name>_final.pt`, checkpoints in `<output>/checkpoints/<model_name>/` |
 | `cellpose` | `omero-annotate-ai[cellpose]` | up to 3 | 2D; `ZYX` volumes are trained plane by plane | Cellpose normalises itself unless the export already did | Under `<output>/models/` (path in `result.model_path`) |
 | `biapy` | `omero-annotate-ai[biapy]` | any | 2D and 3D | Identity if applied at export or `none`; otherwise BiaPy clips at the percentiles and standardises per image | `<output>/<model_name>/checkpoints/<model_name>_1-checkpoint-best.pth`, logs in `<output>/<model_name>/logs/` |
 

@@ -75,7 +75,7 @@ class TestBiapyNormalization:
     def test_applied_at_export_is_identity(self):
         block = biapy_normalization(NormalizationConfig(apply_at_export=True))
         assert block["TYPE"] == "zero_mean_unit_variance"
-        assert block["ZERO_MEAN_UNIT_VAR"] == {"MEAN_VAL": 0.0, "STD_VAL": 1.0}
+        assert block["ZERO_MEAN_UNIT_VAR"] == {"MEAN_VAL": [0.0], "STD_VAL": [1.0]}
         assert block["PERC_CLIP"]["ENABLE"] is False
 
     def test_trainer_side_percentiles_avoid_bit_depth_guessing(self):

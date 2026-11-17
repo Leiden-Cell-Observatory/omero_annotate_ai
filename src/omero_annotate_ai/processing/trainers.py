@@ -10,6 +10,7 @@ import importlib.metadata
 import json
 import logging
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -29,7 +30,7 @@ from .training_layout import split_folders_for
 
 logger = logging.getLogger(__name__)
 
-_SPLIT_CATEGORY = {"train": "training", "val": "validation", "test": "test"}
+_SPLITS = ("train", "val", "test")
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class TrainingData:
 
     def pairs(self, split: str) -> list[tuple[Path, Path]]:
         """(image, label) paths of a split ("train", "val" or "test"), sorted by name."""
-        if split not in _SPLIT_CATEGORY:
+        if split not in _SPLITS:
             raise ValueError(
                 f"Unknown split: {split}. Expected one of train, val, test"
             )
@@ -111,8 +112,8 @@ def load_training_data(root: str | Path) -> TrainingData:
 
     Raises:
         InvalidTrainingData: A split folder is missing, files are unpaired, train or val
-            has no pairs, a file cannot be read, or the first label does not match the
-            first image's shape.
+            has no pairs, a file cannot be read, or a label does not match its image's shape
+            (checked for every pair from the TIFF metadata, no pixels are loaded).
     """
     root = Path(root)
     if not root.is_dir():
@@ -153,13 +154,23 @@ def load_training_data(root: str | Path) -> TrainingData:
     shape, dtype = _series_info(first)
     axes = _axes_for(shape, first)
     n_channels = shape[-1] if axes.endswith("C") else 1
-    label_shape, _ = _series_info(train_label / first.name)
-    expected = shape[:-1] if axes.endswith("C") else shape
-    if label_shape != expected:
-        raise InvalidTrainingData(
-            f"Label {train_label.name}/{first.name} has shape {label_shape}, "
-            f"expected {expected} for image shape {shape}"
-        )
+    for image_dir, label_dir in (
+        (train_input, train_label),
+        (val_input, val_label),
+        (test_input, test_label),
+    ):
+        if image_dir is None or label_dir is None:
+            continue
+        for image_path in sorted(image_dir.glob("*.tif")):
+            image_shape, _ = _series_info(image_path)
+            has_channels = _axes_for(image_shape, image_path).endswith("C")
+            expected = image_shape[:-1] if has_channels else image_shape
+            label_shape, _ = _series_info(label_dir / image_path.name)
+            if label_shape != expected:
+                raise InvalidTrainingData(
+                    f"Label {label_dir.name}/{image_path.name} has shape "
+                    f"{label_shape}, expected {expected} for image shape {image_shape}"
+                )
 
     sidecar = root / SIDECAR_NAME
     try:
@@ -334,7 +345,7 @@ class MicroSamTrainer:
             logger.exception("micro-SAM training failed")
             raise
 
-        checkpoint_dir = output_dir / model_name
+        checkpoint_dir = output_dir / "checkpoints" / model_name
         checkpoints = sorted(checkpoint_dir.glob("*.pt"))
         best = checkpoint_dir / "best.pt"
         best_checkpoint = best if best.exists() else None
@@ -549,7 +560,7 @@ class BiaPyTrainer:
             "PROBLEM": {
                 "TYPE": "INSTANCE_SEG",
                 "NDIM": "3D" if volume else "2D",
-                # foreground + contour; checked against BiaPy 3.6.8
+                # foreground + contour; checked against BiaPy 3.7.1
                 "INSTANCE_SEG": {"DATA_CHANNELS": ["F", "C"]},
             },
             "DATA": {
@@ -563,7 +574,6 @@ class BiaPyTrainer:
                     "PATH": str(data.val_input.resolve()),
                     "GT_PATH": str(data.val_label.resolve()),
                 },
-                "TEST": {"ENABLE": False},
                 "NORMALIZATION": biapy_normalization(
                     normalization_config(data.normalization)
                 ),
@@ -585,6 +595,8 @@ class BiaPyTrainer:
         )
         gpu = "0" if torch.cuda.is_available() else None
         logger.info("BiaPy training %s on %s", model_name, "gpu" if gpu else "cpu")
+        # BiaPy swaps sys.stdout/stderr and restores them only on success
+        streams = sys.stdout, sys.stderr
         try:
             biapy.BiaPy(
                 str(config_path),
@@ -595,6 +607,8 @@ class BiaPyTrainer:
             ).run_job()
         except Exception as e:
             raise RuntimeError(f"BiaPy training failed, see {log_dir}: {e}") from e
+        finally:
+            sys.stdout, sys.stderr = streams
         if not model_path.exists():
             raise RuntimeError(
                 f"BiaPy finished without a best checkpoint at {model_path}, see {log_dir}"

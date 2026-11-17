@@ -1,5 +1,6 @@
 """Tests for training data preparation functions."""
 
+import io
 import json
 import shutil
 import sys
@@ -914,6 +915,14 @@ class TestLoadTrainingData:
         with pytest.raises(InvalidTrainingData, match=first.name):
             load_training_data(root)
 
+    @pytest.mark.parametrize("split,index", [("val", 0), ("train", 1)])
+    def test_shape_mismatch_in_any_pair_is_refused(self, tmp_path, split, index):
+        root = _export(tmp_path)
+        bad = sorted((root / f"{split}_label").glob("*.tif"))[index]
+        tifffile.imwrite(bad, np.zeros((16, 16), np.uint16))
+        with pytest.raises(InvalidTrainingData, match=f"{split}_label/{bad.name}"):
+            load_training_data(root)
+
     def test_local_export_copies_tracking_table(self, tmp_path):
         annotation_dir = tmp_path / "project"
         (annotation_dir / "annotation_input").mkdir(parents=True)
@@ -970,7 +979,7 @@ def _stub_microsam(monkeypatch, calls):
 
     def train_sam(**kwargs):
         calls["train_sam"] = kwargs
-        best = Path(kwargs["save_root"]) / kwargs["name"] / "best.pt"
+        best = Path(kwargs["save_root"]) / "checkpoints" / kwargs["name"] / "best.pt"
         best.parent.mkdir(parents=True, exist_ok=True)
         best.write_bytes(b"weights")
 
@@ -1177,7 +1186,7 @@ def _stub_biapy(monkeypatch, calls, *, write_checkpoint=True):
                 (ckpt / f"{self._name}_1-checkpoint-best.pth").write_bytes(b"w")
 
     biapy = types.ModuleType("biapy")
-    biapy.__version__ = "3.6.8"
+    biapy.__version__ = "3.7.1"
     biapy.BiaPy = BiaPy
     torch = types.ModuleType("torch")
     torch.cuda = types.SimpleNamespace(is_available=lambda: False)
@@ -1199,13 +1208,20 @@ class TestBiaPyTrainer:
         assert cfg["DATA"]["TRAIN"]["PATH"] == str(tmp_path / "export" / "train_input")
         assert cfg["DATA"]["VAL"]["FROM_TRAIN"] is False
         assert cfg["TRAIN"]["EPOCHS"] == 3
+        assert "TEST" not in cfg["DATA"]
+        assert cfg["PROBLEM"]["INSTANCE_SEG"]["DATA_CHANNELS"] == ["F", "C"]
+        assert cfg["DATA"]["TRAIN"]["GT_PATH"] == str(
+            tmp_path / "export" / "train_label"
+        )
+        assert cfg["DATA"]["VAL"]["PATH"] == str(tmp_path / "export" / "val_input")
+        assert cfg["TEST"]["ENABLE"] is False
         assert cfg["DATA"]["NORMALIZATION"]["PERC_CLIP"]["ENABLE"] is True
         assert calls["init"]["name"] == "bp" and calls["init"]["run_id"] == 1
         assert calls["init"]["gpu"] is None
         assert r.model_path == (
             tmp_path / "out" / "bp" / "checkpoints" / "bp_1-checkpoint-best.pth"
         )
-        assert r.package_version == "3.6.8"
+        assert r.package_version == "3.7.1"
         assert r.extras["log_dir"] == tmp_path / "out" / "bp" / "logs"
 
     def test_volume_and_channels_set_ndim_and_patch(self, tmp_path, monkeypatch):
@@ -1247,6 +1263,50 @@ class TestBiaPyTrainer:
         )
         with pytest.raises(RuntimeError, match="logs"):
             train(_export(tmp_path), "biapy", tmp_path / "out", model_name="bp")
+
+    def test_streams_restored_after_failure(self, tmp_path, monkeypatch):
+        _stub_biapy(monkeypatch, {})
+        original = sys.stdout
+        biapy_cls = sys.modules["biapy"].BiaPy
+
+        def init(self, config, result_dir, name, run_id, gpu):
+            sys.stdout = io.StringIO()
+
+        monkeypatch.setattr(biapy_cls, "__init__", init)
+        monkeypatch.setattr(
+            biapy_cls,
+            "run_job",
+            lambda self: (_ for _ in ()).throw(ValueError("boom")),
+        )
+        with pytest.raises(RuntimeError):
+            train(_export(tmp_path), "biapy", tmp_path / "out", model_name="bp")
+        assert sys.stdout is original
+
+    @pytest.mark.parametrize("applied", [False, True])
+    def test_generated_config_is_accepted_by_biapy(self, tmp_path, applied):
+        pytest.importorskip("biapy")
+        from biapy.config.config import Config
+
+        captured = {}
+
+        class Capture:
+            def __init__(self, config, **kwargs):
+                captured["path"] = config
+
+            def run_job(self):
+                raise RuntimeError("stop")
+
+        import biapy
+
+        with patch.object(biapy, "BiaPy", Capture), pytest.raises(RuntimeError):
+            train(
+                _export(tmp_path, applied_at_export=applied),
+                "biapy",
+                tmp_path / "out",
+                model_name="bp",
+            )
+        # raises "Non-existent config key" for unknown keys
+        Config("/tmp", "x")._C.merge_from_file(captured["path"])
 
     def test_missing_package_names_the_extra(self, tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "biapy", None)

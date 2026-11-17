@@ -150,12 +150,11 @@ def biapy_normalization(spec: Any) -> dict[str, Any]:
     if spec.apply_at_export or spec.method == "none":
         return {
             "TYPE": "zero_mean_unit_variance",
-            "ZERO_MEAN_UNIT_VAR": {"MEAN_VAL": 0.0, "STD_VAL": 1.0},
+            "ZERO_MEAN_UNIT_VAR": {"MEAN_VAL": [0.0], "STD_VAL": [1.0]},
             "PERC_CLIP": {"ENABLE": False},
         }
     return {
         "TYPE": "zero_mean_unit_variance",
-        "MEASURE_BY": "image",
         "PERC_CLIP": {
             "ENABLE": True,
             "LOWER_PERC": spec.percentile_low,
