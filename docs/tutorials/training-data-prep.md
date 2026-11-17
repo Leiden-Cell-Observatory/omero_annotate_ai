@@ -55,6 +55,9 @@ the set's folder name for a local set),
 the channels and the normalisation, then click **Export**. The result is in
 `training_widget.result`. The marimo training notebook offers the same choices.
 
+To train on the export, pick the trainer, epochs and model name in the widget's **Train**
+box and run `training_widget.train()` in the next cell (see [Train a model](#train-a-model)).
+
 !!! note "Things to know"
     - Images keep their original bit depth unless you apply the normalisation at
       export. `normalization.json` records how to scale them; micro-SAM training applies
@@ -98,7 +101,7 @@ are in the [training data format](../training-data-format.md#trainers) page.
   micro-SAM's own tools.
 - BiaPy writes its log to `<output>/<model_name>/logs/`.
 
-Notebook: [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
+Notebooks: [export and train (Jupyter)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb), [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/omero-training-microsam.py)
 
 ### DL4MicEverywhere
 
@@ -106,7 +109,7 @@ Notebook: [micro-SAM training (marimo)](https://github.com/Leiden-Cell-Observato
 notebooks (StarDist, Cellpose, U-Net, ...) in containers. Give it the export folder as
 its data directory.
 
-Notebook: [export for BiaPy or DL4MicEverywhere](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
+Notebook: [export and train](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb)
 
 ## Tips
 

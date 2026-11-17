@@ -928,6 +928,31 @@ class TestTrainingDataWidget:
         assert "session expired" in widget.status.value
         assert widget.selected_config() is None
 
+    def test_train_uses_the_export_and_the_form(self, tmp_path):
+        config, _, _ = omero_set(tmp_path)
+        widget = self._omero_widget(tmp_path, config)
+        assert widget.model_name.value == config.name
+        assert widget.epochs.value == 50  # micro-SAM's own default
+        widget.trainer.value = "cellpose"
+        assert widget.epochs.value == 100
+        with pytest.raises(ValueError, match="Export the training set first"):
+            widget.train()
+
+        widget.result = {"base_dir": str(tmp_path / "export")}
+        widget.epochs.value = 3
+        with patch("omero_annotate_ai.widgets.training_data_widget.train") as train:
+            assert widget.train(batch_size=4) is train.return_value
+        assert train.call_args.args == (
+            tmp_path / "export",
+            "cellpose",
+            tmp_path / "export" / "model",
+        )
+        assert train.call_args.kwargs == {
+            "model_name": config.name,
+            "epochs": 3,
+            "batch_size": 4,
+        }
+
 
 @pytest.mark.unit
 class TestLazyWidgetImport:
