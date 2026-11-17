@@ -1021,9 +1021,11 @@ class TestMicroSamTrainer:
             tmp_path / "out",
             model_name="m",
             n_iterations=3,
+            learning_rate=3e-4,
             patch_shape=(64, 64),
         )
         assert calls["train_sam"]["n_iterations"] == 3
+        assert calls["train_sam"]["lr"] == 3e-4
         assert calls["train_sam"]["save_root"] == str(tmp_path / "out")
         assert calls["loader"][0]["patch_shape"] == (64, 64)
         assert callable(calls["loader"][0]["raw_transform"])
@@ -1055,3 +1057,12 @@ class TestMicroSamTrainer:
         monkeypatch.setitem(sys.modules, "micro_sam", None)
         with pytest.raises(ImportError, match="microsam"):
             train(_export(tmp_path), "microsam", tmp_path / "out")
+
+    def test_no_checkpoint_written_is_an_error(self, tmp_path, monkeypatch):
+        calls = _stub_microsam(monkeypatch, {})
+        monkeypatch.setattr(
+            sys.modules["micro_sam.training"], "train_sam", lambda **kw: None
+        )
+        with pytest.raises(RuntimeError, match="no checkpoint"):
+            train(_export(tmp_path), "microsam", tmp_path / "out", n_iterations=1)
+        assert "train_sam" not in calls

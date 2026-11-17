@@ -332,9 +332,10 @@ class MicroSamTrainer:
         best_checkpoint = best if best.exists() else None
         source = best_checkpoint or (checkpoints[-1] if checkpoints else None)
         model_path = output_dir / f"{model_name}_final.pt"
-        if source is not None:
-            shutil.copy2(source, model_path)
-            logger.info("Final model exported to %s", model_path)
+        if source is None:
+            raise RuntimeError(f"micro-SAM wrote no checkpoint in {checkpoint_dir}")
+        shutil.copy2(source, model_path)
+        logger.info("Final model exported to %s", model_path)
 
         return TrainingResult(
             trainer=self.name,

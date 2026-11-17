@@ -509,7 +509,6 @@ def _():
     from omero_annotate_ai.trainingset import (
         read_set_config,
         summarize,
-        train,
         training_set_choices,
     )
 
