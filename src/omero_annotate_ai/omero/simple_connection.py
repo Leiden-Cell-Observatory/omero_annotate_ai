@@ -29,6 +29,69 @@ def is_url_host(host: str | None) -> bool:
     return bool(host) and bool(_URL_HOST.match(host.strip()))
 
 
+KEEPALIVE_SECONDS = 60
+
+
+def ensure_connected(conn: Any) -> None:
+    """Make sure ``conn`` still works before remote work; reconnect if it dropped.
+
+    A dropped connection rejoins its OMERO session. If the session itself ended (an
+    idle timeout on the server), the gateway logs in again with the credentials it
+    holds in memory for this process; nothing is read from or written to disk. A
+    connection made from a session key has no credentials, so it can only rejoin.
+    Objects other than a ``BlitzGateway`` (test fakes) are left alone.
+
+    Raises:
+        ConnectionFailed: The connection could not be restored; connect again.
+    """
+    keep_alive = getattr(conn, "keepAlive", None)
+    if keep_alive is None:
+        return
+    if conn.c is None:  # closed on purpose (e.g. replaced by another login)
+        raise ConnectionFailed("This OMERO connection was closed; connect again")
+    # Without a session factory keepAlive() reconnects by itself but leaves the
+    # client's keep-alive pings off: handle that as a drop too.
+    if getattr(conn.c, "sf", None) is not None:
+        with contextlib.suppress(Exception):
+            if keep_alive():
+                # The group this session works in (cached by the gateway), to
+                # restore it should the session end.
+                conn.oai_session_group = conn.getEventContext().groupId
+                return
+    logger.warning("The connection to OMERO was lost; reconnecting")
+    group = getattr(conn, "oai_session_group", None)
+    try:
+        # A fresh client: the old one still believes it has a session, so connect()
+        # alone would report success. Private omero-py API, pinned by a Docker test.
+        conn._resetOmeroClient()
+        restored = conn.connect()
+        if restored and group is not None and conn.getEventContext().groupId != group:
+            conn.setGroupForSession(group)
+    except Exception as e:  # noqa: BLE001 - any gateway/Ice failure: not restored
+        raise ConnectionFailed(
+            f"The connection to OMERO was lost and could not be restored: {e}"
+        ) from e
+    if not restored:
+        raise ConnectionFailed(
+            "The connection to OMERO was lost and its session has ended; "
+            "connect again (with your password)"
+        )
+    if conn.c is not None:
+        conn.c.enableKeepAlive(KEEPALIVE_SECONDS)
+    logger.info("Reconnected to OMERO")
+
+
+class JoinedGateway(BlitzGateway):
+    """A gateway on a session someone else started (OMERO.web, a script, the CLI).
+
+    Closing it detaches: the session stays usable where it came from. (A plain
+    ``BlitzGateway.close()`` ends the session for everyone.)
+    """
+
+    def close(self, hard: bool = False) -> None:
+        super().close(hard=hard)
+
+
 class SimpleOMEROConnection:
     """Simple OMERO connection manager; never stores passwords."""
 
@@ -254,7 +317,7 @@ class SimpleOMEROConnection:
 
                 # Keep the session alive while the user annotates.
                 if conn.c is not None:
-                    conn.c.enableKeepAlive(60)
+                    conn.c.enableKeepAlive(KEEPALIVE_SECONDS)
 
                 self.last_connection = conn
                 return conn
@@ -271,6 +334,9 @@ class SimpleOMEROConnection:
     ) -> Any:
         """Join an existing OMERO session by its key (e.g. from OMERO.web or a token).
 
+        The returned gateway never ends that session: closing it only detaches.
+        Without a password it cannot log in again once the session has ended.
+
         Raises:
             ConnectionFailed: The session does not exist (any more) or the server
                 cannot be reached.
@@ -282,10 +348,10 @@ class SimpleOMEROConnection:
             kwargs["port"] = port
         conn = None
         try:
-            conn = BlitzGateway(**kwargs)
+            conn = JoinedGateway(**kwargs)
             if conn.connect(sUuid=session_key):
                 if conn.c is not None:
-                    conn.c.enableKeepAlive(60)
+                    conn.c.enableKeepAlive(KEEPALIVE_SECONDS)
                 self.last_connection = conn
                 return conn
         except Exception as e:  # noqa: BLE001 - any gateway/Ice failure is a failed join
@@ -337,7 +403,9 @@ class SimpleOMEROConnection:
         """Create connection from widget configuration.
 
         The password is only used to log in: it is never written anywhere.
-        Host, username, group and port are saved to the connection history.
+        Host, username, group and port are saved to the connection history. With
+        a ``session_key`` (and a host) that session is joined instead, and nothing
+        is saved.
 
         Args:
             widget_config: Configuration dictionary from widget
@@ -352,13 +420,18 @@ class SimpleOMEROConnection:
         username = (widget_config.get("username") or "").strip()
         # Not stripped: whitespace can be part of a password.
         password = widget_config.get("password") or ""
+        session_key = (widget_config.get("session_key") or "").strip()
         group = (widget_config.get("group") or "").strip() or None
         secure = widget_config.get("secure", True)
         port = widget_config.get("port")
 
-        # Validate required fields
+        if host and session_key:
+            # Joins someone else's session: nothing is remembered for next time.
+            return self.join_session(host, session_key, port, secure)
         if not host or not username or not password:
-            raise ConnectionFailed("Host, username and password are required")
+            raise ConnectionFailed(
+                "Host, and username and password (or a session key), are required"
+            )
 
         # Create connection first to validate it works
         connection = self.connect(

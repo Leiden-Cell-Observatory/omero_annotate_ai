@@ -27,7 +27,9 @@ conn_widget = create_omero_connection_widget()
 conn_widget.display()
 ```
 
-Fill in the server address, your username and password, and click **Connect**.
+Fill in the server address, your username and password, and click **Connect**. Instead
+of username and password you can paste a *session key*, e.g. from a session you started
+in OMERO.web.
 
 ![OMERO connection widget](../images/widget_connect.png)
 

@@ -36,6 +36,7 @@ from ..events import (
     UploadFailed,
 )
 from ..omero.omero_utils import get_container_info
+from ..omero.simple_connection import ensure_connected
 from ..planning import Mode, parse_indices
 from ..trainingset import (
     TrainingSet,
@@ -181,6 +182,7 @@ def container_options(
     """``(label, id)`` of the containers of one type; an OMERO error is reported."""
     kind = str(container_type).capitalize()
     try:
+        ensure_connected(connection)
         found = list(connection.getObjects(kind))
     except Exception as error:  # noqa: BLE001 - UI boundary: show any OMERO error
         on_error(f"Could not list {kind}s: {error}")

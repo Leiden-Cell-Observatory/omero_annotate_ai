@@ -59,6 +59,28 @@ class TestAnnotationSession:
         assert not batch.mask_dir.exists()  # removed once every unit is in
         assert session.next_batch() is None
 
+    def test_a_dropped_connection_is_restored_before_remote_work(self, tmp_path):
+        pipeline, omero = ready_pipeline(tmp_path)
+        session = pipeline.start_session()
+        pipeline.conn.keepAlive.return_value = False  # the network dropped
+        pipeline.conn.connect.return_value = True
+
+        batch = session.next_batch()
+        session.commit(batch, masks_for(batch))
+
+        assert pipeline.conn._resetOmeroClient.called
+        assert len(omero.labels) == 3
+
+    def test_finish_records_the_session_also_when_offline(self, tmp_path):
+        pipeline, _ = ready_pipeline(tmp_path)
+        session = pipeline.start_session()
+        pipeline.conn.keepAlive.return_value = False
+        pipeline.conn.connect.return_value = False  # cannot be restored
+
+        session.finish("offline", status="interrupted")
+
+        assert pipeline.config.sessions[-1].status == "interrupted"
+
     def test_release_keeps_units_pending_for_the_next_session(self, tmp_path):
         events = []
         pipeline, _ = ready_pipeline(tmp_path, events=events)

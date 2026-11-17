@@ -15,6 +15,16 @@ Newest first. The full list of pull requests per version is on
   on Linux, Keychain Access on macOS, Credential Manager on Windows) or with
   `pipx run keyring del omero-annotate-ai <host>:<username>` (`keyring` itself is no
   longer installed with the package).
+- **A dropped connection is restored.** Before remote work (opening a set, each batch,
+  each save, listing sets) the connection is checked; if the network dropped it
+  rejoins its OMERO session, and if the session itself ended (the server's idle
+  timeout) it logs in again with the credentials held in memory for this run (never
+  on disk). Only when that fails are you asked to connect again.
+- **Log in with a session key** instead of username and password: a *Session key*
+  field in the Jupyter connection widget and the napari plugin (and `session_key` in
+  `create_connection_from_config`), e.g. for a session started in OMERO.web or
+  BIOMERO. Closing such a connection only detaches; the session stays usable where it
+  came from. A session-key connection cannot log in again once its session has ended.
 
 ## 0.5.2
 

@@ -29,7 +29,13 @@ often blocked outside the institute network.
 **My password is not remembered.**
 By design: omero-annotate-ai never stores passwords. Enter it each time you connect;
 the Jupyter widget and the napari plugin only remember the server, port, username and
-group.
+group. Within one run a dropped connection is restored without asking again. To avoid
+typing a password, log in with a *session key* (e.g. from OMERO.web).
+
+**"The connection to OMERO was lost and its session has ended".**
+The connection dropped and could not be restored: usually a session-key login whose
+session expired (servers end idle sessions after some minutes). Connect again; work
+saved so far is kept, and an interrupted session is picked up when you open the set.
 
 ## Annotating
 
