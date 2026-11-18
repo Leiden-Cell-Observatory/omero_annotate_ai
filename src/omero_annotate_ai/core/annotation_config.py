@@ -155,7 +155,7 @@ class SpatialCoverage(_Section):
         default=False, description="Extract patches vs full images"
     )
     patch_size: list[int] = Field(
-        default=[512, 512], description="Patch dimensions [width, height]"
+        default=[512, 512], description="Patch dimensions [height, width]"
     )
     patches_per_image: int = Field(default=1, gt=0, description="Patches per image")
     random_patches: bool = Field(

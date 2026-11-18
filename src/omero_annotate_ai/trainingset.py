@@ -67,7 +67,7 @@ from .provenance import image_code
 from .reconcile import reconcile
 from .rows import Category, Row, keep_local_codes, rows_from_frame, rows_to_frame
 from .session import AnnotationSession, commit_unit
-from .sources import ImageMeta, ImageSource, OmeroImageSource, make_image_source
+from .sources import ImageMeta, ImageSource, make_image_source
 from .sources.uri import omero_uri, parse_omero_uri
 from .sources.wells import match_well_filter
 from .sources.zarr_discovery import ZarrImageRef, discover_zarr_images
@@ -310,12 +310,6 @@ class TrainingSet:
             raise ValueError(
                 "An OMERO connection is required unless the set is stored locally (storage: local)"
             )
-        # An OMERO source needs its own connection to read images.
-        if (
-            isinstance(self.image_source, OmeroImageSource)
-            and self.image_source.conn is None
-        ):
-            raise ValueError("OMERO connection is required to read images")
 
     def _get_input_folders(self) -> dict:
         """Return input folder paths for the current workflow configuration.

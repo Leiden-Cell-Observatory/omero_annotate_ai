@@ -62,6 +62,12 @@ class TestPatchGeneration:
     def test_image_smaller_than_patch_uses_whole_image(self):
         assert generate_patch_coordinates((20, 30), [64, 64], 3) == ([(0, 0)], (20, 30))
 
+    def test_patch_size_is_height_then_width(self):
+        # 100 high x 400 wide: [50, 200] fits, the swapped [200, 50] would not.
+        origins, size = generate_patch_coordinates((100, 400), [50, 200], 4, False)
+        assert size == (50, 200)
+        assert len(origins) == 4
+
 
 class TestRectangleOverlap:
     """Test rectangle overlap detection."""

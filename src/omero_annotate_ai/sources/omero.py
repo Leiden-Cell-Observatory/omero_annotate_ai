@@ -22,7 +22,7 @@ class OmeroImageSource:
     def get_image(self, image: Any) -> Any:
         """Look up an image by OMERO id or ``omero:image:<id>`` URI."""
         if self.conn is None:
-            raise ValueError("OMERO connection is not set.")
+            raise ValueError("OMERO connection is required to read images")
         image_id = image if isinstance(image, int) else parse_omero_uri(image)
         if image_id is None:
             raise LookupError(f"{image!r} is not an OMERO image")

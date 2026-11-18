@@ -126,7 +126,7 @@ An example is in
 | Key | Default | Meaning |
 |---|---|---|
 | `use_patches` | `false` | Annotate crops instead of whole planes. |
-| `patch_size` | `[512, 512]` | Patch size in pixels. Square patches are safest. |
+| `patch_size` | `[512, 512]` | Patch size in pixels, `[height, width]`. |
 | `patches_per_image` | `1` | Non-overlapping patches per plane. An image smaller than the patch gives one full-image unit. |
 | `random_patches` | `true` | Place patches at random positions. |
 
