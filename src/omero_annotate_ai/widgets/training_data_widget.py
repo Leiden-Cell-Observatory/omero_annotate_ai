@@ -154,12 +154,9 @@ class TrainingDataWidget:
             self._error(f"Could not read the set: {error}")
             return
         self._config = config
-        coverage = config.spatial_coverage
         self.output_dir.value = str(default_export_dir(ref, config.name, self.home))
-        self.training_channels.value = ", ".join(
-            map(str, coverage.get_training_channels())
-        )
-        self.label_channel.value = coverage.get_label_channel()
+        self.training_channels.value = ", ".join(map(str, config.training_channels()))
+        self.label_channel.value = config.label_channel()
         self.normalization.value = bool(config.normalization.apply_at_export)
         # A local set exports the channels its folder holds.
         local = not isinstance(ref, int)

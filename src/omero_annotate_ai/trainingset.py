@@ -17,11 +17,12 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
 import tifffile
+from bioimage_annotation_schema import datamodel as bas
 
 from . import claims
 from .annotators import Annotator, Batch, BatchItem, MicroSamAnnotator
@@ -37,7 +38,6 @@ from .bundle import (
     server_slug,
 )
 from .core.annotation_config import AnnotationConfig, SessionRecord
-from .crate import write_ro_crate
 from .errors import (
     ConfigError,
     OmeroAnnotateAIError,
@@ -56,6 +56,7 @@ from .planning import (
     CoverageSpec,
     ImageIdentity,
     ImageInfo,
+    Mode,
     SplitSpec,
     plan_extension,
     plan_split,
@@ -73,6 +74,28 @@ from .sources.wells import match_well_filter
 from .sources.zarr_discovery import ZarrImageRef, discover_zarr_images
 
 logger = logging.getLogger(__name__)
+
+DESCRIPTION_FIELDS = frozenset(
+    {
+        "description",
+        "license",
+        "version",
+        "url",
+        "changes",
+        "previous_version",
+        "authors",
+        "keywords",
+        "links",
+        "ai_models_trained",
+        "study",
+        "source_dataset",
+        "methodology",
+        "classes",
+        "notes",
+        "extensions",
+    }
+)
+"""Config fields :meth:`TrainingSet.describe` may change after a set is created."""
 
 # Where external tools (e.g. Cellpose) write masks for collect_masks.
 EXTERNAL_OUTPUT = "external_output"
@@ -220,6 +243,7 @@ class TrainingSet:
         # Notes set here on sessions of other computers, kept over their copy on
         # OMERO until published (see _merge_remote_config).
         self._note_edits: dict[int, str] = {}
+        self._description_edits: set[str] = set()
         # A session being started: renumbered if another computer took its number.
         self._starting: SessionRecord | None = None
         _ = self._seed  # generate and store the seed before anything is planned
@@ -258,20 +282,34 @@ class TrainingSet:
 
     @property
     def annotation_type(self) -> str:
-        return self._config.annotation_methodology.annotation_type
+        return self._config.methodology.annotation_types[0]
 
     @property
     def _seed(self) -> int:
         """The training set's seed; generated and stored in the config when unset."""
-        seed = self._config.training.seed
+        seed = self._config.split.seed
         if seed is None:
             seed = secrets.randbelow(2**31)
-            self._config.training.seed = seed
+            self._config.split.seed = seed
         return seed
 
     def _server(self) -> str:
         host = getattr(self.conn, "host", None) or "omero"
         return server_slug(str(host), getattr(self.conn, "port", None))
+
+    def _connected_server(self) -> bas.OmeroServer | None:
+        """The OMERO server the images are read from, recorded in the config so the
+        exported set's ``omero:image:<id>`` URIs can be traced to their images."""
+        if self._config.source != "omero" or self.conn is None:
+            return None
+        host = str(getattr(self.conn, "host", None) or "omero")
+        port = getattr(self.conn, "port", None)
+        if port and "://" not in host:
+            host = f"{host}:{port}"
+        uuid = self.conn.getConfigService().getDatabaseUuid()
+        return bas.OmeroServer(
+            host=host, database_uuid=uuid if isinstance(uuid, str) else None
+        )
 
     @property
     def bundle_dir(self) -> Path:
@@ -321,7 +359,7 @@ class TrainingSet:
           - 'annotation_input': serves both roles
         """
         folders = {"annotation_input": self.bundle_dir / "annotation_input"}
-        if self._config.spatial_coverage.uses_separate_channels():
+        if self._config.uses_separate_channels():
             folders["model_input"] = self.bundle_dir / "model_input"
         return folders
 
@@ -378,10 +416,10 @@ class TrainingSet:
         return ImageInfo(uri=uri, plate=plate, well=well, well_metadata=well_metadata)
 
     def _split_spec(self) -> SplitSpec:
-        training = self._config.training
+        training, split = self._config.training, self._config.split
         return SplitSpec(
-            split_unit=training.split_unit,
-            stratify_by=tuple(training.stratify_by),
+            split_unit="well" if split.unit == "well" else "image",
+            stratify_by=tuple(split.stratify_by or ()),
             segment_all=training.segment_all,
             train_n=training.train_n,
             validate_n=training.validate_n,
@@ -407,31 +445,35 @@ class TrainingSet:
         return dict(plan.assignment)
 
     def _coverage(self) -> CoverageSpec:
-        """What to annotate in each image, from ``config.spatial_coverage``."""
-        sc = self._config.spatial_coverage
+        """What to annotate in each image, from ``config.sampling``."""
+        config = self._config
+        sampling = config.sampling
+        spec = sampling.patches
 
         def patches(
             shape: tuple[int, int], rng
         ) -> tuple[list[tuple[int, int]], tuple[int, int]]:
+            assert spec is not None
             origins, (height, width) = generate_patch_coordinates(
                 image_shape=shape,
-                patch_size=sc.patch_size,
-                n_patches=sc.patches_per_image,
-                random_patch=sc.random_patches,
+                patch_size=[spec.height, spec.width],
+                n_patches=spec.per_image or 1,
+                random_patch=spec.random if spec.random is not None else True,
                 rng=rng,
             )
             return origins, (height, width)
 
+        timepoints, z_slices = sampling.timepoints, sampling.z_slices
         return CoverageSpec(
-            channel=sc.get_label_channel(),
-            timepoint_mode=sc.timepoint_mode,
-            timepoints=tuple(sc.timepoints),
-            n_timepoints=sc.n_timepoints,
-            z_slice_mode=sc.z_slice_mode,
-            z_slices=tuple(sc.z_slices),
-            n_slices=sc.n_slices,
-            three_d=sc.three_d,
-            patches=patches if sc.use_patches else None,
+            channel=config.label_channel(),
+            timepoint_mode=_mode(timepoints),
+            timepoints=tuple(config.timepoint_values()),
+            n_timepoints=timepoints.n if timepoints else None,
+            z_slice_mode=_mode(z_slices),
+            z_slices=tuple(config.z_values()),
+            n_slices=z_slices.n if z_slices else None,
+            three_d=bool(sampling.volumetric),
+            patches=patches if spec is not None else None,
         )
 
     def _identity(self, image_meta: ImageMeta) -> ImageIdentity:
@@ -492,14 +534,14 @@ class TrainingSet:
         self, index: int, items: Sequence[BatchItem], scratch: Path
     ) -> Batch:
         """A batch for the annotator, writing into its own ``scratch`` folder."""
-        specs = self._config.spatial_coverage.get_context_channel_specs()
+        specs = self._config.display.specs()
         return Batch(
             index=index,
             items=tuple(items),
             mask_dir=scratch,
             embedding_dir=scratch / "embeddings",
             model_type=self._config.ai_model.pretrained_from or "vit_b_lm",
-            is_volumetric=self._config.spatial_coverage.three_d,
+            is_volumetric=bool(self._config.sampling.volumetric),
             context_colormaps={name: cmap for _ch, name, cmap in specs},
         )
 
@@ -522,22 +564,17 @@ class TrainingSet:
     def _load_image_data(self, image_obj, metadata: dict) -> np.ndarray:
         """Load the plane or volume an annotation unit refers to, cropped to its patch."""
         timepoint = metadata["timepoint"]
-        channel = metadata.get(
-            "channel_override", self._config.spatial_coverage.get_label_channel()
-        )
+        channel = metadata.get("channel_override", self._config.label_channel())
 
         region = None
-        if self._config.spatial_coverage.use_patches and "patch_x" in metadata:
+        patches = self._config.sampling.patches
+        if patches is not None and "patch_x" in metadata:
             # Use the actual patch dimensions from metadata instead of config
             region = (
                 metadata["patch_x"],
                 metadata["patch_y"],
-                metadata.get(
-                    "patch_width", self._config.spatial_coverage.patch_size[1]
-                ),
-                metadata.get(
-                    "patch_height", self._config.spatial_coverage.patch_size[0]
-                ),
+                metadata.get("patch_width", patches.width),
+                metadata.get("patch_height", patches.height),
             )
 
         if metadata.get("is_volumetric", False):
@@ -573,11 +610,9 @@ class TrainingSet:
 
     def _context_for(self, image_obj, meta: dict) -> dict[str, np.ndarray]:
         """Context channels shown next to the annotated one: ``{name: pixels}``."""
-        if not self._config.spatial_coverage.uses_context_channels():
-            return {}
         return {
             name: self._load_image_data(image_obj, {**meta, "channel_override": ch})
-            for ch, name, _cmap in self._config.spatial_coverage.get_context_channel_specs()
+            for ch, name, _cmap in self._config.display.specs()
         }
 
     def _save_inputs(
@@ -594,7 +629,7 @@ class TrainingSet:
             pixels, folders["annotation_input"] / f"{annotation_id}.tif"
         )
         if "model_input" in folders:
-            training_channels = self._config.spatial_coverage.get_training_channels()
+            training_channels = self._config.training_channels()
             train_meta = {**meta, "channel_override": training_channels[0]}
             self._save_training_image(
                 image_obj, train_meta, annotation_id, folders["model_input"]
@@ -1000,6 +1035,7 @@ class TrainingSet:
             self._config.omero.get_primary_container_id(),
         )
         self._note_edits.clear()
+        self._description_edits.clear()
         return file_id
 
     # --- Creating and opening ----------------------------------------------------
@@ -1049,6 +1085,8 @@ class TrainingSet:
             cancel=cancel,
         )
         ts.rows = ts._plan_rows(images)
+        # From the connection, not from the config an earlier set was made with
+        ts._config.omero_server = ts._connected_server() or config.omero_server
         if not ts.is_local:
             ts._config.identity.server = ts._server()
             ts._config.identity.table_id = ts.omero_writes.create_table(
@@ -1134,6 +1172,10 @@ class TrainingSet:
             ts._release_own_claims()
             reconcile(ts, local_rows, prune_duplicates=prune_duplicates, cancel=cancel)
             ts._report_claims()
+        if ts._config.omero_server is None:  # a set made before it was recorded
+            ts._config.omero_server = ts._connected_server()
+            if ts._config.omero_server is not None:
+                ts.save_config()
         ts._close_open_sessions()
         return ts
 
@@ -1326,6 +1368,9 @@ class TrainingSet:
           renumbered (no rows carry it yet).
         - Image counts only grow (:meth:`extend`), so the larger count wins.
 
+        - Description fields (:meth:`describe`): OMERO's copy, except fields set
+          here.
+
         Everything else in a set's config is fixed once it is created.
         """
         if self.table_id is None:
@@ -1349,6 +1394,8 @@ class TrainingSet:
             if session_id in merged:
                 merged[session_id].note = note
         self._config.sessions = sorted(merged.values(), key=lambda s: s.id)
+        for name in DESCRIPTION_FIELDS - self._description_edits:
+            setattr(self._config, name, getattr(remote, name))
         training = self._config.training
         for key in ("train_n", "validate_n", "test_n"):
             setattr(
@@ -1443,6 +1490,37 @@ class TrainingSet:
         self.save_config()
         self.publish_config()
 
+    def describe(self, **fields: Any) -> None:
+        """Change the set's description, locally and on OMERO.
+
+        Takes the description fields of the config (see :data:`DESCRIPTION_FIELDS`),
+        e.g. ``ts.describe(version="1", keywords=["nuclei"])``: what a publication or
+        a MIFA export needs and is often only known after annotating. What to
+        annotate and how it is split (``sampling``, ``split``) is fixed once the
+        set exists. A field set here wins over another computer's copy on OMERO.
+
+        Raises:
+            ValueError: A field is not a description field, or a value is invalid.
+        """
+        unknown = set(fields) - DESCRIPTION_FIELDS
+        if unknown:
+            raise ValueError(
+                f"Not description fields: {sorted(unknown)}; describe() takes "
+                f"{sorted(DESCRIPTION_FIELDS)}"
+            )
+        if not self.is_local:
+            self.ensure_connected()
+        if self.table_id is not None:
+            self._merge_remote_config()
+        updated = AnnotationConfig.model_validate(
+            {**self._config.model_dump(), **fields}
+        )
+        for name in fields:
+            setattr(self._config, name, getattr(updated, name))
+        self._description_edits |= set(fields)
+        self.save_config()
+        self.publish_config()
+
     def _session(self, session_id: int) -> SessionRecord:
         for record in self._config.sessions:
             if record.id == session_id:
@@ -1517,17 +1595,17 @@ class TrainingSet:
     def write_ro_crate(self) -> Path:
         """Describe the set's folder as an RO-Crate; returns the metadata file.
 
-        Writes ``ro-crate-metadata.json`` (see :mod:`omero_annotate_ai.crate`): the
-        files with their digests, the source images, and the sessions with their
-        notes. Call it before sharing or archiving the folder.
+        Writes the Bioimage Annotation Schema documents (``annotation-set.yaml``,
+        ``annotation-records.csv``) and ``ro-crate-metadata.json``: the files with
+        their digests, the source images, and the sessions with their notes (see
+        :mod:`omero_annotate_ai.schema_export`). Call it before sharing or archiving
+        the folder.
         """
-        from . import __version__
+        from .schema_export import write_ro_crate
 
         self.save_local_table()
         self.save_config()
-        return write_ro_crate(
-            self._config, self.rows, self.bundle_dir, software_version=__version__
-        )
+        return write_ro_crate(self._config, self.rows, self.bundle_dir)
 
     def next_batch_index(self) -> int:
         """Number of the next batch handed out (1, 2, ...)."""
@@ -1564,7 +1642,7 @@ class TrainingSet:
             if saved is None:
                 logger.warning("Could not save the image of %s", row.annotation_id)
             if "model_input" in folders:
-                channels = self._config.spatial_coverage.get_training_channels()
+                channels = self._config.training_channels()
                 stacked = self._load_and_stack_channels(image_obj, meta, channels)
                 folders["model_input"].mkdir(parents=True, exist_ok=True)
                 target = folders["model_input"] / f"{row.annotation_id}.tif"
@@ -1649,6 +1727,13 @@ class TrainingSet:
                 patch_height=annotation.patch_height,
             )
         return meta
+
+
+def _mode(selection: Any) -> Mode:
+    """The selection mode of a plane selection (``specific`` when not given)."""
+    mode = getattr(selection, "mode", None) or "specific"
+    mode = getattr(mode, "value", mode)  # an enum member, or its value
+    return cast(Mode, mode if mode in ("all", "random") else "specific")
 
 
 def _software_version() -> str | None:

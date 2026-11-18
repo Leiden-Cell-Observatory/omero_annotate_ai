@@ -45,6 +45,7 @@ dependencies = [
     "ezomero>=3.1.0",
     "opencv-python",
     "tifffile",
+    "bioimage-annotation-schema",
 ]
 
 [project.optional-dependencies]
@@ -211,7 +212,7 @@ twine = "*"
 
 # MIFA export feature (optional) - BioImage Archive annotation metadata models.
 # Git-only package (not on PyPI); pinned to a release tag so poetry-dynamic-versioning
-# can resolve a version. Imported lazily by omero_annotate_ai.core.mifa_export, so the
+# can resolve a version. Imported lazily by bioimage_annotation_schema.mifa, so the
 # default user environment stays lean and only dev / the `mifa` env pull it in.
 [tool.pixi.feature.mifa.pypi-dependencies]
 bia-mifa-models = { git = "https://github.com/BioImage-Archive/bia-mifa-models.git", tag = "v1.1.5" }
@@ -230,6 +231,8 @@ mifa = ["mifa"]
 
 [tool.pixi.pypi-dependencies]
 omero-annotate-ai = { path = ".", editable = true }
+# Not on PyPI yet: the schema library comes from its (private) GitHub repository.
+bioimage-annotation-schema = { git = "https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema.git", branch = "main" }
 
 [tool.pixi.tasks]
 # Testing

@@ -8,6 +8,13 @@ macOS and Windows. micro-SAM and napari are installed alongside it.
     does not touch the rest of your system. Install it once by following the
     [pixi instructions](https://pixi.sh/latest/#installation).
 
+!!! note "Development version: install the schema first"
+    The development version depends on the
+    [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
+    package, which is not on PyPI yet. Until it is, install it first:
+    `pip install "git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema"`
+    (with pixi: `pixi add --pypi "bioimage-annotation-schema @ git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema"`).
+
 ## Install with pixi (recommended)
 
 Open a terminal and run:

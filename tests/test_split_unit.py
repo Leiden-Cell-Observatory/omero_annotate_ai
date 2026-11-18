@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from omero_annotate_ai.core.annotation_config import (
     AnnotationConfig,
-    TrainingConfig,
     create_default_config,
 )
 from omero_annotate_ai.rows import Row, split_report, split_summary
@@ -42,12 +41,28 @@ class FakeImageSource:
         )
 
 
+_SPLIT_KEYS = {
+    "split_unit": "unit",
+    "split_rationale": "rationale",
+    "stratify_by": "stratify_by",
+    "seed": "seed",
+}
+
+
+def _apply(config, settings):
+    """Split settings go to ``config.split``, counts and fractions to ``config.training``."""
+    for key, value in settings.items():
+        if key in _SPLIT_KEYS:
+            setattr(config.split, _SPLIT_KEYS[key], value)
+        else:
+            setattr(config.training, key, value)
+
+
 def _plate_pipeline(tmp_path, wells, **training):
     """Pipeline over a fake plate; ``wells`` maps well name -> list of image ids."""
     config = create_default_config()
     config.storage = "local"
-    for key, value in training.items():
-        setattr(config.training, key, value)
+    _apply(config, training)
     ids = [i for ids in wells.values() for i in ids]
     source = FakeImageSource(ids)
     pipeline = TrainingSet(config, None, image_source=source, home=tmp_path)
@@ -84,34 +99,33 @@ def _plan(training_set, images):
     ]
 
 
-def _report(rows, training):
-    return split_report(
-        rows, training.split_unit, training.stratify_by, training.split_rationale
-    )
+def _report(rows, split):
+    return split_report(rows, split.unit, split.stratify_by or [], split.rationale)
 
 
 class TestSplitUnitConfig:
     def test_default_is_image(self):
-        assert TrainingConfig().split_unit == "image"
-        assert TrainingConfig().split_rationale is None
+        config = create_default_config()
+        assert config.split.unit == "image"
+        assert config.split.rationale is None
 
     def test_well_is_accepted(self):
-        training = TrainingConfig(
-            split_unit="well", split_rationale="wells independent"
+        config = AnnotationConfig.from_dict(
+            {"name": "x", "split": {"unit": "well", "rationale": "wells independent"}}
         )
-        assert training.split_unit == "well"
+        assert config.split.unit == "well"
 
     def test_unknown_unit_is_rejected(self):
         with pytest.raises(ValidationError):
-            TrainingConfig(split_unit="pixel")
+            AnnotationConfig.from_dict({"name": "x", "split": {"unit": "pixel"}})
 
     def test_survives_yaml_round_trip(self):
         config = create_default_config()
-        config.training.split_unit = "well"
-        config.training.split_rationale = "fields overlap"
+        config.split.unit = "well"
+        config.split.rationale = "fields overlap"
         loaded = AnnotationConfig.from_yaml(config.to_yaml())
-        assert loaded.training.split_unit == "well"
-        assert loaded.training.split_rationale == "fields overlap"
+        assert loaded.split.unit == "well"
+        assert loaded.split.rationale == "fields overlap"
 
 
 class TestWellSplit:
@@ -154,7 +168,7 @@ class TestWellSplit:
         )
         _plan(pipeline, images)
 
-        report = _report(pipeline.rows, pipeline.config.training)
+        report = _report(pipeline.rows, pipeline.config.split)
         assert report["wells"]["spanning_splits"] == []
         counts = report["wells"]["per_split"]
         assert counts == {"training": 2, "validation": 1, "test": 1}
@@ -201,8 +215,8 @@ class TestWellSplit:
 class TestSplitReport:
     def _config(self, anns, unit="image", rationale=None):
         config = create_default_config()
-        config.training.split_unit = unit
-        config.training.split_rationale = rationale
+        config.split.unit = unit
+        config.split.rationale = rationale
         self.rows = list(anns)
         return config
 
@@ -215,7 +229,7 @@ class TestSplitReport:
                 _ann(4, "B3", "test"),
             ]
         )
-        report = _report(self.rows, config.training)
+        report = _report(self.rows, config.split)
         assert report["split_unit"] == "image"
         assert report["images"] == {
             "total": 4,
@@ -232,13 +246,13 @@ class TestSplitReport:
                 _ann(1, "B2", "validation", t=1),
             ]
         )
-        assert _report(self.rows, config.training)["images"]["spanning_splits"] == [
+        assert _report(self.rows, config.split)["images"]["spanning_splits"] == [
             "omero:image:1"
         ]
 
     def test_no_wells_section_without_well_information(self):
         config = self._config([_ann(1, "", "training")])
-        assert "wells" not in _report(self.rows, config.training)
+        assert "wells" not in _report(self.rows, config.split)
 
     def test_summary_sentence(self):
         config = self._config(
@@ -249,7 +263,7 @@ class TestSplitReport:
             ],
             rationale="Fields do not overlap.",
         )
-        summary = split_summary(_report(self.rows, config.training))
+        summary = split_summary(_report(self.rows, config.split))
         assert "Split unit: image" in summary
         assert "1 of 2 wells" in summary
         assert "B2" in summary
@@ -257,23 +271,26 @@ class TestSplitReport:
 
 
 def test_mifa_method_text_states_split_unit():
-    from omero_annotate_ai.core.mifa_export import compose_method
+    from bioimage_annotation_schema.mifa import compose_method
+
+    from omero_annotate_ai.schema_export import annotation_records, annotation_set
 
     config = create_default_config()
-    config.training.split_unit = "well"
-    config.training.split_rationale = "Wells are the experimental unit."
+    config.split.unit = "well"
+    config.split.rationale = "Wells are the experimental unit."
     rows = [_ann(1, "B2", "training"), _ann(2, "B3", "test")]
-    method = compose_method(config, rows)
-    assert "Split unit: well" in method
-    assert "Wells are the experimental unit." in method
+    for row in rows:
+        row.processed = True
+    method = compose_method(annotation_set(config), annotation_records(rows))
+    assert "assigned per well" in method
+    assert "Wells are the experimental unit" in method
 
 
 def _condition_pipeline(tmp_path, n_fields=4, **training):
     """2 cell lines x 2 treatments, one well each, ``n_fields`` fields per well."""
     config = create_default_config()
     config.storage = "local"
-    for key, value in training.items():
-        setattr(config.training, key, value)
+    _apply(config, training)
     pipeline = TrainingSet(
         config, None, image_source=FakeImageSource([]), home=tmp_path
     )
@@ -312,7 +329,7 @@ class TestFractionShuffle:
         )
         orders = set()
         for seed in range(5):  # the order is random per seed, fixed for one seed
-            pipeline._config.training.seed = seed
+            pipeline._config.split.seed = seed
             _plan(pipeline, images)
             orders.add(
                 tuple(
@@ -414,10 +431,10 @@ class TestStratifiedSplit:
             test_fraction=0.25,
         )
         _plan(pipeline, images)
-        report = _report(pipeline.rows, pipeline.config.training)
+        report = _report(pipeline.rows, pipeline.config.split)
         assert report["stratify_by"] == ["cell_line"]
         assert set(report["strata"]) == {"cell_line=MDA", "cell_line=HCC"}
         assert report["strata_missing_splits"] == {}
         assert "every stratum" in split_summary(
-            _report(pipeline.rows, pipeline.config.training)
+            _report(pipeline.rows, pipeline.config.split)
         )

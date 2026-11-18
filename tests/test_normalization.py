@@ -57,10 +57,10 @@ class TestPercentileNormalize:
 
 @pytest.mark.unit
 class TestNormalizationConfig:
-    def test_legacy_spatial_coverage_fields_are_refused(self):
+    def test_legacy_spatial_coverage_section_is_refused(self):
         from omero_annotate_ai.errors import RemovedConfigKey
 
-        with pytest.raises(RemovedConfigKey, match="normalization.method"):
+        with pytest.raises(RemovedConfigKey, match="sampling"):
             AnnotationConfig.from_dict(
                 {"name": "legacy", "spatial_coverage": {"normalization_method": "none"}}
             )

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import ipywidgets as widgets
+from bioimage_annotation_schema import datamodel as bas
 from IPython.display import display
 
 from ..annotators import Annotator
@@ -505,22 +506,28 @@ class WorkflowWidget:
         if self.container.value is not None:
             config.omero.container_type = str(self.container_type.value)
             config.omero.container_id = int(self.container.value)
-        coverage = config.spatial_coverage
-        coverage.channels = [int(self.channel.value)]
-        mode, listed, n_random = self.timepoints.values()
-        coverage.timepoint_mode, coverage.timepoints = mode, listed
-        coverage.n_timepoints = n_random
-        mode, listed, n_random = self.z_slices.values()
-        coverage.z_slice_mode, coverage.z_slices = mode, listed
-        coverage.n_slices = n_random
-        coverage.three_d = bool(self.three_d.value)
-        coverage.use_patches = bool(self.use_patches.value)
-        coverage.patch_size = [int(self.patch_size.value)] * 2
-        coverage.patches_per_image = int(self.patches_per_image.value)
+        t_mode, t_listed, t_n = self.timepoints.values()
+        z_mode, z_listed, z_n = self.z_slices.values()
+        size = int(self.patch_size.value)
+        config.sampling = bas.Sampling.model_validate(
+            {
+                "label_channel": int(self.channel.value),
+                "timepoints": {"mode": t_mode, "values": t_listed, "n": t_n},
+                "z_slices": {"mode": z_mode, "values": z_listed, "n": z_n},
+                "volumetric": bool(self.three_d.value),
+                "patches": {
+                    "width": size,
+                    "height": size,
+                    "per_image": int(self.patches_per_image.value),
+                }
+                if self.use_patches.value
+                else None,
+            }
+        )
         for category, key in SPLITS:
             setattr(config.training, key, int(self.counts[category].value))
         seed = self.seed.value.strip()
-        config.training.seed = int(seed) if seed else None
+        config.split.seed = int(seed) if seed else None
         config.ai_model.pretrained_from = str(self.model.value)
         config.workflow.batch_size = int(self.batch_size.value)
         config.storage = "local" if self.storage.value == "local" else "omero"

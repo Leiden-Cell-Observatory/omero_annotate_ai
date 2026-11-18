@@ -70,7 +70,7 @@ def _(Path, load_button, load_config_from_yaml, mo, yaml_path):
     | Source | {config.source}: {_what} |
     | Storage | {config.storage} |
     | Splits | {config.training.train_n} / {config.training.validate_n} / {config.training.test_n} |
-    | Channels | {config.spatial_coverage.channels} |
+    | Label channel | {config.label_channel()} |
     | Model | {config.ai_model.pretrained_from} |
     """)
     return config, set_folder

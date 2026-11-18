@@ -12,59 +12,98 @@ This needs the BioImage Archive's metadata models, which are not on PyPI:
 pip install "git+https://github.com/BioImage-Archive/bia-mifa-models.git@v1.1.5"
 ```
 
-## 1. Describe the study
+## 1. Describe the set
 
-The config has three metadata sections used for the archive: `study`, `dataset` and
-`annotation_methodology`. Fill them in the YAML before annotating, or set them just before
-export:
+The archive's MIFA metadata comes from the config's [schema sections](../configuration.md#schema-sections).
+MIFA requires a study title, description and funding statement, keywords, at least one
+link (or a `source_dataset.url`) and a version. Fill them in the YAML before creating the
+set:
 
 ```yaml
+license: CC-BY-4.0               # CC-BY-4.0 or CC0-1.0
+version: "1"
+keywords: [nuclei, segmentation, cell painting]
+links:
+  - {url: "https://github.com/example/hela-nuclei", description: Analysis code}
 study:
   title: "Nuclei annotations in HeLa Cell Painting images"
   description: "Instance masks of nuclei, annotated with micro-SAM and corrected by hand."
-  keywords: [nuclei, segmentation, cell painting]
   organism: "Homo sapiens"
   imaging_method: "widefield fluorescence microscopy"
   funding_statement: "Funded by NWO."
-dataset:
-  source_description: "HeLa cells, Hoechst channel"
-  license: "CC-BY-4.0"           # CC0 or CC-BY
-annotation_methodology:
-  annotation_type: segmentation_mask
-  annotation_method: semi_automatic
-  annotation_criteria: "Every nucleus fully inside the field; touching nuclei separated."
-  annotation_coverage: representative
+source_dataset:
+  description: "HeLa cells, Hoechst channel"
+methodology:
+  annotation_types: [segmentation_mask]
+  mask_kind: instance
+  method: semi_automatic
+  criteria: "Every nucleus fully inside the field; touching nuclei separated."
+  coverage: representative
 ```
+
+Or add them to an existing set with `describe`, which saves them locally and on OMERO:
+
+```python
+from omero_annotate_ai import TrainingSet
+
+ts = TrainingSet.open(table_id, conn)
+ts.describe(
+    version="1",
+    keywords=["nuclei", "segmentation", "cell painting"],
+    links=[{"url": "https://github.com/example/hela-nuclei"}],
+    study={
+        "title": "Nuclei annotations in HeLa Cell Painting images",
+        "description": "Instance masks of nuclei, annotated with micro-SAM.",
+        "funding_statement": "Funded by NWO.",
+    },
+)
+```
+
+When a required field is missing, `save_bia_package` raises `MifaNotReady`
+(`from bioimage_annotation_schema.mifa import MifaNotReady`) and lists the missing
+fields; it does not fill in placeholders.
 
 ## 2. Export from OMERO
 
 ```python
-from omero_annotate_ai import prepare_bia_data_from_table
-from omero_annotate_ai.core.mifa_export import save_bia_package
-from omero_annotate_ai.trainingset import read_set_config
+from omero_annotate_ai import TrainingSet, prepare_bia_data_from_table
+from omero_annotate_ai.schema_export import save_bia_package
 
-config = read_set_config(table_id, conn)  # the set's config, with the study metadata
+ts = TrainingSet.open(table_id, conn)
 stats = prepare_bia_data_from_table(conn, table_id, "bia_staging")
 
 summary = save_bia_package(
-    config, stats["rows"], "bia_staging", "bia_bundle", move_data=True
+    ts.config, stats["rows"], "bia_staging", "bia_bundle", move_data=True
 )
 ```
 
 `prepare_bia_data_from_table` downloads the finished units in their original bit depth;
-`save_bia_package` writes the bundle.
+`save_bia_package` writes the bundle. `accession=` sets the name of the metadata files
+(default: `source_dataset.identifier`, else the set's name).
 
 ## From a local training set
 
 ```python
 from omero_annotate_ai import TrainingSet
-from omero_annotate_ai.core.mifa_export import save_bia_package
+from omero_annotate_ai.schema_export import save_bia_package
 
 ts = TrainingSet.open("~/omero_annotate_ai/local/<id>_hela_nuclei_v1")
 save_bia_package(
     ts.config, ts.units(), ts.bundle_dir, "bia_bundle"
 )  # annotated units only
 ```
+
+The MIFA export comes from the
+[Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
+library (`bioimage_annotation_schema.mifa`). Its `bas` command checks a set's folder
+after `ts.write_ro_crate()` has written `annotation-set.yaml` and
+`annotation-records.csv` there:
+
+```bash
+bas validate --mifa ~/omero_annotate_ai/local/<id>_hela_nuclei_v1
+```
+
+It says *Ready for MIFA* or lists what is missing.
 
 ## What is in the bundle
 
@@ -74,8 +113,8 @@ bia_bundle/
 │   ├── Study_<accession>.yaml
 │   ├── Annotations_<accession>.yaml
 │   └── Version_<accession>.yaml
-├── file_list_images.tsv
-├── file_list_annotations.tsv
+├── file_list_images.tsv          # with pixel_sha256 and iscc per file
+├── file_list_annotations.tsv     # with pixel_sha256 and iscc per file
 ├── images/<unit id>.tif
 └── annotations/<unit id>_mask.tif
 ```

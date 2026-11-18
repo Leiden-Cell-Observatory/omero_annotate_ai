@@ -18,23 +18,35 @@ Image-Code takes (colour: mean of its channels), and intensities are stretched t
 object 255, so renumbering objects keeps the code). Uniform images all get the
 same code, so for them only the SHA-256 digest says anything. Codes are comparable
 between images coded by this package; they are not meant to match codes another
-tool computed from the image file.
+tool computed from the image file. :func:`code_method` states all this in the
+form the Bioimage Annotation Schema exports carry (``content_codes.region``).
 """
 
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 from pathlib import Path
 from typing import Protocol, cast
 
 import cv2
 import numpy as np
 import tifffile
+from bioimage_annotation_schema import datamodel as bas
 
 # Bits (of 64) two Image-Codes may differ in and still count as a near-duplicate.
 NEAR_DUPLICATE_BITS = 12
 
 _SIDE = 32  # the Image-Code works on 32 x 32 grayscale pixels
+
+PIXELS = (
+    "the annotated region as saved in input_file, and the mask as saved in mask_file"
+)
+PREPARATION = (
+    "volumes reduced by maximum projection, colour averaged to gray, area-averaged to "
+    "32 x 32 in the plane's data type; images then stretched to 0-255 between the "
+    "full plane's minimum and maximum, masks binarised (background 0, objects 255)"
+)
 
 
 class _IsccLib(Protocol):
@@ -136,6 +148,27 @@ def _featureless(code: str) -> bool:
         return False
     uniform = (bytes(_SIDE * _SIDE), bytes([255]) * (_SIDE * _SIDE))
     return code in {lib.gen_image_code_v0(plane)["iscc"] for plane in uniform}
+
+
+def _version(package: str) -> str:
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def code_method() -> bas.CodeMethod:
+    """How :func:`image_code` makes codes, for a set's ``content_codes.region``."""
+    return bas.CodeMethod(
+        code_type=bas.IsccCodeType.image_code,
+        bits=64,
+        pixels=PIXELS,
+        preparation=PREPARATION,
+        implementation=(
+            f"omero-annotate-ai {_version('omero-annotate-ai')} "
+            f"(iscc-lib {_version('iscc-lib')}, gen_image_code_v0)"
+        ),
+    )
 
 
 def describe_change(recorded: str | None, pixels: np.ndarray, *, mask: bool) -> str:

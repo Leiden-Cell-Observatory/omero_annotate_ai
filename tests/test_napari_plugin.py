@@ -747,7 +747,7 @@ class TestDockOnOmero:
         config.omero.container_id = omero_seed.dataset_id
         config.training.train_n, config.training.validate_n = 2, 0
         config.training.test_n = 0
-        config.training.seed = 7
+        config.split.seed = 7
         home = tmp_path / "home"
         ts = TrainingSet.create(config, omero_conn, home=home)
 

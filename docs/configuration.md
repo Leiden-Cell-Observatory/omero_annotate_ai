@@ -13,17 +13,16 @@ Only `name` is required. Everything else has a default.
 ## A minimal example
 
 ```yaml
+config_version: 4
 name: hela_nuclei_v1
 
 omero:
   container_type: dataset
   container_id: 123
 
-spatial_coverage:
-  channels: [0]            # annotate channel 0 (e.g. DAPI)
-  use_patches: true
-  patch_size: [512, 512]
-  patches_per_image: 2
+sampling:
+  label_channel: 0         # annotate channel 0 (e.g. DAPI)
+  patches: {width: 512, height: 512, per_image: 2}
 
 training:
   train_n: 5               # images for training
@@ -56,7 +55,34 @@ from omero_annotate_ai.core.annotation_config import get_config_template
 print(get_config_template())
 ```
 
-## `omero`: where the images come from
+## Two kinds of sections
+
+A config (version 4) has two kinds of sections:
+
+- **Schema sections** describe the annotation set: its name, licence, authors, study,
+  source data, how it was annotated, the classes, what was sampled from each image and
+  how the set is split. They are the models of the
+  [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
+  (`bioimage_annotation_schema.datamodel`), so a set's description is the same in
+  every tool that uses the schema, and the RO-Crate, MIFA and BioImage Archive exports
+  need no translation.
+- **Tool sections** hold what omero-annotate-ai needs to run: where the images come
+  from, how many go into each split, normalisation, the model, how sessions run and
+  where results are kept.
+
+| Kind | Sections |
+|---|---|
+| Schema | `name`, `description`, `version`, `url`, `license`, `changes`, `previous_version`, `authors`, `keywords`, `links`, `ai_models_trained`, `study`, `source_dataset`, `methodology`, `classes`, `sampling`, `split`, `notes`, `extensions` |
+| Tool | `omero`, `zarr`, `source`, `storage`, `training`, `normalization`, `ai_model`, `display`, `workflow` |
+| Written by omero-annotate-ai | `config_version`, `created`, `identity`, `omero_server`, `sessions` |
+
+`sampling` and `split` decide which units a set has, so they are fixed once the set
+exists. The other schema sections can be changed later with
+[`TrainingSet.describe`](#changing-the-description-of-a-set).
+
+## Tool sections
+
+### `omero`: where the images come from
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -77,7 +103,7 @@ omero:
   well_filter_mode: include
 ```
 
-## `zarr`: OME-Zarr images instead of OMERO
+### `zarr`: OME-Zarr images instead of OMERO
 
 With `source: zarr` images are read from OME-Zarr files or URLs (for example the
 BioImage Archive) and no OMERO connection is needed; such sets are always
@@ -95,44 +121,11 @@ BioImage Archive) and no OMERO connection is needed; such sets are always
 An example is in
 [`notebooks/marimo/configs/`](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/tree/main/notebooks/marimo/configs).
 
-## `spatial_coverage`: what to annotate in each image
+### `training`: how many units go to each split
 
-**Channels**
-
-| Key | Default | Meaning |
-|---|---|---|
-| `channels` | `[0]` | Channels loaded from each image (0-based). |
-| `label_channel` | first of `channels` | Channel you annotate on. |
-| `training_channels` | `[label_channel]` | Channel(s) saved as model input. If different from `label_channel`, they are saved to `model_input/`. |
-| `context_channels` | `[]` | Extra channels shown in napari for orientation only; never used for training. |
-| `context_channel_names` | – | Display names for the context channels. |
-| `context_channel_colormaps` | – | napari colormaps for the context channels, e.g. `[magenta, green]`. |
-
-**Timepoints and z-slices**
-
-| Key | Default | Meaning |
-|---|---|---|
-| `timepoints` | `[0]` | Timepoints to use (with `timepoint_mode: specific`). |
-| `timepoint_mode` | `specific` | `specific` (the list above), `all`, or `random`. |
-| `n_timepoints` | – | Number of random timepoints (with `random`). |
-| `z_slices` | `[0]` | Z-slices to use (with `z_slice_mode: specific`). |
-| `z_slice_mode` | `specific` | `specific`, `all`, or `random`. |
-| `n_slices` | – | Number of random slices (with `random`). |
-| `three_d` | `false` | Annotate each timepoint as one 3D volume instead of separate planes. |
-| `z_range_start`, `z_range_end` | – | Optional volume range in 3D mode; filled from `z_slices` if not set. |
-
-**Patches**
-
-| Key | Default | Meaning |
-|---|---|---|
-| `use_patches` | `false` | Annotate crops instead of whole planes. |
-| `patch_size` | `[512, 512]` | Patch size in pixels, `[height, width]`. |
-| `patches_per_image` | `1` | Non-overlapping patches per plane. An image smaller than the patch gives one full-image unit. |
-| `random_patches` | `true` | Place patches at random positions. |
-
-## `training`: train, validation and test sets
-
-There are two ways to split, chosen by `segment_all`.
+There are two ways to split, chosen by `segment_all`. Which unit is split, the
+stratification and the seed are part of the description, in
+[`split`](#split-how-the-set-is-split).
 
 === "Pick a number of images (default)"
 
@@ -143,8 +136,9 @@ There are two ways to split, chosen by `segment_all`.
       validate_n: 3
       test_n: 0
     ```
-    Images are drawn at random from the container. Counts are images, not units: with
-    patches or several z-slices, one image gives several units.
+    Images are drawn at random from the container. Counts are split units (images, or
+    wells with `split.unit: well`), not annotation units: with patches or several
+    z-slices, one image gives several annotation units.
 
 === "Annotate everything"
 
@@ -160,68 +154,7 @@ There are two ways to split, chosen by `segment_all`.
 Setting the counts in fraction mode (or the other way round) gives a warning and has no
 effect.
 
-| Key | Default | Meaning |
-|---|---|---|
-| `seed` | – | Seed for every random choice (split, timepoints, z-slices, patches). Empty: one is picked and stored when the set is created, so the selection can be repeated. |
-| `validation_strategy` | `random_split` | Recorded as metadata: `random_split`, `expert_review` or `cross_validation`. |
-| `quality_threshold` | – | Recorded as metadata. |
-
-### Split Unit
-
-`split_unit` sets the level at which data are assigned to a split. All annotations
-of one unit end up in the same split, and `train_n`/`validate_n`/`test_n` and the
-fractions count units:
-
-- `image` (default): an image (a plate field) with all its timepoints and z-slices.
-  Fields from one well may end up in different splits.
-- `well`: all fields of a plate well. Needs plate data with well information
-  (OMERO plates or OME-Zarr HCS plates).
-
-Whether fields of one well are independent enough to be split apart depends on the
-task, so the choice is recorded rather than imposed. Use `split_rationale` to say
-why, for example:
-
-```yaml
-training:
-  split_unit: image
-  split_rationale: >
-    Fields within a well do not overlap; for nucleus segmentation they are
-    treated as independent.
-```
-
-`config.split_report()` lists which images and wells have annotations in more than
-one split, and `config.split_summary()` puts this in a sentence that is added to the
-MIFA annotation method. Validation reports an error when annotations of one declared
-unit are found in different splits.
-
-### Stratified Splits
-
-`stratify_by` divides the units over the splits per condition, so that validation
-and test cover every condition instead of whatever a random draw gives. Keys are
-well key-value pairs (from OMERO map annotations or OME-Zarr well attributes), or
-`well` itself:
-
-```yaml
-training:
-  segment_all: true
-  stratify_by: [cell_line, treatment]
-  train_fraction: 0.6
-  validation_fraction: 0.2
-  test_fraction: 0.2
-```
-
-- Fraction mode: within each condition, validation and test get their rounded share
-  and training the rest (4 fields at 0.6/0.2/0.2 become 2/1/1).
-- Count mode: each split draws units in turn from all conditions, test and
-  validation first.
-
-When a condition has too few units to reach every split (for example one well per
-condition with `split_unit: well`), the split still runs with a warning, and
-`split_report()` lists the conditions that miss a split. A key that no image has is
-an error, as it is most likely a typo. Images lacking a key that others have form
-their own `(missing)` group.
-
-## `normalization`: intensity scaling of model input
+### `normalization`: intensity scaling of model input
 
 How raw intensities become model input is defined once, in the config, and travels with
 the annotation set (OMERO, YAML, MIFA export):
@@ -246,7 +179,7 @@ returns the matching BiaPy `DATA.NORMALIZATION` block. BiaPy's `div` and `scale_
 types guess the bit depth from the image maximum, so exporting with
 `apply_at_export: true` (BiaPy then applies the identity) is the most reliable route.
 
-## `ai_model`: the model
+### `ai_model`: the model
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -255,14 +188,24 @@ types guess the bit depth from the image maximum, so exporting with
 | `model_name`, `model_version`, `model_url`, `model_doi` | | Describe the model for the record. |
 | `training_mode` | `inference` | `inference`, `finetuning` or `from_scratch`. |
 
-## `workflow`: how the run behaves
+When `methodology.tools` is empty, the exports describe the tool from this section.
+
+### `display`: context channels in napari
+
+| Key | Default | Meaning |
+|---|---|---|
+| `context_channels` | `[]` | Extra channels shown in napari for orientation only; never used for training. Must differ from the label channel. |
+| `context_channel_names` | – | Display names for the context channels (same length). |
+| `context_channel_colormaps` | – | napari colormaps for the context channels, e.g. `[magenta, green]`. |
+
+### `workflow`: how the run behaves
 
 | Key | Default | Meaning |
 |---|---|---|
 | `batch_size` | `0` | Units per napari session; a batch's masks are saved and uploaded when its napari window closes. `0` = all at once. |
 | `claim_hours` | `6` | OMERO sets: how long a session's claim on the units it shows lasts before another computer may take them over. Your own claims on the same computer never block you. |
 
-## `storage`: where rows and masks are kept
+### `storage`: where rows and masks are kept
 
 | Value | Meaning |
 |---|---|
@@ -273,98 +216,265 @@ Fixed when the set is created. Each set has its own folder:
 `<home>/<server>/<table id>_<name>/` (or `<home>/local/<id>_<name>/` for local sets),
 where `<home>` is `home=`, else `$OMERO_ANNOTATE_AI_HOME`, else `~/omero_annotate_ai`.
 
-## Metadata for sharing
+## Schema sections
 
-These sections describe your study for others and are used by the
+### `sampling`: what to annotate in each image
+
+**Channels**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `label_channel` | `0` | Channel you annotate on (0-based). |
+| `input_channels` | `[label_channel]` | Channel(s) the model is trained on. If different from `label_channel`, they are saved to `model_input/`. |
+
+Channels shown only for orientation are set in
+[`display`](#display-context-channels-in-napari).
+
+**Timepoints and z-slices**
+
+`timepoints` and `z_slices` each take a `mode` and, depending on it, `values` or `n`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `timepoints` | `{mode: specific, values: [0]}` | `specific` (the `values` list), `all`, or `random` (`n` drawn per image with the seed). |
+| `z_slices` | `{mode: specific, values: [0]}` | The same, for z-slices. |
+| `volumetric` | `false` | Annotate each timepoint as one 3D volume, from the first to the last selected z-slice, instead of separate planes. |
+
+**Patches**
+
+Leave `patches` out to annotate whole planes. When it is present, crops are annotated:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `width`, `height` | required | Patch size in pixels. Square patches are safest. |
+| `per_image` | `1` | Non-overlapping patches per plane. An image smaller than the patch gives one full-image unit. |
+| `random` | `true` | Place patches at random positions. |
+
+### `split`: how the set is split
+
+| Key | Default | Meaning |
+|---|---|---|
+| `strategy` | `random_split` | `random_split`, `expert_review` or `cross_validation`. Recorded as metadata. |
+| `unit` | `image` | Level at which data are assigned to a split: `image` or `well`. |
+| `rationale` | – | Why this unit was chosen. |
+| `stratify_by` | – | Well keys to balance the split on. |
+| `seed` | – | Seed for every random choice (split, timepoints, z-slices, patches). Empty: one is picked and stored when the set is created, so the selection can be repeated. |
+
+**Split unit.** All annotations of one unit end up in the same split, and
+`train_n`/`validate_n`/`test_n` and the fractions count units:
+
+- `image` (default): an image (a plate field) with all its timepoints and z-slices.
+  Fields from one well may end up in different splits.
+- `well`: all fields of a plate well. Needs plate data with well information
+  (OMERO plates or OME-Zarr HCS plates).
+
+Whether fields of one well are independent enough to be split apart depends on the
+task, so the choice is recorded rather than imposed. Use `rationale` to say why, for
+example:
+
+```yaml
+split:
+  unit: image
+  rationale: >
+    Fields within a well do not overlap; for nucleus segmentation they are
+    treated as independent.
+```
+
+The unit and rationale are added to the MIFA annotation method. Every export also
+writes a split report, `split-report.yaml`: `ts.write_ro_crate()` puts it in the set's
+folder and `save_bia_package` in the bundle. It lists per split the number of images,
+wells and conditions, the images and wells with annotations in more than one split,
+and the conditions that miss a split, followed by a summary in a few sentences. The
+same report is available in Python as
+`omero_annotate_ai.rows.split_report(rows, split_unit, stratify_by, split_rationale)`
+and `split_summary(report)`.
+
+**Stratified splits.** `stratify_by` divides the units over the splits per condition,
+so that validation and test cover every condition instead of whatever a random draw
+gives. Keys are well key-value pairs (from OMERO map annotations or OME-Zarr well
+attributes), or `well` itself:
+
+```yaml
+split:
+  stratify_by: [cell_line, treatment]
+training:
+  segment_all: true
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+```
+
+- Fraction mode: within each condition, validation and test get their rounded share
+  and training the rest (4 fields at 0.6/0.2/0.2 become 2/1/1).
+- Count mode: each split draws units in turn from all conditions, test and
+  validation first.
+
+When a condition has too few units to reach every split (for example one well per
+condition with `unit: well`), the split still runs with a warning, and the split report
+lists the conditions that miss a split. A key that no image has is an error, as it is
+most likely a typo. Images lacking a key that others have form their own `(missing)`
+group.
+
+### Description: study, authors, methods
+
+These sections describe your set for others and are used by the RO-Crate and the
 [BioImage Archive export](tutorials/bioimage-archive-export.md). They do not change how
 the run works.
 
 ```yaml
+license: CC-BY-4.0                          # CC-BY-4.0 or CC0-1.0
+version: "1"
+url: https://doi.org/10.5281/zenodo.0000000   # where the set is published, once it is
 authors:
-  - name: Jane Doe
-    affiliation: Leiden University
+  - first_name: Jane
+    last_name: Doe
     email: j.doe@example.org
     orcid: https://orcid.org/0000-0000-0000-0000
+    affiliations:
+      - {name: Leiden University, ror: "https://ror.org/027bh9e22"}
+    roles: [annotator]
+keywords: [nuclei, segmentation]
+links:
+  - {url: "https://github.com/example/project", description: Analysis code}
 
 study:
   title: "Nuclei annotations in HeLa cells"
   description: "Instance masks of nuclei for training segmentation models."
-  keywords: [nuclei, segmentation]
   organism: "Homo sapiens"
   imaging_method: "widefield fluorescence microscopy"
   funding_statement: "Funded by NWO."
 
-dataset:
-  source_dataset_id: "S-BIAD123"
-  source_dataset_url: "https://www.ebi.ac.uk/biostudies/bioimages/studies/S-BIAD123"
-  source_description: "HeLa cells, Hoechst channel"
-  license: "CC-BY-4.0"
+source_dataset:
+  identifier: "S-BIAD123"
+  url: "https://www.ebi.ac.uk/biostudies/bioimages/studies/S-BIAD123"
+  description: "HeLa cells, Hoechst channel"
 
-annotation_methodology:
-  annotation_type: segmentation_mask        # bounding_box, point, classification, semantic_segmentation
-  annotation_method: semi_automatic         # manual, automatic
-  annotation_criteria: "Every nucleus fully inside the field."
-  annotation_coverage: representative       # all, partial
-  annotation_tool:
-    name: micro-sam
-    mode: interactive                       # automatic, human_in_the_loop
+methodology:
+  annotation_types: [segmentation_mask]     # MIFA names: point_annotations, bounding_boxes, class_labels, ...
+  mask_kind: instance                       # instance or semantic
+  method: semi_automatic                    # manual, semi_automatic or automatic
+  criteria: "Every nucleus fully inside the field."
+  coverage: representative                  # all, representative or partial
+  confidence_level: "One trained annotator, checked by a second."
+  tools:
+    - {name: micro-sam, version: "1.8.0", mode: interactive}   # automatic, interactive, human_in_the_loop
 
-tags: [segmentation, nuclei]
+classes:
+  - {name: nucleus, color: "#0FA3B1"}
 ```
 
-Other top-level keys: `documentation` and `repository` (URLs), and `feature_types`
-(list of `name` and `color`).
+- `study` also takes `publications`, `grants` and `acknowledgements`; only `title` is
+  required.
+- `source_dataset` needs a `description`.
+- `methodology` needs `annotation_types` and `criteria`. A semantic segmentation is
+  `segmentation_mask` with `mask_kind: semantic`.
+- `classes` entries can also carry `label_value` (the pixel value in a semantic mask)
+  and `ontology_term` (an IRI, e.g. a Cell Ontology term).
 
-### Notes and Custom Metadata
+### Notes and extensions
 
-Anything the structured schema does not cover can be recorded in two open fields. Both
-are stored with the configuration; `notes` is also added to the MIFA annotation overview.
+Anything the schema does not cover can be recorded in two open fields. Both are stored
+with the configuration and in `annotation-set.yaml`.
 
 ```yaml
 notes: "Wells A1-B2 use the key 'celline' instead of 'cellline' in OMERO."
-custom_metadata:
-  instrument: "Incucyte SX5"
-  objective: "10x"
+extensions:
+  my_lab:                    # a namespace key
+    instrument: "Incucyte SX5"
+    objective: "10x"
 ```
+
+### Changing the description of a set
+
+`TrainingSet.config` is a copy; changing it does not change the set. To change the
+description of an existing set, locally and on OMERO, use `describe`:
+
+```python
+ts = TrainingSet.open(table_id, conn)
+ts.describe(
+    version="1",
+    keywords=["nuclei", "segmentation"],
+    study={
+        "title": "Nuclei annotations in HeLa cells",
+        "description": "Instance masks of nuclei for training segmentation models.",
+        "funding_statement": "Funded by NWO.",
+    },
+    links=[{"url": "https://github.com/example/project"}],
+)
+```
+
+`describe` takes the schema sections except `sampling` and `split`
+(`omero_annotate_ai.trainingset.DESCRIPTION_FIELDS`). Values can be plain dicts or the
+schema's models (`bioimage_annotation_schema.datamodel`).
 
 ## Filled in by omero-annotate-ai
 
-`schema_version` (3), `created`, `training.seed` (if you left it empty), `identity` (the set's table ID or local
-ID) and `sessions` (who annotated when, annotate or review, how many units, and the
-session note) are written
-when a set is created and annotated. The rows (one per annotation unit, with its split
-and state) live in `tracking_table.csv` and the OMERO table, not in the config. To start
-a new set from a saved config, remove `identity` and `sessions`.
+`config_version` (4), `created`, `split.seed` (if you left it empty), `identity` (the
+set's table ID or local ID), `omero_server` and `sessions` (who annotated when, annotate
+or review, how many units, and the session note) are written when a set is created and
+annotated.
 
-Keys removed in schema version 3 are refused with a message naming the replacement (for
-example `workflow.read_only_mode` → `storage: local`, `omero.table_id` →
-`TrainingSet.open(table_id)`); the full list is in
+`omero_server` says which OMERO server the images are on: the `host` the connection
+uses and the server's `database_uuid`, which stays the same if the server moves. The
+exported set needs it, because its records name images only as `omero:image:<id>`.
+It is taken from the connection when a set is created, and filled in when an older set,
+made before it was recorded, is opened with a connection. You can add `web_url`, the address of the
+server's OMERO.web, for readers of the exported set. The
+rows (one per annotation unit, with its split and state) live in `tracking_table.csv`
+and the OMERO table, not in the config. To start a new set from a saved config, remove
+`identity` and `sessions`.
+
+## Migrating from config version 3
+
+Version 3 configs are not read. Keys that moved are refused with a message naming the
+replacement, so you can update a config by hand:
+
+| Version 3 | Version 4 |
+|---|---|
+| `schema_version: 3` | `config_version: 4` |
+| `authors: [{name, affiliation, email, orcid}]` | `authors: [{first_name, last_name, email, orcid, affiliations: [{name, ror, address}], roles}]` |
+| `study.keywords`, `tags` | `keywords` (top level) |
+| `dataset.source_dataset_id`, `source_dataset_url`, `source_description` | `source_dataset.identifier`, `url`, `description` |
+| `dataset.license` | `license` (top level; `CC-BY-4.0` or `CC0-1.0`) |
+| `documentation`, `repository` | `links: [{url, description}]` |
+| `annotation_methodology.annotation_type` | `methodology.annotation_types` (list, MIFA names); `semantic_segmentation` becomes `segmentation_mask` with `mask_kind: semantic` |
+| `annotation_methodology.annotation_method`, `annotation_criteria`, `annotation_coverage`, `annotation_tool` | `methodology.method`, `criteria`, `coverage`, `tools` (list) |
+| `feature_types` | `classes` |
+| `spatial_coverage.channels` | removed; `sampling.label_channel` (default 0) |
+| `spatial_coverage.label_channel`, `training_channels` | `sampling.label_channel`, `input_channels` |
+| `spatial_coverage.timepoints`, `timepoint_mode`, `n_timepoints` | `sampling.timepoints: {mode, values, n}` (the same for `z_slices`) |
+| `spatial_coverage.three_d`, `z_range_start`, `z_range_end` | `sampling.volumetric`; the range is the first to last selected z-slice |
+| `spatial_coverage.use_patches`, `patch_size`, `patches_per_image`, `random_patches` | `sampling.patches: {width, height, per_image, random}` |
+| `spatial_coverage.context_channels`, `context_channel_names`, `context_channel_colormaps` | `display.context_channels`, ... |
+| `training.validation_strategy`, `split_unit`, `split_rationale`, `stratify_by`, `seed` | `split.strategy`, `unit`, `rationale`, `stratify_by`, `seed` |
+| `training.quality_threshold` | removed; describe it in `methodology.confidence_level` |
+| `custom_metadata` | `extensions` (keyed by a namespace) |
+
+In Python, `config.spatial_coverage.get_label_channel()`, `get_training_channels()` and
+`uses_separate_channels()` became `config.label_channel()`,
+`config.training_channels()` and `config.uses_separate_channels()`. Keys removed in
+earlier versions (`workflow.read_only_mode`, `omero.table_id`, ...) are listed in
 [migrating from 0.4](release-notes.md#migrating-from-04).
 
 ## Example recipes
 
 ??? example "Time-lapse: 5 random timepoints"
     ```yaml
-    spatial_coverage:
-      channels: [0]
-      timepoint_mode: random
-      n_timepoints: 5
+    sampling:
+      timepoints: {mode: random, n: 5}
     ```
 
 ??? example "Annotate fluorescence, train on brightfield"
     ```yaml
-    spatial_coverage:
-      channels: [0, 1]
+    sampling:
       label_channel: 0          # nuclei stain
-      training_channels: [1]    # brightfield
+      input_channels: [1]       # brightfield
     ```
 
 ??? example "Large images on a CPU"
     ```yaml
-    spatial_coverage:
-      use_patches: true
-      patch_size: [256, 256]
-      patches_per_image: 4
+    sampling:
+      patches: {width: 256, height: 256, per_image: 4}
     ai_model:
       pretrained_from: vit_b_lm
     workflow:
@@ -373,10 +483,9 @@ example `workflow.read_only_mode` → `storage: local`, `omero.table_id` →
 
 ??? example "3D volumes"
     ```yaml
-    spatial_coverage:
-      channels: [0]
-      three_d: true
-      z_slices: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    sampling:
+      z_slices: {mode: specific, values: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]}
+      volumetric: true
     ```
 
 ## Working with configs in Python
@@ -391,6 +500,8 @@ print(config.to_yaml())
 config = create_default_config()  # start from defaults
 config.name = "new_run"
 config.omero.container_id = 123
+config.sampling.label_channel = 1
+config.split.seed = 42
 ```
 
 Full details: [API: Configuration](api/config.md).

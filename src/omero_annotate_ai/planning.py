@@ -270,7 +270,7 @@ PatchFn = Callable[
 
 @dataclass(frozen=True, slots=True)
 class CoverageSpec:
-    """What to annotate in each image (``config.spatial_coverage``).
+    """What to annotate in each image (``config.sampling``).
 
     ``patches`` draws patch origins for an image; ``None`` annotates whole planes.
     """

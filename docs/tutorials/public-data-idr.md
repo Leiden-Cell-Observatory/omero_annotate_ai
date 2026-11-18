@@ -35,14 +35,14 @@ zarr:
   level: 0          # full resolution
   fields: first
   wells: [A1, B2, C3, D4]
-spatial_coverage:
-  channels: [0]     # H2B-GFP: nuclei
-  timepoint_mode: random
-  n_timepoints: 1   # one random frame of each time-lapse
+sampling:
+  label_channel: 0  # H2B-GFP: nuclei
+  timepoints: {mode: random, n: 1}   # one random frame of each time-lapse
+split:
+  seed: 42
 training:
   train_n: 2
   validate_n: 1
-  seed: 42
 storage: local
 ```
 

@@ -549,7 +549,7 @@ def reorganize_local_data_for_training(
     if not processed_annotations:
         raise ValueError(f"No annotated units in {table_file}")
 
-    uses_separate_channels = config.spatial_coverage.uses_separate_channels()
+    uses_separate_channels = config.uses_separate_channels()
 
     if include_test is None:
         include_test = any(ann.category == "test" for ann in processed_annotations)
@@ -713,32 +713,31 @@ def export_training_set(
     from ..trainingset import read_set_config  # the core imports this module
 
     config = read_set_config(ref, conn).model_copy(deep=True)
-    coverage = config.spatial_coverage
     if not isinstance(ref, int) and (
-        (label_channel is not None and label_channel != coverage.get_label_channel())
+        (label_channel is not None and label_channel != config.label_channel())
         or (
             training_channels is not None
-            and training_channels != coverage.get_training_channels()
+            and training_channels != config.training_channels()
         )
     ):
         raise ValueError(
             "A local training set exports the channels it was annotated with "
-            f"(label {coverage.get_label_channel()}, training "
-            f"{coverage.get_training_channels()})"
+            f"(label {config.label_channel()}, training "
+            f"{config.training_channels()})"
         )
     if label_channel is not None:
-        coverage.label_channel = label_channel
+        config.sampling.label_channel = label_channel
     if training_channels is not None:
-        coverage.training_channels = training_channels
+        config.sampling.input_channels = training_channels
     if apply_normalization is not None:
         config.normalization.apply_at_export = apply_normalization
     if not isinstance(ref, int):
         return reorganize_local_data_for_training(config, Path(ref), output_dir)
 
-    if len(coverage.get_training_channels()) > 1:
+    if len(config.training_channels()) > 1:
         raise ValueError(
             "An OMERO export trains on one channel; pick one training channel "
-            f"(got {coverage.get_training_channels()})"
+            f"(got {config.training_channels()})"
         )
     root = home_dir(home)
     for folder in root.glob(f"*/{ref}_*"):  # the set's local folder, on any server
@@ -749,7 +748,7 @@ def export_training_set(
         ref,
         output_dir,
         training_name=config.name,
-        label_channel=coverage.get_label_channel(),
-        training_channels=coverage.get_training_channels(),
+        label_channel=config.label_channel(),
+        training_channels=config.training_channels(),
         normalization=config.normalization,
     )

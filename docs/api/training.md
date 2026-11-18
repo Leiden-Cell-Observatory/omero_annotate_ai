@@ -20,4 +20,4 @@
 
 ::: omero_annotate_ai.processing.bia_data.prepare_bia_data_from_table
 
-::: omero_annotate_ai.core.mifa_export.save_bia_package
+::: omero_annotate_ai.schema_export.save_bia_package

@@ -17,6 +17,7 @@ adding images, notes) is a method on it.
         - review
         - start_session
         - set_session_note
+        - describe
         - reconcile
         - prepare_external
         - collect_masks
@@ -47,12 +48,14 @@ adding images, notes) is a method on it.
         - distance
         - describe_change
 
-## RO-Crate
+## Schema documents and RO-Crate
 
-::: omero_annotate_ai.crate
+::: omero_annotate_ai.schema_export
     options:
       members:
-        - build_ro_crate
+        - annotation_set
+        - annotation_records
+        - write_schema_documents
         - write_ro_crate
 
 ## Several computers (claims)

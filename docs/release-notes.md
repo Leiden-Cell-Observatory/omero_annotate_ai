@@ -3,6 +3,61 @@
 Newest first. The full list of pull requests per version is on
 [GitHub releases](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/releases).
 
+## Unreleased
+
+- **Config version 4: sets are described with the Bioimage Annotation Schema.** The
+  config's description sections are now the models of the
+  [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
+  (`bioimage_annotation_schema.datamodel`): `name`, `description`, `license`,
+  `version`, `changes`, `previous_version`, `ai_models_trained`, `authors`,
+  `keywords`, `links`, `study`, `source_dataset`, `methodology`, `classes`,
+  `sampling`, `split`, `notes` and `extensions`. The tool sections (`omero`, `zarr`,
+  `storage`, `training`, `normalization`, `ai_model`, `workflow`, `identity`,
+  `sessions`) stay, plus a new `display` section for context channels. Configs start
+  with `config_version: 4`; version 3 configs are not read, and every moved key raises
+  `RemovedConfigKey` naming its new place (`spatial_coverage` → `sampling`,
+  `annotation_methodology` → `methodology`, `dataset` → `source_dataset` and
+  `license`, `feature_types` → `classes`, `training.seed` / `split_unit` /
+  `stratify_by` → `split`, `custom_metadata` → `extensions`, ...). See the
+  [migration table](configuration.md#migrating-from-config-version-3). Annotation
+  types use MIFA's names (`segmentation_mask`, `point_annotations`, ...); the licence
+  is `CC-BY-4.0` or `CC0-1.0`. `config.label_channel()`, `config.training_channels()`
+  and `config.uses_separate_channels()` replace the `spatial_coverage` methods.
+- **`TrainingSet.describe(**fields)`** changes the description of an existing set
+  (version, keywords, study, links, ...), locally and on OMERO. `sampling` and `split`
+  are fixed once the set exists. `ts.config` is a copy; changing it does not change
+  the set.
+- **Split report with every export.** `ts.write_ro_crate()` and `save_bia_package`
+  write `split-report.yaml`: the images, wells and conditions per split, those found
+  in more than one split and the conditions that miss a split.
+- **Exports come from the schema library.** `ts.write_ro_crate()` now also writes
+  `annotation-set.yaml` and `annotation-records.csv` (checked against the schema) into
+  the set's folder. `save_bia_package` moved to `omero_annotate_ai.schema_export`; it
+  no longer takes `funding_statement=` and does not fill in placeholders: it raises
+  `MifaNotReady` listing the MIFA fields the config lacks (study description and
+  funding statement, keywords, a link, version). The modules
+  `omero_annotate_ai.crate` and `omero_annotate_ai.core.mifa_export` are removed; the
+  MIFA functions (`save_mifa`, `check_mifa`, `save_bia_package`) live in
+  `bioimage_annotation_schema.mifa`.
+- **ISCC codes say how they were made.** When units carry ISCC codes, the exported
+  `annotation-set.yaml` has a `content_codes.region` block: code type (Image-Code,
+  64 bits), which pixels, how they were prepared, and the package and `iscc-lib`
+  versions. ISCC codes are only comparable when made the same way, so other tools
+  (for example iscc-bio, whose ISCC-SUMs cover the whole source image) can tell
+  whether a code is theirs. The export checks that the set and its records agree
+  (`bioimage_annotation_schema.check_documents`).
+- **`url`: where the set is published** (DOI or archive page). The exported
+  `annotation-set.yaml` carries it; the schema's Croissant and bioimage.io dataset
+  descriptions need it. Set it with `ts.describe(url=...)` once the set is deposited.
+- **The OMERO server is recorded.** Records name images as `omero:image:<id>`,
+  which is not traceable without the server. The config's new `omero_server` (host,
+  database UUID, optionally `web_url`) is filled in from the connection, the exported
+  `annotation-set.yaml` carries it, and the RO-Crate links each source image to it.
+  Exporting OMERO images without it fails; open an older set once with a connection
+  to fill it in.
+- **Install:** `bioimage-annotation-schema` is a new dependency. Until it is on PyPI,
+  install it from GitHub (see [Installation](installation.md)).
+
 ## 0.5.3
 
 - **Passwords are no longer stored anywhere.** The Jupyter connection widget lost its
@@ -23,8 +78,8 @@ Newest first. The full list of pull requests per version is on
   statement, organism and accession with example values; it now keeps what the config
   holds and stops until the required fields are filled in.
 - **Notebooks:** the marimo notebooks take a session key too, and
-  `annotate-from-yaml.py` a group and the encryption switch. Their patch size fields
-  are labelled (height, width), which is how the value was always read. The inference
+  `annotate-from-yaml.py` a group and the encryption switch. The patch
+  shape of the training notebook is labelled (height, width), which is how it is read. The inference
   notebook no longer carries an image ID and checkpoint name from our own server.
 - **A dropped connection is restored.** Before remote work (opening a set, each batch,
   each save, listing sets) the connection is checked; if the network dropped it
@@ -171,7 +226,7 @@ extended; finish them with 0.4 or start a new training set.
 | `output.output_directory`, `config_file_path` | the set's folder: `home=` or `$OMERO_ANNOTATE_AI_HOME` |
 | `workflow.read_only_mode: true` | `storage: local` |
 | `workflow.resume_from_table`, `omero.table_id` | `TrainingSet.open(table_id)` (`identity.table_id` is written by the package) |
-| `version` | `schema_version` |
+| `version` | `schema_version` (config version 4 drops it again: `config_version: 4`, and `version` is now the set's own version) |
 | `spatial_coverage.normalization_method`, `percentile_*` | `normalization.*` |
 
 Unknown keys are refused, in every section, instead of ignored.

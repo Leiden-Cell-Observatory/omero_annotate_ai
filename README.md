@@ -40,7 +40,7 @@ flowchart LR
 - **Review and correct** earlier annotations with their saved masks; record a note per session.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
-- **FAIR by default:** the config carries study and method metadata and exports to the BioImage Archive (MIFA).
+- **FAIR by default:** the config describes the set with the [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema) (study, authors, methods, sampling, split) and exports to RO-Crate and the BioImage Archive (MIFA).
 - **Local-only storage** (`storage: local`) for data you cannot write to, such as public [IDR](https://idr.openmicroscopy.org) OME-Zarr.
 
 ## Jupyter widgets
@@ -81,6 +81,12 @@ pip install "omero-annotate-ai[microsam,notebooks]" jupyterlab
 ```
 
 See the [installation guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/installation/) for details and troubleshooting.
+
+The development version (this repository's `main`) depends on the
+[Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema),
+which is not on PyPI yet. Install it first:
+`pip install "git+https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema"`.
+A clone with `pixi install` gets it automatically.
 
 ## Quick start
 

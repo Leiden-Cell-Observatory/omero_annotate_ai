@@ -14,7 +14,7 @@
 
 ::: omero_annotate_ai.core.annotation_config.OMEROConfig
 
-::: omero_annotate_ai.core.annotation_config.SpatialCoverage
+::: omero_annotate_ai.core.annotation_config.DisplayConfig
 
 ::: omero_annotate_ai.core.annotation_config.TrainingConfig
 
@@ -30,14 +30,8 @@
 
 ::: omero_annotate_ai.core.annotation_config.SessionRecord
 
-## Metadata sections
+## Schema sections
 
-::: omero_annotate_ai.core.annotation_config.StudyContext
-
-::: omero_annotate_ai.core.annotation_config.DatasetInfo
-
-::: omero_annotate_ai.core.annotation_config.AnnotationMethodology
-
-::: omero_annotate_ai.core.annotation_config.AnnotationTool
-
-::: omero_annotate_ai.core.annotation_config.AuthorInfo
+The description sections (`authors`, `study`, `source_dataset`, `methodology`,
+`classes`, `sampling`, `split`, ...) are the models of the Bioimage Annotation Schema,
+`bioimage_annotation_schema.datamodel`; see [Configuration](../configuration.md#schema-sections).
