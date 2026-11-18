@@ -22,6 +22,10 @@ Newest first. The full list of pull requests per version is on
   `omero-table-to-bioimage-archive.ipynb` filled an empty title, author, funding
   statement, organism and accession with example values; it now keeps what the config
   holds and stops until the required fields are filled in.
+- **Notebooks:** the marimo notebooks take a session key too, and
+  `annotate-from-yaml.py` a group and the encryption switch. Their patch size fields
+  are labelled (height, width), which is how the value was always read. The inference
+  notebook no longer carries an image ID and checkpoint name from our own server.
 - **A dropped connection is restored.** Before remote work (opening a set, each batch,
   each save, listing sets) the connection is checked; if the network dropped it
   rejoins its OMERO session, and if the session itself ended (the server's idle
