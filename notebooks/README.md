@@ -1,7 +1,8 @@
 # Notebooks
 
 Example notebooks for the omero-annotate-ai workflows. The Jupyter widget notebook is the
-easiest start; the marimo notebooks cover everything else. Committed notebooks carry no
+easiest start; the marimo notebooks cover everything else. Neither front-end covers every
+step: [docs/notebooks.md](../docs/notebooks.md) lists which notebook does what. Committed notebooks carry no
 outputs (`pixi run -e dev install-hooks` sets up the hook that strips them).
 
 ## marimo (`marimo/`)

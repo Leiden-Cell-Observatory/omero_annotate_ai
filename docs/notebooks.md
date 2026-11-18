@@ -11,6 +11,7 @@ on GitHub. Download the one you need, or clone the repository.
 | Task | Jupyter | marimo | Guide |
 |---|---|---|---|
 | Annotate with micro-SAM | [widget workflow][gh-ann] | [annotation][mo-ann] | [guide](tutorials/microsam-annotation-pipeline.md) |
+| Review and correct saved masks | [widget workflow][gh-ann] (*Review annotated*) | | |
 | Annotate with Cellpose | | [annotation][mo-ann] (tool: Cellpose GUI) | [guide](tutorials/cellpose-integration.md) |
 | Run from a YAML file (OMERO or OME-Zarr) | | [from YAML][mo-yaml] | [guide](tutorials/resume-and-repeat.md) |
 | Try on public data | | [IDR OME-Zarr demo][mo-idr], [OME-Zarr from YAML][mo-yaml] | [guide](tutorials/public-data-idr.md) |

@@ -82,9 +82,28 @@ def _(config, mo):
     omero_host = mo.ui.text(label="OMERO host")
     omero_username = mo.ui.text(label="Username")
     omero_password = mo.ui.text(label="Password", kind="password")
+    omero_session_key = mo.ui.text(
+        label="Session key (instead of username and password)", kind="password"
+    )
+    omero_group = mo.ui.text(label="Group (optional)")
+    omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect")
-    mo.hstack([omero_host, omero_username, omero_password, connect_button])
-    return connect_button, omero_host, omero_password, omero_username
+    mo.vstack(
+        [
+            mo.hstack([omero_host, omero_username, omero_password], justify="start"),
+            mo.hstack([omero_session_key, omero_group], justify="start"),
+            mo.hstack([omero_secure, connect_button], justify="start"),
+        ]
+    )
+    return (
+        connect_button,
+        omero_group,
+        omero_host,
+        omero_password,
+        omero_secure,
+        omero_session_key,
+        omero_username,
+    )
 
 
 @app.cell
@@ -93,8 +112,11 @@ def _(
     config,
     connect_button,
     mo,
+    omero_group,
     omero_host,
     omero_password,
+    omero_secure,
+    omero_session_key,
     omero_username,
 ):
     conn = None
@@ -106,6 +128,9 @@ def _(
                     "host": omero_host.value,
                     "username": omero_username.value,
                     "password": omero_password.value,
+                    "session_key": omero_session_key.value,
+                    "group": omero_group.value,
+                    "secure": omero_secure.value,
                 }
             )
         except Exception as _error:  # ConnectionFailed: report and stop
