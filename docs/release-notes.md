@@ -46,6 +46,12 @@ Newest first. The full list of pull requests per version is on
   (for example iscc-bio, whose ISCC-SUMs cover the whole source image) can tell
   whether a code is theirs. The export checks that the set and its records agree
   (`bioimage_annotation_schema.check_documents`).
+- **The OMERO server is recorded.** Records name images as `omero:image:<id>`,
+  which is not traceable without the server. The config's new `omero_server` (host,
+  database UUID, optionally `web_url`) is filled in from the connection, the exported
+  `annotation-set.yaml` carries it, and the RO-Crate links each source image to it.
+  Exporting OMERO images without it fails; open an older set once with a connection
+  to fill it in.
 - **Install:** `bioimage-annotation-schema` is a new dependency. Until it is on PyPI,
   install it from GitHub (see [Installation](installation.md)).
 

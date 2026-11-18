@@ -129,6 +129,7 @@ def annotation_set(
             "ai_models_trained",
             "study",
             "source_dataset",
+            "omero_server",
             "classes",
             "sampling",
             "split",

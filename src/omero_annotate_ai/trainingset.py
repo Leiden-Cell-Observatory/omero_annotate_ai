@@ -22,6 +22,7 @@ from typing import Any, Literal, cast
 import numpy as np
 import pandas as pd
 import tifffile
+from bioimage_annotation_schema import datamodel as bas
 
 from . import claims
 from .annotators import Annotator, Batch, BatchItem, MicroSamAnnotator
@@ -294,6 +295,20 @@ class TrainingSet:
     def _server(self) -> str:
         host = getattr(self.conn, "host", None) or "omero"
         return server_slug(str(host), getattr(self.conn, "port", None))
+
+    def _connected_server(self) -> bas.OmeroServer | None:
+        """The OMERO server the images are read from, recorded in the config so the
+        exported set's ``omero:image:<id>`` URIs can be traced to their images."""
+        if self._config.source != "omero" or self.conn is None:
+            return None
+        host = str(getattr(self.conn, "host", None) or "omero")
+        port = getattr(self.conn, "port", None)
+        if port and "://" not in host:
+            host = f"{host}:{port}"
+        uuid = self.conn.getConfigService().getDatabaseUuid()
+        return bas.OmeroServer(
+            host=host, database_uuid=uuid if isinstance(uuid, str) else None
+        )
 
     @property
     def bundle_dir(self) -> Path:
@@ -1075,6 +1090,8 @@ class TrainingSet:
             cancel=cancel,
         )
         ts.rows = ts._plan_rows(images)
+        # From the connection, not from the config an earlier set was made with
+        ts._config.omero_server = ts._connected_server() or config.omero_server
         if not ts.is_local:
             ts._config.identity.server = ts._server()
             ts._config.identity.table_id = ts.omero_writes.create_table(
@@ -1160,6 +1177,10 @@ class TrainingSet:
             ts._release_own_claims()
             reconcile(ts, local_rows, prune_duplicates=prune_duplicates, cancel=cancel)
             ts._report_claims()
+        if ts._config.omero_server is None:  # a set made before it was recorded
+            ts._config.omero_server = ts._connected_server()
+            if ts._config.omero_server is not None:
+                ts.save_config()
         ts._close_open_sessions()
         return ts
 

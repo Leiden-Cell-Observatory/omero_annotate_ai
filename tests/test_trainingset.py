@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import tifffile
+from bioimage_annotation_schema import datamodel as bas
 
 from omero_annotate_ai.core.annotation_config import AnnotationConfig
 from omero_annotate_ai.errors import ConfigError
@@ -19,6 +20,18 @@ def new(tmp_path, n_images=3, **kwargs):
 
 
 class TestCreate:
+    def test_records_the_omero_server(self, tmp_path):
+        ts, _, _ = new(tmp_path)
+        saved = AnnotationConfig.from_yaml(ts.bundle_dir / "config.yaml")
+        assert saved.omero_server is not None
+        assert saved.omero_server.host == "fake.omero:4064"
+
+    def test_omero_server_is_not_taken_from_an_earlier_set(self, tmp_path):
+        config, source, omero = omero_set(tmp_path)
+        config.omero_server = bas.OmeroServer(host="old.example.org:4064")
+        ts = create_set(config, source, omero, tmp_path / "home")
+        assert ts._config.omero_server.host == "fake.omero:4064"
+
     def test_omero_set_gets_table_folder_and_published_config(self, tmp_path):
         ts, _, omero = new(tmp_path)
 
@@ -58,6 +71,16 @@ class TestCreate:
 
 
 class TestOpen:
+    def test_fills_in_a_missing_omero_server(self, tmp_path):
+        ts, source, omero = new(tmp_path)
+        ts._config.omero_server = None  # a set made before the server was recorded
+        ts.save_config()
+
+        reopen(ts, source, omero)
+        saved = AnnotationConfig.from_yaml(ts.bundle_dir / "config.yaml")
+        assert saved.omero_server is not None
+        assert saved.omero_server.host == "fake.omero:4064"
+
     def test_by_table_id_uses_the_local_copy(self, tmp_path):
         ts, source, omero = new(tmp_path)
         again = reopen(ts, source, omero)

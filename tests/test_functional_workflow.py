@@ -267,6 +267,9 @@ class TestNewTrainingSet:
         }
         # Exactly one config on OMERO for the set.
         assert len(config_annotations(omero_conn, table_id)) == 1
+        # The config says which server the images are on, with its database UUID.
+        server = pipeline._config.omero_server
+        assert server is not None and len(server.database_uuid or "") == 36
         # Label files are lossless: the local mask and the upload are identical.
         image = pipeline.image_source.get_image(
             f"omero:image:{int(rows['image_id'][0])}"

@@ -28,6 +28,8 @@ from tests.fakes import annotate, create_set, omero_set
 def _crate(tmp_path, *, n_images=3, limit=2, note="nuclei only", storage="omero"):
     config, source, omero = omero_set(tmp_path, n_images=n_images)
     config.storage = storage
+    if storage == "local":  # no connection to read the server from
+        config.omero_server = bas.OmeroServer(host="fake.omero:4064")
     config.authors = [
         bas.Person(
             first_name="A.",
@@ -245,8 +247,14 @@ class TestSchemaDocuments:
         (tool,) = annotation_set(config).methodology.tools
         assert (tool.name, tool.model.name) == ("micro-sam", "vit_b_lm")
 
+    def test_omero_images_name_their_server(self, tmp_path):
+        ts, _, _, by_id = _crate(tmp_path, limit=1)
+        assert read_set(ts.bundle_dir).omero_server.host == "fake.omero:4064"
+        assert by_id["omero:image:1"]["isPartOf"] == {"@id": "#omero-server"}
+
     def test_written_documents_pass_the_schema(self, tmp_path):
         config = create_default_config()
+        config.omero_server = bas.OmeroServer(host="omero.example.org:4064")
         rows = [Row(image_uri="omero:image:1", image_name="a", annotation_id="a_0")]
         set_path, records_path = write_schema_documents(config, rows, tmp_path)
         assert read_set(set_path).schema_version == "0.1.0"

@@ -74,7 +74,7 @@ A config (version 4) has two kinds of sections:
 |---|---|
 | Schema | `name`, `description`, `version`, `license`, `changes`, `previous_version`, `authors`, `keywords`, `links`, `ai_models_trained`, `study`, `source_dataset`, `methodology`, `classes`, `sampling`, `split`, `notes`, `extensions` |
 | Tool | `omero`, `zarr`, `source`, `storage`, `training`, `normalization`, `ai_model`, `display`, `workflow` |
-| Written by omero-annotate-ai | `config_version`, `created`, `identity`, `sessions` |
+| Written by omero-annotate-ai | `config_version`, `created`, `identity`, `omero_server`, `sessions` |
 
 `sampling` and `split` decide which units a set has, so they are fixed once the set
 exists. The other schema sections can be changed later with
@@ -409,8 +409,16 @@ schema's models (`bioimage_annotation_schema.datamodel`).
 ## Filled in by omero-annotate-ai
 
 `config_version` (4), `created`, `split.seed` (if you left it empty), `identity` (the
-set's table ID or local ID) and `sessions` (who annotated when, annotate or review, how
-many units, and the session note) are written when a set is created and annotated. The
+set's table ID or local ID), `omero_server` and `sessions` (who annotated when, annotate
+or review, how many units, and the session note) are written when a set is created and
+annotated.
+
+`omero_server` says which OMERO server the images are on: the `host` the connection
+uses and the server's `database_uuid`, which stays the same if the server moves. The
+exported set needs it, because its records name images only as `omero:image:<id>`.
+It is taken from the connection when a set is created, and filled in when an older set,
+made before it was recorded, is opened with a connection. You can add `web_url`, the address of the
+server's OMERO.web, for readers of the exported set. The
 rows (one per annotation unit, with its split and state) live in `tracking_table.csv`
 and the OMERO table, not in the config. To start a new set from a saved config, remove
 `identity` and `sessions`.

@@ -448,6 +448,11 @@ class AnnotationConfig(BaseModel):
     ai_models_trained: list[str] = Field(default_factory=list)
     study: bas.Study | None = None
     source_dataset: bas.SourceDataset | None = None
+    omero_server: bas.OmeroServer | None = Field(
+        default=None,
+        description="The OMERO server the images are on; filled in from the "
+        "connection when the set is created or opened",
+    )
     methodology: bas.Methodology = Field(default_factory=_default_methodology)
     classes: list[bas.AnnotationClass] = Field(
         default_factory=list,
