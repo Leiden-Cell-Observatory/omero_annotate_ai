@@ -101,6 +101,19 @@ class TestOpen:
         assert elsewhere.name == ts.name
         assert elsewhere.bundle_dir.is_relative_to(tmp_path / "other_home")
 
+    def test_local_set_opens_from_its_folder_without_a_connection(self, tmp_path):
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        config.storage = "local"
+        ts = create_set(config, source, omero, tmp_path / "home")
+        annotate(ts)
+
+        offline = TrainingSet.open(ts.bundle_dir)  # no conn, no image source
+
+        assert all(r.processed for r in offline.rows)
+        offline.set_session_note(offline.config.sessions[-1].id, "checked offline")
+        with pytest.raises(ValueError, match="OMERO connection is required"):
+            offline.prepare_item(offline.rows[0])
+
     def test_a_session_left_open_becomes_interrupted(self, tmp_path):
         ts, source, omero = new(tmp_path)
         session = ts.start_session()

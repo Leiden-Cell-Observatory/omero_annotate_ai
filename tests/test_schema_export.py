@@ -247,6 +247,11 @@ class TestSchemaDocuments:
         (tool,) = annotation_set(config).methodology.tools
         assert (tool.name, tool.model.name) == ("micro-sam", "vit_b_lm")
 
+    def test_publication_address_is_exported(self):
+        config = create_default_config()
+        config.url = "https://doi.org/10.5281/zenodo.0000000"
+        assert annotation_set(config).url == config.url
+
     def test_omero_images_name_their_server(self, tmp_path):
         ts, _, _, by_id = _crate(tmp_path, limit=1)
         assert read_set(ts.bundle_dir).omero_server.host == "fake.omero:4064"

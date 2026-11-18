@@ -1,8 +1,8 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.11"
 # dependencies = [
 #     "marimo",
-#     "omero-annotate-ai",
+#     "omero-annotate-ai[microsam]",
 # ]
 # ///
 
@@ -46,6 +46,11 @@ def _(mo):
     omero_password = mo.ui.text(
         value="", label="Password", placeholder="password", kind="password"
     )
+    omero_session_key = mo.ui.text(
+        value="",
+        label="Session key (instead of username and password)",
+        kind="password",
+    )
     omero_group = mo.ui.text(
         value="", label="Group (optional)", placeholder="Leave empty for default"
     )
@@ -57,6 +62,7 @@ def _(mo):
             omero_host,
             omero_username,
             omero_password,
+            omero_session_key,
             omero_group,
             omero_secure,
             connect_button,
@@ -68,46 +74,46 @@ def _(mo):
         omero_host,
         omero_password,
         omero_secure,
+        omero_session_key,
         omero_username,
     )
 
 
 @app.cell
 def _(
+    SimpleOMEROConnection,
     connect_button,
-    establish_connection,
     mo,
     omero_group,
     omero_host,
     omero_password,
     omero_secure,
+    omero_session_key,
     omero_username,
 ):
     conn = None
     connection_status = "Not connected"
 
     if connect_button.value:
-        host = omero_host.value
-        username = omero_username.value
-        password = omero_password.value
-        group = omero_group.value if omero_group.value else None
-        secure = omero_secure.value
-
-        if host and username and password:
-            try:
-                conn = establish_connection(host, username, password, group, secure)
-                if conn and conn.isConnected():
-                    user = conn.getUser().getName()
-                    group_name = conn.getGroupFromContext().getName()
-                    connection_status = (
-                        f"Connected as **{user}** to group **{group_name}**"
-                    )
-                else:
-                    connection_status = "Connection failed"
-            except Exception as e:
-                connection_status = f"Connection error: {str(e)}"
+        try:
+            conn = SimpleOMEROConnection().create_connection_from_config(
+                {
+                    "host": omero_host.value,
+                    "username": omero_username.value,
+                    "password": omero_password.value,
+                    "session_key": omero_session_key.value,
+                    "group": omero_group.value,
+                    "secure": omero_secure.value,
+                }
+            )
+        except Exception as _error:  # ConnectionFailed: show it, don't crash
+            connection_status = f"Connection error: {_error}"
         else:
-            connection_status = "Please fill in host, username, and password"
+            conn.c.enableKeepAlive(60)
+            connection_status = (
+                f"Connected as **{conn.getUser().getName()}** to group "
+                f"**{conn.getGroupFromContext().getName()}**"
+            )
 
     mo.md(f"**Status:** {connection_status}")
     return (conn,)
@@ -198,7 +204,7 @@ def _(mo):
 def _(annotation_config, mo):
     _patches = annotation_config.sampling.patches
     _default_model = annotation_config.ai_model.pretrained_from or "vit_b_lm"
-    _default_patch = f"{_patches.width}, {_patches.height}" if _patches else "512, 512"
+    _default_patch = f"{_patches.height}, {_patches.width}" if _patches else "512, 512"
     _default_name = annotation_config.name
 
     model_name = mo.ui.text(value=_default_name, label="Model Name")
@@ -211,7 +217,7 @@ def _(annotation_config, mo):
         start=1, stop=200, value=10, label="Epochs (use 50+ for real training)"
     )
     batch_size = mo.ui.slider(start=1, stop=8, value=1, label="Batch Size")
-    patch_shape = mo.ui.text(value=_default_patch, label="Patch Shape (width, height)")
+    patch_shape = mo.ui.text(value=_default_patch, label="Patch Shape (height, width)")
     n_iterations = mo.ui.number(
         value=0, start=0, label="Iterations (0 = derive from epochs)"
     )
@@ -500,6 +506,7 @@ def _():
         run_training,
         setup_training,
     )
+    from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
     from omero_annotate_ai.planning import parse_indices
     from omero_annotate_ai.processing.training_functions import default_export_dir
     from omero_annotate_ai.trainingset import (
@@ -508,14 +515,7 @@ def _():
         training_set_choices,
     )
 
-    try:
-        from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
-
-        OMERO_AVAILABLE = True
-    except ImportError:
-        OMERO_AVAILABLE = False
     return (
-        OMERO_AVAILABLE,
         SimpleOMEROConnection,
         default_export_dir,
         export_training_set,
@@ -526,32 +526,6 @@ def _():
         summarize,
         training_set_choices,
     )
-
-
-@app.cell
-def _(OMERO_AVAILABLE, SimpleOMEROConnection):
-    def establish_connection(host, username, password, group=None, secure=True):
-        if not OMERO_AVAILABLE:
-            raise ImportError(
-                "OMERO functionality not available. Install with: pip install -e .[omero]"
-            )
-
-        connection = SimpleOMEROConnection()
-        config = {
-            "host": host,
-            "username": username,
-            "password": password,
-            "secure": secure,
-        }
-        if group:
-            config["group"] = group
-
-        conn = connection.create_connection_from_config(config)
-        if conn:
-            conn.c.enableKeepAlive(60)
-        return conn
-
-    return (establish_connection,)
 
 
 @app.function

@@ -59,13 +59,17 @@ def _(mo):
     omero_host = mo.ui.text(label="Host", placeholder="omero.example.org")
     omero_username = mo.ui.text(label="Username")
     omero_password = mo.ui.text(label="Password", kind="password")
+    omero_session_key = mo.ui.text(
+        label="Session key (instead of username and password)", kind="password"
+    )
     omero_group = mo.ui.text(label="Group (optional)")
     omero_secure = mo.ui.checkbox(value=True, label="Encrypt data transfer")
     connect_button = mo.ui.run_button(label="Connect")
     mo.vstack(
         [
             mo.hstack([omero_host, omero_username, omero_password], justify="start"),
-            mo.hstack([omero_group, omero_secure, connect_button], justify="start"),
+            mo.hstack([omero_session_key, omero_group], justify="start"),
+            mo.hstack([omero_secure, connect_button], justify="start"),
         ]
     )
     return (
@@ -74,6 +78,7 @@ def _(mo):
         omero_host,
         omero_password,
         omero_secure,
+        omero_session_key,
         omero_username,
     )
 
@@ -87,6 +92,7 @@ def _(
     omero_host,
     omero_password,
     omero_secure,
+    omero_session_key,
     omero_username,
 ):
     mo.stop(
@@ -96,6 +102,7 @@ def _(
         "host": omero_host.value,
         "username": omero_username.value,
         "password": omero_password.value,
+        "session_key": omero_session_key.value,
         "secure": omero_secure.value,
     }
     if omero_group.value:
@@ -189,7 +196,7 @@ def _(mo):
     z_slices = mo.ui.text(value="0", label="Z-slices")
     three_d = mo.ui.checkbox(value=False, label="3D (volumes)")
     use_patches = mo.ui.checkbox(value=False, label="Patches")
-    patch_size = mo.ui.text(value="512, 512", label="Patch size (w, h)")
+    patch_size = mo.ui.text(value="512, 512", label="Patch size (width, height)")
     patches_per_image = mo.ui.number(value=1, start=1, label="Patches per image")
     storage = mo.ui.dropdown(
         options={

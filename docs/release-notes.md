@@ -46,6 +46,9 @@ Newest first. The full list of pull requests per version is on
   (for example iscc-bio, whose ISCC-SUMs cover the whole source image) can tell
   whether a code is theirs. The export checks that the set and its records agree
   (`bioimage_annotation_schema.check_documents`).
+- **`url`: where the set is published** (DOI or archive page). The exported
+  `annotation-set.yaml` carries it; the schema's Croissant and bioimage.io dataset
+  descriptions need it. Set it with `ts.describe(url=...)` once the set is deposited.
 - **The OMERO server is recorded.** Records name images as `omero:image:<id>`,
   which is not traceable without the server. The config's new `omero_server` (host,
   database UUID, optionally `web_url`) is filled in from the connection, the exported
@@ -67,6 +70,17 @@ Newest first. The full list of pull requests per version is on
   on Linux, Keychain Access on macOS, Credential Manager on Windows) or with
   `pipx run keyring del omero-annotate-ai <host>:<username>` (`keyring` itself is no
   longer installed with the package).
+- **The connection widget has no Test Connection button any more.** It cleared the
+  password, which then had to be typed again for **Connect**; Connect reports the same
+  errors. `SimpleOMEROConnection.test_connection` is removed with it.
+- **The BioImage Archive notebook no longer invents study metadata.**
+  `omero-table-to-bioimage-archive.ipynb` filled an empty title, author, funding
+  statement, organism and accession with example values; it now keeps what the config
+  holds and stops until the required fields are filled in.
+- **Notebooks:** the marimo notebooks take a session key too, and
+  `annotate-from-yaml.py` a group and the encryption switch. The patch
+  shape of the training notebook is labelled (height, width), which is how it is read. The inference
+  notebook no longer carries an image ID and checkpoint name from our own server.
 - **A dropped connection is restored.** Before remote work (opening a set, each batch,
   each save, listing sets) the connection is checked; if the network dropped it
   rejoins its OMERO session, and if the session itself ended (the server's idle
@@ -77,6 +91,14 @@ Newest first. The full list of pull requests per version is on
   `create_connection_from_config`), e.g. for a session started in OMERO.web or
   BIOMERO. Closing such a connection only detaches; the session stays usable where it
   came from. A session-key connection cannot log in again once its session has ended.
+- **`import omero_annotate_ai` works without the `notebooks` extra.** `python-dotenv`
+  is now a base dependency, and the widget factories are imported on first use; without
+  `ipywidgets` they raise an error naming `omero-annotate-ai[notebooks]` (#110).
+- **A local set opens from its folder without an OMERO connection**:
+  `TrainingSet.open(folder)` no longer needs one for `storage: local` sets with OMERO
+  images; the connection is asked for only when an image is read (#112).
+- `spatial_coverage.patch_size` is documented as `[height, width]`, which is how it has
+  always been read (#111).
 
 ## 0.5.2
 

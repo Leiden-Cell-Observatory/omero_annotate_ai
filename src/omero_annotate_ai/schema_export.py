@@ -122,6 +122,7 @@ def annotation_set(
             "created",
             "license",
             "version",
+            "url",
             "changes",
             "previous_version",
             "keywords",

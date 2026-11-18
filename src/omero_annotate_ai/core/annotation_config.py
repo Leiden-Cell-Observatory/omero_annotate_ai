@@ -440,6 +440,11 @@ class AnnotationConfig(BaseModel):
     version: str | None = Field(
         default=None, description="Version of the set, e.g. '1' (needed for MIFA)"
     )
+    url: str | None = Field(
+        default=None,
+        description="Where the set is published (DOI or archive page); needed "
+        "for the Croissant and bioimage.io descriptions",
+    )
     changes: str | None = None
     previous_version: str | None = None
     authors: list[bas.Person] = Field(default_factory=list)

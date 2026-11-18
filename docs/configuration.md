@@ -72,7 +72,7 @@ A config (version 4) has two kinds of sections:
 
 | Kind | Sections |
 |---|---|
-| Schema | `name`, `description`, `version`, `license`, `changes`, `previous_version`, `authors`, `keywords`, `links`, `ai_models_trained`, `study`, `source_dataset`, `methodology`, `classes`, `sampling`, `split`, `notes`, `extensions` |
+| Schema | `name`, `description`, `version`, `url`, `license`, `changes`, `previous_version`, `authors`, `keywords`, `links`, `ai_models_trained`, `study`, `source_dataset`, `methodology`, `classes`, `sampling`, `split`, `notes`, `extensions` |
 | Tool | `omero`, `zarr`, `source`, `storage`, `training`, `normalization`, `ai_model`, `display`, `workflow` |
 | Written by omero-annotate-ai | `config_version`, `created`, `identity`, `omero_server`, `sessions` |
 
@@ -324,6 +324,7 @@ the run works.
 ```yaml
 license: CC-BY-4.0                          # CC-BY-4.0 or CC0-1.0
 version: "1"
+url: https://doi.org/10.5281/zenodo.0000000   # where the set is published, once it is
 authors:
   - first_name: Jane
     last_name: Doe
