@@ -5,8 +5,12 @@ Newest first. The full list of pull requests per version is on
 
 ## Unreleased
 
-- **IDR OME-Zarr demo as a Jupyter notebook**
-  (`notebooks/jupyter/annotation/idr-zarr-demo.ipynb`), next to the marimo one.
+- **Two more Jupyter notebooks**, next to their marimo versions: the IDR OME-Zarr demo
+  (`annotation/idr-zarr-demo.ipynb`) and run from a YAML file
+  (`annotation/annotate-from-yaml.ipynb`).
+- **IDR OME-Zarr moved** to `livingobjects.ebi.ac.uk`; the old host
+  (`uk1s3.embassy.ebi.ac.uk`) refuses connections. Example config, notebooks and the
+  tutorial use the new address.
 - **Config version 4: sets are described with the Bioimage Annotation Schema.** The
   config's description sections are now the models of the
   [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)

@@ -13,7 +13,7 @@ on GitHub. Download the one you need, or clone the repository.
 | Annotate with micro-SAM | [widget workflow][gh-ann] | [annotation][mo-ann] | [guide](tutorials/microsam-annotation-pipeline.md) |
 | Review and correct saved masks | [widget workflow][gh-ann] (*Review annotated*) | | |
 | Annotate with Cellpose | | [annotation][mo-ann] (tool: Cellpose GUI) | [guide](tutorials/cellpose-integration.md) |
-| Run from a YAML file (OMERO or OME-Zarr) | | [from YAML][mo-yaml] | [guide](tutorials/resume-and-repeat.md) |
+| Run from a YAML file (OMERO or OME-Zarr) | [from YAML][gh-yaml] | [from YAML][mo-yaml] | [guide](tutorials/resume-and-repeat.md) |
 | Try on public data | [IDR OME-Zarr demo][gh-idr] | [IDR OME-Zarr demo][mo-idr], [OME-Zarr from YAML][mo-yaml] | [guide](tutorials/public-data-idr.md) |
 | Train micro-SAM | | [micro-SAM][mo-tr] | [guide](tutorials/training-data-prep.md) |
 | Export for BiaPy or DL4MicEverywhere | [export][gh-export] | | [guide](tutorials/training-data-prep.md#biapy) |
@@ -22,6 +22,7 @@ on GitHub. Download the one you need, or clone the repository.
 | Delete a training set from OMERO | [cleanup][gh-clean] | | |
 
 [gh-ann]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb
+[gh-yaml]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/annotate-from-yaml.ipynb
 [gh-idr]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/idr-zarr-demo.ipynb
 [gh-export]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/training/omero-training-export.ipynb
 [gh-inf]: https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/inference/omero-test_model-microsam.ipynb

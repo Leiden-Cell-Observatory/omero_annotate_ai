@@ -33,7 +33,7 @@ name: idr0013-mitocheck-nuclei
 source: zarr
 zarr:
   uris:
-    - https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/idr0013A/3451.zarr
+    - https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/idr0013A/3451.zarr
   level: 0          # full resolution
   fields: first
   wells: [A1, B2, C3, D4]
@@ -72,7 +72,7 @@ idr0128E). A plate's
 OME-Zarr address is
 
 ```text
-https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/<study folder>/<plate id>.zarr
+https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/<study folder>/<plate id>.zarr
 ```
 
 where the study folder is the study name with its screen letter (`idr0013A`) and the
@@ -90,7 +90,7 @@ plates = requests.get(
     timeout=30,
 ).json()["plates"]
 for plate in plates[:5]:
-    url = f"https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/idr0013A/{plate['id']}.zarr"
+    url = f"https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/idr0013A/{plate['id']}.zarr"
     ok = requests.head(url + "/.zattrs", timeout=15).status_code == 200
     print(plate["id"], plate["name"], url if ok else "no OME-Zarr")
 ```

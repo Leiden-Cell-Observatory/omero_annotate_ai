@@ -185,7 +185,7 @@ def _(mo, note, run_button, tool, ts):
         _result = (
             f"**{_n} images exported** to `{ts.bundle_dir / 'annotation_input'}`. "
             "Annotate them in the Cellpose GUI, save each mask as "
-            f"`{ts.bundle_dir / 'annotation_output'}/<image name>_mask.tif`, then "
+            f"`{ts.bundle_dir / 'external_output'}/<image name>_mask.tif`, then "
             "click **Collect masks**."
         )
     else:

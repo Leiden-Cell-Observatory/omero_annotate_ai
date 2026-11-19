@@ -93,7 +93,7 @@ def _(find_button, mo, n_plates, pd, requests, screen_id, zarr_study):
     _rows = []
     for _plate in _plates:
         _url = (
-            "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/"
+            "https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/"
             f"{zarr_study.value.strip()}/{_plate['id']}.zarr"
         )
         _ok = requests.head(_url + "/.zattrs", timeout=15).status_code == 200

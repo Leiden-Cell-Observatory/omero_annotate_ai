@@ -26,6 +26,7 @@ Notebooks with ipywidgets forms. Run with `jupyter lab`.
 | Notebook | What it does |
 |---|---|
 | `annotation/omero-annotate-ai-annotation-widget.ipynb` | The widget workflow: connect, create or open a training set, annotate with micro-SAM, add a session note |
+| `annotation/annotate-from-yaml.ipynb` | Create a training set from a YAML config (OMERO or OME-Zarr) or open a set's folder, then annotate |
 | `annotation/idr-zarr-demo.ipynb` | Annotate and train on public IDR OME-Zarr data as a local training set (no OMERO needed) |
 | `training/omero-training-export.ipynb` | Export a training set for BiaPy or DL4MicEverywhere |
 | `inference/omero-test_model-microsam.ipynb` | Run a fine-tuned micro-SAM model on OMERO images |

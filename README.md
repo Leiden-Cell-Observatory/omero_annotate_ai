@@ -141,7 +141,7 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 | | Jupyter | marimo |
 |---|---|---|
 | Annotate with micro-SAM or Cellpose | [widget workflow](notebooks/jupyter/annotation/omero-annotate-ai-annotation-widget.ipynb) | [annotation](notebooks/marimo/omero-annotate-ai-annotation.py) |
-| Run from YAML (OMERO or OME-Zarr) | | [from YAML](notebooks/marimo/annotate-from-yaml.py) |
+| Run from YAML (OMERO or OME-Zarr) | [from YAML](notebooks/jupyter/annotation/annotate-from-yaml.ipynb) | [from YAML](notebooks/marimo/annotate-from-yaml.py) |
 | Train micro-SAM | | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
 | Export for BiaPy / DL4MicEverywhere | [export](notebooks/jupyter/training/omero-training-export.ipynb) | |
 | Export to the BioImage Archive | [BIA export](notebooks/jupyter/export_annotations/omero-table-to-bioimage-archive.ipynb) | |
