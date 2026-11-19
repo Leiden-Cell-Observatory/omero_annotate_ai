@@ -5,7 +5,7 @@ name: idr0013-mitocheck-nuclei
 source: zarr
 zarr:
   uris:
-    - https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/idr0013A/3451.zarr
+    - https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/idr0013A/3451.zarr
   level: 0          # full resolution (1024 x 1344)
   fields: first
   wells: [A1, B2, C3, D4]

@@ -179,7 +179,7 @@ class TestRoCrate:
 
     def test_local_paths_never_enter_the_crate(self, tmp_path):
         local = "/home/someone/data/plate.zarr/A/1/0"
-        url = "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/v0.4/6001240.zarr"
+        url = "https://livingobjects.ebi.ac.uk/idr/zarr/v0.4/6001240.zarr"
         rows = [
             Row(image_uri=local, image_name="0", annotation_id="a_0_0"),
             Row(image_uri=url, image_name="6001240.zarr", annotation_id="b_0_0"),

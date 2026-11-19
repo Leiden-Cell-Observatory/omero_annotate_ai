@@ -636,7 +636,7 @@ class TestZarrConfig:
         )
         assert config.source == "zarr" and config.storage == "local"
         assert config.zarr.uris[0].startswith(
-            "https://uk1s3.embassy.ebi.ac.uk/idr/zarr/"
+            "https://livingobjects.ebi.ac.uk/idr/zarr/"
         )
         assert config.sampling.timepoints.mode == "random"
 
