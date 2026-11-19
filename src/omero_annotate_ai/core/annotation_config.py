@@ -365,7 +365,7 @@ _REMOVED_KEYS: dict[tuple[str, ...], str] = {
     ("output",): "each training set has its own folder under the home folder; pass "
     "home= or set $OMERO_ANNOTATE_AI_HOME",
     ("config_file_path",): "the config lives in the training set's folder",
-    ("schema_version",): "config_version: 4 (see the migration table in the docs)",
+    ("schema_version",): "config_version: 4 (see the configuration guide)",
     ("workflow", "resume_from_table"): "open the set with TrainingSet.open(table_id), "
     "or set identity.table_id",
     ("workflow", "read_only_mode"): "storage: local",

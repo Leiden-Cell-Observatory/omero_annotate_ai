@@ -8,6 +8,8 @@ outputs (`pixi run -e dev install-hooks` sets up the hook that strips them).
 ## marimo (`marimo/`)
 
 Reactive notebooks stored as plain `.py` files. Run with `marimo edit notebooks/marimo/<notebook>.py`.
+Use `marimo edit`, not `marimo run`: napari only opens from `edit`, where cells run in the
+main thread.
 
 | Notebook | What it does |
 |---|---|
@@ -24,6 +26,7 @@ Notebooks with ipywidgets forms. Run with `jupyter lab`.
 | Notebook | What it does |
 |---|---|
 | `annotation/omero-annotate-ai-annotation-widget.ipynb` | The widget workflow: connect, create or open a training set, annotate with micro-SAM, add a session note |
+| `annotation/idr-zarr-demo.ipynb` | Annotate and train on public IDR OME-Zarr data as a local training set (no OMERO needed) |
 | `training/omero-training-export.ipynb` | Export a training set for BiaPy or DL4MicEverywhere |
 | `inference/omero-test_model-microsam.ipynb` | Run a fine-tuned micro-SAM model on OMERO images |
 | `export_annotations/omero-table-to-bioimage-archive.ipynb` | Build a BioImage Archive submission from a training set on OMERO |

@@ -15,7 +15,9 @@ micro-SAM's `vit_b_lm` model.
 
 The [IDR demo notebook](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/marimo/idr-zarr-demo.py)
 (marimo) checks a screen for OME-Zarr plates, creates the training set, opens napari
-and trains a short micro-SAM run, with everything pre-filled.
+and trains a short micro-SAM run, with everything pre-filled. The same workflow is
+available as a
+[Jupyter notebook](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/blob/main/notebooks/jupyter/annotation/idr-zarr-demo.ipynb).
 
 ```bash
 pixi run marimo edit notebooks/marimo/idr-zarr-demo.py

@@ -5,6 +5,8 @@ Newest first. The full list of pull requests per version is on
 
 ## Unreleased
 
+- **IDR OME-Zarr demo as a Jupyter notebook**
+  (`notebooks/jupyter/annotation/idr-zarr-demo.ipynb`), next to the marimo one.
 - **Config version 4: sets are described with the Bioimage Annotation Schema.** The
   config's description sections are now the models of the
   [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema)
@@ -18,8 +20,7 @@ Newest first. The full list of pull requests per version is on
   `RemovedConfigKey` naming its new place (`spatial_coverage` → `sampling`,
   `annotation_methodology` → `methodology`, `dataset` → `source_dataset` and
   `license`, `feature_types` → `classes`, `training.seed` / `split_unit` /
-  `stratify_by` → `split`, `custom_metadata` → `extensions`, ...). See the
-  [migration table](configuration.md#migrating-from-config-version-3). Annotation
+  `stratify_by` → `split`, `custom_metadata` → `extensions`, ...). Annotation
   types use MIFA's names (`segmentation_mask`, `point_annotations`, ...); the licence
   is `CC-BY-4.0` or `CC0-1.0`. `config.label_channel()`, `config.training_channels()`
   and `config.uses_separate_channels()` replace the `spatial_coverage` methods.
@@ -171,8 +172,7 @@ Newest first. The full list of pull requests per version is on
 ## 0.5.0
 
 0.5.0 makes annotation runs reliable and traceable, adds OME-Zarr as an image source, and
-reorganises the package around **training sets**. It is a breaking release; see
-[migrating from 0.4](#migrating-from-04).
+reorganises the package around **training sets**. It is a breaking release.
 
 ### Highlights
 
@@ -208,44 +208,6 @@ reorganises the package around **training sets**. It is a breaking release; see
   dry run first, waits for the server, and refuses objects owned by other users.
 - **Cellpose route**: `ts.prepare_external()` exports images; masks saved in
   `external_output/` are collected with `ts.collect_masks()`.
-
-### Migrating from 0.4
-
-**Python and licence.** Python 3.11 or newer. The package is now licensed GPL-2.0-or-later
-(it builds on omero-py and ezomero); 0.4.x releases stay Apache-2.0.
-
-**Old tracking tables are not supported.** Tables written by 0.4 cannot be opened or
-extended; finish them with 0.4 or start a new training set.
-
-**Config (`schema_version: 3`).** Loading a config that still has a removed key raises
-`RemovedConfigKey` naming its replacement:
-
-| 0.4 | 0.5 |
-|---|---|
-| `annotations` | the rows live in the set's `tracking_table.csv` and OMERO table: `ts.units()` |
-| `output.output_directory`, `config_file_path` | the set's folder: `home=` or `$OMERO_ANNOTATE_AI_HOME` |
-| `workflow.read_only_mode: true` | `storage: local` |
-| `workflow.resume_from_table`, `omero.table_id` | `TrainingSet.open(table_id)` (`identity.table_id` is written by the package) |
-| `version` | `schema_version` (config version 4 drops it again: `config_version: 4`, and `version` is now the set's own version) |
-| `spatial_coverage.normalization_method`, `percentile_*` | `normalization.*` |
-
-Unknown keys are refused, in every section, instead of ignored.
-
-**Code.**
-
-| 0.4 | 0.5 |
-|---|---|
-| `create_pipeline(config, conn).run_full_micro_sam_workflow()` | `TrainingSet.create(config, conn).annotate()` (the old call still works, deprecated) |
-| resume with `resume_from_table` | `TrainingSet.open(table_id, conn).annotate()` |
-| `run_cp_workflow()` / `collect_annotations_from_disk()` | `ts.prepare_external()` / `ts.collect_masks()`; masks from Cellpose go to `external_output/` |
-| `config.get_processed()`, `config.annotations` | `[r for r in ts.units() if r.processed]` |
-| `config.save_bia_package(dest)` | `save_bia_package(ts.config, ts.units(), ts.bundle_dir, dest)` |
-| `cleanup_project_annotations(...)` | `delete_training_set(conn, table_id)` |
-| `prepare_training_data_from_table(..., validation_split=...)` | splits come from the set's categories |
-
-**Notebooks.** Cellpose is a tool choice in the marimo annotation notebook, OMERO and
-OME-Zarr YAML runs share `annotate-from-yaml.py`, and BiaPy/DL4MicEverywhere export is one
-notebook; see [example notebooks](notebooks.md).
 
 ## 0.4.0
 

@@ -133,8 +133,6 @@ sessions and their notes) and a local copy of the tracking table. By default tha
 Open the same set on another computer to carry on there; two people can even annotate
 it at the same time, because each session claims the images it shows (your own claims,
 e.g. after a dropped connection, never block you).
-`create_pipeline(config, conn).run_full_micro_sam_workflow()` from 0.4 still works but
-is deprecated.
 
 The [configuration guide](https://leiden-cell-observatory.github.io/omero_annotate_ai/configuration/) lists every option.
 
@@ -147,11 +145,9 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 | Train micro-SAM | | [micro-SAM](notebooks/marimo/omero-training-microsam.py) |
 | Export for BiaPy / DL4MicEverywhere | [export](notebooks/jupyter/training/omero-training-export.ipynb) | |
 | Export to the BioImage Archive | [BIA export](notebooks/jupyter/export_annotations/omero-table-to-bioimage-archive.ipynb) | |
-| Try it on public data | | [IDR OME-Zarr demo](notebooks/marimo/idr-zarr-demo.py) |
+| Try it on public data | [IDR OME-Zarr demo](notebooks/jupyter/annotation/idr-zarr-demo.ipynb) | [IDR OME-Zarr demo](notebooks/marimo/idr-zarr-demo.py) |
 
 ## Documentation
-
-Upgrading from 0.4? The [release notes](https://leiden-cell-observatory.github.io/omero_annotate_ai/release-notes/) list the changes and how to migrate.
 
 Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_ai/**
 ([micro-SAM tutorial](https://leiden-cell-observatory.github.io/omero_annotate_ai/tutorials/microsam-annotation-pipeline/),

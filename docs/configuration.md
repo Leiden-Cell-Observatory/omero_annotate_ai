@@ -424,38 +424,6 @@ rows (one per annotation unit, with its split and state) live in `tracking_table
 and the OMERO table, not in the config. To start a new set from a saved config, remove
 `identity` and `sessions`.
 
-## Migrating from config version 3
-
-Version 3 configs are not read. Keys that moved are refused with a message naming the
-replacement, so you can update a config by hand:
-
-| Version 3 | Version 4 |
-|---|---|
-| `schema_version: 3` | `config_version: 4` |
-| `authors: [{name, affiliation, email, orcid}]` | `authors: [{first_name, last_name, email, orcid, affiliations: [{name, ror, address}], roles}]` |
-| `study.keywords`, `tags` | `keywords` (top level) |
-| `dataset.source_dataset_id`, `source_dataset_url`, `source_description` | `source_dataset.identifier`, `url`, `description` |
-| `dataset.license` | `license` (top level; `CC-BY-4.0` or `CC0-1.0`) |
-| `documentation`, `repository` | `links: [{url, description}]` |
-| `annotation_methodology.annotation_type` | `methodology.annotation_types` (list, MIFA names); `semantic_segmentation` becomes `segmentation_mask` with `mask_kind: semantic` |
-| `annotation_methodology.annotation_method`, `annotation_criteria`, `annotation_coverage`, `annotation_tool` | `methodology.method`, `criteria`, `coverage`, `tools` (list) |
-| `feature_types` | `classes` |
-| `spatial_coverage.channels` | removed; `sampling.label_channel` (default 0) |
-| `spatial_coverage.label_channel`, `training_channels` | `sampling.label_channel`, `input_channels` |
-| `spatial_coverage.timepoints`, `timepoint_mode`, `n_timepoints` | `sampling.timepoints: {mode, values, n}` (the same for `z_slices`) |
-| `spatial_coverage.three_d`, `z_range_start`, `z_range_end` | `sampling.volumetric`; the range is the first to last selected z-slice |
-| `spatial_coverage.use_patches`, `patch_size`, `patches_per_image`, `random_patches` | `sampling.patches: {width, height, per_image, random}` |
-| `spatial_coverage.context_channels`, `context_channel_names`, `context_channel_colormaps` | `display.context_channels`, ... |
-| `training.validation_strategy`, `split_unit`, `split_rationale`, `stratify_by`, `seed` | `split.strategy`, `unit`, `rationale`, `stratify_by`, `seed` |
-| `training.quality_threshold` | removed; describe it in `methodology.confidence_level` |
-| `custom_metadata` | `extensions` (keyed by a namespace) |
-
-In Python, `config.spatial_coverage.get_label_channel()`, `get_training_channels()` and
-`uses_separate_channels()` became `config.label_channel()`,
-`config.training_channels()` and `config.uses_separate_channels()`. Keys removed in
-earlier versions (`workflow.read_only_mode`, `omero.table_id`, ...) are listed in
-[migrating from 0.4](release-notes.md#migrating-from-04).
-
 ## Example recipes
 
 ??? example "Time-lapse: 5 random timepoints"
