@@ -5,7 +5,8 @@ stays valid as long as it is used at least once every ``idle_days``. The next ti
 notebooks and the napari plugin join that session instead of asking for the password
 again. The password itself is never stored.
 
-Tokens are kept in ``~/.omero-annotate-ai/tokens.json`` (readable by the user only).
+Tokens are kept in ``~/.omero-annotate-ai/tokens.json``, readable by the user only (file
+mode 600; on Windows the user profile's permissions).
 A token made with Glencoe's ``omero-user-token set`` (``~/.omero_user_token/token``,
 or ``$OMERO_USER_TOKEN_DIR``) is offered as well. Anyone who can read a token can use
 the OMERO account until it is forgotten or expires: :func:`forget_login` ends the

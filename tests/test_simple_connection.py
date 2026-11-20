@@ -454,7 +454,8 @@ class TestSavedLogins:
         assert manager.saved_login == login
         assert conn.idle == [(0, 7 * 24 * 3600 * 1000, "lab")]  # 7 days idle
         path = tokens_file()
-        assert path.stat().st_mode & 0o777 == 0o600
+        if os.name == "posix":  # Windows: the profile folder's ACL keeps it private
+            assert path.stat().st_mode & 0o777 == 0o600
         assert b"s3cret-pw" not in path.read_bytes()
 
     def test_without_remember_nothing_is_saved(self, manager, monkeypatch):
