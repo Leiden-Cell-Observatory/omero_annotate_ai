@@ -147,6 +147,13 @@ The [configuration guide](https://leiden-cell-observatory.github.io/omero_annota
 | Export to the BioImage Archive | [BIA export](notebooks/jupyter/export_annotations/omero-table-to-bioimage-archive.ipynb) | |
 | Try it on public data | [IDR OME-Zarr demo](notebooks/jupyter/annotation/idr-zarr-demo.ipynb) | [IDR OME-Zarr demo](notebooks/marimo/idr-zarr-demo.py) |
 
+## Agent skill
+
+[`skills/omero-annotate-ai`](skills/omero-annotate-ai/SKILL.md) is a skill for coding
+agents (Claude Code, Codex, Cursor, ...) that helps them set up, run and debug
+omero-annotate-ai for you. Install it with `npx skills add Leiden-Cell-Observatory/omero_annotate_ai`,
+or copy the folder into your agent's skills folder (`~/.claude/skills/` for Claude Code).
+
 ## Documentation
 
 Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_ai/**

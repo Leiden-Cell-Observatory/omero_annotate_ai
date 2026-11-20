@@ -108,6 +108,14 @@ remote server or cloud workspace, use its remote desktop (for example VNC or the
 tile on SURF Research Cloud), not a plain SSH or JupyterHub tab. Preparing images for
 Cellpose and preparing training data work without a display.
 
+## Agent skill
+
+The repository ships a skill for coding agents (Claude Code, Codex, Cursor, ...) in
+[`skills/omero-annotate-ai`](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/tree/main/skills/omero-annotate-ai).
+It tells the agent how to write configs, create or resume training sets and export them.
+Install it with `npx skills add Leiden-Cell-Observatory/omero_annotate_ai`, or copy the
+folder into the agent's skills folder (`~/.claude/skills/` for Claude Code).
+
 ## For developers
 
 ```bash
