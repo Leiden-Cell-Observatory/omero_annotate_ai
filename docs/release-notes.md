@@ -5,6 +5,8 @@ Newest first. The full list of pull requests per version is on
 
 ## Unreleased
 
+- **Agent skill** in `skills/omero-annotate-ai`: helps coding agents (Claude Code, Codex,
+  Cursor, ...) set up, run and debug omero-annotate-ai. See the README.
 - **Two more Jupyter notebooks**, next to their marimo versions: the IDR OME-Zarr demo
   (`annotation/idr-zarr-demo.ipynb`) and run from a YAML file
   (`annotation/annotate-from-yaml.ipynb`).
