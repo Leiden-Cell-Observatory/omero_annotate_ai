@@ -14,6 +14,14 @@ import_module("ezomero.rois")  # load the submodule so ``ezomero.rois`` resolves
 omero_grid: Any = import_module("omero.grid")
 omero_model: Any = import_module("omero.model")
 omero_rtypes: Any = import_module("omero.rtypes")
+omero_sys: Any = import_module("omero.sys")
 NSBULKANNOTATIONS: str = import_module("omero.constants.namespaces").NSBULKANNOTATIONS
 
-__all__ = ["NSBULKANNOTATIONS", "ezomero", "omero_grid", "omero_model", "omero_rtypes"]
+__all__ = [
+    "NSBULKANNOTATIONS",
+    "ezomero",
+    "omero_grid",
+    "omero_model",
+    "omero_rtypes",
+    "omero_sys",
+]

@@ -35,13 +35,16 @@ import getpass
 from omero_annotate_ai import TrainingSet, load_config_from_yaml
 from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 
-conn = SimpleOMEROConnection().connect(        # raises ConnectionFailed
-    host="omero.example.org", username="me", password=getpass.getpass())
-config = load_config_from_yaml("hela_nuclei_v1.yaml")   # the file is never changed
-ts = TrainingSet.create(config, conn)    # selects images, creates table + folder
-ts.annotate(note="nuclei only")          # blocks until each napari window closes
+conn = SimpleOMEROConnection().connect(  # raises ConnectionFailed
+    host="omero.example.org", username="me", password=getpass.getpass()
+)
+config = load_config_from_yaml("hela_nuclei_v1.yaml")  # the file is never changed
+ts = TrainingSet.create(config, conn)  # selects images, creates table + folder
+ts.annotate(note="nuclei only")  # blocks until each napari window closes
 print(ts.table_id, ts.bundle_dir)
-ts = TrainingSet.open(ts.table_id, conn)  # later / elsewhere: repairs, then pending only
+ts = TrainingSet.open(
+    ts.table_id, conn
+)  # later / elsewhere: repairs, then pending only
 ```
 
 Local, OME-Zarr (no OMERO, no connection):
@@ -59,12 +62,15 @@ training: {train_n: 2, validate_n: 1}
 ```python
 ts = TrainingSet.create(load_config_from_yaml("idr0013.yaml"))
 ts.annotate()
-ts = TrainingSet.open(ts.bundle_dir)     # resume a local set by its folder
+ts = TrainingSet.open(ts.bundle_dir)  # resume a local set by its folder
 ```
 
 Jupyter widgets (ipywidgets, not marimo): `create_omero_connection_widget()` ->
 `.display()`, `.get_connection()`; `create_workflow_widget(connection=conn)` -> New/Open
-set, `.training_set()`, `.annotate(note=...)`, `.get_config()`;
+set, `.training_set()`, `.annotate(note=...)`, `.get_config()`; its container picker has
+group / owner / search / *Go to ID* (any group; switches the session group) and picks
+several containers; folded sections for channels (train on, napari context channels,
+normalisation) and plate/screen well filters (MIHCSME keys first).
 `create_training_data_widget(connection=conn)` -> `.export()`. Marimo notebooks in
 `notebooks/marimo/` build their own UI.
 

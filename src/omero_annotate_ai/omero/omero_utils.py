@@ -12,7 +12,7 @@ import dask.array as da
 import numpy as np
 from dask.delayed import delayed
 
-from ._untyped import ezomero
+from ._untyped import ezomero, omero_rtypes, omero_sys
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +328,115 @@ def _spread_sample(items: list[Any], n: int) -> list[Any]:
         return list(items)
     step = len(items) / n
     return [items[min(len(items) - 1, round((i + 1) * step) - 1)] for i in range(n)]
+
+
+# =============================================================================
+# Browsing: groups, owners, containers, well metadata
+# =============================================================================
+
+# OMERO's built-in groups: never hold data to annotate.
+_SYSTEM_GROUPS = {"system", "user", "guest"}
+# Namespace MIHCSME_py writes well conditions under (``MIHCSME/AssayConditions``).
+MIHCSME_WELL_NS = "MIHCSME/AssayConditions"
+
+
+def list_groups(conn) -> list[tuple[str, int]]:
+    """``(name, id)`` of the groups the user can browse, sorted by name.
+
+    An administrator sees every group, others the groups they are a member of.
+    """
+    groups = (
+        conn.getObjects("ExperimenterGroup")
+        if conn.isAdmin()
+        else conn.getGroupsMemberOf()
+    )
+    found = {
+        (g.getName(), g.getId()) for g in groups if g.getName() not in _SYSTEM_GROUPS
+    }
+    return sorted(found, key=lambda item: item[0].lower())
+
+
+def list_group_members(conn, group_id: int) -> list[tuple[str, int]]:
+    """``(full name, id)`` of the members of a group whose data the user can see."""
+    group = conn.getObject("ExperimenterGroup", group_id)
+    if group is None:
+        return []
+    leaders, members = group.groupSummary()
+    found = {(e.getFullName(), e.getId()) for e in [*leaders, *members]}
+    return sorted(found, key=lambda item: item[0].lower())
+
+
+def list_containers(
+    conn, container_type: str, owner: int | None = None
+) -> list[tuple[str, int]]:
+    """``(name, id)`` of the containers of one type in the current group.
+
+    ``owner`` limits the list to one user's containers; sorted by name.
+    """
+    opts = {"owner": owner} if owner is not None else None
+    found = conn.getObjects(container_type.capitalize(), opts=opts)
+    return sorted(
+        ((c.getName() or "", c.getId()) for c in found),
+        key=lambda item: (item[0].lower(), item[1]),
+    )
+
+
+def find_container(conn, container_type: str, container_id: int) -> int | None:
+    """The group ID a container is in, searching all the user's groups; None if
+    the container does not exist or cannot be read."""
+    opts = conn.SERVICE_OPTS
+    group = opts.getOmeroGroup()
+    opts.setOmeroGroup("-1")  # any group
+    try:
+        found = conn.getObject(container_type.capitalize(), container_id)
+    finally:
+        opts.setOmeroGroup(group)
+    return None if found is None else found.getDetails().getGroup().getId()
+
+
+def plate_well_metadata(
+    conn, container_type: str, container_ids: list[int]
+) -> tuple[dict[int, dict[str, str]], set[str]]:
+    """Key-value pairs per well of plates (or of the plates of screens).
+
+    Returns ``(wells, mihcsme_keys)``: every well's merged map annotations (as the
+    training set reads them when it filters wells; wells without any are included)
+    and the keys MIHCSME_py wrote as assay conditions. Two queries, however many
+    wells.
+    """
+    plate_ids = list(container_ids)
+    if container_type == "screen":
+        plate_ids = [
+            pid
+            for sid in container_ids
+            for pid in ezomero.get_plate_ids(conn, screen=sid)
+        ]
+    if not plate_ids:
+        return {}, set()
+    params = omero_sys.ParametersI()
+    params.add("pids", omero_rtypes.rlist([omero_rtypes.rlong(i) for i in plate_ids]))
+    query = conn.getQueryService()
+    wells: dict[int, dict[str, str]] = {
+        row[0].val: {}
+        for row in query.projection(
+            "select w.id from Well w where w.plate.id in (:pids)",
+            params,
+            conn.SERVICE_OPTS,
+        )
+    }
+    rows = query.projection(
+        "select l.parent.id, a.ns, mv.name, mv.value from WellAnnotationLink l, "
+        "MapAnnotation a join a.mapValue mv "
+        "where l.child.id = a.id and l.parent.plate.id in (:pids)",
+        params,
+        conn.SERVICE_OPTS,
+    )
+    mihcsme_keys: set[str] = set()
+    for well_id, ns, key, value in rows:
+        wells.setdefault(well_id.val, {})[key.val] = value.val
+        if ns is not None and ns.val == MIHCSME_WELL_NS:
+            mihcsme_keys.add(key.val)
+    return wells, mihcsme_keys
 
 
 # =============================================================================

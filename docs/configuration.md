@@ -90,7 +90,7 @@ exists. The other schema sections can be changed later with
 | `container_id` | `0` | ID of the container. The tracking table and the set's config are attached here. |
 | `container_ids` | – | List of several containers of the same type to draw images from. Set `container_id` too. |
 | `source_desc` | `""` | Free-text description of the source. |
-| `well_filters` | – | Plates only: keep wells by their key-value pairs, e.g. `{treatment: [DMSO]}`. Several keys must all match. |
+| `well_filters` | – | Plates and screens: keep wells by their key-value pairs (map annotations, e.g. MIHCSME assay conditions), e.g. `{treatment: [DMSO]}`. Several keys must all match. |
 | `well_filter_mode` | `include` | `include` keeps matching wells, `exclude` drops them. |
 
 ```yaml

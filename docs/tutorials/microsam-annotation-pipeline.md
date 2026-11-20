@@ -52,7 +52,17 @@ workflow_widget.display()
 
 The widget has one screen, in cards:
 
-**Data.** Choose the container type (project, dataset, plate, screen) and the container.
+**Data.** Find the data on the server:
+
+- *Group* switches the session to another of your groups (an administrator sees all
+  groups); *Owner* shows your containers (*Me*, the default), everyone's (*All members*)
+  or one colleague's.
+- *Container* is the type (project, dataset, plate, screen). *Search* filters the list
+  by name or ID as you type. *Go to ID* finds a container by its ID in any of your groups
+  and switches to that group.
+- Pick one container, or Ctrl/Shift-click several of the same type for one training set
+  over all of them (`omero.container_ids`). Picks stay picked while you change the search.
+
 A line below shows the number of images, a sample image's dimensions and its channel names.
 
 **New training set** or **Open training set.** For a first run choose *New*:
@@ -62,13 +72,26 @@ A line below shows the number of images, a sample image's dimensions and its cha
 | Setting | What to choose |
 |---|---|
 | Name | A short, descriptive name such as `hela_nuclei_v1`; used for the OMERO table and the local folder. |
-| Channel | The channel you will draw on, e.g. the DAPI channel for nuclei. Channel numbers start at 0. |
+| Annotate on | The channel you will draw on, by name, e.g. the DAPI channel for nuclei. |
 | Timepoints, Z-slices | Which planes to annotate: *Specific* (a list such as `0, 3, 5-7`), *All*, or *Random* (`n` drawn per image with the seed). For 2D images leave them at *Specific* `0`. |
 | 3D | Annotate one volume over the chosen z-slices instead of single planes (e.g. z-slices *Specific* `10-20`, or *All*). |
 | Patches | Annotate crops instead of whole images, with patch size and patches per image. Recommended for large images or a CPU-only computer. |
 | Training / Validation / Test | How many images to annotate for each split. Start small, e.g. 5 and 2. |
 | Seed | Empty picks one at random and stores it, so the selection can be repeated. |
 | Storage | *OMERO* uploads masks and keeps a tracking table; *Local folder only* writes nothing to OMERO. |
+
+Two folded sections hold the advanced options:
+
+- **Channels.** One row per channel. *Train on*: the channels the model gets as input
+  (`sampling.input_channels`; by default only the annotated one). *Show* and *Colour*:
+  extra channels napari shows next to the annotated one, e.g. a membrane stain while
+  drawing nuclei (`display`; never used for training). Below: the intensity
+  normalisation (percentiles, or none, and whether to apply it at export).
+- **Plate wells** (plates and screens). Keep or leave out wells by their metadata
+  (`omero.well_filters`). Keys and values come from the wells' key-value annotations;
+  assay conditions added with [MIHCSME_py](https://github.com/Leiden-Cell-Observatory/MIHCSME_py)
+  (cell line, treatment, dose, ...) come first. Conditions combine with AND; the number
+  of wells kept updates as you pick.
 
 *Open* lists the training sets on the container (and local ones). Selecting one shows its
 progress per split and the notes of earlier sessions; you can add images per split, and

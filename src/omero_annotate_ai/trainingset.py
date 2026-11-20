@@ -814,7 +814,7 @@ class TrainingSet:
             plate_ids = ezomero.get_plate_ids(self.conn, screen=container_id)
             image_ids = []
             for plate_id in plate_ids:
-                image_ids.extend(ezomero.get_image_ids(self.conn, plate=plate_id))
+                image_ids.extend(self._get_image_ids_from_plate(plate_id))
             return image_ids
         if container_type == "image":
             return [container_id]

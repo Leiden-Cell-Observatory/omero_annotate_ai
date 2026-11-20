@@ -21,15 +21,8 @@ from ..errors import OmeroAnnotateAIError
 from ..planning import parse_indices
 from ..processing.training_functions import default_export_dir, export_training_set
 from ..trainingset import read_set_config, summarize, training_set_choices
-from .workflow_widget import (
-    _LABEL,
-    _STYLE,
-    CONTAINER_TYPES,
-    _card,
-    _wide,
-    container_options,
-    render_summary,
-)
+from .container_picker import ContainerPicker
+from .workflow_widget import _LABEL, _STYLE, _card, _wide, render_summary
 
 NORMALIZATION = (
     ("Keep native bit depth (record the normalisation)", False),
@@ -53,17 +46,16 @@ class TrainingDataWidget:
         self.result: dict[str, Any] | None = None
         self._config: AnnotationConfig | None = None
         self._build()
-        self._load_containers()
+        self.picker.set_connection(connection)
+        self._load_sets()  # local sets need no connection
 
     # --- layout -------------------------------------------------------------------
 
     def _build(self) -> None:
-        self.container_type = widgets.Dropdown(
-            options=CONTAINER_TYPES, description="Container", style=_LABEL
-        )
-        self.container = widgets.Dropdown(options=[], layout=_wide())
-        self.container_type.observe(lambda _: self._load_containers(), names="value")
-        self.container.observe(lambda _: self._load_sets(), names="value")
+        # Connected in __init__, once the widgets its callbacks use exist.
+        self.picker = ContainerPicker(on_change=self._load_sets, on_error=self._error)
+        self.container_type = self.picker.container_type
+        self.container = self.picker.container
         self.sets = widgets.Select(options=[], rows=5, layout=_wide())
         self.sets.observe(lambda _: self._on_set(), names="value")
         self.summary = widgets.HTML()
@@ -105,7 +97,7 @@ class TrainingDataWidget:
                 widgets.HTML(_STYLE),
                 _card(
                     "Training set",
-                    widgets.HBox([self.container_type, self.container]),
+                    self.picker.box,
                     self.sets,
                     self.summary,
                 ),
@@ -116,20 +108,11 @@ class TrainingDataWidget:
 
     # --- data ---------------------------------------------------------------------
 
-    def _load_containers(self) -> None:
-        if self.connection is None:
-            self.container.options = []
-            self._load_sets()  # local sets need no connection
-            return
-        self.container.options = container_options(
-            self.connection, self.container_type.value, self._error
-        )
-
     def _load_sets(self) -> None:
         self.sets.options = training_set_choices(
             self.connection,
-            str(self.container_type.value),
-            self.container.value,
+            self.picker.kind,
+            self.picker.selected[0] if self.picker.selected else None,
             home=self.home,
             on_error=self._error,
         )
@@ -228,7 +211,8 @@ class TrainingDataWidget:
     def set_connection(self, connection: Any) -> None:
         """Use another OMERO connection (reloads the containers)."""
         self.connection = connection
-        self._load_containers()
+        self.picker.set_connection(connection)
+        self._load_sets()
 
     def display(self) -> None:
         """Show the widget in the notebook."""

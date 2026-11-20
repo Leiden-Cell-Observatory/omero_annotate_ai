@@ -460,7 +460,17 @@ class TestWorkflowWidget:
 
     @staticmethod
     def _conn(containers=()):
+        """A connection with one group (ID 3) and user 1 in it."""
         conn = Mock()
+        conn.isAdmin.return_value = False
+        group = Mock()
+        group.getName.return_value = "lab"
+        group.getId.return_value = 3
+        group.groupSummary.return_value = ([], [])
+        conn.getGroupsMemberOf.return_value = [group]
+        conn.getEventContext.return_value.groupId = 3
+        conn.getUserId.return_value = 1
+        conn.getObject.return_value = group
         conn.getObjects.return_value = list(containers)
         return conn
 
@@ -473,6 +483,7 @@ class TestWorkflowWidget:
 
     def test_new_request_builds_a_fresh_config_from_the_form(self, tmp_path):
         widget = WorkflowWidget(self._conn(), home=tmp_path)
+        widget.channels.set_channels(["DAPI", "GFP"])
         widget.name.value = "nuclei"
         widget.channel.value = 1
         widget.counts["validation"].value = 3
@@ -536,17 +547,17 @@ class TestWorkflowWidget:
             },
         ):
             widget = WorkflowWidget(conn, home=tmp_path)
-            widget.container.value = 7
+            widget.container.value = (7,)
             assert widget.container.options == (
                 ("plate A (ID 7)", 7),
                 ("plate B (ID 8)", 8),
             )
             assert "0: DAPI, 1: GFP" in widget.container_info.value
-            assert widget.channel.max == 1
+            assert widget.channel.options == (("0: DAPI", 0), ("1: GFP", 1))
 
             widget.summary.value = "old summary"
             widget.add["training"].value = 5
-            widget.container.value = 8
+            widget.container.value = (8,)
 
         assert widget.summary.value == ""
         assert widget.add["training"].value == 0
@@ -588,7 +599,7 @@ class TestWorkflowWidget:
             ),
         ):
             widget = WorkflowWidget(conn, home=tmp_path)
-            widget.container.value = 7
+            widget.container.value = (7,)
             widget.mode.value = "open"
             assert [value for _, value in widget.sets.options] == [99, local]
             widget.sets.value = 99
@@ -728,6 +739,234 @@ class TestWorkflowWidget:
         assert revised == 2
         assert ts.config.sessions[-1].kind == "review"
         assert "review, finished, 2 revised" in render_summary(summarize(ts.bundle_dir))
+
+
+@pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
+@pytest.mark.unit
+class TestContainerPicker:
+    """Group/owner narrowing, search that keeps the picks, go to an ID."""
+
+    @staticmethod
+    def _conn(containers):
+        conn = TestWorkflowWidget._conn(
+            [TestWorkflowWidget._container(cid, name) for cid, name in containers]
+        )
+        bob = Mock()
+        bob.getFullName.return_value = "Bob B"
+        bob.getId.return_value = 2
+        me = Mock()
+        me.getFullName.return_value = "Me Myself"
+        me.getId.return_value = 1
+        conn.getObject.return_value.groupSummary.return_value = ([bob], [me])
+        return conn
+
+    def test_lists_my_containers_by_default_and_all_on_request(self):
+        from omero_annotate_ai.widgets.container_picker import ContainerPicker
+
+        conn = self._conn([(7, "alpha")])
+        picker = ContainerPicker(conn)
+        assert picker.group.options == (("lab", 3),)
+        assert picker.owner.options == (
+            ("Me", 1),
+            ("All members", -1),
+            ("Bob B", 2),
+        )
+        assert conn.getObjects.call_args.kwargs == {"opts": {"owner": 1}}
+        picker.owner.value = -1
+        assert conn.getObjects.call_args.kwargs == {"opts": None}
+        assert picker.container.options == (("alpha (ID 7)", 7),)
+
+    def test_search_filters_the_list_but_keeps_the_picks(self):
+        from omero_annotate_ai.widgets.container_picker import ContainerPicker
+
+        changes = []
+        picker = ContainerPicker(
+            self._conn([(7, "alpha"), (8, "beta"), (9, "gamma")]),
+            multiple=True,
+            on_change=lambda: changes.append(1),
+        )
+        picker.container.value = (7,)
+        picker.search.value = "gam"
+        assert [cid for _, cid in picker.container.options] == [7, 9]
+        assert picker.container.value == (7,)
+        assert "1 of 3" in picker.count.value
+        picker.container.value = (7, 9)
+        assert picker.selected == [7, 9]
+        assert "alpha (ID 7), gamma (ID 9)" in picker.picked_info.value
+        picker.search.value = "8"  # an ID matches too
+        assert [cid for _, cid in picker.container.options] == [7, 9, 8]
+        assert len(changes) == 2  # filtering is not a change of picks
+
+    def test_go_to_id_switches_to_the_containers_group(self):
+        from omero_annotate_ai.widgets.container_picker import ContainerPicker
+
+        conn = self._conn([(42, "elsewhere")])
+        other = Mock()
+        other.getName.return_value = "other lab"
+        other.getId.return_value = 5
+        conn.getGroupsMemberOf.return_value.append(other)
+        picker = ContainerPicker(conn)
+        assert picker.find.disabled
+        picker.search.value = "42"
+        assert not picker.find.disabled
+        with patch(
+            "omero_annotate_ai.widgets.container_picker.find_container",
+            return_value=5,
+        ):
+            picker.find.click()
+        conn.setGroupForSession.assert_called_with(5)
+        assert picker.group.value == 5
+        assert picker.owner.value == -1
+        assert picker.selected == [42]
+        assert picker.search.value == ""
+
+    def test_go_to_an_unknown_id_is_reported(self):
+        from omero_annotate_ai.widgets.container_picker import ContainerPicker
+
+        errors = []
+        picker = ContainerPicker(self._conn([]), on_error=errors.append)
+        picker.search.value = "99"
+        with patch(
+            "omero_annotate_ai.widgets.container_picker.find_container",
+            return_value=None,
+        ):
+            picker.find.click()
+        assert errors == ["No dataset with ID 99 that you can read"]
+
+    def test_server_without_groups_still_lists_containers(self):
+        from omero_annotate_ai.widgets.container_picker import ContainerPicker
+
+        conn = self._conn([(7, "alpha")])
+        conn.getGroupsMemberOf.side_effect = RuntimeError("no admin service")
+        errors = []
+        picker = ContainerPicker(conn, on_error=errors.append)
+        assert picker.group.layout.display == "none"
+        assert picker.container.options == (("alpha (ID 7)", 7),)
+        assert "Could not list groups" in errors[0]
+
+
+@pytest.mark.skipif(not WIDGETS_AVAILABLE, reason="Widget dependencies not available")
+@pytest.mark.unit
+class TestChannelsAndWells:
+    """Channel table and well filter, and what they write into the config."""
+
+    def test_training_channels_follow_the_annotated_channel(self):
+        from omero_annotate_ai.widgets.channels import ChannelTable
+
+        table = ChannelTable()
+        table.set_channels(["DAPI", "GFP", "Actin"])
+        assert table.input_channels() is None  # just the annotated one
+        table.label.value = 1
+        assert [r.train.value for r in table.rows] == [False, True, False]
+        assert table.rows[1].show.disabled
+        table.rows[0].train.value = True
+        assert table.input_channels() == [0, 1]
+        table.rows[0].train.value = table.rows[1].train.value = False
+        with pytest.raises(ValueError, match="at least one channel"):
+            table.input_channels()
+
+    def test_context_channels_and_normalisation(self):
+        from omero_annotate_ai.widgets.channels import ChannelTable
+
+        table = ChannelTable()
+        table.set_channels(["DAPI", "GFP", "Actin"])
+        table.rows[2].show.value = True
+        table.rows[2].colormap.value = "red"
+        assert table.display().specs() == [(2, "Actin", "red")]
+        table.method.value = "none"
+        assert table.low.disabled
+        table.apply_at_export.value = True
+        normalization = table.normalization()
+        assert normalization.method == "none" and normalization.apply_at_export
+
+    @staticmethod
+    def _wells():
+        wells = {
+            i: {
+                "CellLine": "HeLa" if i % 2 else "U2OS",
+                "Treatment": "DMSO" if i < 10 else "Drug",
+                "WellName": f"W{i}",
+            }
+            for i in range(16)
+        }
+        return wells, {"Treatment", "CellLine"}
+
+    def test_well_filter_offers_mihcsme_keys_and_counts_matches(self):
+        from omero_annotate_ai.widgets.well_filter import WellFilter
+
+        well_filter = WellFilter()
+        with patch(
+            "omero_annotate_ai.widgets.well_filter.plate_well_metadata",
+            return_value=self._wells(),
+        ):
+            well_filter.load(Mock(), "plate", [5])
+        assert "All 16 wells" in well_filter.summary.value
+        well_filter.add.click()
+        condition = well_filter.conditions[0]
+        # MIHCSME keys first; a key naming every well is no condition.
+        assert condition.key.options == (
+            ("CellLine (MIHCSME)", "CellLine"),
+            ("Treatment (MIHCSME)", "Treatment"),
+        )
+        assert condition.accepted.options == (
+            ("HeLa (8 wells)", "HeLa"),
+            ("U2OS (8 wells)", "U2OS"),
+        )
+        condition.accepted.value = ("HeLa",)
+        well_filter.add.click()
+        second = well_filter.conditions[1]
+        second.key.value = "Treatment"
+        second.accepted.value = ("Drug",)
+        assert well_filter.filters() == {"CellLine": ["HeLa"], "Treatment": ["Drug"]}
+        assert "3 of 16 wells kept" in well_filter.summary.value
+        well_filter.mode.value = "exclude"
+        assert "13 of 16 wells kept" in well_filter.summary.value
+        second.remove.click()
+        assert well_filter.filters() == {"CellLine": ["HeLa"]}
+
+    def test_datasets_have_no_well_filter(self):
+        from omero_annotate_ai.widgets.well_filter import WellFilter
+
+        well_filter = WellFilter()
+        well_filter.load(Mock(), "dataset", [5])
+        assert well_filter.add.disabled
+        assert well_filter.filters() is None
+
+    def test_form_writes_containers_channels_and_wells_to_the_config(self, tmp_path):
+        conn = TestWorkflowWidget._conn(
+            [
+                TestWorkflowWidget._container(7, "plate A"),
+                TestWorkflowWidget._container(8, "plate B"),
+            ]
+        )
+        module = "omero_annotate_ai.widgets"
+        with (
+            patch(
+                f"{module}.workflow_widget.get_container_info",
+                return_value={"channel_names": ["DAPI", "GFP"]},
+            ),
+            patch(
+                f"{module}.well_filter.plate_well_metadata",
+                return_value=self._wells(),
+            ),
+        ):
+            widget = WorkflowWidget(conn, home=tmp_path)
+            widget.container_type.value = "plate"
+            widget.container.value = (7, 8)
+        assert "2 containers" in widget.container_info.value
+        widget.channels.rows[1].show.value = True
+        widget.wells.add.click()
+        widget.wells.conditions[0].accepted.value = ("U2OS",)
+        widget.wells.mode.value = "exclude"
+
+        config = widget.get_config()
+
+        assert config.omero.container_type == "plate"
+        assert config.omero.container_ids == [7, 8]
+        assert config.omero.well_filters == {"CellLine": ["U2OS"]}
+        assert config.omero.well_filter_mode == "exclude"
+        assert config.display.specs() == [(1, "GFP", "magenta")]
+        assert config.sampling.input_channels is None
 
 
 @pytest.mark.unit

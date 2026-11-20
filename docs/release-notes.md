@@ -7,6 +7,16 @@ Newest first. The full list of pull requests per version is on
 
 - **Agent skill** in `skills/omero-annotate-ai`: helps coding agents (Claude Code, Codex,
   Cursor, ...) set up, run and debug omero-annotate-ai. See the README.
+- **Finding data in the widgets.** The workflow and training-data widgets pick
+  containers by group (switching the session's group), owner (*Me* by default, all
+  members or one colleague) and a search box that filters by name or ID; *Go to ID*
+  finds a container in any of your groups. The workflow widget picks several containers
+  of one type for a multi-container set.
+- **More of the config in the workflow widget**, in folded sections: the channels to
+  train on, extra napari context channels with colours, the normalisation, and well
+  filters on plate metadata (MIHCSME assay conditions first, with a live count of the
+  wells kept).
+- **Well filters apply to screens** too (to the wells of each plate of the screen).
 - **Two more Jupyter notebooks**, next to their marimo versions: the IDR OME-Zarr demo
   (`annotation/idr-zarr-demo.ipynb`) and run from a YAML file
   (`annotation/annotate-from-yaml.ipynb`).
