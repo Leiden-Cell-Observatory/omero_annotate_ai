@@ -97,7 +97,8 @@ Config version 4 (until released): `pip install
 ## Workflow at a glance
 
 1. Connect: widget, `SimpleOMEROConnection().connect(...)`, `.join_session(host,
-   session_key)`, or any BlitzGateway. Not needed for `source: zarr`.
+   session_key)`, `.connect_saved(host=...)` (a token saved by an earlier
+   "Stay logged in" login), or any BlitzGateway. Not needed for `source: zarr`.
 2. Config: YAML -> `load_config_from_yaml` / `load_config`, the widget's `get_config()`,
    or `create_default_config()` + attribute assignment. Only `name` is required.
 3. New set: `TrainingSet.create(config, conn)`. Continue: `TrainingSet.open(table_id, conn)`

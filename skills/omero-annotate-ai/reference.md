@@ -318,17 +318,25 @@ deletes the table last. Objects owned by others raise `PermissionError` unless
 verbose=True, port=None)` (host may be `wss://server/omero-ws`; raises
 `ConnectionFailed`), `join_session(host, session_key, port=None, secure=True)`,
 `create_connection_from_config({"host", "username", "password" | "session_key",
-"group", "port", "secure"})` (saves history), `load_config_files()` (host/user/group/port
+"group", "port", "secure", "remember"})` (saves history; `remember` also saves a login
+token, `.saved_login`), `connect_saved(login=None, host=None)` (joins the newest saved
+token, for `host` if given; `ConnectionFailed` if none or expired), `load_config_files()` (host/user/group/port
 from `./.env` keys `HOST`, `USER_NAME`, `GROUP`, `PORT`, then history, then
 `~/.ezomero`; never a password). History: `~/.omero-annotate-ai/connections.json`.
 Remote calls first check the connection and rejoin or log in again with credentials
 held in memory. IDR's OMERO API is closed to logins; use its OME-Zarr.
 
+Saved logins (`omero_annotate_ai.omero.tokens`): `saved_logins()`, `save_login(conn,
+host, port, secure=True, idle_days=7)`, `forget_login(login)` (ends the session on the
+server too). One token per server and user in `~/.omero-annotate-ai/tokens.json`
+(mode 600); a token from `omero-user-token` (`~/.omero_user_token/token` or
+`$OMERO_USER_TOKEN_DIR`) is listed too. Passwords are never stored.
+
 ## napari plugin (experimental)
 
 `pip install "omero-annotate-ai[napari]" "napari[all]"`; Plugins -> OMERO Annotate AI ->
 Annotate training set. Lists local sets under the home folder, *Open folder...*, or
-connect (password or session key, nothing stored) and *List sets* on a container. Keys:
+connect (a *Saved login*, or password or session key; *Stay logged in* saves a token) and *List sets* on a container. Keys:
 Accept (`N`; empty image needs a second press), Skip (`Shift-N`, later), Exclude, Prev
 (back through the session, Accept replaces the saved mask). *Review annotated images*
 tickbox for review. *Finish session* with a note. Each accepted image is saved and
