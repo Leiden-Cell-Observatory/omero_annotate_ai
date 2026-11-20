@@ -882,28 +882,30 @@ class TestChannelsAndWells:
     """Channel table and well filter, and what they write into the config."""
 
     def test_training_channels_follow_the_annotated_channel(self):
+        from omero_annotate_ai.forms import input_channels
         from omero_annotate_ai.widgets.channels import ChannelTable
 
         table = ChannelTable()
         table.set_channels(["DAPI", "GFP", "Actin"])
-        assert table.input_channels() is None  # just the annotated one
+        assert input_channels(table.rows_data(), 0) is None  # just the annotated one
         table.label.value = 1
         assert [r.train.value for r in table.rows] == [False, True, False]
         assert table.rows[1].show.disabled
         table.rows[0].train.value = True
-        assert table.input_channels() == [0, 1]
+        assert input_channels(table.rows_data(), 1) == [0, 1]
         table.rows[0].train.value = table.rows[1].train.value = False
         with pytest.raises(ValueError, match="at least one channel"):
-            table.input_channels()
+            input_channels(table.rows_data(), 1)
 
     def test_context_channels_and_normalisation(self):
+        from omero_annotate_ai.forms import display_config
         from omero_annotate_ai.widgets.channels import ChannelTable
 
         table = ChannelTable()
         table.set_channels(["DAPI", "GFP", "Actin"])
         table.rows[2].show.value = True
         table.rows[2].colormap.value = "red"
-        assert table.display().specs() == [(2, "Actin", "red")]
+        assert display_config(table.rows_data(), 0).specs() == [(2, "Actin", "red")]
         table.method.value = "none"
         assert table.low.disabled
         table.apply_at_export.value = True

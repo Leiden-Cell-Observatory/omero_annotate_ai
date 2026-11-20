@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import ipywidgets as widgets
-from bioimage_annotation_schema import datamodel as bas
 from IPython.display import display
 
 from ..annotators import Annotator
 from ..bundle import home_dir
-from ..core.annotation_config import AnnotationConfig, create_default_config
+from ..core.annotation_config import AnnotationConfig
 from ..errors import OmeroAnnotateAIError
 from ..events import (
     BatchPrepared,
@@ -36,8 +35,9 @@ from ..events import (
     UnitConflict,
     UploadFailed,
 )
+from ..forms import DEFAULT_COUNTS, MODELS, SPLITS, NewSetForm, Planes
 from ..omero.omero_utils import get_container_info
-from ..planning import Mode, parse_indices
+from ..planning import Mode
 from ..trainingset import (
     TrainingSet,
     TrainingSetSummary,
@@ -48,15 +48,6 @@ from .channels import ChannelTable
 from .container_picker import ContainerPicker
 from .well_filter import WellFilter
 
-MODELS = (
-    ("vit_b_lm (light microscopy, recommended)", "vit_b_lm"),
-    ("vit_l_lm", "vit_l_lm"),
-    ("vit_b_em_organelles", "vit_b_em_organelles"),
-    ("vit_b", "vit_b"),
-    ("vit_l", "vit_l"),
-    ("vit_h", "vit_h"),
-)
-SPLITS = (("training", "train_n"), ("validation", "validate_n"), ("test", "test_n"))
 LOG_LINES = 12
 
 _STYLE = """
@@ -162,13 +153,9 @@ class _AxisPicker:
         self.listed.disabled = self.mode.value != "specific"
         self.n_random.disabled = self.mode.value != "random"
 
-    def values(self) -> tuple[Mode, list[int], int | None]:
-        """``(mode, listed indices, n to draw)`` for :class:`SpatialCoverage`."""
+    def planes(self) -> Planes:
         mode: Mode = self.mode.value
-        listed = (
-            parse_indices(self.listed.value, self.what) if mode == "specific" else [0]
-        )
-        return mode, listed, int(self.n_random.value) if mode == "random" else None
+        return Planes(mode, self.listed.value, int(self.n_random.value))
 
 
 def _card(title: str, *children: widgets.Widget) -> widgets.VBox:
@@ -270,7 +257,7 @@ class WorkflowWidget:
         sync_patches()
         self.counts = {
             category: number(category.capitalize(), value, 0, 100_000)
-            for (category, _), value in zip(SPLITS, (5, 2, 0), strict=True)
+            for category, value in DEFAULT_COUNTS.items()
         }
         self.seed = widgets.Text(
             placeholder="random", description="Seed", style=_LABEL, layout=_narrow()
@@ -480,45 +467,27 @@ class WorkflowWidget:
 
     def get_config(self) -> AnnotationConfig:
         """The config a "New training set" would be created from (a fresh copy)."""
-        config = create_default_config()
-        config.name = self.name.value.strip() or config.name
         picked = self.picker.selected
-        if picked:
-            config.omero.container_type = self.picker.kind
-            config.omero.container_id = picked[0]
-            config.omero.container_ids = picked if len(picked) > 1 else None
-        if self.picker.kind in ("plate", "screen"):
-            config.omero.well_filters = self.wells.filters()
-            config.omero.well_filter_mode = self.wells.filter_mode
-        t_mode, t_listed, t_n = self.timepoints.values()
-        z_mode, z_listed, z_n = self.z_slices.values()
-        size = int(self.patch_size.value)
-        config.sampling = bas.Sampling.model_validate(
-            {
-                "label_channel": int(self.channel.value),
-                "input_channels": self.channels.input_channels(),
-                "timepoints": {"mode": t_mode, "values": t_listed, "n": t_n},
-                "z_slices": {"mode": z_mode, "values": z_listed, "n": z_n},
-                "volumetric": bool(self.three_d.value),
-                "patches": {
-                    "width": size,
-                    "height": size,
-                    "per_image": int(self.patches_per_image.value),
-                }
-                if self.use_patches.value
-                else None,
-            }
-        )
-        for category, key in SPLITS:
-            setattr(config.training, key, int(self.counts[category].value))
-        seed = self.seed.value.strip()
-        config.split.seed = int(seed) if seed else None
-        config.ai_model.pretrained_from = str(self.model.value)
-        config.workflow.batch_size = int(self.batch_size.value)
-        config.storage = "local" if self.storage.value == "local" else "omero"
-        config.display = self.channels.display()
-        config.normalization = self.channels.normalization()
-        return config
+        return NewSetForm(
+            name=self.name.value,
+            container_type=self.picker.kind,
+            container_ids=picked,
+            label_channel=int(self.channel.value),
+            channels=self.channels.rows_data(),
+            timepoints=self.timepoints.planes(),
+            z_slices=self.z_slices.planes(),
+            volumetric=bool(self.three_d.value),
+            patch_size=int(self.patch_size.value) if self.use_patches.value else None,
+            patches_per_image=int(self.patches_per_image.value),
+            counts={c: int(box.value) for c, box in self.counts.items()},
+            seed=self.seed.value,
+            storage="local" if self.storage.value == "local" else "omero",
+            model=str(self.model.value),
+            batch_size=int(self.batch_size.value),
+            normalization=self.channels.normalization(),
+            well_filters=self.wells.filters(),
+            well_filter_mode=self.wells.filter_mode,
+        ).to_config()
 
     def request(self) -> Request:
         """The form as a request for :func:`open_or_create`."""

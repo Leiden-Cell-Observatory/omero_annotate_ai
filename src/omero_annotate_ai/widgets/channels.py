@@ -11,10 +11,9 @@ import html
 
 import ipywidgets as widgets
 
-from ..core.annotation_config import DisplayConfig, NormalizationConfig
+from ..core.annotation_config import NormalizationConfig
+from ..forms import COLORMAPS, ChannelRow, move_label
 
-COLORMAPS = ("gray", "blue", "green", "red", "magenta", "cyan", "yellow")
-_DEFAULT_COLORMAPS = ("blue", "magenta", "green", "yellow", "cyan")
 _LABEL = {"description_width": "110px"}
 
 
@@ -31,7 +30,7 @@ class _Row:
         self.show = widgets.Checkbox(indent=False, layout=_cell("90px"))
         self.colormap = widgets.Dropdown(
             options=COLORMAPS,
-            value=_DEFAULT_COLORMAPS[index % len(_DEFAULT_COLORMAPS)],
+            value=ChannelRow(index, name).colormap,
             layout=_cell("110px"),
         )
         self.show.observe(lambda _: self.sync(), names="value")
@@ -118,12 +117,11 @@ class ChannelTable:
         self._mark_label(label, train=True)
 
     def _on_label(self, change: dict) -> None:
-        old, new = change["old"], change["new"]
-        # Training on just the annotated channel follows the annotated channel.
-        follow = [r.index for r in self.rows if r.train.value] == [old]
-        if follow:
-            self.rows[old].train.value = False
-        self._mark_label(new, train=follow)
+        rows = self.rows_data()
+        move_label(rows, change["old"], change["new"])
+        for row, data in zip(self.rows, rows, strict=True):
+            row.train.value, row.show.value = data.train, data.show
+        self._mark_label(change["new"], train=False)
 
     def _mark_label(self, label: int, *, train: bool) -> None:
         for row in self.rows:
@@ -144,20 +142,18 @@ class ChannelTable:
 
     # --- values -------------------------------------------------------------------
 
-    def input_channels(self) -> list[int] | None:
-        """Training channels; None when only the annotated one (the default)."""
-        chosen = [r.index for r in self.rows if r.train.value]
-        if not chosen:
-            raise ValueError("Pick at least one channel to train on")
-        return None if chosen == [self.label.value] else chosen
-
-    def display(self) -> DisplayConfig:
-        shown = [r for r in self.rows if r.show.value and r.index != self.label.value]
-        return DisplayConfig(
-            context_channels=[r.index for r in shown],
-            context_channel_names=[r.name for r in shown] or None,
-            context_channel_colormaps=[str(r.colormap.value) for r in shown] or None,
-        )
+    def rows_data(self) -> list[ChannelRow]:
+        """The rows as :class:`~omero_annotate_ai.forms.ChannelRow`."""
+        return [
+            ChannelRow(
+                r.index,
+                r.name,
+                train=bool(r.train.value),
+                show=bool(r.show.value),
+                colormap=str(r.colormap.value),
+            )
+            for r in self.rows
+        ]
 
     def normalization(self) -> NormalizationConfig:
         return NormalizationConfig(

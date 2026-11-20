@@ -13,6 +13,7 @@ from typing import Any
 
 import ipywidgets as widgets
 
+from ..forms import CONTAINER_TYPES, container_label, matches_search
 from ..omero.omero_utils import (
     find_container,
     list_containers,
@@ -21,14 +22,9 @@ from ..omero.omero_utils import (
 )
 from ..omero.simple_connection import ensure_connected
 
-CONTAINER_TYPES = ("dataset", "project", "plate", "screen")
 ALL_MEMBERS = -1
 _LABEL = {"description_width": "110px"}
 ROWS = 8
-
-
-def _label(name: str, cid: int) -> str:
-    return f"{name} (ID {cid})"
 
 
 class ContainerPicker:
@@ -239,16 +235,15 @@ class ContainerPicker:
         self._show()
 
     def _matches(self, name: str, cid: int) -> bool:
-        text = self.search.value.strip().lower()
-        return not text or text in name.lower() or text == str(cid)
+        return matches_search(name, cid, self.search.value)
 
     def _show(self) -> None:
         """Fill the list: the picks first, then the matches of the filter."""
         picked = set(self._picked)
         names = dict((cid, name) for name, cid in self._all)
-        shown = [(_label(names[cid], cid), cid) for cid in self._picked]
+        shown = [(container_label(names[cid], cid), cid) for cid in self._picked]
         shown += [
-            (_label(name, cid), cid)
+            (container_label(name, cid), cid)
             for name, cid in self._all
             if cid not in picked and self._matches(name, cid)
         ]
@@ -270,7 +265,7 @@ class ContainerPicker:
         )
         self.picked_info.value = (
             "<span class='oai-muted'>Picked: "
-            + ", ".join(_label(names[cid], cid) for cid in self._picked)
+            + ", ".join(container_label(names[cid], cid) for cid in self._picked)
             + "</span>"
             if self.multiple and len(self._picked) > 1
             else ""

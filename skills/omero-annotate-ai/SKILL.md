@@ -192,7 +192,8 @@ Config version 4 (until released): `pip install
 - `save_bia_package` without study description, funding statement, keywords, a link and
   `version`: raises `MifaNotReady`; fill them with `ts.describe(...)`.
 - `delete_training_set(conn, table_id)` without `dry_run=False` deletes nothing.
-- napari plugin to start a project: it only opens existing sets (2D only).
+- napari plugin for OME-Zarr data or 3D annotation: it makes and annotates 2D sets on
+  OMERO images only.
 
 reference.md: config v4 schema with defaults, removed keys, folder layout, OMERO objects
 and table columns, resume/repair, review/exclude, external tools, training and BIA /

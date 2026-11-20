@@ -1,12 +1,12 @@
 # napari plugin (experimental)
 
 !!! warning "Experimental"
-    The plugin opens and annotates existing training sets (on OMERO or in a local
-    folder). Create a new training set with the [notebooks](notebooks.md) or
-    `TrainingSet.create` first; the plugin cannot create sets yet.
+    The plugin works on OMERO images (and on sets in a local folder); OME-Zarr sets
+    are made with the [notebooks](notebooks.md).
 
-The plugin lets you annotate a training set with [micro-SAM](https://github.com/computational-cell-analytics/micro-sam)
-inside your own napari window, one image at a time, without leaving napari.
+The plugin takes you from your OMERO data to annotated training images inside your own
+napari window, with [micro-SAM](https://github.com/computational-cell-analytics/micro-sam):
+find the data, make a training set (or open one), and annotate it one image at a time.
 
 ## Install
 
@@ -23,17 +23,42 @@ message naming the one it needs.
 
 ## Use
 
-1. **Pick a training set.** Sets that have a folder in your home folder
-   (`~/omero_annotate_ai`, or `$OMERO_ANNOTATE_AI_HOME`) are listed straight away;
-   *Open folder…* opens any other set folder. For sets on OMERO, **connect** first
-   (host, user and password, or a session key; the password is never stored, but
-   *Stay logged in* saves a token so the next time you pick a *Saved login* and click
-   *Log in*), choose
-   the container type and ID, and click *List sets*. Connecting runs in the
-   background, so napari stays responsive. The summary shows progress per split and
-   the last sessions with their notes; listing never changes anything. Tick
-   *Review annotated images* to correct images annotated earlier instead (step 2b).
-2. **Annotate.** Click *Annotate*. The set is opened, and repaired first if an earlier
+The dock is a small wizard in three steps; every call to OMERO runs in the background,
+so napari stays responsive.
+
+1. **Server.** Pick a *Saved login* and click *Log in*, or log in with host, user and
+   password (or a session key). The password is never stored; with *Stay logged in*
+   ticked a token is saved instead, so next time no password is needed. Sets that have
+   a folder on this computer need no server: go to step 3.
+2. **Data.** Find the images: *Group* switches to another of your groups, *Owner* shows
+   your data (*Me*), everyone's (*All members*) or one colleague's, and *Type* is
+   project, dataset, plate or screen. *Search* filters the list by name or ID as you
+   type; *Go to ID* (or Enter) finds a container by its ID in any of your groups and
+   switches to that group. Ctrl/Shift-click picks several containers of one type for one
+   training set. Below the list: the number of images, a sample image's size and its
+   channel names. *Next* goes to step 3.
+3. **Training set.**
+    - **Open** lists the sets on the picked container and the sets with a folder on
+      this computer (*Open folder…* opens any other set folder); the summary shows
+      progress per split and the last sessions with their notes. *Add images* adds
+      images per split to the set before annotating. Tick *Review annotated images* to
+      correct images annotated earlier instead (step 4b).
+    - **New** makes a training set from the picked containers. *Name*; **Channels**:
+      the channel you draw on (by name), the channels the model trains on (*Train on*),
+      extra channels napari shows next to it while you annotate (*Show*, with a
+      colour; never used for training), and the intensity normalisation. *Show sample
+      image in viewer* adds each channel of a sample image as a layer, to see which
+      channel is which. **Images**: timepoints and z-slices (specific, all or random),
+      3D, patches, the number of images for training / validation / test, the seed
+      (empty: random, stored) and where the set is kept (OMERO, or this computer
+      only). For plates and screens, **Plate wells** keeps or leaves out wells by
+      their metadata: keys added with [MIHCSME](https://github.com/Leiden-Cell-Observatory/MIHCSME_py)
+      (cell line, treatment, ...) come first, and the number of wells kept updates
+      as you pick.
+
+    *Model* and *Batch size* apply to both. Click *Annotate* (or *Create and
+    annotate*); after the session the dock comes back to *Open* with the set selected.
+4. **Annotate.** The set is opened (or created). The set is opened, and repaired first if an earlier
    run was interrupted (*Cancel* stops that). The image appears with micro-SAM's annotator docked
    next to it; the image embedding is computed in the background first (a progress
    bar shows while it runs); the next image's embedding is computed while you
@@ -54,13 +79,13 @@ message naming the one it needs.
     If an image cannot be shown (for example its embedding fails), the error is shown
     and **Skip** / **Prev** still work.
 
-    **2b. Review.** With *Review annotated images* ticked, the annotated images come
+    **4b. Review.** With *Review annotated images* ticked, the annotated images come
     back one by one with their saved objects already committed (going back with
     **Prev** shows the saved mask again, not unaccepted edits). Correct them and
     press **Accept**: a changed mask replaces the label file and ROI on OMERO (the new
     ones are uploaded before the old ones are deleted); an image accepted unchanged
     keeps its upload. The progress line counts the revised images.
-3. **Finish.** Add a short note about the session (for example *"nuclei only, skipped
+5. **Finish.** Add a short note about the session (for example *"nuclei only, skipped
    small debris"*) and click *Finish session*. The note is stored with the session.
 
 Each accepted image is saved straight away (and, for OMERO sets, uploaded with its
@@ -78,8 +103,8 @@ uploaded again: your mask is kept in the set folder and the plugin names the fil
 
 ## Known limits
 
-- 2D only: the plugin refuses 3D sets. Creating a set and adding images to a set come
-  later (use `TrainingSet.create` / `extend`).
+- Annotating is 2D only: a 3D set can be made in the dock but is annotated with the
+  notebooks (`ts.annotate()`).
 - Images that need review (their local and uploaded masks differ) are skipped, and the
   plugin says how many; resolve them as described in
   [Resume and repeat](tutorials/resume-and-repeat.md).
