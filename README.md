@@ -35,7 +35,7 @@ flowchart LR
     D --> F[BioImage Archive<br/>MIFA export]
 ```
 
-- **Jupyter widgets** to connect to OMERO and create a training set or open one to continue, no code needed: find data by group, owner, name or ID; pick the channels to train on and show in napari; filter plate wells on their (MIHCSME) metadata.
+- **Jupyter widgets** to connect to OMERO and create a training set or open one to continue, no code needed: find data by group, owner, name or ID; pick the channels to train on and show in napari; filter plate wells on their (MIHCSME) metadata; stay logged in with a saved token instead of typing your password each time.
 - **Resumable and crash-safe:** each mask is saved locally, uploaded with a tag and then recorded in the tracking table, so an interrupted run continues where it stopped without duplicate uploads; pixel digests flag files that changed afterwards.
 - **Review and correct** earlier annotations with their saved masks; record a note per session.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate (or screen) wells on their key-value pairs.

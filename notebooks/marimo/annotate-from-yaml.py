@@ -21,8 +21,17 @@ def _():
 
     from omero_annotate_ai import TrainingSet, load_config_from_yaml
     from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+    from omero_annotate_ai.omero.tokens import saved_logins
 
-    return Path, SimpleOMEROConnection, TrainingSet, load_config_from_yaml, mo, pd
+    return (
+        Path,
+        SimpleOMEROConnection,
+        TrainingSet,
+        load_config_from_yaml,
+        mo,
+        pd,
+        saved_logins,
+    )
 
 
 @app.cell
@@ -77,8 +86,17 @@ def _(Path, load_button, load_config_from_yaml, mo, yaml_path):
 
 
 @app.cell
-def _(config, mo):
+def _(config, mo, saved_logins):
     mo.stop(config.source != "omero" and config.storage != "omero")
+    _logins = {_login.label: _login for _login in saved_logins()}
+    omero_saved = mo.ui.dropdown(
+        options={**_logins, "New login (password or session key)": None},
+        value=next(iter(_logins), "New login (password or session key)"),
+        label="Log in with",
+    )
+    omero_remember = mo.ui.checkbox(
+        value=True, label="Stay logged in on this computer (saves a token)"
+    )
     omero_host = mo.ui.text(label="OMERO host")
     omero_username = mo.ui.text(label="Username")
     omero_password = mo.ui.text(label="Password", kind="password")
@@ -90,9 +108,12 @@ def _(config, mo):
     connect_button = mo.ui.run_button(label="Connect")
     mo.vstack(
         [
+            omero_saved,
+            mo.md("or a new login (this or another server):"),
             mo.hstack([omero_host, omero_username, omero_password], justify="start"),
             mo.hstack([omero_session_key, omero_group], justify="start"),
-            mo.hstack([omero_secure, connect_button], justify="start"),
+            mo.hstack([omero_secure, omero_remember], justify="start"),
+            connect_button,
         ]
     )
     return (
@@ -100,6 +121,8 @@ def _(config, mo):
         omero_group,
         omero_host,
         omero_password,
+        omero_remember,
+        omero_saved,
         omero_secure,
         omero_session_key,
         omero_username,
@@ -115,6 +138,8 @@ def _(
     omero_group,
     omero_host,
     omero_password,
+    omero_remember,
+    omero_saved,
     omero_secure,
     omero_session_key,
     omero_username,
@@ -123,15 +148,20 @@ def _(
     if config.source == "omero" or config.storage == "omero":
         mo.stop(not connect_button.value, mo.md("This set needs OMERO: connect."))
         try:
-            conn = SimpleOMEROConnection().create_connection_from_config(
-                {
-                    "host": omero_host.value,
-                    "username": omero_username.value,
-                    "password": omero_password.value,
-                    "session_key": omero_session_key.value,
-                    "group": omero_group.value,
-                    "secure": omero_secure.value,
-                }
+            conn = (
+                SimpleOMEROConnection().connect_saved(omero_saved.value)
+                if omero_saved.value is not None
+                else SimpleOMEROConnection().create_connection_from_config(
+                    {
+                        "host": omero_host.value,
+                        "username": omero_username.value,
+                        "password": omero_password.value,
+                        "session_key": omero_session_key.value,
+                        "group": omero_group.value,
+                        "secure": omero_secure.value,
+                        "remember": omero_remember.value,
+                    }
+                )
             )
         except Exception as _error:  # ConnectionFailed: report and stop
             mo.stop(True, mo.md(f"**Not connected:** {_error}"))

@@ -48,6 +48,12 @@ def isolated_cwd(tmp_path, monkeypatch):
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OMERO_ANNOTATE_AI_HOME", str(tmp_path / "home"))
+    # Saved logins (tokens) neither read from nor written to the user's home.
+    monkeypatch.setenv("OMERO_USER_TOKEN_DIR", str(tmp_path / "omero_user_token"))
+    with contextlib.suppress(ImportError):
+        from omero_annotate_ai.omero import tokens
+
+        monkeypatch.setattr(tokens, "tokens_file", lambda: tmp_path / "tokens.json")
 
 
 @pytest.fixture

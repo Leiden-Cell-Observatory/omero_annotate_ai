@@ -17,6 +17,14 @@ Newest first. The full list of pull requests per version is on
   filters on plate metadata (MIHCSME assay conditions first, with a live count of the
   wells kept).
 - **Well filters apply to screens** too (to the wells of each plate of the screen).
+- **Stay logged in.** A password login can save a token (on by default in the
+  Jupyter connection widget, the marimo notebooks and the napari plugin): next time,
+  choose it under *Saved login* and log in without a password. One token per server and
+  user, so logins for several OMERO servers live side by side and the form still logs
+  in to another one. Tokens end after 7 days unused; *Forget* ends one on the server.
+  Kept in `~/.omero-annotate-ai/tokens.json` (user-only permissions); passwords are
+  still never stored. `SimpleOMEROConnection().connect_saved(host=...)` does the same
+  in scripts, and a token from `omero-user-token set` is picked up too.
 - **Two more Jupyter notebooks**, next to their marimo versions: the IDR OME-Zarr demo
   (`annotation/idr-zarr-demo.ipynb`) and run from a YAML file
   (`annotation/annotate-from-yaml.ipynb`).

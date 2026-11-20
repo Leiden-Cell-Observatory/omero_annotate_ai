@@ -702,6 +702,49 @@ class TestDock:
         qtbot.waitUntil(lambda: widget.list_button.isEnabled(), timeout=5000)
         assert joined == [("omero.example.org", "abc-123")]
 
+    def test_stay_logged_in_saves_a_login_that_connects_next_time(
+        self, tmp_path, make_dock, qtbot, monkeypatch
+    ):
+        from unittest.mock import MagicMock
+
+        from omero_annotate_ai.omero import tokens
+        from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
+
+        _, source, _, home = _make_set(tmp_path, "local")
+        gateway = MagicMock()
+        gateway.getEventContext.return_value.userName = "someone"
+        gateway.getSessionService.return_value.createUserSession.return_value.getUuid.return_value.getValue.return_value = "tok-1"  # noqa: E501
+        monkeypatch.setattr(
+            SimpleOMEROConnection, "connect", lambda self, *a, **kw: gateway
+        )
+        joined = []
+        monkeypatch.setattr(
+            SimpleOMEROConnection,
+            "join_session",
+            lambda self, *args: joined.append(args) or MagicMock(),
+        )
+        monkeypatch.setattr(tokens, "_end_session", lambda login: None)
+
+        widget = make_dock(home, source)[0]
+        assert not widget.saved_row.isVisibleTo(widget)
+        widget.host.setText("omero.example.org")
+        widget.user.setText("someone")
+        widget.password.setText("secret")
+        widget.connect_button.click()
+        qtbot.waitUntil(lambda: "Login saved" in widget.status.text(), timeout=5000)
+        assert widget.saved_row.isVisibleTo(widget)
+        assert widget.saved_login.currentText().startswith(
+            "someone @ omero.example.org"
+        )
+
+        widget.saved_login_button.click()
+        qtbot.waitUntil(lambda: bool(joined), timeout=5000)
+        assert joined == [("omero.example.org", "tok-1", None, True)]
+
+        widget.forget_button.click()
+        qtbot.waitUntil(lambda: not widget.saved_row.isVisibleTo(widget), timeout=5000)
+        assert tokens.saved_logins() == []
+
     def test_the_password_is_never_stored(
         self, tmp_path, make_dock, qtbot, monkeypatch
     ):
