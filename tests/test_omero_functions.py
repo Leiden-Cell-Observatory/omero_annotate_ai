@@ -1153,3 +1153,89 @@ class TestFindTagged:
                 [3],
                 [1],
             )
+
+
+@pytest.mark.unit
+class TestBrowseHelpers:
+    """Groups, owners, containers and well metadata for the container picker."""
+
+    @staticmethod
+    def _named(name, oid):
+        obj = Mock()
+        obj.getName.return_value = name
+        obj.getFullName.return_value = name
+        obj.getId.return_value = oid
+        return obj
+
+    def test_groups_leave_out_system_groups_and_sort(self):
+        from omero_annotate_ai.omero.omero_utils import list_groups
+
+        conn = Mock()
+        conn.isAdmin.return_value = False
+        conn.getGroupsMemberOf.return_value = [
+            self._named("zebra", 5),
+            self._named("user", 1),
+            self._named("Alpha", 4),
+        ]
+        assert list_groups(conn) == [("Alpha", 4), ("zebra", 5)]
+
+    def test_admin_sees_every_group(self):
+        from omero_annotate_ai.omero.omero_utils import list_groups
+
+        conn = Mock()
+        conn.isAdmin.return_value = True
+        conn.getObjects.return_value = [self._named("lab", 3)]
+        assert list_groups(conn) == [("lab", 3)]
+        conn.getObjects.assert_called_once_with("ExperimenterGroup")
+
+    def test_containers_by_owner_sorted_by_name(self):
+        from omero_annotate_ai.omero.omero_utils import list_containers
+
+        conn = Mock()
+        conn.getObjects.return_value = [self._named("b", 2), self._named("A", 9)]
+        assert list_containers(conn, "plate", owner=7) == [("A", 9), ("b", 2)]
+        conn.getObjects.assert_called_once_with("Plate", opts={"owner": 7})
+        list_containers(conn, "dataset")
+        assert conn.getObjects.call_args.kwargs == {"opts": None}
+
+    def test_find_container_searches_all_groups_and_restores_the_group(self):
+        from omero_annotate_ai.omero.omero_utils import find_container
+
+        conn = Mock()
+        conn.SERVICE_OPTS.getOmeroGroup.return_value = "3"
+        details = conn.getObject.return_value.getDetails.return_value
+        details.getGroup.return_value.getId.return_value = 8
+        assert find_container(conn, "dataset", 42) == 8
+        assert [c.args for c in conn.SERVICE_OPTS.setOmeroGroup.call_args_list] == [
+            ("-1",),
+            ("3",),
+        ]
+        conn.getObject.return_value = None
+        assert find_container(conn, "dataset", 43) is None
+
+    def test_well_metadata_merges_annotations_and_marks_mihcsme_keys(self):
+        from omero_annotate_ai.omero.omero_utils import (
+            MIHCSME_WELL_NS,
+            plate_well_metadata,
+        )
+
+        def r(value):
+            return None if value is None else Mock(val=value)
+
+        conn = Mock()
+        conn.getQueryService.return_value.projection.side_effect = [
+            [[r(1)], [r(2)], [r(3)]],
+            [
+                [r(1), r(MIHCSME_WELL_NS), r("CellLine"), r("HeLa")],
+                [r(1), r(None), r("Other"), r("x")],
+                [r(2), r(MIHCSME_WELL_NS), r("CellLine"), r("U2OS")],
+            ],
+        ]
+        wells, mihcsme = plate_well_metadata(conn, "plate", [10])
+        assert wells == {
+            1: {"CellLine": "HeLa", "Other": "x"},
+            2: {"CellLine": "U2OS"},
+            3: {},
+        }
+        assert mihcsme == {"CellLine"}
+        assert plate_well_metadata(conn, "plate", []) == ({}, set())

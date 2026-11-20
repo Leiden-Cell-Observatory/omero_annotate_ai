@@ -35,10 +35,10 @@ flowchart LR
     D --> F[BioImage Archive<br/>MIFA export]
 ```
 
-- **Jupyter widgets** to connect to OMERO and create a training set or open one to continue, no code needed.
+- **Jupyter widgets** to connect to OMERO and create a training set or open one to continue, no code needed: find data by group, owner, name or ID; pick the channels to train on and show in napari; filter plate wells on their (MIHCSME) metadata.
 - **Resumable and crash-safe:** each mask is saved locally, uploaded with a tag and then recorded in the tracking table, so an interrupted run continues where it stopped without duplicate uploads; pixel digests flag files that changed afterwards.
 - **Review and correct** earlier annotations with their saved masks; record a note per session.
-- **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate wells on their key-value pairs.
+- **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate (or screen) wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
 - **FAIR by default:** the config describes the set with the [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema) (study, authors, methods, sampling, split) and exports to RO-Crate and the BioImage Archive (MIFA).
 - **Local-only storage** (`storage: local`) for data you cannot write to, such as public [IDR](https://idr.openmicroscopy.org) OME-Zarr.

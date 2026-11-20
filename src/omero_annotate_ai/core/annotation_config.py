@@ -260,7 +260,8 @@ class OMEROConfig(_Section):
         default=None,
         description="Filter wells by map annotation key-value pairs. "
         "Example: {'cellline': ['U2OS', 'HeLa'], 'treatment': ['Control']}. "
-        "All conditions must be met (AND logic). Only applies when container_type='plate'.",
+        "All conditions must be met (AND logic). Applies to plates and the plates "
+        "of screens.",
     )
     well_filter_mode: Literal["include", "exclude"] = Field(
         default="include",

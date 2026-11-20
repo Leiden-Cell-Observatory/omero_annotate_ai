@@ -308,6 +308,38 @@ class TestNewTrainingSet:
 
 
 class TestSources:
+    def test_plate_well_metadata_from_mihcsme(self, omero_conn, omero_seed):
+        """The widget's well filter reads MIHCSME conditions in one query."""
+        from omero.gateway import MapAnnotationWrapper
+
+        from omero_annotate_ai.omero.omero_utils import (
+            MIHCSME_WELL_NS,
+            plate_well_metadata,
+        )
+
+        if omero_seed.plate_id is None:
+            pytest.skip("Plate could not be imported on this server")
+        plate = omero_conn.getObject("Plate", omero_seed.plate_id)
+        wells = {w.getId(): w for w in plate.listChildren()}
+        annotations = []
+        for i, well in enumerate(wells.values()):
+            ann = MapAnnotationWrapper(omero_conn)
+            ann.setNs(MIHCSME_WELL_NS)
+            ann.setValue([["CellLine", "HeLa" if i % 2 else "U2OS"]])
+            ann.save()
+            well.linkAnnotation(ann)
+            annotations.append(ann.getId())
+        try:
+            found, mihcsme = plate_well_metadata(
+                omero_conn, "plate", [omero_seed.plate_id]
+            )
+        finally:
+            omero_conn.deleteObjects("Annotation", annotations, wait=True)
+
+        assert set(found) == set(wells)
+        assert {kv["CellLine"] for kv in found.values()} == {"HeLa", "U2OS"}
+        assert mihcsme == {"CellLine"}
+
     def test_plate(self, omero_conn, omero_seed, annotator, tmp_path):
         if omero_seed.plate_id is None:
             pytest.skip("Plate could not be imported on this server")

@@ -37,7 +37,6 @@ from ..events import (
     UploadFailed,
 )
 from ..omero.omero_utils import get_container_info
-from ..omero.simple_connection import ensure_connected
 from ..planning import Mode, parse_indices
 from ..trainingset import (
     TrainingSet,
@@ -45,8 +44,10 @@ from ..trainingset import (
     summarize,
     training_set_choices,
 )
+from .channels import ChannelTable
+from .container_picker import ContainerPicker
+from .well_filter import WellFilter
 
-CONTAINER_TYPES = ("dataset", "project", "plate", "screen")
 MODELS = (
     ("vit_b_lm (light microscopy, recommended)", "vit_b_lm"),
     ("vit_l_lm", "vit_l_lm"),
@@ -177,20 +178,6 @@ def _card(title: str, *children: widgets.Widget) -> widgets.VBox:
     return card
 
 
-def container_options(
-    connection: Any, container_type: Any, on_error: Callable[[str], None]
-) -> list[tuple[str, int]]:
-    """``(label, id)`` of the containers of one type; an OMERO error is reported."""
-    kind = str(container_type).capitalize()
-    try:
-        ensure_connected(connection)
-        found = list(connection.getObjects(kind))
-    except Exception as error:  # noqa: BLE001 - UI boundary: show any OMERO error
-        on_error(f"Could not list {kind}s: {error}")
-        return []
-    return [(f"{c.getName()} (ID {c.getId()})", c.getId()) for c in found]
-
-
 def render_summary(summary: TrainingSetSummary) -> str:
     """HTML for a set's summary card: progress per split and its sessions."""
     ident = f"table {summary.table_id}" if summary.table_id else "local"
@@ -226,21 +213,18 @@ class WorkflowWidget:
         self._notes: dict[int, str] = {}  # session ID -> note, for the note editor
         self._log: list[str] = []
         self._build()
-        self._load_containers()
+        self.picker.set_connection(connection)
 
     # --- layout -------------------------------------------------------------------
 
     def _build(self) -> None:
-        self.container_type = widgets.Dropdown(
-            options=CONTAINER_TYPES,
-            description="Container",
-            style=_LABEL,
-            layout=_narrow(),
+        # Connected in __init__, once the widgets its callbacks use exist.
+        self.picker = ContainerPicker(
+            multiple=True, on_change=self._on_container, on_error=self._error
         )
-        self.container = widgets.Dropdown(options=[], layout=_wide())
+        self.container_type = self.picker.container_type
+        self.container = self.picker.container
         self.container_info = widgets.HTML()
-        self.container_type.observe(lambda _: self._load_containers(), names="value")
-        self.container.observe(lambda _: self._on_container(), names="value")
 
         self.mode = widgets.ToggleButtons(
             options=[("New training set", "new"), ("Open training set", "open")],
@@ -262,7 +246,13 @@ class WorkflowWidget:
 
         # New
         self.name = widgets.Text(description="Name", style=_LABEL, layout=_wide())
-        self.channel = number("Channel", 0, 0, 99)
+        self.channels = ChannelTable()
+        self.channel = self.channels.label
+        self.wells = WellFilter(on_error=self._error)
+        self.advanced = widgets.Accordion(children=[self.channels.box, self.wells.box])
+        self.advanced.set_title(0, "Channels: annotate, train on, show in napari")
+        self.advanced.set_title(1, "Plate wells: filter by metadata (MIHCSME)")
+        self.advanced.selected_index = None
         self.timepoints = _AxisPicker("Timepoints")
         self.z_slices = _AxisPicker("Z-slices")
         self.three_d = widgets.Checkbox(
@@ -304,6 +294,7 @@ class WorkflowWidget:
             widgets.HBox([self.use_patches, self.patch_size, self.patches_per_image]),
             widgets.HBox(list(self.counts.values())),
             widgets.HBox([self.seed, self.storage]),
+            self.advanced,
         )
 
         # Open
@@ -366,11 +357,7 @@ class WorkflowWidget:
         self.main = widgets.VBox(
             [
                 widgets.HTML(_STYLE),
-                _card(
-                    "Data",
-                    widgets.HBox([self.container_type, self.container]),
-                    self.container_info,
-                ),
+                _card("Data", self.picker.box, self.container_info),
                 self.mode,
                 self.new_card,
                 self.open_card,
@@ -402,39 +389,28 @@ class WorkflowWidget:
 
     # --- data ---------------------------------------------------------------------
 
-    def _load_containers(self) -> None:
-        self._reset_selection()
-        if self.connection is None:
-            self.container.options = []
-            return
-        self.container.options = container_options(
-            self.connection, self.container_type.value, self._error
-        )
-
     def _on_container(self) -> None:
         self._reset_selection()
-        if self.connection is None or self.container.value is None:
+        picked = self.picker.selected
+        self.wells.load(self.connection, self.picker.kind, picked)
+        if self.connection is None or not picked:
             self.container_info.value = ""
             return
-        info = (
-            get_container_info(
-                self.connection,
-                str(self.container_type.value),
-                int(self.container.value),
-            )
-            or {}
-        )
-        self.container_info.value = self._format_info(info)
+        # A multi-container set: the first container stands for the others.
+        info = get_container_info(self.connection, self.picker.kind, picked[0]) or {}
+        self.container_info.value = self._format_info(info, len(picked))
         sizes = info.get("dimensions") or {}
-        if sizes.get("C"):
-            self.channel.max = max(0, int(sizes["C"]) - 1)
+        names = info.get("channel_names") or [
+            f"Channel {i}" for i in range(int(sizes.get("C") or 1))
+        ]
+        self.channels.set_channels([str(n) for n in names])
         if not self.name.value and info.get("container_name"):
             self.name.value = str(info["container_name"])
         if self.mode.value == "open":
             self._load_sets()
 
     @staticmethod
-    def _format_info(info: dict[str, Any]) -> str:
+    def _format_info(info: dict[str, Any], n_containers: int = 1) -> str:
         if not info:
             return ""
         sizes = info.get("dimensions") or {}
@@ -444,6 +420,8 @@ class WorkflowWidget:
         if info.get("channel_names_vary"):
             channels += " <i>(names differ between images)</i>"
         parts = [f"{info.get('total_images', 0)} images"]
+        if n_containers > 1:
+            parts = [f"{n_containers} containers; first: {parts[0]}"]
         if dims:
             parts.append(f"sample {dims}")
         if channels:
@@ -463,10 +441,11 @@ class WorkflowWidget:
         self.status.value = ""
 
     def _load_sets(self) -> None:
+        picked = self.picker.selected
         options = training_set_choices(
             self.connection,
-            str(self.container_type.value),
-            self.container.value,
+            self.picker.kind,
+            picked[0] if picked else None,
             home=self.home,
             on_error=self._error,
         )
@@ -503,15 +482,21 @@ class WorkflowWidget:
         """The config a "New training set" would be created from (a fresh copy)."""
         config = create_default_config()
         config.name = self.name.value.strip() or config.name
-        if self.container.value is not None:
-            config.omero.container_type = str(self.container_type.value)
-            config.omero.container_id = int(self.container.value)
+        picked = self.picker.selected
+        if picked:
+            config.omero.container_type = self.picker.kind
+            config.omero.container_id = picked[0]
+            config.omero.container_ids = picked if len(picked) > 1 else None
+        if self.picker.kind in ("plate", "screen"):
+            config.omero.well_filters = self.wells.filters()
+            config.omero.well_filter_mode = self.wells.filter_mode
         t_mode, t_listed, t_n = self.timepoints.values()
         z_mode, z_listed, z_n = self.z_slices.values()
         size = int(self.patch_size.value)
         config.sampling = bas.Sampling.model_validate(
             {
                 "label_channel": int(self.channel.value),
+                "input_channels": self.channels.input_channels(),
                 "timepoints": {"mode": t_mode, "values": t_listed, "n": t_n},
                 "z_slices": {"mode": z_mode, "values": z_listed, "n": z_n},
                 "volumetric": bool(self.three_d.value),
@@ -531,6 +516,8 @@ class WorkflowWidget:
         config.ai_model.pretrained_from = str(self.model.value)
         config.workflow.batch_size = int(self.batch_size.value)
         config.storage = "local" if self.storage.value == "local" else "omero"
+        config.display = self.channels.display()
+        config.normalization = self.channels.normalization()
         return config
 
     def request(self) -> Request:
@@ -688,7 +675,8 @@ class WorkflowWidget:
     def set_connection(self, connection: Any) -> None:
         """Use another OMERO connection (reloads the containers)."""
         self.connection = connection
-        self._load_containers()
+        self.picker.set_connection(connection)
+        self._on_container()
 
     def display(self) -> None:
         """Show the widget in the notebook."""
