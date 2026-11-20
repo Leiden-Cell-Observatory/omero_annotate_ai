@@ -280,8 +280,12 @@ from omero_annotate_ai import TrainingSet, prepare_bia_data_from_table
 from omero_annotate_ai.schema_export import save_bia_package
 
 ts = TrainingSet.open(table_id, conn)
-ts.describe(version="1", keywords=["nuclei"], links=[{"url": "https://example.org"}],
-            study={"title": "...", "description": "...", "funding_statement": "..."})
+ts.describe(
+    version="1",
+    keywords=["nuclei"],
+    links=[{"url": "https://example.org"}],
+    study={"title": "...", "description": "...", "funding_statement": "..."},
+)
 stats = prepare_bia_data_from_table(conn, table_id, "bia_staging")  # native dtype
 save_bia_package(ts.config, stats["rows"], "bia_staging", "bia_bundle", move_data=True)
 # local set: save_bia_package(ts.config, ts.units(), ts.bundle_dir, "bia_bundle")
@@ -299,8 +303,9 @@ documents and `ro-crate-metadata.json` into the set folder; `bas validate --mifa
 
 ```python
 from omero_annotate_ai.omero.omero_functions import delete_training_set
-report = delete_training_set(conn, table_id)               # dry run: lists IDs
-delete_training_set(conn, table_id, dry_run=False)         # deletes, waits
+
+report = delete_training_set(conn, table_id)  # dry run: lists IDs
+delete_training_set(conn, table_id, dry_run=False)  # deletes, waits
 ```
 Finds ROIs, labels, annotation inputs and configs by row ID and by tag (never by name),
 deletes the table last. Objects owned by others raise `PermissionError` unless

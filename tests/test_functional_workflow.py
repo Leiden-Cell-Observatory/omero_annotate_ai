@@ -1199,7 +1199,7 @@ class TestFrontEndRoutes:
 
         widget = create_workflow_widget(connection=conn, home=home)
         widget.container_type.value = "dataset"
-        widget.container.value = seed.dataset_id
+        widget.picker.pick(seed.dataset_id)
         return widget
 
     def test_widget_create_annotate_note_reopen_extend(
