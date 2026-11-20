@@ -31,11 +31,21 @@ Fill in the server address, your username and password, and click **Connect**. I
 of username and password you can paste a *session key*, e.g. from a session you started
 in OMERO.web.
 
+With *Stay logged in on this computer* ticked (the default), the login is saved as a
+token: next time choose it under **Saved login** and click **Log in**, no password
+needed. Tokens are kept per server and user, so you can save logins for several OMERO
+servers and still log in to another one with the form. A token ends after 7 days
+without use; **Forget** removes it and ends it on the server. Tokens are in
+`~/.omero-annotate-ai/tokens.json`, readable only by you: anyone who can read that file
+can use your OMERO account until the token ends, so do not tick the box on a shared
+account. A token made with
+[`omero-user-token set`](https://github.com/glencoesoftware/omero-user-token) is offered
+too.
+
 ![OMERO connection widget](../images/widget_connect.png)
 
 The widget remembers the server and username for next time (in
-`~/.omero-annotate-ai/connections.json`), but never your password: you type it each
-time.
+`~/.omero-annotate-ai/connections.json`), but never your password.
 
 Then, in the next cell:
 
@@ -255,6 +265,8 @@ Every set also has a local folder (`ts.bundle_dir`) with the images and masks in
     conn = SimpleOMEROConnection().connect(
         host="omero.example.org", username="me", password=getpass.getpass()
     )
+    # or, with a login saved earlier ("Stay logged in"): no password
+    # conn = SimpleOMEROConnection().connect_saved(host="omero.example.org")
     config = load_config_from_yaml("annotation_config.yaml")
     ts = TrainingSet.create(config, conn)
     ts.annotate()

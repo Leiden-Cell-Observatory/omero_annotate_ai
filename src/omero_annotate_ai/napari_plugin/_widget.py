@@ -55,6 +55,7 @@ from ..events import (
     UploadFailed,
 )
 from ..omero.simple_connection import SimpleOMEROConnection
+from ..omero.tokens import SavedLogin, forget_login, save_login, saved_logins
 from ..session import NEEDS_REVIEW, AnnotationSession
 from ..trainingset import (
     TrainingSet,
@@ -262,6 +263,23 @@ class OMEROAnnotateDock(QWidget):
 
         connection = QGroupBox("OMERO server (not needed for local sets)")
         form = QFormLayout(connection)
+        # Saved logins (tokens): no password needed.
+        self.saved_login = QComboBox()
+        self.saved_login_button = QPushButton("Log in")
+        self.saved_login_button.clicked.connect(self._connect_saved)
+        self.forget_button = QPushButton("Forget")
+        self.forget_button.setToolTip(
+            "End this login on the server and remove its token here"
+        )
+        self.forget_button.clicked.connect(self._forget_saved)
+        self.saved_row = QWidget()
+        saved = QHBoxLayout(self.saved_row)
+        saved.setContentsMargins(0, 0, 0, 0)
+        for widget in (self.saved_login, self.saved_login_button, self.forget_button):
+            saved.addWidget(widget)
+        form.addRow("Saved login", self.saved_row)
+        self.remember = QCheckBox("Stay logged in on this computer (saves a token)")
+        self.remember.setChecked(True)
         self.host = QLineEdit()
         self.user = QLineEdit()
         self.password = QLineEdit()
@@ -279,7 +297,9 @@ class OMEROAnnotateDock(QWidget):
         form.addRow("User", self.user)
         form.addRow("Password", self.password)
         form.addRow("Session key", self.session_key)
+        form.addRow(self.remember)
         form.addRow(self.connect_button)
+        self._fill_saved_logins()
         self.container_type = QComboBox()
         self.container_type.addItems(CONTAINER_TYPES)
         self.container_id = QSpinBox()
@@ -399,22 +419,71 @@ class OMEROAnnotateDock(QWidget):
             )
             return
 
-        def connect() -> Any:
-            # Nothing is stored: the password (or key) is asked for each time.
+        remember = self.remember.isChecked()
+
+        def connect() -> tuple[Any, str]:
+            # The password is never stored; "Stay logged in" saves a token instead.
             omero = SimpleOMEROConnection()
             if key:
-                return omero.join_session(host, key)  # closing it only detaches
-            return omero.connect(host, user, password, verbose=False)
+                return omero.join_session(host, key), ""  # closing it only detaches
+            conn = omero.connect(host, user, password, verbose=False)
+            if not remember:
+                return conn, ""
+            try:
+                save_login(conn, host, None)
+            except Exception as error:  # noqa: BLE001 - the login itself worked
+                return conn, f" (the login could not be saved: {error})"
+            return conn, " Login saved: next time no password needed."
 
-        def done(conn: Any) -> None:
-            self._conn = conn
+        self._run_connect(connect, host)
+
+    def _run_connect(self, connect: Callable[[], tuple[Any, str]], host: str) -> None:
+        def done(result: tuple[Any, str]) -> None:
+            self._conn, note = result
+            self._fill_saved_logins()
             self.connect_button.setEnabled(True)
+            self.saved_login_button.setEnabled(True)
             self.list_button.setEnabled(True)
-            self._say(f"Connected to {host}. Choose a container and list its sets.")
+            self._say(
+                f"Connected to {host}. Choose a container and list its sets.{note}"
+            )
+
+        def failed(exc: BaseException) -> None:
+            self.connect_button.setEnabled(True)
+            self.saved_login_button.setEnabled(True)
+            self._on_error(exc)
 
         self.connect_button.setEnabled(False)
+        self.saved_login_button.setEnabled(False)
         self._say(f"Connecting to {host}…")
-        self._io.run(connect, done, self._on_error)
+        self._io.run(connect, done, failed)
+
+    def _fill_saved_logins(self) -> None:
+        self.saved_login.clear()
+        for login in saved_logins():
+            self.saved_login.addItem(login.label, login)
+        self.saved_row.setVisible(self.saved_login.count() > 0)
+
+    def _connect_saved(self) -> None:
+        login: SavedLogin | None = self.saved_login.currentData()
+        if login is None:
+            return
+
+        def connect() -> tuple[Any, str]:
+            return SimpleOMEROConnection().connect_saved(login), ""
+
+        self._run_connect(connect, login.host)
+
+    def _forget_saved(self) -> None:
+        login: SavedLogin | None = self.saved_login.currentData()
+        if login is None:
+            return
+
+        def forgotten(_: None) -> None:
+            self._fill_saved_logins()
+            self._say(f"Forgot the saved login {login.label}.")
+
+        self._io.run(lambda: forget_login(login), forgotten, self._on_error)
 
     def _refresh(self) -> None:
         conn, home = self._conn, self._home

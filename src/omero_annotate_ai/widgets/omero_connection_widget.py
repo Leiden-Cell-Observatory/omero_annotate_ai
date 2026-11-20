@@ -1,6 +1,8 @@
 """Interactive widget for OMERO server connections.
 
-The password is typed for every connection and never stored.
+The password is never stored. A password login can save a token instead ("Stay
+logged in"), so the next connection to that server needs no password; tokens for
+several servers can be kept side by side.
 """
 
 from typing import Any
@@ -10,6 +12,7 @@ from IPython.display import clear_output, display
 
 from ..errors import ConnectionFailed
 from ..omero.simple_connection import SimpleOMEROConnection, is_url_host
+from ..omero.tokens import DEFAULT_IDLE_DAYS, forget_login, saved_logins
 
 
 class OMEROConnectionWidget:
@@ -26,6 +29,7 @@ class OMEROConnectionWidget:
         self._create_widgets()
         self._setup_observers()
         self._load_existing_config()
+        self._populate_saved_logins()
 
     def _create_widgets(self):
         """Create all widget components."""
@@ -34,6 +38,44 @@ class OMEROConnectionWidget:
         self.header = widgets.HTML(
             value="<h3>🔌 OMERO Server Connection</h3>",
             layout=widgets.Layout(margin="0 0 20px 0"),
+        )
+
+        # Saved logins (tokens): connect without a password
+        self.saved_login_dropdown = widgets.Dropdown(
+            options=[],
+            description="Saved login:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="400px"),
+        )
+        self.saved_login_button = widgets.Button(
+            description="Log in", button_style="success", icon="key"
+        )
+        self.forget_login_button = widgets.Button(
+            description="Forget",
+            icon="trash",
+            tooltip="End this login on the server and remove its token here",
+        )
+        self.saved_logins_box = widgets.VBox(
+            [
+                widgets.HTML("<b>Saved logins</b> (no password needed)"),
+                widgets.HBox(
+                    [
+                        self.saved_login_dropdown,
+                        self.saved_login_button,
+                        self.forget_login_button,
+                    ]
+                ),
+                widgets.HTML("<br><b>Log in to this or another server</b>"),
+            ]
+        )
+        self.remember_widget = widgets.Checkbox(
+            value=True,
+            description=(
+                "Stay logged in on this computer (saves a token; it ends after "
+                f"{DEFAULT_IDLE_DAYS} days unused)"
+            ),
+            indent=False,
+            layout=widgets.Layout(width="auto"),
         )
 
         # Connection history dropdown
@@ -129,6 +171,7 @@ class OMEROConnectionWidget:
                 self.session_key_widget,
                 self.group_widget,
                 self.secure_widget,
+                self.remember_widget,
             ]
         )
 
@@ -144,6 +187,7 @@ class OMEROConnectionWidget:
         self.main_widget = widgets.VBox(
             [
                 self.header,
+                self.saved_logins_box,
                 self.config_info,
                 widgets.HTML("<b>Previous Connections</b>"),
                 self.connection_dropdown,
@@ -165,8 +209,45 @@ class OMEROConnectionWidget:
 
         # Button callbacks
         self.connect_button.on_click(self._connect)
+        self.saved_login_button.on_click(lambda _: self._connect_saved())
+        self.forget_login_button.on_click(lambda _: self._forget_saved())
         self.save_connection_button.on_click(self._save_connection_only)
         self.delete_connection_button.on_click(self._delete_connection)
+
+    def _populate_saved_logins(self) -> None:
+        """Show the saved logins (newest first); hide the row when there are none."""
+        logins = saved_logins()
+        self.saved_login_dropdown.options = [(login.label, login) for login in logins]
+        self.saved_login_dropdown.value = logins[0] if logins else None
+        self.saved_logins_box.layout.display = None if logins else "none"
+
+    def _connect_saved(self) -> None:
+        """Join the session of the chosen token: no password needed."""
+        login = self.saved_login_dropdown.value
+        if login is None:
+            return
+        with self.status_output:
+            clear_output()
+            self._close_existing_connection()
+            print(f"🔑 Logging in as {login.label}...")
+            try:
+                self.connection = self.connection_manager.connect_saved(login)
+            except ConnectionFailed as error:
+                self.connection = None
+                print(f"❌ {error}")
+                return
+            print("✅ Connection created and ready to use!")
+            self._print_connection_details()
+
+    def _forget_saved(self) -> None:
+        login = self.saved_login_dropdown.value
+        if login is None:
+            return
+        with self.status_output:
+            clear_output()
+            forget_login(login)
+            self._populate_saved_logins()
+            print(f"🗑️ Forgot the saved login {login.label}")
 
     def _on_host_changed(self, change):
         """Disable Port and force encryption for ws:// and wss:// hosts."""
@@ -309,6 +390,12 @@ class OMEROConnectionWidget:
                     print(
                         "💾 Server and username saved for next time (not the password)"
                     )
+                    if config["remember"]:
+                        self._populate_saved_logins()
+                        if getattr(self.connection_manager, "saved_login", None):
+                            print("🔑 Login saved: next time no password needed")
+                        else:
+                            print("⚠️ Connected, but the login could not be saved")
 
             except Exception as e:  # noqa: BLE001 - UI boundary: show any error in the widget
                 print(f"❌ Error creating connection: {e}")
@@ -353,6 +440,7 @@ class OMEROConnectionWidget:
             # URL hosts carry their own port; 4064 would override it.
             "port": None if url_host else self.port_widget.value,
             "secure": True if url_host else self.secure_widget.value,
+            "remember": self.remember_widget.value,
         }
 
     def _validate_config(self, config: dict[str, Any]) -> bool:

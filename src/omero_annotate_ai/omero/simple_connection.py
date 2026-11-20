@@ -18,6 +18,7 @@ from dotenv import dotenv_values
 from omero.gateway import BlitzGateway
 
 from ..errors import ConnectionFailed
+from .tokens import DEFAULT_IDLE_DAYS, SavedLogin, save_login, saved_logins
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,8 @@ class SimpleOMEROConnection:
     def __init__(self):
         """Initialize the connection manager."""
         self.last_connection = None
+        # The token the last remembered login saved (None if it could not be saved).
+        self.saved_login: SavedLogin | None = None
 
     def load_config_files(self) -> dict[str, Any]:
         """Load configuration from .env, connection history and .ezomero files.
@@ -376,7 +379,9 @@ class SimpleOMEROConnection:
         The password is only used to log in: it is never written anywhere.
         Host, username, group and port are saved to the connection history. With
         a ``session_key`` (and a host) that session is joined instead, and nothing
-        is saved.
+        is saved. With ``remember`` true, a password login also saves a token
+        (``idle_days``, default 7), so :meth:`connect_saved` needs no password
+        next time; see :mod:`omero_annotate_ai.omero.tokens`.
 
         Args:
             widget_config: Configuration dictionary from widget
@@ -417,8 +422,46 @@ class SimpleOMEROConnection:
 
         # Remember host/username/group/port (never the password) for next time
         self.save_connection_details(host, username, group, port, verbose=False)
+        self.saved_login = None
+        if widget_config.get("remember"):
+            idle_days = widget_config.get("idle_days") or DEFAULT_IDLE_DAYS
+            try:
+                self.saved_login = save_login(
+                    connection, host, port, secure=secure, idle_days=idle_days
+                )
+            except Exception as e:  # noqa: BLE001 - the login itself worked
+                logger.warning(f"Connected, but could not save a token: {e}")
 
         return connection
+
+    def connect_saved(
+        self, login: SavedLogin | None = None, host: str | None = None
+    ) -> Any:
+        """Log in with a saved token, without a password.
+
+        Uses ``login``, else the most recent token for ``host``, else the most recent
+        token of all (:func:`~omero_annotate_ai.omero.tokens.saved_logins`).
+
+        Raises:
+            ConnectionFailed: No token saved (for ``host``), or it has expired: log in
+                with the password (and ``remember``) to make a new one.
+        """
+        if login is None:
+            logins = [x for x in saved_logins() if host is None or x.host == host]
+            if not logins:
+                where = f" for {host}" if host else ""
+                raise ConnectionFailed(
+                    f"No saved login{where}: log in with your password once and "
+                    "tick 'Stay logged in'"
+                )
+            login = logins[0]
+        try:
+            return self.join_session(login.host, login.key, login.port, login.secure)
+        except ConnectionFailed as e:
+            raise ConnectionFailed(
+                f"The saved login for {login.label} no longer works (expired or "
+                "ended): log in with your password to make a new one"
+            ) from e
 
     def get_last_connection(self) -> BlitzGateway | None:
         """Get the last successful connection.

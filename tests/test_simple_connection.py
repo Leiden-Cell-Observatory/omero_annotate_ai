@@ -392,3 +392,167 @@ class TestSessionKey:
             inspect.signature(sc.JoinedGateway.close).parameters["hard"].default
             is False
         )
+
+
+class _TokenConn:
+    """A logged-in connection that hands out user sessions."""
+
+    def __init__(self, keys=("key-1",)):
+        from unittest.mock import Mock
+
+        self.idle = []
+        self._keys = iter(keys)
+        context = Mock(userName="alice", groupName="lab")
+        self.getEventContext = lambda: context
+
+        def create(ttl, idle, group):
+            self.idle.append((ttl, idle, group))
+            session = Mock()
+            session.getUuid.return_value.getValue.return_value = next(self._keys)
+            return session
+
+        self.getSessionService = lambda: Mock(createUserSession=create)
+
+
+@pytest.mark.unit
+class TestSavedLogins:
+    """Tokens: saved per server and user, readable by the user only, forgettable."""
+
+    @pytest.fixture(autouse=True)
+    def ended(self, monkeypatch, tmp_path):
+        from omero_annotate_ai.omero import tokens
+
+        monkeypatch.setenv("OMERO_USER_TOKEN_DIR", str(tmp_path / "no_user_token"))
+        ended = []
+        monkeypatch.setattr(tokens, "_end_session", ended.append)
+        return ended
+
+    def test_password_login_with_remember_saves_a_private_token(
+        self, manager, monkeypatch
+    ):
+        from omero_annotate_ai.omero.tokens import saved_logins, tokens_file
+
+        conn = _TokenConn()
+        monkeypatch.setattr(manager, "connect", lambda *a, **kw: conn)
+        manager.create_connection_from_config(
+            {
+                "host": "omero.example.org",
+                "username": "alice",
+                "password": "s3cret-pw",
+                "port": 4064,
+                "remember": True,
+            }
+        )
+
+        [login] = saved_logins()
+        assert (login.host, login.port, login.username, login.key) == (
+            "omero.example.org",
+            4064,
+            "alice",
+            "key-1",
+        )
+        assert manager.saved_login == login
+        assert conn.idle == [(0, 7 * 24 * 3600 * 1000, "lab")]  # 7 days idle
+        path = tokens_file()
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert b"s3cret-pw" not in path.read_bytes()
+
+    def test_without_remember_nothing_is_saved(self, manager, monkeypatch):
+        from omero_annotate_ai.omero.tokens import saved_logins
+
+        monkeypatch.setattr(manager, "connect", lambda *a, **kw: _TokenConn())
+        manager.create_connection_from_config(
+            {"host": "h", "username": "alice", "password": "pw"}
+        )
+        assert saved_logins() == []
+
+    def test_a_failed_token_does_not_fail_the_login(self, manager, monkeypatch):
+        from unittest.mock import Mock
+
+        conn = Mock()
+        conn.getSessionService.side_effect = RuntimeError("not allowed")
+        monkeypatch.setattr(manager, "connect", lambda *a, **kw: conn)
+        result = manager.create_connection_from_config(
+            {"host": "h", "username": "alice", "password": "pw", "remember": True}
+        )
+        assert result is conn
+        assert manager.saved_login is None
+
+    def test_one_token_per_server_and_user_newest_first(self, manager, ended):
+        from omero_annotate_ai.omero.tokens import save_login, saved_logins
+
+        conn = _TokenConn(keys=("a", "b", "c"))
+        save_login(conn, "server-one", 4064)
+        save_login(conn, "server-two", None)
+        save_login(conn, "server-one", 4064)  # a new login to server one
+
+        assert [(x.host, x.key) for x in saved_logins()] == [
+            ("server-one", "c"),
+            ("server-two", "b"),
+        ]
+        assert [x.key for x in ended] == ["a"]  # the replaced token was ended
+
+    def test_forget_ends_the_session_and_removes_the_token(self, manager, ended):
+        from omero_annotate_ai.omero.tokens import (
+            forget_login,
+            save_login,
+            saved_logins,
+        )
+
+        login = save_login(_TokenConn(), "server-one", 4064)
+        forget_login(login)
+        assert ended == [login]
+        assert saved_logins() == []
+
+    def test_an_omero_user_token_is_offered_and_left_in_place(
+        self, manager, monkeypatch, tmp_path, ended
+    ):
+        from omero_annotate_ai.omero.tokens import forget_login, saved_logins
+
+        directory = tmp_path / "user_token"
+        directory.mkdir()
+        (directory / "token").write_text("abc-123@omero.example.org:4064\n")
+        monkeypatch.setenv("OMERO_USER_TOKEN_DIR", str(directory))
+
+        [login] = saved_logins()
+        assert (login.host, login.port, login.key, login.source) == (
+            "omero.example.org",
+            4064,
+            "abc-123",
+            "omero-user-token",
+        )
+        forget_login(login)
+        assert ended == [login]
+        assert (directory / "token").exists()  # that tool's file, not ours
+
+    def test_connect_saved_joins_the_newest_token_of_a_host(self, manager, monkeypatch):
+        from omero_annotate_ai.omero.tokens import save_login
+
+        conn = _TokenConn(keys=("one", "two"))
+        save_login(conn, "server-one", 4064)
+        save_login(conn, "server-two", None, secure=False)
+        joined = []
+        monkeypatch.setattr(
+            manager, "join_session", lambda *args: joined.append(args) or "conn"
+        )
+
+        assert manager.connect_saved(host="server-one") == "conn"
+        assert manager.connect_saved() == "conn"  # newest of all
+        assert joined == [
+            ("server-one", "one", 4064, True),
+            ("server-two", "two", None, False),
+        ]
+
+    def test_connect_saved_without_or_with_an_expired_token(self, manager, monkeypatch):
+        from omero_annotate_ai.omero.tokens import save_login
+
+        with pytest.raises(ConnectionFailed, match="No saved login for h"):
+            manager.connect_saved(host="h")
+        save_login(_TokenConn(), "h", 4064)
+
+        def expired(*args):
+            raise ConnectionFailed("Could not join the OMERO session")
+
+        monkeypatch.setattr(manager, "join_session", expired)
+        with pytest.raises(ConnectionFailed, match="no longer works"):
+            manager.connect_saved(host="h")

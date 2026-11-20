@@ -255,6 +255,37 @@ class TestOMEROConnectionWidgetCredentials:
         ):
             yield OMEROConnectionWidget()
 
+    def test_saved_logins_connect_without_a_password(self, conn_manager):
+        from omero_annotate_ai.omero.tokens import SavedLogin
+
+        login = SavedLogin("omero.example.org", 4064, "alice", "abc-123")
+        module = "omero_annotate_ai.widgets.omero_connection_widget"
+        forgotten = []
+        with (
+            patch(f"{module}.SimpleOMEROConnection", return_value=conn_manager),
+            patch(f"{module}.saved_logins", side_effect=[[login], []]),
+            patch(f"{module}.forget_login", forgotten.append),
+        ):
+            widget = OMEROConnectionWidget()
+            assert widget.saved_logins_box.layout.display is None
+            assert widget.saved_login_dropdown.value == login
+            widget.saved_login_button.click()
+            conn_manager.connect_saved.assert_called_once_with(login)
+            assert widget.connection is conn_manager.connect_saved.return_value
+
+            widget.forget_login_button.click()
+        assert forgotten == [login]
+        assert widget.saved_logins_box.layout.display == "none"
+
+    def test_remember_is_passed_with_the_password_login(self, widget, conn_manager):
+        widget.host_widget.value = "omero.example.org"
+        widget.username_widget.value = "alice"
+        widget.password_widget.value = "pw"
+        assert widget.remember_widget.value  # on by default
+        widget.connect_button.click()
+        config = conn_manager.create_connection_from_config.call_args.args[0]
+        assert config["remember"] is True
+
     def test_widget_builds_with_real_ipywidgets(self, widget):
         """The widget tree is constructed and the input fields are all in it."""
         assert widget.main_widget is not None

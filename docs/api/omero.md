@@ -4,7 +4,13 @@
 
 ::: omero_annotate_ai.omero.simple_connection.SimpleOMEROConnection
     options:
-      members: [connect, load_config_files, create_connection_from_config]
+      members: [connect, load_config_files, create_connection_from_config, connect_saved]
+
+### Saved logins (tokens)
+
+::: omero_annotate_ai.omero.tokens
+    options:
+      members: [SavedLogin, saved_logins, save_login, forget_login]
 
 ## Tracking tables and configs
 
