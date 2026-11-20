@@ -39,7 +39,7 @@ Tool sections:
 | `container_id` | 0 | |
 | `container_ids` | null | same type; wins over `container_id`; first one is the primary container (config file) |
 | `source_desc` | "" | |
-| `well_filters` | null | `{key: [values]}` on well map annotations, AND over keys; plates |
+| `well_filters` | null | `{key: [values]}` on well map annotations, AND over keys; plates, and the plates of screens |
 | `well_filter_mode` | `include` | or `exclude` |
 
 `zarr` (with `source: zarr`; needs the `zarr` extra):

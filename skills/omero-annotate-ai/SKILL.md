@@ -64,7 +64,10 @@ ts = TrainingSet.open(ts.bundle_dir)     # resume a local set by its folder
 
 Jupyter widgets (ipywidgets, not marimo): `create_omero_connection_widget()` ->
 `.display()`, `.get_connection()`; `create_workflow_widget(connection=conn)` -> New/Open
-set, `.training_set()`, `.annotate(note=...)`, `.get_config()`;
+set, `.training_set()`, `.annotate(note=...)`, `.get_config()`; its container picker has
+group / owner / search / *Go to ID* (any group; switches the session group) and picks
+several containers; folded sections for channels (train on, napari context channels,
+normalisation) and plate/screen well filters (MIHCSME keys first).
 `create_training_data_widget(connection=conn)` -> `.export()`. Marimo notebooks in
 `notebooks/marimo/` build their own UI.
 
