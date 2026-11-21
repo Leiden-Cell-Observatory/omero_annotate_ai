@@ -954,14 +954,16 @@ class TestWizard:
             lambda: widget.new_set.channels.label.count() == 2, timeout=5000
         )
         widget.steps.setCurrentIndex(2)
-        widget.set_mode.setCurrentIndex(1)
-        assert widget.open_button.text() == "Create and annotate"
-        assert widget.open_button.isEnabled()
+        assert widget.new_button.isEnabled()
+        widget.new_button.click()
+        dialog = widget.new_dialog
+        assert dialog.isVisible() and "nuclei dataset (ID 1)" in dialog.heading.text()
         widget.new_set.name.setText("wizard_set")
         widget.new_set.counts["training"].setValue(2)
         widget.new_set.counts["validation"].setValue(0)
         widget.batch_size.setValue(2)
-        widget.open_button.click()
+        dialog.create_button.click()
+        assert not dialog.isVisible()
         qtbot.waitUntil(lambda: widget._pages.currentIndex() == 1, timeout=10000)
         for _ in range(2):
             qtbot.waitUntil(lambda: widget._ready, timeout=10000)
@@ -974,8 +976,7 @@ class TestWizard:
         [table] = omero.tables.values()
         assert len(table) == 2 and table["processed"].astype(bool).all()
         assert "wizard_set" in next(iter(omero.config_text.values()))
-        # Back on Open with the new set selected: no second "Create" by mistake.
-        assert widget.set_mode.currentIndex() == 0
+        # The new set is listed and selected, ready for the next session.
         qtbot.waitUntil(lambda: widget.set_list.count() == 1, timeout=5000)
         assert widget.set_list.currentItem().text().startswith("wizard_set")
         assert widget.open_button.text() == "Annotate"
@@ -983,18 +984,18 @@ class TestWizard:
     def test_a_bad_field_is_reported_and_nothing_is_created(self, wizard, qtbot):
         widget, _, omero, _ = wizard
         widget.browser.list.item(0).setSelected(True)
-        widget.set_mode.setCurrentIndex(1)
+        widget.new_button.click()
         widget.new_set.timepoints.listed.setText("3-1")
-        widget.open_button.click()
-        assert "Timepoints" in widget.status.text()
+        widget.new_dialog.create_button.click()
+        assert "Timepoints" in widget.new_dialog.error.text()
+        assert widget.new_dialog.isVisible()  # to fix the field
         assert not omero.tables
 
     def test_new_needs_a_connection_and_a_container(self, tmp_path, make_dock):
         _, source, _, home = _make_set(tmp_path, "local")
         widget = make_dock(home, source)[0]
-        widget.set_mode.setCurrentIndex(1)
-        assert not widget.open_button.isEnabled()
-        assert "Connect" in widget.open_button.toolTip()
+        assert not widget.new_button.isEnabled()
+        assert "Connect" in widget.new_button.toolTip()
 
     def test_plates_show_the_well_filter(self, wizard, qtbot, monkeypatch):
         from omero_annotate_ai.napari_plugin import _widget
@@ -1102,6 +1103,7 @@ class TestDockOnOmero:
         """Browse the real server, pick the dataset, create a set from the form,
         annotate it and find it listed afterwards."""
         from napari.components import ViewerModel
+        from qtpy.QtCore import Qt
 
         from omero_annotate_ai import TrainingSet
         from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
@@ -1120,16 +1122,27 @@ class TestDockOnOmero:
         widget.browser.owner.setCurrentIndex(1)  # all members
         widget.browser._load()
         widget.browser.search.setText(str(omero_seed.dataset_id))
-        qtbot.waitUntil(lambda: widget.browser.list.count() == 1, timeout=30000)
-        widget.browser.list.item(0).setSelected(True)
+        listed = widget.browser.list
+
+        def seeded():  # the search also matches names containing the digits
+            for i in range(listed.count()):
+                if (
+                    listed.item(i).data(Qt.ItemDataRole.UserRole)
+                    == omero_seed.dataset_id
+                ):
+                    return listed.item(i)
+            return None
+
+        qtbot.waitUntil(lambda: seeded() is not None, timeout=30000)
+        seeded().setSelected(True)
         channels = widget.new_set.channels
         qtbot.waitUntil(lambda: channels.label.count() > 1, timeout=30000)
-        widget.set_mode.setCurrentIndex(1)
+        widget.new_button.click()
         widget.new_set.name.setText(f"{omero_seed.tag}_wizard")
         widget.new_set.counts["training"].setValue(2)
         widget.new_set.counts["validation"].setValue(0)
         channels._widgets[1][2].setChecked(True)  # second channel as context
-        widget.open_button.click()
+        widget.new_dialog.create_button.click()
         for _ in range(2):
             qtbot.waitUntil(lambda: widget._ready, timeout=60000)
             assert set(controller.contexts[-1][1]) == {channels.rows[1].name}

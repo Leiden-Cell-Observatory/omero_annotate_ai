@@ -37,28 +37,30 @@ so napari stays responsive.
    switches to that group. Ctrl/Shift-click picks several containers of one type for one
    training set. Below the list: the number of images, a sample image's size and its
    channel names. *Next* goes to step 3.
-3. **Training set.**
-    - **Open** lists the sets on the picked container and the sets with a folder on
-      this computer (*Open folder…* opens any other set folder); the summary shows
-      progress per split and the last sessions with their notes. *Add images* adds
-      images per split to the set before annotating. Tick *Review annotated images* to
-      correct images annotated earlier instead (step 4b).
-    - **New** makes a training set from the picked containers. *Name*; **Channels**:
-      the channel you draw on (by name), the channels the model trains on (*Train on*),
-      extra channels napari shows next to it while you annotate (*Show*, with a
-      colour; never used for training), and the intensity normalisation. *Show sample
-      image in viewer* adds each channel of a sample image as a layer, to see which
-      channel is which. **Images**: timepoints and z-slices (specific, all or random),
-      3D, patches, the number of images for training / validation / test, the seed
-      (empty: random, stored) and where the set is kept (OMERO, or this computer
-      only). For plates and screens, **Plate wells** keeps or leaves out wells by
-      their metadata: keys added with [MIHCSME](https://github.com/Leiden-Cell-Observatory/MIHCSME_py)
-      (cell line, treatment, ...) come first, and the number of wells kept updates
-      as you pick.
+3. **Training set.** The sets on the picked container and the sets with a folder on
+   this computer are listed (*Open folder…* opens any other set folder); the summary
+   shows progress per split and the last sessions with their notes. *Add images* adds
+   images per split to the picked set before annotating. Tick *Review annotated
+   images* to correct images annotated earlier instead (step 4b). *Model* and *Batch
+   size* apply to the session; click *Annotate*.
 
-    *Model* and *Batch size* apply to both. Click *Annotate* (or *Create and
-    annotate*); after the session the dock comes back to *Open* with the set selected.
-4. **Annotate.** The set is opened (or created). The set is opened, and repaired first if an earlier
+    **New training set…** opens the form in its own, resizable window (the viewer
+    stays usable). Left: *Name*; **Channels**: the channel you draw on (by name), the
+    channels the model trains on (*Train on*), extra channels napari shows next to it
+    while you annotate (*Show*; never used for training), the colour of each, the
+    annotated channel included (gray by default), and the intensity normalisation.
+    *Show sample image in viewer* adds each channel of a sample image as a layer, to
+    see which channel is which. **Images**: timepoints and z-slices (specific, all or
+    random), 3D and patches. Right: the number of images for training / validation /
+    test, the seed (empty: random, stored), where the set is kept (OMERO, or this
+    computer only), and for plates and screens **Plate wells**, which keeps or leaves
+    out wells by their metadata: keys added with
+    [MIHCSME](https://github.com/Leiden-Cell-Observatory/MIHCSME_py) (cell line,
+    treatment, ...) come first, and the number of wells kept updates as you pick.
+    *Create and annotate* makes the set and starts; a field that is not right is named
+    in the window and nothing is made. After the session the new set is listed and
+    selected.
+4. **Annotate.** The set is opened (or created), and repaired first if an earlier
    run was interrupted (*Cancel* stops that). The image appears with micro-SAM's annotator docked
    next to it; the image embedding is computed in the background first (a progress
    bar shows while it runs); the next image's embedding is computed while you

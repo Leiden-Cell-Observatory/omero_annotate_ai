@@ -67,7 +67,7 @@ from ..trainingset import (
     summarize,
 )
 from ._controller import LayerConflict, MicroSamController
-from ._wizard import ContainerBrowser, NewSetPanel, combo, hbox, model_box
+from ._wizard import ContainerBrowser, NewSetDialog, combo, hbox, model_box
 from ._workers import Embedder, Embedding, EventBridge, Worker
 
 logger = logging.getLogger(__name__)
@@ -379,9 +379,7 @@ class OMEROAnnotateDock(QWidget):
         self.picked_label.setWordWrap(True)
         layout.addWidget(self.picked_label)
 
-        # Open an existing set
-        open_page = QWidget()
-        open_layout = QVBoxLayout(open_page)
+        # The sets: open one (or add images to it)
         self.set_list = QListWidget()
         self.set_list.currentRowChanged.connect(self._on_set_selected)
         self.summary = QLabel(
@@ -407,33 +405,23 @@ class OMEROAnnotateDock(QWidget):
         add_row.addWidget(QLabel("Add images"))
         for box in self.add.values():
             add_row.addWidget(box)
-        open_layout.addWidget(self.set_list)
-        open_layout.addWidget(self.summary)
-        open_layout.addLayout(add_row)
-        open_layout.addWidget(self.review)
-        open_layout.addWidget(hbox(self.list_button, self.folder_button))
+        layout.addWidget(self.set_list, 1)
+        layout.addWidget(self.summary)
+        layout.addLayout(add_row)
+        layout.addWidget(self.review)
+        layout.addWidget(hbox(self.list_button, self.folder_button))
 
-        # A new set
-        self.new_set = NewSetPanel()
-        self.preview_button = QPushButton("Show sample image in viewer")
-        self.preview_button.setToolTip(
-            "Adds each channel of a sample image as a layer, to see which is which"
-        )
+        # A new set: the form opens in its own, wider window
+        self.new_dialog = NewSetDialog(self)
+        self.new_set = self.new_dialog.panel
+        self.preview_button = self.new_dialog.preview_button
         self.preview_button.setEnabled(False)
         self.preview_button.clicked.connect(self._preview)
-        new_page = QWidget()
-        new_layout = QVBoxLayout(new_page)
-        new_layout.addWidget(self.preview_button)
-        new_layout.addWidget(self.new_set)
-        new_layout.addStretch()
+        self.new_dialog.create_button.clicked.connect(self._create)
+        self.new_button = QPushButton("New training set…")
+        self.new_button.clicked.connect(self._show_new_dialog)
 
-        self.set_mode = QTabWidget()
-        self.set_mode.addTab(open_page, "Open")
-        self.set_mode.addTab(_scrolled(new_page), "New")
-        self.set_mode.currentChanged.connect(lambda _: self._sync_action())
-        layout.addWidget(self.set_mode, 1)
-
-        # Both: model, batch size, go
+        # Model, batch size, go
         run = QFormLayout()
         self.model = model_box()
         self.batch_size = QSpinBox()
@@ -445,11 +433,11 @@ class OMEROAnnotateDock(QWidget):
         layout.addLayout(run)
         self.open_button = QPushButton("Annotate")
         self.open_button.setEnabled(False)
-        self.open_button.clicked.connect(self._go)
+        self.open_button.clicked.connect(self._open_selected)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._request_cancel)
-        layout.addWidget(hbox(self.open_button, self.cancel_button))
+        layout.addWidget(hbox(self.open_button, self.new_button, self.cancel_button))
         self._sync_action()
         return page
 
@@ -680,7 +668,9 @@ class OMEROAnnotateDock(QWidget):
             last = self._last_ref
             self.set_list.setCurrentRow(refs.index(last) if last in refs else 0)
         else:
-            self.summary.setText("No training sets here yet: make one under *New*.")
+            self.summary.setText(
+                "No training sets here yet: make one with New training set…"
+            )
         self._sync_action()
 
     def _on_set_selected(self, row: int) -> None:
@@ -689,26 +679,29 @@ class OMEROAnnotateDock(QWidget):
         self._sync_action()
 
     def _sync_action(self) -> None:
-        """The main button: open the picked set, or create one from the form."""
-        if self.set_mode.currentIndex() == 1:
-            self.open_button.setText("Create and annotate")
-            ready = self._conn is not None and bool(self.browser.selected)
-            self.open_button.setToolTip(
-                "" if ready else "Connect (step 1) and pick a container (step 2) first"
-            )
-        else:
-            self.open_button.setText(
-                "Review" if self.review.isChecked() else "Annotate"
-            )
-            ready = 0 <= self.set_list.currentRow() < len(self._sets)
-            self.open_button.setToolTip("" if ready else "Pick a training set first")
-        self.open_button.setEnabled(ready and not self.cancel_button.isVisible())
+        """Annotate the picked set; a new set needs a connection and a container."""
+        busy = self.cancel_button.isVisible()
+        self.open_button.setText("Review" if self.review.isChecked() else "Annotate")
+        ready = 0 <= self.set_list.currentRow() < len(self._sets)
+        self.open_button.setToolTip("" if ready else "Pick a training set first")
+        self.open_button.setEnabled(ready and not busy)
+        can_create = self._conn is not None and bool(self.browser.selected)
+        self.new_button.setToolTip(
+            "Make a training set from the picked containers"
+            if can_create
+            else "Connect (step 1) and pick a container (step 2) first"
+        )
+        self.new_button.setEnabled(can_create and not busy)
+        self.new_dialog.create_button.setEnabled(can_create and not busy)
 
-    def _go(self) -> None:
-        if self.set_mode.currentIndex() == 1:
-            self._create()
-        else:
-            self._open_selected()
+    def _show_new_dialog(self) -> None:
+        kind = self.browser.kind.capitalize()
+        names = ", ".join(self.browser.names())
+        self.new_dialog.heading.setText(f"<b>{kind}</b>: {names}")
+        self.new_dialog.error.clear()
+        self.new_dialog.show()
+        self.new_dialog.raise_()
+        self.new_dialog.activateWindow()
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -753,10 +746,9 @@ class OMEROAnnotateDock(QWidget):
         )
 
     def _create(self) -> None:
+        error = self.new_dialog.error
         if self._conn is None or not self.browser.selected:
-            self._say(
-                "Connect (step 1) and pick a container (step 2) first.", error=True
-            )
+            error.setText("Connect (step 1) and pick a container (step 2) first.")
             return
         try:
             config = self.new_set.form(
@@ -765,9 +757,10 @@ class OMEROAnnotateDock(QWidget):
                 self.model.currentData(),
                 self.batch_size.value(),
             ).to_config()
-        except ValueError as exc:  # a field: shown, nothing created
-            self._say(str(exc), error=True)
+        except ValueError as exc:  # a field: shown in the form, nothing created
+            error.setText(str(exc))
             return
+        self.new_dialog.hide()
         conn, home, options = self._conn, self._home, self._core_options
 
         def create() -> TrainingSet:
@@ -1302,7 +1295,6 @@ class OMEROAnnotateDock(QWidget):
             self._controller.teardown()
             self.note.clear()
             self._pages.setCurrentIndex(0)
-            self.set_mode.setCurrentIndex(0)  # the set exists now: not "New" again
             done = "revised" if reviewed else "annotated"
             self._say(f"Session finished: {annotated} image(s) {done}.")
             self._refresh()
@@ -1475,7 +1467,7 @@ class OMEROAnnotateDock(QWidget):
             self.exclude_button.setEnabled(self._can_exclude())
 
     def _set_start_controls(self, enabled: bool) -> None:
-        for widget in (self.folder_button, self.review, self.browser, self.new_set):
+        for widget in (self.folder_button, self.review, self.browser):
             widget.setEnabled(enabled)
         if enabled:
             self._sync_action()

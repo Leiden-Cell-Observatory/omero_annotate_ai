@@ -28,7 +28,7 @@ Newest first. The full list of pull requests per version is on
 - **The napari plugin is a wizard now: from your OMERO data to annotated images
   without a notebook.** Step 1 logs in (or uses a saved login); step 2 finds the data
   (group, owner, search by name or ID, *Go to ID*, several containers); step 3 opens
-  a set (and can add images to it) or makes a **new** one with the same choices as the
+  a set (and can add images to it) or makes a **new** one, in its own wide window, with the same choices as the
   Jupyter widget: channels to annotate, train on and show, planes, 3D, patches,
   counts, seed, storage, model, batch size and plate well filters. *Show sample image
   in viewer* shows each channel as a layer. Context channels chosen for a set are now

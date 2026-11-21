@@ -16,6 +16,7 @@ from qtpy.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
@@ -25,6 +26,7 @@ from qtpy.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -267,7 +269,9 @@ class ContainerBrowser(QWidget):
         self._run_io(switch, show)
 
     def _on_type(self) -> None:
-        self._picks = []
+        # Empty at once: the old type's containers must not be picked meanwhile.
+        self._picks, self._all = [], []
+        self._show()
         self._load()
         self.picked.emit()
 
@@ -692,24 +696,33 @@ class NewSetPanel(QWidget):
         self.wells = WellFilterBox()
         self.wells_title = QLabel("<b>Plate wells</b> (filter by metadata)")
 
-        layout = QFormLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addRow("Name", self.name)
-        layout.addRow(QLabel("<b>Channels</b>"))
-        layout.addRow(self.channels)
-        layout.addRow(QLabel("<b>Images</b>"))
-        layout.addRow("Timepoints", self.timepoints)
-        layout.addRow("Z-slices", self.z_slices)
-        layout.addRow(self.volumetric)
-        layout.addRow(hbox(self.patches, self.patch_size, self.per_image))
-        layout.addRow(
+        # Two columns: what to annotate (left), how many and where from (right).
+        left_box, right_box = QWidget(), QWidget()
+        left, right = QFormLayout(left_box), QFormLayout(right_box)
+        for column in (left, right):
+            column.setContentsMargins(0, 0, 0, 0)
+        left.addRow("Name", self.name)
+        left.addRow(QLabel("<b>Channels</b>"))
+        left.addRow(self.channels)
+        left.addRow(QLabel("<b>Images</b>"))
+        left.addRow("Timepoints", self.timepoints)
+        left.addRow("Z-slices", self.z_slices)
+        left.addRow(self.volumetric)
+        left.addRow(hbox(self.patches, self.patch_size, self.per_image))
+        right.addRow(QLabel("<b>Splits</b> (number of images)"))
+        right.addRow(
             "Train / val / test",
             hbox(*(self.counts[c] for c, _ in SPLITS)),
         )
-        layout.addRow("Seed", self.seed)
-        layout.addRow("Storage", self.storage)
-        layout.addRow(self.wells_title)
-        layout.addRow(self.wells)
+        right.addRow("Seed", self.seed)
+        right.addRow("Storage", self.storage)
+        right.addRow(self.wells_title)
+        right.addRow(self.wells)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(24)
+        layout.addWidget(left_box, 3)
+        layout.addWidget(right_box, 2, alignment=Qt.AlignmentFlag.AlignTop)
         self.patches.toggled.connect(self._sync_patches)
         self.volumetric.toggled.connect(self._sync_patches)
         self._sync_patches()
@@ -753,6 +766,46 @@ class NewSetPanel(QWidget):
             else None,
             well_filter_mode=self.wells.filter_mode,
         )
+
+
+class NewSetDialog(QDialog):
+    """The "New training set" form in its own resizable window (the dock is narrow).
+
+    Not modal: the viewer stays usable, e.g. to look at the sample image.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New training set")
+        self.heading = QLabel()
+        self.heading.setWordWrap(True)
+        self.preview_button = QPushButton("Show sample image in viewer")
+        self.preview_button.setToolTip(
+            "Adds each channel of a sample image as a layer, to see which is which"
+        )
+        self.panel = NewSetPanel()
+        area = QScrollArea()
+        area.setWidget(self.panel)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.error = QLabel()
+        self.error.setWordWrap(True)
+        self.error.setStyleSheet("color: #d1242f")
+        self.cancel_button = QPushButton("Cancel")
+        self.create_button = QPushButton("Create and annotate")
+        self.create_button.setDefault(True)
+        self.cancel_button.clicked.connect(self.hide)
+        layout = QVBoxLayout(self)
+        layout.addWidget(hbox(self.heading, self.preview_button))
+        layout.addWidget(area, 1)
+        layout.addWidget(self.error)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.create_button)
+        layout.addLayout(buttons)
+        self.resize(1000, 700)
+        self.setMinimumWidth(920)  # both columns fit side by side
 
 
 def model_box() -> QComboBox:
