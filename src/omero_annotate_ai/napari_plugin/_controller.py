@@ -98,12 +98,14 @@ class MicroSamController:
         mask: np.ndarray | None = None,
         context: Mapping[str, np.ndarray] | None = None,
         colormaps: Mapping[str, str] | None = None,
+        colormap: str = "gray",
     ) -> None:
         """Display ``pixels`` using a precomputed embedding.
 
         The committed objects start empty, or from ``mask`` (a saved mask to review).
         ``context`` (channel name -> pixels) is shown as extra layers in ``colormaps``
         next to the image; without it (an image saved in an earlier batch) they hide.
+        ``colormap`` colours the annotated channel.
         """
         from micro_sam.sam_annotator._state import AnnotatorState
         from micro_sam.sam_annotator.annotator_2d import Annotator2d
@@ -142,6 +144,8 @@ class MicroSamController:
                 self._annotator, name="micro-SAM", area="right"
             )
         self._annotator._update_image(segmentation_result=mask)
+        image_layer: Any = self._viewer.layers[IMAGE_LAYER]
+        image_layer.colormap = colormap
         self._show_context(context, colormaps or {})
         self._release_hold()
 

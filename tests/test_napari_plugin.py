@@ -29,6 +29,7 @@ class FakeController:
     def __init__(self) -> None:
         self.shown: list[np.ndarray] = []
         self.contexts: list[tuple[dict, dict]] = []
+        self.colormaps: list[str] = []
         self.held: list[np.ndarray | None] = []
         self.initial: list[np.ndarray | None] = []
         self.mask = np.zeros((16, 16), np.uint32)
@@ -47,8 +48,16 @@ class FakeController:
         self.held.append(pixels)
 
     def show(
-        self, pixels, embedding, model_type, mask=None, context=None, colormaps=None
+        self,
+        pixels,
+        embedding,
+        model_type,
+        mask=None,
+        context=None,
+        colormaps=None,
+        colormap="gray",
     ) -> None:
+        self.colormaps.append(colormap)
         self.shown.append(pixels)
         self.contexts.append((dict(context or {}), dict(colormaps or {})))
         self.initial.append(None if mask is None else mask.copy())
@@ -929,8 +938,14 @@ class TestWizard:
         table.label.setCurrentIndex(1)
         assert [r.train for r in table.rows] == [False, True]
         table._widgets[0][2].setChecked(True)  # show DAPI in napari
+        colour = table._widgets[1][3]  # the annotated channel's colour
+        assert colour.isEnabled() and colour.currentText() == "gray"
+        assert table._widgets[0][3].isEnabled()  # shown: its colour can be picked
+        colour.setCurrentText("green")
         form = widget.new_set.form("dataset", [1], "vit_b_lm", 0)
-        assert form.to_config().display.specs() == [(0, "DAPI", "blue")]
+        display = form.to_config().display
+        assert display.specs() == [(0, "DAPI", "blue")]
+        assert display.label_colormap == "green"
 
     def test_create_and_annotate_a_new_set(self, wizard, qtbot):
         widget, controller, omero, _ = wizard
@@ -1118,6 +1133,7 @@ class TestDockOnOmero:
         for _ in range(2):
             qtbot.waitUntil(lambda: widget._ready, timeout=60000)
             assert set(controller.contexts[-1][1]) == {channels.rows[1].name}
+            assert controller.colormaps[-1] == "gray"
             controller.mask = np.zeros(controller.shown[-1].shape, np.uint32)
             controller.mask[2:6, 2:6] = 1
             widget.accept_button.click()

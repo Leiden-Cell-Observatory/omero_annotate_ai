@@ -46,6 +46,7 @@ class TestNewSetForm:
         assert config.label_channel() == 1
         assert config.training_channels() == [0, 1]
         assert config.display.specs() == [(2, "Actin", "red")]
+        assert config.display.label_colormap == "gray"  # the annotated row's default
         assert config.sampling.timepoints.mode == "random"
         assert config.sampling.z_slices.values == [2, 5, 6]
         assert config.sampling.patches.width == 256
@@ -58,6 +59,7 @@ class TestNewSetForm:
         config = NewSetForm(container_ids=[9]).to_config()
         assert (config.omero.container_id, config.omero.container_ids) == (9, None)
         assert config.sampling.input_channels is None  # the annotated channel
+        assert config.display.label_colormap == "gray"
         assert config.omero.well_filters is None  # datasets have no wells
         assert config.split.seed is None
 
@@ -82,15 +84,26 @@ class TestPickerLogic:
         assert not matches_search("HeLa nuclei", 123, "12")
         assert matches_search("anything", 1, "  ")
 
+    def test_the_annotated_channel_has_a_colour_too(self):
+        from omero_annotate_ai.forms import display_config
+
+        rows = channel_rows(["DAPI", "GFP"], label=1)
+        assert [r.colormap for r in rows] == ["blue", "gray"]
+        rows[1].colormap = "green"
+        assert display_config(rows, 1).label_colormap == "green"
+
     def test_training_follows_the_annotated_channel_unless_changed(self):
         rows = channel_rows(["a", "b", "c"])
         rows[1].show = True
         move_label(rows, 0, 1)
         assert [r.train for r in rows] == [False, True, False]
         assert not rows[1].show  # the annotated channel is not also context
+        assert [r.colormap for r in rows] == ["blue", "gray", "green"]  # gray moves
         rows[2].train = True  # chosen by hand: kept when the label moves
+        rows[1].colormap = "red"
         move_label(rows, 1, 0)
         assert [r.train for r in rows] == [False, True, True]
+        assert [r.colormap for r in rows] == ["blue", "red", "green"]  # picked: kept
 
 
 @pytest.mark.unit

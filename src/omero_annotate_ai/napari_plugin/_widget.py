@@ -1032,9 +1032,15 @@ class OMEROAnnotateDock(QWidget):
                 return  # the user moved on (or finished) meanwhile
             self.busy.setVisible(False)
             try:
-                colormaps = self._batch.context_colormaps if self._batch else {}
+                batch = self._batch
                 self._controller.show(
-                    pixels, embedding, model_type, start, context, colormaps
+                    pixels,
+                    embedding,
+                    model_type,
+                    start,
+                    context,
+                    batch.context_colormaps if batch else {},
+                    batch.colormap if batch else "gray",
                 )
             except Exception as exc:  # noqa: BLE001 - shown to the user, logged
                 self._on_image_error(exc)

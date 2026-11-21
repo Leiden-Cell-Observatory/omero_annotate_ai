@@ -71,7 +71,8 @@ method you call picks the tool), `framework_version` null, `model_name` "",
 `model_version` `latest`, `model_url`, `model_doi`, `training_mode` `inference`
 (`finetuning`, `from_scratch`), `pretrained_from` `vit_b_lm` (micro-SAM model in napari).
 
-`display`: `context_channels` [] (shown in napari only; must not include the label
+`display`: `label_colormap` `gray` (napari colormap of the annotated channel),
+`context_channels` [] (shown in napari only; must not include the label
 channel), `context_channel_names`, `context_channel_colormaps` (same length).
 
 `workflow`: `batch_size` 0 (= all units in one window), `claim_hours` 6.

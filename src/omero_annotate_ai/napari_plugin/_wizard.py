@@ -401,7 +401,8 @@ class ChannelTable(QWidget):
         layout.addRow(
             _muted(
                 "Train on: the channels the model gets as input. Show: extra channels "
-                "napari shows next to the annotated one (never used for training)."
+                "napari shows next to the annotated one (never used for training). "
+                "Colour: how napari shows a channel, the annotated one included."
             )
         )
         layout.addRow("Normalisation", hbox(self.method, self.low, self.high))
@@ -444,7 +445,7 @@ class ChannelTable(QWidget):
 
     def _on_show(self, row: ChannelRow, on: bool) -> None:
         row.show = on
-        self._widgets[row.index][3].setEnabled(on)
+        self._widgets[row.index][3].setEnabled(on or row.index == self._label)
 
     def _on_label(self, index: int) -> None:
         if index < 0 or index == self._label:
@@ -467,8 +468,11 @@ class ChannelTable(QWidget):
                 box.blockSignals(True)
                 box.setChecked(value)
                 box.blockSignals(False)
+            colour.blockSignals(True)
+            colour.setCurrentText(row.colormap)
+            colour.blockSignals(False)
             show.setEnabled(not annotated)  # napari shows it anyway
-            colour.setEnabled(row.show and not annotated)
+            colour.setEnabled(row.show or annotated)
 
     def _sync_method(self) -> None:
         raw = self.method.currentData() == "none"

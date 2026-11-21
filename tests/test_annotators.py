@@ -156,6 +156,7 @@ class TestMicroSamAnnotator:
         import importlib
 
         sam = Mock()
+        sam.image_series_annotator.return_value = MagicMock()  # the viewer
         modules = {"napari": MagicMock(), "micro_sam.sam_annotator": sam}
         monkeypatch.setattr(importlib, "import_module", lambda name: modules[name])
         return sam

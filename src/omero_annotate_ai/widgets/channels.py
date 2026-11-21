@@ -12,7 +12,7 @@ import html
 import ipywidgets as widgets
 
 from ..core.annotation_config import NormalizationConfig
-from ..forms import COLORMAPS, ChannelRow, move_label
+from ..forms import COLORMAPS, ChannelRow, channel_rows, move_label
 
 _LABEL = {"description_width": "110px"}
 
@@ -22,22 +22,25 @@ def _cell(width: str = "auto") -> widgets.Layout:
 
 
 class _Row:
-    def __init__(self, index: int, name: str) -> None:
-        self.index = index
-        self.name = name
+    def __init__(self, data: ChannelRow) -> None:
+        self.index = data.index
+        self.name = name = data.name
+        index = data.index
+        self.annotated = False
         self.title = widgets.HTML(f"{index}: {html.escape(name)}", layout=_cell())
         self.train = widgets.Checkbox(indent=False, layout=_cell("90px"))
         self.show = widgets.Checkbox(indent=False, layout=_cell("90px"))
         self.colormap = widgets.Dropdown(
             options=COLORMAPS,
-            value=ChannelRow(index, name).colormap,
+            value=data.colormap,
             layout=_cell("110px"),
         )
         self.show.observe(lambda _: self.sync(), names="value")
         self.sync()
 
     def sync(self) -> None:
-        self.colormap.disabled = not self.show.value
+        """The colour applies to a shown context channel and to the annotated one."""
+        self.colormap.disabled = not (self.show.value or self.annotated)
 
 
 class ChannelTable:
@@ -88,7 +91,8 @@ class ChannelTable:
                 widgets.HTML(
                     "<span class='oai-muted'>Train on: channels the model gets as "
                     "input. Show: extra channels napari shows next to the annotated "
-                    "one (never used for training).</span>"
+                    "one (never used for training). Colour: how napari shows a "
+                    "channel, the annotated one included.</span>"
                 ),
                 widgets.HBox([self.method, self.low, self.high]),
                 self.apply_at_export,
@@ -99,7 +103,7 @@ class ChannelTable:
     def set_channels(self, names: list[str]) -> None:
         """One row per channel; the choices are reset."""
         label = self.label.value if self.label.value < len(names) else 0
-        self.rows = [_Row(i, name) for i, name in enumerate(names)]
+        self.rows = [_Row(data) for data in channel_rows(names, label)]
         self.label.unobserve(self._on_label, names="value")
         self.label.options = [(f"{i}: {name}", i) for i, name in enumerate(names)]
         self.label.value = label
@@ -121,11 +125,13 @@ class ChannelTable:
         move_label(rows, change["old"], change["new"])
         for row, data in zip(self.rows, rows, strict=True):
             row.train.value, row.show.value = data.train, data.show
+            row.colormap.value = data.colormap
         self._mark_label(change["new"], train=False)
 
     def _mark_label(self, label: int, *, train: bool) -> None:
         for row in self.rows:
             is_label = row.index == label
+            row.annotated = is_label
             row.show.disabled = is_label  # napari shows it anyway
             if is_label:
                 row.show.value = False
@@ -136,6 +142,7 @@ class ChannelTable:
                     row.train.value = True
             else:
                 row.title.value = f"{row.index}: {html.escape(row.name)}"
+            row.sync()
 
     def _sync_method(self) -> None:
         self.low.disabled = self.high.disabled = self.method.value == "none"

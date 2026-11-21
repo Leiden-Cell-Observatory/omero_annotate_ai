@@ -903,6 +903,9 @@ class TestChannelsAndWells:
 
         table = ChannelTable()
         table.set_channels(["DAPI", "GFP", "Actin"])
+        assert not table.rows[0].colormap.disabled  # the annotated channel's colour
+        assert table.rows[0].colormap.value == "gray"
+        assert table.rows[1].colormap.disabled  # not shown
         table.rows[2].show.value = True
         table.rows[2].colormap.value = "red"
         assert display_config(table.rows_data(), 0).specs() == [(2, "Actin", "red")]

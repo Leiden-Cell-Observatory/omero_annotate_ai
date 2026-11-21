@@ -74,16 +74,24 @@ class ChannelRow:
 
 
 def channel_rows(names: list[str], label: int = 0) -> list[ChannelRow]:
-    """Rows for these channel names: train on the annotated channel only."""
-    return [ChannelRow(i, name, train=i == label) for i, name in enumerate(names)]
+    """Rows for these channel names: train on the annotated channel only, which
+    napari shows in gray unless another colour is picked."""
+    return [
+        ChannelRow(i, name, train=i == label, colormap="gray" if i == label else "")
+        for i, name in enumerate(names)
+    ]
 
 
 def move_label(rows: list[ChannelRow], old: int, new: int) -> None:
     """The annotated channel changed: training on just that channel follows it, and
-    the annotated channel is never also a context channel."""
+    so does its default gray; the annotated channel is never also a context channel.
+    Choices made by hand (more training channels, another colour) stay."""
     if [r.index for r in rows if r.train] == [old]:
         rows[old].train = False
         rows[new].train = True
+    if rows[old].colormap == "gray":
+        rows[old].colormap = ChannelRow(old, rows[old].name).colormap
+        rows[new].colormap = "gray"
     rows[new].show = False
 
 
@@ -97,7 +105,9 @@ def input_channels(rows: list[ChannelRow], label: int) -> list[int] | None:
 
 def display_config(rows: list[ChannelRow], label: int) -> DisplayConfig:
     shown = [r for r in rows if r.show and r.index != label]
+    annotated = next((r for r in rows if r.index == label), None)
     return DisplayConfig(
+        label_colormap=annotated.colormap if annotated else "gray",
         context_channels=[r.index for r in shown],
         context_channel_names=[r.name for r in shown] or None,
         context_channel_colormaps=[r.colormap for r in shown] or None,

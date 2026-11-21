@@ -194,6 +194,7 @@ When `methodology.tools` is empty, the exports describe the tool from this secti
 
 | Key | Default | Meaning |
 |---|---|---|
+| `label_colormap` | `gray` | napari colormap of the annotated channel. |
 | `context_channels` | `[]` | Extra channels shown in napari for orientation only; never used for training. Must differ from the label channel. |
 | `context_channel_names` | – | Display names for the context channels (same length). |
 | `context_channel_colormaps` | – | napari colormaps for the context channels, e.g. `[magenta, green]`. |
