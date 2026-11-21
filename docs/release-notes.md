@@ -25,6 +25,15 @@ Newest first. The full list of pull requests per version is on
   Kept in `~/.omero-annotate-ai/tokens.json` (user-only permissions); passwords are
   still never stored. `SimpleOMEROConnection().connect_saved(host=...)` does the same
   in scripts, and a token from `omero-user-token set` is picked up too.
+- **The napari plugin is a wizard now: from your OMERO data to annotated images
+  without a notebook.** Step 1 logs in (or uses a saved login); step 2 finds the data
+  (group, owner, search by name or ID, *Go to ID*, several containers); step 3 opens
+  a set (and can add images to it) or makes a **new** one, in its own wide window, with the same choices as the
+  Jupyter widget: channels to annotate, train on and show, planes, 3D, patches,
+  counts, seed, storage, model, batch size and plate well filters. *Show sample image
+  in viewer* shows each channel as a layer. Context channels chosen for a set are now
+  shown next to the image while annotating in the dock. The form logic lives in
+  `omero_annotate_ai.forms`, shared by both front ends.
 - **Two more Jupyter notebooks**, next to their marimo versions: the IDR OME-Zarr demo
   (`annotation/idr-zarr-demo.ipynb`) and run from a YAML file
   (`annotation/annotate-from-yaml.ipynb`).

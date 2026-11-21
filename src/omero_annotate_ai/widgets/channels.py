@@ -11,10 +11,9 @@ import html
 
 import ipywidgets as widgets
 
-from ..core.annotation_config import DisplayConfig, NormalizationConfig
+from ..core.annotation_config import NormalizationConfig
+from ..forms import COLORMAPS, ChannelRow, channel_rows, move_label
 
-COLORMAPS = ("gray", "blue", "green", "red", "magenta", "cyan", "yellow")
-_DEFAULT_COLORMAPS = ("blue", "magenta", "green", "yellow", "cyan")
 _LABEL = {"description_width": "110px"}
 
 
@@ -23,22 +22,25 @@ def _cell(width: str = "auto") -> widgets.Layout:
 
 
 class _Row:
-    def __init__(self, index: int, name: str) -> None:
-        self.index = index
-        self.name = name
+    def __init__(self, data: ChannelRow) -> None:
+        self.index = data.index
+        self.name = name = data.name
+        index = data.index
+        self.annotated = False
         self.title = widgets.HTML(f"{index}: {html.escape(name)}", layout=_cell())
         self.train = widgets.Checkbox(indent=False, layout=_cell("90px"))
         self.show = widgets.Checkbox(indent=False, layout=_cell("90px"))
         self.colormap = widgets.Dropdown(
             options=COLORMAPS,
-            value=_DEFAULT_COLORMAPS[index % len(_DEFAULT_COLORMAPS)],
+            value=data.colormap,
             layout=_cell("110px"),
         )
         self.show.observe(lambda _: self.sync(), names="value")
         self.sync()
 
     def sync(self) -> None:
-        self.colormap.disabled = not self.show.value
+        """The colour applies to a shown context channel and to the annotated one."""
+        self.colormap.disabled = not (self.show.value or self.annotated)
 
 
 class ChannelTable:
@@ -89,7 +91,8 @@ class ChannelTable:
                 widgets.HTML(
                     "<span class='oai-muted'>Train on: channels the model gets as "
                     "input. Show: extra channels napari shows next to the annotated "
-                    "one (never used for training).</span>"
+                    "one (never used for training). Colour: how napari shows a "
+                    "channel, the annotated one included.</span>"
                 ),
                 widgets.HBox([self.method, self.low, self.high]),
                 self.apply_at_export,
@@ -100,7 +103,7 @@ class ChannelTable:
     def set_channels(self, names: list[str]) -> None:
         """One row per channel; the choices are reset."""
         label = self.label.value if self.label.value < len(names) else 0
-        self.rows = [_Row(i, name) for i, name in enumerate(names)]
+        self.rows = [_Row(data) for data in channel_rows(names, label)]
         self.label.unobserve(self._on_label, names="value")
         self.label.options = [(f"{i}: {name}", i) for i, name in enumerate(names)]
         self.label.value = label
@@ -118,16 +121,17 @@ class ChannelTable:
         self._mark_label(label, train=True)
 
     def _on_label(self, change: dict) -> None:
-        old, new = change["old"], change["new"]
-        # Training on just the annotated channel follows the annotated channel.
-        follow = [r.index for r in self.rows if r.train.value] == [old]
-        if follow:
-            self.rows[old].train.value = False
-        self._mark_label(new, train=follow)
+        rows = self.rows_data()
+        move_label(rows, change["old"], change["new"])
+        for row, data in zip(self.rows, rows, strict=True):
+            row.train.value, row.show.value = data.train, data.show
+            row.colormap.value = data.colormap
+        self._mark_label(change["new"], train=False)
 
     def _mark_label(self, label: int, *, train: bool) -> None:
         for row in self.rows:
             is_label = row.index == label
+            row.annotated = is_label
             row.show.disabled = is_label  # napari shows it anyway
             if is_label:
                 row.show.value = False
@@ -138,26 +142,25 @@ class ChannelTable:
                     row.train.value = True
             else:
                 row.title.value = f"{row.index}: {html.escape(row.name)}"
+            row.sync()
 
     def _sync_method(self) -> None:
         self.low.disabled = self.high.disabled = self.method.value == "none"
 
     # --- values -------------------------------------------------------------------
 
-    def input_channels(self) -> list[int] | None:
-        """Training channels; None when only the annotated one (the default)."""
-        chosen = [r.index for r in self.rows if r.train.value]
-        if not chosen:
-            raise ValueError("Pick at least one channel to train on")
-        return None if chosen == [self.label.value] else chosen
-
-    def display(self) -> DisplayConfig:
-        shown = [r for r in self.rows if r.show.value and r.index != self.label.value]
-        return DisplayConfig(
-            context_channels=[r.index for r in shown],
-            context_channel_names=[r.name for r in shown] or None,
-            context_channel_colormaps=[str(r.colormap.value) for r in shown] or None,
-        )
+    def rows_data(self) -> list[ChannelRow]:
+        """The rows as :class:`~omero_annotate_ai.forms.ChannelRow`."""
+        return [
+            ChannelRow(
+                r.index,
+                r.name,
+                train=bool(r.train.value),
+                show=bool(r.show.value),
+                colormap=str(r.colormap.value),
+            )
+            for r in self.rows
+        ]
 
     def normalization(self) -> NormalizationConfig:
         return NormalizationConfig(

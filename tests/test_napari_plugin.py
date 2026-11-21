@@ -28,6 +28,8 @@ class FakeController:
 
     def __init__(self) -> None:
         self.shown: list[np.ndarray] = []
+        self.contexts: list[tuple[dict, dict]] = []
+        self.colormaps: list[str] = []
         self.held: list[np.ndarray | None] = []
         self.initial: list[np.ndarray | None] = []
         self.mask = np.zeros((16, 16), np.uint32)
@@ -45,8 +47,19 @@ class FakeController:
     def hold(self, pixels) -> None:
         self.held.append(pixels)
 
-    def show(self, pixels, embedding, model_type, mask=None) -> None:
+    def show(
+        self,
+        pixels,
+        embedding,
+        model_type,
+        mask=None,
+        context=None,
+        colormaps=None,
+        colormap="gray",
+    ) -> None:
+        self.colormaps.append(colormap)
         self.shown.append(pixels)
+        self.contexts.append((dict(context or {}), dict(colormaps or {})))
         self.initial.append(None if mask is None else mask.copy())
         self.mask = mask if mask is not None else np.zeros(pixels.shape, np.uint32)
 
@@ -83,7 +96,7 @@ def make_dock(qtbot):
 
     from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
 
-    def make(home, source, omero=None, conn=None):
+    def make(home, source, omero=None, conn=None, *, has_sets=True):
         # A viewer model without a canvas: the widget only binds keys, micro-SAM is
         # faked, and an OpenGL canvas crashes on headless CI runners (macOS).
         viewer = ViewerModel()
@@ -100,7 +113,8 @@ def make_dock(qtbot):
         )
         widget._conn = conn
         qtbot.addWidget(widget)
-        qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=5000)
+        if has_sets:  # the local sets are listed
+            qtbot.waitUntil(lambda: widget.open_button.isEnabled(), timeout=5000)
         return widget, controller, viewer
 
     return make
@@ -682,7 +696,6 @@ class TestDock:
     def test_a_session_key_joins_without_user_or_password(
         self, tmp_path, make_dock, qtbot, monkeypatch
     ):
-        from unittest.mock import MagicMock
 
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 
@@ -692,7 +705,7 @@ class TestDock:
         monkeypatch.setattr(
             SimpleOMEROConnection,
             "join_session",
-            lambda self, host, key: joined.append((host, key)) or MagicMock(),
+            lambda self, host, key: joined.append((host, key)) or _fake_gateway(),
         )
         widget.host.setText("omero.example.org")
         widget.user.setText("")
@@ -711,7 +724,7 @@ class TestDock:
         from omero_annotate_ai.omero.simple_connection import SimpleOMEROConnection
 
         _, source, _, home = _make_set(tmp_path, "local")
-        gateway = MagicMock()
+        gateway = _fake_gateway()
         gateway.getEventContext.return_value.userName = "someone"
         gateway.getSessionService.return_value.createUserSession.return_value.getUuid.return_value.getValue.return_value = "tok-1"  # noqa: E501
         monkeypatch.setattr(
@@ -726,13 +739,13 @@ class TestDock:
         monkeypatch.setattr(tokens, "_end_session", lambda login: None)
 
         widget = make_dock(home, source)[0]
-        assert not widget.saved_row.isVisibleTo(widget)
+        assert widget.saved_row.isHidden()
         widget.host.setText("omero.example.org")
         widget.user.setText("someone")
         widget.password.setText("secret")
         widget.connect_button.click()
         qtbot.waitUntil(lambda: "Login saved" in widget.status.text(), timeout=5000)
-        assert widget.saved_row.isVisibleTo(widget)
+        assert not widget.saved_row.isHidden()
         assert widget.saved_login.currentText().startswith(
             "someone @ omero.example.org"
         )
@@ -742,7 +755,7 @@ class TestDock:
         assert joined == [("omero.example.org", "tok-1", None, True)]
 
         widget.forget_button.click()
-        qtbot.waitUntil(lambda: not widget.saved_row.isVisibleTo(widget), timeout=5000)
+        qtbot.waitUntil(lambda: widget.saved_row.isHidden(), timeout=5000)
         assert tokens.saved_logins() == []
 
     def test_the_password_is_never_stored(
@@ -758,7 +771,9 @@ class TestDock:
         widget = make_dock(home, source)[0]
         history = sc.SimpleOMEROConnection()._get_connections_file()
         before = history.read_bytes() if history.exists() else None
-        monkeypatch.setattr(sc, "BlitzGateway", MagicMock())
+        gateway_class = MagicMock()
+        gateway_class.return_value = _fake_gateway()
+        monkeypatch.setattr(sc, "BlitzGateway", gateway_class)
         widget.host.setText("omero.example.org")
         widget.user.setText("someone")
         widget.password.setText("secret")
@@ -766,6 +781,244 @@ class TestDock:
         assert widget.password.text() == ""
         qtbot.waitUntil(lambda: widget.list_button.isEnabled(), timeout=5000)
         assert (history.read_bytes() if history.exists() else None) == before
+
+
+class TestContextLayers:
+    """Context channels the set asks for are shown next to the annotated image."""
+
+    def test_context_layers_follow_the_image_and_sit_above_it(self):
+        from napari.components import ViewerModel
+
+        from omero_annotate_ai.napari_plugin._controller import MicroSamController
+
+        viewer = ViewerModel()
+        viewer.add_image(np.zeros((8, 8)), name="image")
+        viewer.add_labels(np.zeros((8, 8), np.uint32), name="committed_objects")
+        controller = MicroSamController(viewer)  # type: ignore[arg-type]
+        gfp = np.full((8, 8), 7.0)
+        controller._show_context({"GFP": gfp}, {"GFP": "magenta"})
+        names = [layer.name for layer in viewer.layers]
+        assert names == ["image", "GFP (context)", "committed_objects"]
+        layer = viewer.layers["GFP (context)"]
+        assert layer.colormap.name == "magenta" and layer.blending == "additive"
+        controller._show_context({"GFP": gfp + 1}, {"GFP": "magenta"})
+        assert layer.data.max() == 8 and layer.visible
+        controller._show_context(None, {"GFP": "magenta"})  # an earlier batch's image
+        assert not layer.visible
+        controller.teardown()
+        assert "GFP (context)" not in viewer.layers
+
+
+def _fake_gateway():
+    """A logged-in gateway with one empty group, for tests that only connect."""
+    from unittest.mock import MagicMock
+
+    gateway = MagicMock()
+    gateway.getObject.side_effect = lambda kind, oid: None
+    return _browsable(gateway, containers=())
+
+
+def _browsable(conn, containers=((1, "nuclei dataset"), (2, "other data"))):
+    """Give a fake connection one group (3) with user 1, and these datasets."""
+    from unittest.mock import Mock
+
+    group = Mock()
+    group.getName.return_value = "lab"
+    group.getId.return_value = 3
+    me, bob = Mock(), Mock()
+    me.getFullName.return_value, me.getId.return_value = "Me Myself", 1
+    bob.getFullName.return_value, bob.getId.return_value = "Bob B", 2
+    group.groupSummary.return_value = ([bob], [me])
+    conn.isAdmin.return_value = False
+    conn.getGroupsMemberOf.return_value = [group]
+    conn.getEventContext.return_value.groupId = 3
+    conn.getUserId.return_value = 1
+    found = []
+    for cid, name in containers:
+        item = Mock()
+        item.getId.return_value, item.getName.return_value = cid, name
+        found.append(item)
+    conn.getObjects.return_value = found
+    lookup = conn.getObject.side_effect
+    conn.getObject.side_effect = lambda kind, oid: (
+        group if kind == "ExperimenterGroup" else lookup(kind, oid)
+    )
+    return conn
+
+
+@pytest.mark.skipif(
+    sys.platform == "darwin" and bool(os.environ.get("CI")),
+    reason="see TestDock",
+)
+class TestWizard:
+    """Server -> Data -> New training set -> annotate, on the fakes."""
+
+    INFO = {
+        "container_name": "nuclei dataset",
+        "total_images": 2,
+        "dimensions": {"X": 16, "Y": 16, "Z": 1, "C": 2, "T": 1},
+        "channel_names": ["DAPI", "GFP"],
+        "sample_image_id": 1,
+    }
+
+    @pytest.fixture
+    def wizard(self, tmp_path, make_dock, qtbot, monkeypatch):
+        from omero_annotate_ai import trainingset
+        from omero_annotate_ai.napari_plugin import _widget
+
+        config, source, omero = omero_set(tmp_path, n_images=2)
+        conn = _browsable(omero.conn())
+        monkeypatch.setattr(_widget, "get_container_info", lambda *a: self.INFO)
+        monkeypatch.setattr(_widget, "list_training_sets", lambda *a: [])
+        monkeypatch.setattr(
+            trainingset.ezomero, "get_image_ids", lambda *a, **kw: [1, 2]
+        )
+        widget, controller, viewer = make_dock(
+            tmp_path / "home", source, omero, has_sets=False
+        )
+        widget._conn = conn
+        widget.browser.set_connection(conn)
+        qtbot.waitUntil(lambda: widget.browser.list.count() == 2, timeout=5000)
+        return widget, controller, omero, conn
+
+    def test_browser_lists_my_data_and_filters_it(self, wizard, qtbot):
+        widget, _, _, conn = wizard
+        browser = widget.browser
+        assert [browser.owner.itemText(i) for i in range(browser.owner.count())] == [
+            "Me",
+            "All members",
+            "Bob B",
+        ]
+        assert conn.getObjects.call_args.kwargs == {"opts": {"owner": 1}}
+        assert "2 datasets" in browser.count.text()
+        browser.search.setText("nuc")
+        assert browser.list.count() == 1
+        assert "1 of 2" in browser.count.text()
+        browser.search.setText("2")  # an ID
+        assert browser.list.item(0).text() == "other data (ID 2)"
+        assert browser.find.isEnabled()
+
+    def test_picks_survive_the_search_and_fill_the_form(self, wizard, qtbot):
+        widget, _, _, _ = wizard
+        browser = widget.browser
+        assert not widget.next_button.isEnabled()
+        browser.list.item(0).setSelected(True)
+        assert browser.selected == [1]
+        qtbot.waitUntil(
+            lambda: widget.new_set.channels.label.count() == 2, timeout=5000
+        )
+        assert widget.new_set.name.text() == "nuclei dataset"
+        assert "DAPI" in widget.container_info.text()
+        assert widget.next_button.isEnabled()
+        browser.search.setText("other")
+        assert browser.list.item(0).text() == "nuclei dataset (ID 1)"  # still picked
+        browser.list.item(1).setSelected(True)
+        assert browser.selected == [1, 2]
+        assert "Picked:" in browser.picked_info.text()
+
+    def test_go_to_id_switches_group_and_picks(self, wizard, qtbot, monkeypatch):
+        from omero_annotate_ai.napari_plugin import _wizard
+
+        widget, _, _, conn = wizard
+        monkeypatch.setattr(_wizard, "find_container", lambda *a: 5)
+        conn.getGroupFromContext.return_value.getName.return_value = "other lab"
+        widget.browser.search.setText("2")
+        widget.browser.find.click()
+        qtbot.waitUntil(lambda: widget.browser.selected == [2], timeout=5000)
+        conn.setGroupForSession.assert_called_with(5)
+        assert widget.browser.group.currentText() == "other lab"
+        assert widget.browser.owner.currentText() == "All members"
+
+    def test_channel_table_follows_the_annotated_channel(self, wizard, qtbot):
+        widget, _, _, _ = wizard
+        widget.browser.list.item(0).setSelected(True)
+        table = widget.new_set.channels
+        qtbot.waitUntil(lambda: table.label.count() == 2, timeout=5000)
+        assert [r.train for r in table.rows] == [True, False]
+        table.label.setCurrentIndex(1)
+        assert [r.train for r in table.rows] == [False, True]
+        table._widgets[0][2].setChecked(True)  # show DAPI in napari
+        colour = table._widgets[1][3]  # the annotated channel's colour
+        assert colour.isEnabled() and colour.currentText() == "gray"
+        assert table._widgets[0][3].isEnabled()  # shown: its colour can be picked
+        colour.setCurrentText("green")
+        form = widget.new_set.form("dataset", [1], "vit_b_lm", 0)
+        display = form.to_config().display
+        assert display.specs() == [(0, "DAPI", "blue")]
+        assert display.label_colormap == "green"
+
+    def test_create_and_annotate_a_new_set(self, wizard, qtbot):
+        widget, controller, omero, _ = wizard
+        widget.browser.list.item(0).setSelected(True)
+        qtbot.waitUntil(
+            lambda: widget.new_set.channels.label.count() == 2, timeout=5000
+        )
+        widget.steps.setCurrentIndex(2)
+        assert widget.new_button.isEnabled()
+        widget.new_button.click()
+        dialog = widget.new_dialog
+        assert dialog.isVisible() and "nuclei dataset (ID 1)" in dialog.heading.text()
+        widget.new_set.name.setText("wizard_set")
+        widget.new_set.counts["training"].setValue(2)
+        widget.new_set.counts["validation"].setValue(0)
+        widget.batch_size.setValue(2)
+        dialog.create_button.click()
+        assert not dialog.isVisible()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 1, timeout=10000)
+        for _ in range(2):
+            qtbot.waitUntil(lambda: widget._ready, timeout=10000)
+            controller.mask = np.ones(controller.shown[-1].shape, np.uint32)
+            widget.accept_button.click()
+        qtbot.waitUntil(lambda: not widget._ready, timeout=10000)
+        widget.note.setText("made in the wizard")
+        widget.finish_button.click()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=10000)
+        [table] = omero.tables.values()
+        assert len(table) == 2 and table["processed"].astype(bool).all()
+        assert "wizard_set" in next(iter(omero.config_text.values()))
+        # The new set is listed and selected, ready for the next session.
+        qtbot.waitUntil(lambda: widget.set_list.count() == 1, timeout=5000)
+        assert widget.set_list.currentItem().text().startswith("wizard_set")
+        assert widget.open_button.text() == "Annotate"
+
+    def test_a_bad_field_is_reported_and_nothing_is_created(self, wizard, qtbot):
+        widget, _, omero, _ = wizard
+        widget.browser.list.item(0).setSelected(True)
+        widget.new_button.click()
+        widget.new_set.timepoints.listed.setText("3-1")
+        widget.new_dialog.create_button.click()
+        assert "Timepoints" in widget.new_dialog.error.text()
+        assert widget.new_dialog.isVisible()  # to fix the field
+        assert not omero.tables
+
+    def test_new_needs_a_connection_and_a_container(self, tmp_path, make_dock):
+        _, source, _, home = _make_set(tmp_path, "local")
+        widget = make_dock(home, source)[0]
+        assert not widget.new_button.isEnabled()
+        assert "Connect" in widget.new_button.toolTip()
+
+    def test_plates_show_the_well_filter(self, wizard, qtbot, monkeypatch):
+        from omero_annotate_ai.napari_plugin import _widget
+
+        widget, _, _, _ = wizard
+        wells = {i: {"CellLine": "HeLa" if i % 2 else "U2OS"} for i in range(4)}
+        monkeypatch.setattr(
+            _widget, "plate_well_metadata", lambda *a: (wells, {"CellLine"})
+        )
+        widget.browser.container_type.setCurrentText("plate")
+        widget.browser._on_type()
+        qtbot.waitUntil(lambda: widget.browser.list.count() == 2, timeout=5000)
+        widget.browser.list.item(0).setSelected(True)
+        box = widget.new_set.wells
+        qtbot.waitUntil(lambda: box.add.isEnabled(), timeout=5000)
+        assert not box.isHidden()
+        box.add.click()
+        condition = box._conditions[0]
+        assert condition.key.currentText() == "CellLine (MIHCSME)"
+        condition.accepted.item(0).setSelected(True)  # HeLa
+        assert "2 of 4 wells kept" in box.summary.text()
+        form = widget.new_set.form("plate", [1], "vit_b_lm", 0)
+        assert form.well_filters == {"CellLine": ["HeLa"]}
 
 
 @pytest.mark.docker
@@ -843,6 +1096,76 @@ class TestDockOnOmero:
         kinds = [(s.kind, s.n_annotated, s.note) for s in reviewed.config.sessions]
         assert kinds == [("annotate", 2, "first pass"), ("review", 2, "review pass")]
         assert all(not r.claimed_by for r in reviewed.units())
+
+    def test_wizard_creates_and_annotates_a_set_on_omero(
+        self, omero_conn, omero_seed, qtbot, tmp_path
+    ):
+        """Browse the real server, pick the dataset, create a set from the form,
+        annotate it and find it listed afterwards."""
+        from napari.components import ViewerModel
+        from qtpy.QtCore import Qt
+
+        from omero_annotate_ai import TrainingSet
+        from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
+
+        controller = FakeController()
+        widget = OMEROAnnotateDock(
+            ViewerModel(),
+            home=tmp_path / "home",
+            controller=controller,  # type: ignore[arg-type]
+            embedder=InstantEmbedder(),  # type: ignore[arg-type]
+        )
+        qtbot.addWidget(widget)
+        widget._conn = omero_conn
+        widget.browser.set_connection(omero_conn)
+        qtbot.waitUntil(lambda: widget.browser.list.count() > 0, timeout=30000)
+        widget.browser.owner.setCurrentIndex(1)  # all members
+        widget.browser._load()
+        widget.browser.search.setText(str(omero_seed.dataset_id))
+        listed = widget.browser.list
+
+        def seeded():  # the search also matches names containing the digits
+            for i in range(listed.count()):
+                if (
+                    listed.item(i).data(Qt.ItemDataRole.UserRole)
+                    == omero_seed.dataset_id
+                ):
+                    return listed.item(i)
+            return None
+
+        qtbot.waitUntil(lambda: seeded() is not None, timeout=30000)
+        seeded().setSelected(True)
+        channels = widget.new_set.channels
+        qtbot.waitUntil(lambda: channels.label.count() > 1, timeout=30000)
+        widget.new_button.click()
+        widget.new_set.name.setText(f"{omero_seed.tag}_wizard")
+        widget.new_set.counts["training"].setValue(2)
+        widget.new_set.counts["validation"].setValue(0)
+        channels._widgets[1][2].setChecked(True)  # second channel as context
+        widget.new_dialog.create_button.click()
+        for _ in range(2):
+            qtbot.waitUntil(lambda: widget._ready, timeout=60000)
+            assert set(controller.contexts[-1][1]) == {channels.rows[1].name}
+            assert controller.colormaps[-1] == "gray"
+            controller.mask = np.zeros(controller.shown[-1].shape, np.uint32)
+            controller.mask[2:6, 2:6] = 1
+            widget.accept_button.click()
+        qtbot.waitUntil(lambda: not widget._ready, timeout=60000)
+        widget.finish_button.click()
+        qtbot.waitUntil(lambda: widget._pages.currentIndex() == 0, timeout=60000)
+        name = f"{omero_seed.tag}_wizard"
+
+        def new_set_selected() -> bool:  # the list refreshes in the background
+            item = widget.set_list.currentItem()
+            return item is not None and name in item.text()
+
+        qtbot.waitUntil(new_set_selected, timeout=30000)
+
+        ref = widget._last_ref
+        ts = TrainingSet.open(ref, omero_conn, home=tmp_path / "home")
+        rows = ts.units()
+        assert len(rows) == 2 and all(r.processed and r.label_id for r in rows)
+        assert ts.config.display.context_channels == [1]
 
 
 def _synthetic_image(seed: int, shape: tuple[int, int] = (256, 256)) -> np.ndarray:

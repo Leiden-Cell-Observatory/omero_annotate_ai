@@ -543,6 +543,7 @@ class TrainingSet:
             model_type=self._config.ai_model.pretrained_from or "vit_b_lm",
             is_volumetric=bool(self._config.sampling.volumetric),
             context_colormaps={name: cmap for _ch, name, cmap in specs},
+            colormap=self._config.display.label_colormap,
         )
 
     def upload_fields(self, annotation: Row) -> dict[str, Any]:

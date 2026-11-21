@@ -20,11 +20,10 @@ from typing import Any
 import napari
 import numpy as np
 import tifffile
-from qtpy.QtCore import QEvent, QObject, QTimer
+from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -35,9 +34,11 @@ from qtpy.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -54,6 +55,8 @@ from ..events import (
     UnitConflict,
     UploadFailed,
 )
+from ..forms import SPLITS, WELL_CONTAINERS
+from ..omero.omero_utils import get_container_info, plate_well_metadata
 from ..omero.simple_connection import SimpleOMEROConnection
 from ..omero.tokens import SavedLogin, forget_login, save_login, saved_logins
 from ..session import NEEDS_REVIEW, AnnotationSession
@@ -64,6 +67,7 @@ from ..trainingset import (
     summarize,
 )
 from ._controller import LayerConflict, MicroSamController
+from ._wizard import ContainerBrowser, NewSetDialog, combo, hbox, model_box
 from ._workers import Embedder, Embedding, EventBridge, Worker
 
 logger = logging.getLogger(__name__)
@@ -71,7 +75,7 @@ logger = logging.getLogger(__name__)
 ACCEPT_KEY = "n"
 SKIP_KEY = "Shift-N"
 CATEGORIES = ("training", "validation", "test")
-CONTAINER_TYPES = ("dataset", "plate", "project", "screen")
+PREVIEW_PREFIX = "sample "
 
 Ref = int | Path
 """A training set as the core opens it: a tracking-table ID or a set folder."""
@@ -101,6 +105,35 @@ def _summary_text(summary: TrainingSetSummary) -> str:
             f"{record.n_annotated} annotated{note}"
         )
     return "<br>".join(lines)
+
+
+def _info_text(info: Mapping[str, Any], n_containers: int) -> str:
+    """Images, a sample's dimensions and its channel names, for the Data step."""
+    if not info:
+        return ""
+    sizes = info.get("dimensions") or {}
+    dims = ", ".join(f"{k}={sizes[k]}" for k in "XYZCT" if k in sizes)
+    names = info.get("channel_names") or []
+    parts = [f"{info.get('total_images', 0)} images"]
+    if n_containers > 1:
+        parts = [f"{n_containers} containers; the first has {parts[0]}"]
+    if dims:
+        parts.append(f"sample {dims}")
+    if names:
+        parts.append("channels " + ", ".join(f"{i}: {n}" for i, n in enumerate(names)))
+    if info.get("channel_names_vary"):
+        parts.append("<i>channel names differ between images</i>")
+    return " · ".join(parts)
+
+
+def _scrolled(widget: QWidget) -> QScrollArea:
+    area = QScrollArea()
+    area.setWidget(widget)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QScrollArea.Shape.NoFrame)
+    # The dock is narrow: wrap and elide instead of scrolling sideways.
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    return area
 
 
 def _describe(item: BatchItem) -> str:
@@ -173,6 +206,10 @@ def _close_dock(
 class OMEROAnnotateDock(QWidget):
     """Annotate an omero-annotate-ai training set with micro-SAM in this viewer."""
 
+    # napari's window, watched for closing. A class default too: Qt may deliver a
+    # window event to a dock whose Python side is already being torn down.
+    _window: QWidget | None = None
+
     def __init__(
         self,
         napari_viewer: napari.Viewer,
@@ -195,6 +232,8 @@ class OMEROAnnotateDock(QWidget):
         self._bridge.event.connect(self._on_event)
         self._conn: Any = None
         self._sets: list[tuple[Ref, TrainingSetSummary]] = []
+        self._sample: int | None = None  # an image of the picked container, to preview
+        self._last_ref: Ref | None = None  # the set of the last session, to reselect
         self._cancel_requested = False
 
         self._live = _Live()
@@ -218,7 +257,7 @@ class OMEROAnnotateDock(QWidget):
         self._revised = 0
         self._finishing = False  # no Accept/next batch once Finish was pressed
         self._docked = False
-        self._window: QWidget | None = None  # napari's window, watched for closing
+        self._window = None
 
         self._pages = QStackedWidget()
         self._pages.addWidget(self._build_start_page())
@@ -258,13 +297,20 @@ class OMEROAnnotateDock(QWidget):
     # --- layout -------------------------------------------------------------------
 
     def _build_start_page(self) -> QWidget:
+        """The wizard: 1 Server, 2 Data, 3 Training set (open one or make a new one)."""
+        self.steps = QTabWidget()
+        self.steps.addTab(_scrolled(self._build_server_step()), "1 Server")
+        self.steps.addTab(_scrolled(self._build_data_step()), "2 Data")
+        self.steps.addTab(self._build_set_step(), "3 Training set")
+        return self.steps
+
+    def _build_server_step(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-
-        connection = QGroupBox("OMERO server (not needed for local sets)")
+        connection = QGroupBox("OMERO server")
         form = QFormLayout(connection)
         # Saved logins (tokens): no password needed.
-        self.saved_login = QComboBox()
+        self.saved_login = combo()
         self.saved_login_button = QPushButton("Log in")
         self.saved_login_button.clicked.connect(self._connect_saved)
         self.forget_button = QPushButton("Forget")
@@ -273,10 +319,10 @@ class OMEROAnnotateDock(QWidget):
         )
         self.forget_button.clicked.connect(self._forget_saved)
         self.saved_row = QWidget()
-        saved = QHBoxLayout(self.saved_row)
+        saved = QVBoxLayout(self.saved_row)
         saved.setContentsMargins(0, 0, 0, 0)
-        for widget in (self.saved_login, self.saved_login_button, self.forget_button):
-            saved.addWidget(widget)
+        saved.addWidget(self.saved_login)
+        saved.addWidget(hbox(self.saved_login_button, self.forget_button))
         form.addRow("Saved login", self.saved_row)
         self.remember = QCheckBox("Stay logged in on this computer (saves a token)")
         self.remember.setChecked(True)
@@ -284,6 +330,7 @@ class OMEROAnnotateDock(QWidget):
         self.user = QLineEdit()
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.returnPressed.connect(self._connect)
         self.session_key = QLineEdit()
         self.session_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.session_key.setPlaceholderText("or a session key (e.g. from OMERO.web)")
@@ -300,46 +347,98 @@ class OMEROAnnotateDock(QWidget):
         form.addRow(self.remember)
         form.addRow(self.connect_button)
         self._fill_saved_logins()
-        self.container_type = QComboBox()
-        self.container_type.addItems(CONTAINER_TYPES)
-        self.container_id = QSpinBox()
-        self.container_id.setRange(0, 2**31 - 1)
-        self.list_button = QPushButton("List sets")
-        self.list_button.setEnabled(False)
-        self.list_button.clicked.connect(self._refresh)
-        container = QHBoxLayout()
-        for widget in (self.container_type, self.container_id, self.list_button):
-            container.addWidget(widget)
-        form.addRow("Container", container)
         layout.addWidget(connection)
+        self.connected_label = QLabel(
+            "Sets with a folder on this computer need no server: see step 3."
+        )
+        self.connected_label.setWordWrap(True)
+        layout.addWidget(self.connected_label)
+        layout.addStretch()
+        return page
 
-        sets = QGroupBox("Training sets")
-        sets_layout = QVBoxLayout(sets)
+    def _build_data_step(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.browser = ContainerBrowser(self._run_io)
+        self.browser.picked.connect(self._on_picked)
+        self.container_info = QLabel()
+        self.container_info.setWordWrap(True)
+        self.next_button = QPushButton("Next: training set →")
+        self.next_button.setEnabled(False)
+        self.next_button.clicked.connect(lambda: self.steps.setCurrentIndex(2))
+        layout.addWidget(self.browser)
+        layout.addWidget(self.container_info)
+        layout.addWidget(self.next_button)
+        layout.addStretch()
+        return page
+
+    def _build_set_step(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.picked_label = QLabel()
+        self.picked_label.setWordWrap(True)
+        layout.addWidget(self.picked_label)
+
+        # The sets: open one (or add images to it)
         self.set_list = QListWidget()
         self.set_list.currentRowChanged.connect(self._on_set_selected)
         self.summary = QLabel(
-            "Sets with a folder in the home folder are listed here; connect to "
-            "list the sets on an OMERO container."
+            "Sets with a folder in the home folder are listed here; pick a container "
+            "in step 2 to list the sets on OMERO."
         )
         self.summary.setWordWrap(True)
-        buttons = QHBoxLayout()
+        self.add = {}
+        for category, _ in SPLITS:
+            box = QSpinBox()
+            box.setRange(0, 100_000)
+            box.setPrefix("+")
+            box.setToolTip(f"Add {category} images to the set")
+            self.add[category] = box
+        self.review = QCheckBox("Review annotated images (correct their saved masks)")
+        self.review.toggled.connect(lambda _: self._sync_action())
+        self.list_button = QPushButton("Refresh")
+        self.list_button.setEnabled(False)
+        self.list_button.clicked.connect(self._refresh)
         self.folder_button = QPushButton("Open folder…")
         self.folder_button.clicked.connect(self._choose_folder)
+        add_row = QHBoxLayout()
+        add_row.addWidget(QLabel("Add images"))
+        for box in self.add.values():
+            add_row.addWidget(box)
+        layout.addWidget(self.set_list, 1)
+        layout.addWidget(self.summary)
+        layout.addLayout(add_row)
+        layout.addWidget(self.review)
+        layout.addWidget(hbox(self.list_button, self.folder_button))
+
+        # A new set: the form opens in its own, wider window
+        self.new_dialog = NewSetDialog(self)
+        self.new_set = self.new_dialog.panel
+        self.preview_button = self.new_dialog.preview_button
+        self.preview_button.setEnabled(False)
+        self.preview_button.clicked.connect(self._preview)
+        self.new_dialog.create_button.clicked.connect(self._create)
+        self.new_button = QPushButton("New training set…")
+        self.new_button.clicked.connect(self._show_new_dialog)
+
+        # Model, batch size, go
+        run = QFormLayout()
+        self.model = model_box()
+        self.batch_size = QSpinBox()
+        self.batch_size.setRange(0, 10_000)
+        self.batch_size.setSpecialValueText("all")
+        self.batch_size.setToolTip("Images per batch (all: one batch)")
+        run.addRow("Model", self.model)
+        run.addRow("Batch size", self.batch_size)
+        layout.addLayout(run)
         self.open_button = QPushButton("Annotate")
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self._open_selected)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self._request_cancel)
-        for button in (self.folder_button, self.open_button, self.cancel_button):
-            buttons.addWidget(button)
-        self.review = QCheckBox("Review annotated images (correct their saved masks)")
-        sets_layout.addWidget(self.set_list)
-        sets_layout.addWidget(self.summary)
-        sets_layout.addWidget(self.review)
-        sets_layout.addLayout(buttons)
-        layout.addWidget(sets)
-        layout.addStretch()
+        layout.addWidget(hbox(self.open_button, self.new_button, self.cancel_button))
+        self._sync_action()
         return page
 
     def _build_annotate_page(self) -> QWidget:
@@ -444,9 +543,11 @@ class OMEROAnnotateDock(QWidget):
             self.connect_button.setEnabled(True)
             self.saved_login_button.setEnabled(True)
             self.list_button.setEnabled(True)
-            self._say(
-                f"Connected to {host}. Choose a container and list its sets.{note}"
-            )
+            self.connected_label.setText(f"Connected to <b>{host}</b>.")
+            self.browser.set_connection(self._conn)
+            self.steps.setCurrentIndex(1)
+            self._sync_action()
+            self._say(f"Connected to {host}. Find your data in step 2.{note}")
 
         def failed(exc: BaseException) -> None:
             self.connect_button.setEnabled(True)
@@ -485,14 +586,66 @@ class OMEROAnnotateDock(QWidget):
 
         self._io.run(lambda: forget_login(login), forgotten, self._on_error)
 
+    def _run_io(self, fn: Callable[[], Any], done: Callable[[Any], None]) -> None:
+        self._io.run(fn, done, self._on_error)
+
+    # --- data and training sets ---------------------------------------------------
+
+    def _on_picked(self) -> None:
+        """New picks: list their sets, read the first one's channels (and wells)."""
+        picked, kind, conn = self.browser.selected, self.browser.kind, self._conn
+        self.next_button.setEnabled(bool(picked))
+        self.preview_button.setEnabled(False)
+        self._sample = None
+        self.new_set.show_wells(kind in WELL_CONTAINERS)
+        self.new_set.wells.load({}, set())
+        self.container_info.setText("")
+        self.picked_label.setText(
+            f"<b>{kind.capitalize()}</b>: " + ", ".join(self.browser.names())
+            if picked
+            else "No container picked (step 2): only local sets are listed."
+        )
+        self._refresh()
+        self._sync_action()
+        if conn is None or not picked:
+            return
+
+        def read() -> tuple[dict[str, Any], Any]:
+            info = get_container_info(conn, kind, picked[0]) or {}
+            wells = (
+                plate_well_metadata(conn, kind, picked)
+                if kind in WELL_CONTAINERS
+                else None
+            )
+            return info, wells
+
+        def show(result: tuple[dict[str, Any], Any]) -> None:
+            if self.browser.selected != picked:
+                return  # the picks changed meanwhile
+            info, wells = result
+            self.container_info.setText(_info_text(info, len(picked)))
+            sizes = info.get("dimensions") or {}
+            names = info.get("channel_names") or [
+                f"Channel {i}" for i in range(int(sizes.get("C") or 1))
+            ]
+            self.new_set.channels.set_channels([str(n) for n in names])
+            if not self.new_set.name.text() and info.get("container_name"):
+                self.new_set.name.setText(str(info["container_name"]))
+            self._sample = info.get("sample_image_id")
+            self.preview_button.setEnabled(self._sample is not None)
+            if wells is not None:
+                self.new_set.wells.load(*wells)
+
+        self._run_io(read, show)
+
     def _refresh(self) -> None:
         conn, home = self._conn, self._home
-        container = (self.container_type.currentText(), self.container_id.value())
+        picked, kind = self.browser.selected, self.browser.kind
 
         def list_sets() -> list[tuple[Ref, TrainingSetSummary]]:
             found = _local_sets(home)
-            if conn is not None and container[1]:
-                listed = list_training_sets(conn, *container)
+            if conn is not None and picked:
+                listed = list_training_sets(conn, kind, picked[0])
                 ids = {info.table_id for info in listed}
                 found = [(r, s) for r, s in found if s.table_id not in ids]
                 found += [(i.table_id, summarize(i.table_id, conn)) for i in listed]
@@ -506,15 +659,49 @@ class OMEROAnnotateDock(QWidget):
         for _ref, summary in sets:
             done = sum(d for d, _ in summary.progress.values())
             total = sum(t for _, t in summary.progress.values())
-            self.set_list.addItem(QListWidgetItem(f"{summary.name}  ({done}/{total})"))
+            where = f"table {summary.table_id}" if summary.table_id else "local"
+            self.set_list.addItem(
+                QListWidgetItem(f"{summary.name}  ({done}/{total}, {where})")
+            )
         if sets:
-            self.set_list.setCurrentRow(0)
+            refs = [ref for ref, _ in sets]
+            last = self._last_ref
+            self.set_list.setCurrentRow(refs.index(last) if last in refs else 0)
+        else:
+            self.summary.setText(
+                "No training sets here yet: make one with New training set…"
+            )
+        self._sync_action()
 
     def _on_set_selected(self, row: int) -> None:
-        valid = 0 <= row < len(self._sets)
-        self.open_button.setEnabled(valid)
-        if valid:
+        if 0 <= row < len(self._sets):
             self.summary.setText(_summary_text(self._sets[row][1]))
+        self._sync_action()
+
+    def _sync_action(self) -> None:
+        """Annotate the picked set; a new set needs a connection and a container."""
+        busy = self.cancel_button.isVisible()
+        self.open_button.setText("Review" if self.review.isChecked() else "Annotate")
+        ready = 0 <= self.set_list.currentRow() < len(self._sets)
+        self.open_button.setToolTip("" if ready else "Pick a training set first")
+        self.open_button.setEnabled(ready and not busy)
+        can_create = self._conn is not None and bool(self.browser.selected)
+        self.new_button.setToolTip(
+            "Make a training set from the picked containers"
+            if can_create
+            else "Connect (step 1) and pick a container (step 2) first"
+        )
+        self.new_button.setEnabled(can_create and not busy)
+        self.new_dialog.create_button.setEnabled(can_create and not busy)
+
+    def _show_new_dialog(self) -> None:
+        kind = self.browser.kind.capitalize()
+        names = ", ".join(self.browser.names())
+        self.new_dialog.heading.setText(f"<b>{kind}</b>: {names}")
+        self.new_dialog.error.clear()
+        self.new_dialog.show()
+        self.new_dialog.raise_()
+        self.new_dialog.activateWindow()
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -531,7 +718,68 @@ class OMEROAnnotateDock(QWidget):
 
     def _open(self, ref: Ref, name: str) -> None:
         conn, home, options = self._conn, self._home, self._core_options
-        review = self.review.isChecked()
+        add = {category: box.value() for category, box in self.add.items()}
+
+        def open_set() -> TrainingSet:
+            ts = TrainingSet.open(
+                ref,
+                conn,
+                home=home,
+                events=self._bridge.sink,
+                cancel=lambda: self._cancel_requested,
+                **options,
+            )
+            if any(add.values()):
+                current = ts.config.training
+                ts.extend(
+                    **{
+                        key: getattr(current, key) + add[category]
+                        for category, key in SPLITS
+                    }
+                )
+            return ts
+
+        self._start(
+            open_set,
+            f"Opening {name} (repairing it if a run was interrupted)…",
+            review=self.review.isChecked(),
+        )
+
+    def _create(self) -> None:
+        error = self.new_dialog.error
+        if self._conn is None or not self.browser.selected:
+            error.setText("Connect (step 1) and pick a container (step 2) first.")
+            return
+        try:
+            config = self.new_set.form(
+                self.browser.kind,
+                self.browser.selected,
+                self.model.currentData(),
+                self.batch_size.value(),
+            ).to_config()
+        except ValueError as exc:  # a field: shown in the form, nothing created
+            error.setText(str(exc))
+            return
+        self.new_dialog.hide()
+        conn, home, options = self._conn, self._home, self._core_options
+
+        def create() -> TrainingSet:
+            return TrainingSet.create(
+                config,
+                conn,
+                home=home,
+                events=self._bridge.sink,
+                cancel=lambda: self._cancel_requested,
+                **options,
+            )
+
+        self._start(create, f"Creating {config.name}: picking the images…")
+
+    def _start(
+        self, make: Callable[[], TrainingSet], message: str, *, review: bool = False
+    ) -> None:
+        """Open or create a set on the IO thread, start a session, show its first image."""
+        model, batch_size = self.model.currentData(), self.batch_size.value() or None
         try:
             self._controller.check_layers()  # before anything is claimed
         except LayerConflict as exc:
@@ -542,14 +790,8 @@ class OMEROAnnotateDock(QWidget):
         self.notice.clear()  # events from opening (claims held elsewhere) add to it
 
         def open_set() -> Opened:
-            ts = TrainingSet.open(
-                ref,
-                conn,
-                home=home,
-                events=self._bridge.sink,
-                cancel=lambda: self._cancel_requested,
-                **options,
-            )
+            ts = make()
+            self._last_ref = ts.table_id if ts.table_id is not None else ts.bundle_dir
             done = {c: [0, 0] for c in CATEGORIES}
             excluded: dict[str, int] = dict.fromkeys(CATEGORIES, 0)
             flagged = 0
@@ -558,7 +800,9 @@ class OMEROAnnotateDock(QWidget):
                 done[row.category][0] += int(row.processed)
                 excluded[row.category] += int(row.excluded)
                 flagged += (row.error or "").startswith(NEEDS_REVIEW)
-            session = ts.start_session(review=review)
+            session = ts.start_session(
+                review=review, model=model, batch_size=batch_size
+            )
             try:
                 batch = session.next_batch()
             except BaseException:  # incl. Cancelled: record it, release its claims
@@ -571,6 +815,9 @@ class OMEROAnnotateDock(QWidget):
             self._revised = 0
             self._set_start_controls(True)
             self.cancel_button.setVisible(False)
+            for box in self.add.values():
+                box.setValue(0)
+            self._remove_preview()
             self._skipped.clear()
             self._history, self._revisit = [], None
             self._unsaved, self._counted, self._excluded = set(), set(), set()
@@ -585,8 +832,38 @@ class OMEROAnnotateDock(QWidget):
 
         self._set_start_controls(False)
         self.cancel_button.setVisible(True)
-        self._say(f"Opening {name} (repairing it if a run was interrupted)…")
+        self._say(message)
         self._io.run(open_set, opened, self._on_error)
+
+    def _preview(self) -> None:
+        """Each channel of the sample image (first plane) as a layer, named after it."""
+        conn, image_id = self._conn, self._sample
+        if conn is None or image_id is None:
+            return
+        rows = list(self.new_set.channels.rows)
+
+        def read() -> list[np.ndarray]:
+            pixels = conn.getObject("Image", image_id).getPrimaryPixels()
+            return [pixels.getPlane(0, row.index, 0) for row in rows]
+
+        def show(planes: list[np.ndarray]) -> None:
+            self._remove_preview()
+            for row, plane in zip(rows, planes, strict=True):
+                self._viewer.add_image(
+                    plane,
+                    name=f"{PREVIEW_PREFIX}{row.index}: {row.name}",
+                    colormap=row.colormap,
+                    blending="additive",
+                )
+            self._say("Sample image shown; its layers are removed when you start.")
+
+        self._say("Loading the sample image…")
+        self._run_io(read, show)
+
+    def _remove_preview(self) -> None:
+        for layer in list(self._viewer.layers):
+            if layer.name.startswith(PREVIEW_PREFIX):
+                self._viewer.layers.remove(layer)
 
     def _request_cancel(self) -> None:
         self._cancel_requested = True
@@ -666,14 +943,18 @@ class OMEROAnnotateDock(QWidget):
             )
 
         if saved:
-            self._show_saved_unit(item.annotation_id, path, batch.model_type, current)
+            self._show_saved_unit(
+                item.annotation_id, path, batch.model_type, current, item.context
+            )
             return
         # A copy: the viewer's edits never touch the saved mask, which stays the
         # reference for "unchanged".
         start = (
             None if item.initial_mask is None else item.initial_mask.astype(np.uint32)
         )
-        self._present(item.pixels, path, batch.model_type, start, False, current)
+        self._present(
+            item.pixels, path, batch.model_type, start, False, current, item.context
+        )
         self._prefetch(batch, index)
 
     def _show_earlier(self, annotation_id: str, model_type: str) -> None:
@@ -694,9 +975,10 @@ class OMEROAnnotateDock(QWidget):
         path: Path,
         model_type: str,
         current: Callable[[], bool],
+        context: Mapping[str, np.ndarray] | None = None,
     ) -> None:
         """Read a saved image and its mask from the set's folder (on the IO thread,
-        so after its save), then show them."""
+        so after its save), then show them (with ``context`` channels if known)."""
         session = self._session
         if session is None:
             return
@@ -707,7 +989,7 @@ class OMEROAnnotateDock(QWidget):
                 return
             pixels, mask = unit
             self._present(
-                pixels, path, model_type, mask.astype(np.uint32), True, current
+                pixels, path, model_type, mask.astype(np.uint32), True, current, context
             )
 
         self._io.run(
@@ -730,10 +1012,11 @@ class OMEROAnnotateDock(QWidget):
         start: np.ndarray | None,
         saved: bool,
         current: Callable[[], bool],
+        context: Mapping[str, np.ndarray] | None = None,
     ) -> None:
         """Compute (or load) the embedding of ``pixels``, then hand it to micro-SAM
-        with the objects ``start``; ``current()`` says whether the user is still on
-        this image by then."""
+        with the objects ``start`` and the ``context`` channels; ``current()`` says
+        whether the user is still on this image by then."""
         self._wait(pixels)
         self._say("Computing the image embedding…")
 
@@ -742,7 +1025,16 @@ class OMEROAnnotateDock(QWidget):
                 return  # the user moved on (or finished) meanwhile
             self.busy.setVisible(False)
             try:
-                self._controller.show(pixels, embedding, model_type, start)
+                batch = self._batch
+                self._controller.show(
+                    pixels,
+                    embedding,
+                    model_type,
+                    start,
+                    context,
+                    batch.context_colormaps if batch else {},
+                    batch.colormap if batch else "gray",
+                )
             except Exception as exc:  # noqa: BLE001 - shown to the user, logged
                 self._on_image_error(exc)
                 return
@@ -1175,9 +1467,12 @@ class OMEROAnnotateDock(QWidget):
             self.exclude_button.setEnabled(self._can_exclude())
 
     def _set_start_controls(self, enabled: bool) -> None:
-        self.open_button.setEnabled(enabled and bool(self._sets))
-        self.folder_button.setEnabled(enabled)
-        self.review.setEnabled(enabled)
+        for widget in (self.folder_button, self.review, self.browser):
+            widget.setEnabled(enabled)
+        if enabled:
+            self._sync_action()
+        else:
+            self.open_button.setEnabled(False)
 
     def _notify(self, text: str) -> None:
         """Add a lasting warning to the annotate page (status messages get replaced)."""

@@ -53,6 +53,7 @@ class Batch:
     model_type: str = ""
     is_volumetric: bool = False
     context_colormaps: Mapping[str, str] = field(default_factory=dict[str, str])
+    colormap: str = "gray"  # of the annotated channel
 
 
 @runtime_checkable
@@ -121,6 +122,8 @@ class MicroSamAnnotator:
                 is_volumetric=batch.is_volumetric,
                 skip_segmented=True,
             )
+            if "image" in viewer.layers:  # micro-SAM's layer of the annotated channel
+                viewer.layers["image"].colormap = batch.colormap
             install_context_channel_hook(
                 viewer,
                 images,

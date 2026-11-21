@@ -13,6 +13,7 @@ release that changes them fails loudly there instead of in a user's session.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
 
 IMAGE_LAYER = "image"
 MASK_LAYER = "committed_objects"
+CONTEXT_SUFFIX = " (context)"
+"""Context channel layers are named after the channel plus this."""
 SUPPORTED_MICRO_SAM = (1, 8)
 """The micro-SAM minor version whose internals this controller drives."""
 
@@ -93,10 +96,16 @@ class MicroSamController:
         embedding: Embedding,
         model_type: str,
         mask: np.ndarray | None = None,
+        context: Mapping[str, np.ndarray] | None = None,
+        colormaps: Mapping[str, str] | None = None,
+        colormap: str = "gray",
     ) -> None:
         """Display ``pixels`` using a precomputed embedding.
 
         The committed objects start empty, or from ``mask`` (a saved mask to review).
+        ``context`` (channel name -> pixels) is shown as extra layers in ``colormaps``
+        next to the image; without it (an image saved in an earlier batch) they hide.
+        ``colormap`` colours the annotated channel.
         """
         from micro_sam.sam_annotator._state import AnnotatorState
         from micro_sam.sam_annotator.annotator_2d import Annotator2d
@@ -135,7 +144,32 @@ class MicroSamController:
                 self._annotator, name="micro-SAM", area="right"
             )
         self._annotator._update_image(segmentation_result=mask)
+        image_layer: Any = self._viewer.layers[IMAGE_LAYER]
+        image_layer.colormap = colormap
+        self._show_context(context, colormaps or {})
         self._release_hold()
+
+    def _show_context(
+        self, context: Mapping[str, np.ndarray] | None, colormaps: Mapping[str, str]
+    ) -> None:
+        """Context layers sit right above the image, blended in, below micro-SAM's
+        label layers, so the segmentation stays visible on top."""
+        for name, colormap in colormaps.items():
+            layer_name = name + CONTEXT_SUFFIX
+            data = None if context is None else context.get(name)
+            if layer_name in self._viewer.layers:
+                layer: Any = self._viewer.layers[layer_name]
+                layer.visible = data is not None
+                if data is not None:
+                    layer.data = data
+                    layer.reset_contrast_limits()
+            elif data is not None:
+                layer = self._viewer.add_image(
+                    data, name=layer_name, colormap=colormap, blending="additive"
+                )
+                self._created.append(layer)
+                above_image = self._viewer.layers.index(IMAGE_LAYER) + 1
+                self._viewer.layers.move(self._viewer.layers.index(layer), above_image)
 
     def current_mask(self) -> np.ndarray:
         """The objects the user has committed for the current image."""

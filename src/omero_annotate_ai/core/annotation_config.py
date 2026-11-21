@@ -43,8 +43,12 @@ _CONTEXT_COLORMAP_CYCLE = ["blue", "magenta", "green", "yellow", "cyan"]
 
 
 class DisplayConfig(_Section):
-    """What napari shows next to the annotated channel. Display only: context
-    channels never enter SAM embeddings or training data."""
+    """How napari shows the annotated channel and what it shows next to it. Display
+    only: context channels never enter SAM embeddings or training data."""
+
+    label_colormap: str = Field(
+        default="gray", description="Napari colormap of the annotated channel"
+    )
 
     context_channels: list[int] = Field(
         default_factory=list,

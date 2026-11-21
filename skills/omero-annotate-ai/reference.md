@@ -71,7 +71,8 @@ method you call picks the tool), `framework_version` null, `model_name` "",
 `model_version` `latest`, `model_url`, `model_doi`, `training_mode` `inference`
 (`finetuning`, `from_scratch`), `pretrained_from` `vit_b_lm` (micro-SAM model in napari).
 
-`display`: `context_channels` [] (shown in napari only; must not include the label
+`display`: `label_colormap` `gray` (napari colormap of the annotated channel),
+`context_channels` [] (shown in napari only; must not include the label
 channel), `context_channel_names`, `context_channel_colormaps` (same length).
 
 `workflow`: `batch_size` 0 (= all units in one window), `claim_hours` 6.
@@ -335,13 +336,21 @@ server too). One token per server and user in `~/.omero-annotate-ai/tokens.json`
 ## napari plugin (experimental)
 
 `pip install "omero-annotate-ai[napari]" "napari[all]"`; Plugins -> OMERO Annotate AI ->
-Annotate training set. Lists local sets under the home folder, *Open folder...*, or
-connect (a *Saved login*, or password or session key; *Stay logged in* saves a token) and *List sets* on a container. Keys:
+Annotate training set. A wizard: *1 Server* (a *Saved login*, or password or session
+key; *Stay logged in* saves a token), *2 Data* (group, owner, type, search by name or
+ID, *Go to ID* in any group, several containers), *3 Training set*: *Open* (sets on the
+picked container and local ones, *Open folder...*, *Add images* per split) or *New*
+(the same form as the Jupyter widget, from `omero_annotate_ai.forms.NewSetForm`:
+channels to annotate / train on / show, planes, 3D, patches, counts, seed, storage,
+plate well filters; *Show sample image in viewer*); model and batch size; then
+*Annotate* / *Create and annotate*. Context channels show as `<name> (context)` layers.
+Keys:
 Accept (`N`; empty image needs a second press), Skip (`Shift-N`, later), Exclude, Prev
 (back through the session, Accept replaces the saved mask). *Review annotated images*
 tickbox for review. *Finish session* with a note. Each accepted image is saved and
 uploaded at once; the config on OMERO is updated at finish. Closing the window or dock
-records the session as interrupted. Limits: cannot create or extend sets, 2D only,
+records the session as interrupted. Limits: OMERO and local sets only (OME-Zarr sets
+come from the notebooks), annotating is 2D only,
 needs micro-SAM 1.8.x (pinned), refuses viewers with layers named `image` or
 `committed_objects`, do not open micro-SAM's own annotators at the same time.
 
