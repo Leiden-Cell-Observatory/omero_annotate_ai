@@ -19,6 +19,20 @@ from tests.fakes import annotate, create_set, omero_set  # noqa: E402
 pytestmark = pytest.mark.napari
 
 
+def _require_real_micro_sam() -> None:
+    """Skip unless OAI_REAL_MICRO_SAM=1 and the vit_b_lm weights are cached.
+
+    These tests run SAM on the CPU (~3 GB peak), so they are opt-in: parallel test
+    runs on a laptop otherwise push it into the OOM killer.
+    """
+    if os.environ.get("OAI_REAL_MICRO_SAM") != "1":
+        pytest.skip("real micro-SAM test; set OAI_REAL_MICRO_SAM=1 to run it")
+    from micro_sam import util
+
+    if not (Path(util.get_cache_directory()) / "models" / "vit_b_lm").exists():
+        pytest.skip("vit_b_lm weights not cached; this test does not download them")
+
+
 class FakeController:
     """Stands in for micro-SAM's annotator: the test edits the mask the user 'drew'.
 
@@ -1245,10 +1259,9 @@ class TestMicroSamContract:
     def test_controller_shows_an_image_and_reads_the_mask(
         self, make_napari_viewer, qtbot, tmp_path
     ):
+        _require_real_micro_sam()
         from micro_sam import util
 
-        if not (Path(util.get_cache_directory()) / "models" / "vit_b_lm").exists():
-            pytest.skip("vit_b_lm weights not cached; this test does not download them")
         from omero_annotate_ai.napari_plugin._controller import (
             MASK_LAYER,
             MicroSamController,
@@ -1314,10 +1327,7 @@ def test_dock_with_real_micro_sam_annotates_and_reviews(
 ):
     """The whole plugin with real micro-SAM in a real viewer (no human: the test
     writes the committed objects a user would draw)."""
-    from micro_sam import util
-
-    if not (Path(util.get_cache_directory()) / "models" / "vit_b_lm").exists():
-        pytest.skip("vit_b_lm weights not cached; this test does not download them")
+    _require_real_micro_sam()
     from omero_annotate_ai.napari_plugin._controller import MASK_LAYER
     from omero_annotate_ai.napari_plugin._widget import OMEROAnnotateDock
     from tests.fakes import FakeImageSource
