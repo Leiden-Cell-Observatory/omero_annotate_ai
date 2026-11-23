@@ -29,6 +29,8 @@ services:
       CONFIG_omero_db_name: omero
       CONFIG_omero_policy_binary__access: +read,+write,+image,+plate
       CONFIG_omero_glacier2_IceSSL_Ciphers: "HIGH:!DH"
+      # Size the JVM heaps for 6 GB instead of the host's RAM (~12 GB on a 32 GB laptop).
+      CONFIG_omero_jvmcfg_system__memory: "6000"
       ROOTPASS: omero
     networks:
       - omero
