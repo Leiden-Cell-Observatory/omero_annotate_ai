@@ -199,6 +199,7 @@ pre-commit = ">=4.7.0,<5"
 ruff = ">=0.17.4,<0.18"
 pyright = ">=1.1.414,<2"
 pytest-qt = ">=4.4,<5"
+nbstripout = ">=0.8.1,<0.9"
 
 # Documentation feature
 [tool.pixi.feature.docs.dependencies]
@@ -241,8 +242,9 @@ test = {cmd = "pytest tests/ -v"}
 test-unit = {cmd = "pytest tests/ -v -m \"not (omero or integration or docker)\""}
 test-cov = { cmd = "pytest tests/ --cov=omero_annotate_ai --cov-report=xml" }
 
-# Git hooks: strip notebook outputs on commit (run once per clone)
-install-hooks = { cmd = "pre-commit install" }
+# Git hooks (run once per clone): ruff + nbstripout on commit, and the nbstripout git
+# filter so outputs, kernel name and language_info never reach git diff or a commit.
+install-hooks = { cmd = "pre-commit install && nbstripout --install --attributes .gitattributes && git config filter.nbstripout.extrakeys 'metadata.kernelspec metadata.language_info'" }
 
 # Code quality
 lint = { cmd = "ruff check . && ruff format --check ." }

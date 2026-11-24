@@ -2,7 +2,9 @@
 
 Ready-made notebooks for every workflow are in the
 [`notebooks/` folder](https://github.com/Leiden-Cell-Observatory/omero_annotate_ai/tree/main/notebooks)
-on GitHub. Download the one you need, or clone the repository.
+on GitHub. Download the one you need, or clone the repository. In a clone, copy a
+notebook to `notebooks/local/` (ignored by git) before you fill in your own server
+and IDs, so the repository copy stays a clean template.
 
 - **Jupyter** notebooks use ipywidgets for the forms. Open with `jupyter lab`.
 - **marimo** notebooks are reactive and stored as plain Python files. Open with

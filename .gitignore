@@ -203,6 +203,8 @@ zarr_annotations/
 **/embeddings*.zarr/
 sam_embeddings/
 Untitled*.ipynb
+# Personal working copies of the notebooks (own server, IDs, outputs)
+notebooks/local/
 
 # Editor settings are personal
 .vscode/
