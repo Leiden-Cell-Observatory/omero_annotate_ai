@@ -126,4 +126,9 @@ pixi run -e dev pytest tests/      # tests
 pixi run -e docs docs-serve        # this documentation, live at http://localhost:8000
 ```
 
+`pixi install` picks the CUDA build of PyTorch when it finds an NVIDIA driver for CUDA
+12.8 or newer, and the CPU build otherwise. It needs pixi 0.84 or newer
+(`pixi self-update`). If you add or remove a GPU later, delete `.pixi/envs` and run
+`pixi install` again.
+
 Problems? See [Troubleshooting](troubleshooting.md).

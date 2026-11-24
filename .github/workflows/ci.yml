@@ -34,7 +34,7 @@ jobs:
     - name: Install pixi
       uses: prefix-dev/setup-pixi@v0.11.2
       with:
-        pixi-version: v0.72.2
+        pixi-version: v0.84.2
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         locked: true
@@ -60,7 +60,7 @@ jobs:
     - name: Install pixi
       uses: prefix-dev/setup-pixi@v0.11.2
       with:
-        pixi-version: v0.72.2
+        pixi-version: v0.84.2
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         locked: true
@@ -92,7 +92,7 @@ jobs:
     - name: Install pixi
       uses: prefix-dev/setup-pixi@v0.11.2
       with:
-        pixi-version: v0.72.2
+        pixi-version: v0.84.2
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         locked: true

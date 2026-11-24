@@ -170,10 +170,20 @@ filterwarnings = [
 # Pixi configuration
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
-
-#[tool.pixi.system-requirements]
-#cuda = "12.8"
+# Named platforms (virtual packages on `platforms`) need a recent pixi.
+requires-pixi = ">=0.84"
+# Each environment is locked twice on Linux and Windows: once with CUDA, once without.
+# pixi installs the first entry the machine satisfies, so the CUDA entries come first:
+# a machine with an NVIDIA driver for CUDA >= 12.8 gets the CUDA build of PyTorch,
+# any other machine (and macOS) falls back to the CPU build.
+platforms = [
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12.8" },
+    { name = "win-64-cuda", platform = "win-64", cuda = "12.8" },
+    "linux-64",
+    "win-64",
+    "osx-64",
+    "osx-arm64",
+]
 
 # Default environment - minimal user installation
 [tool.pixi.dependencies]
