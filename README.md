@@ -167,7 +167,7 @@ Full documentation: **https://leiden-cell-observatory.github.io/omero_annotate_a
 ```bash
 git clone https://github.com/Leiden-Cell-Observatory/omero_annotate_ai.git
 cd omero_annotate_ai
-pixi install                         # default env: everything to run the notebooks
+pixi install                         # default env: everything to run the notebooks (CUDA PyTorch if an NVIDIA GPU is found)
 pixi run -e dev install-hooks        # once per clone: ruff + notebook-output hooks
 pixi run -e dev pytest tests/        # dev env adds test, lint and type-check tools
 ```
