@@ -167,6 +167,25 @@ pixel digest (and ISCC code with the `provenance` extra), the source images by U
 with who, when, which model and its note. Write it when you
 share or archive the folder; zip the folder and it is a self-describing dataset.
 
+## Describe a set for ML tools (Croissant, bioimage.io)
+
+```python
+ts.write_croissant()  # writes croissant.json into ts.bundle_dir
+ts.write_bioimageio_dataset()  # writes rdf.yaml into ts.bundle_dir
+```
+
+[Croissant](https://mlcommons.org/croissant/) is the MLCommons dataset format that ML
+frameworks and dataset hubs load: `croissant.json` lists the masks and image regions of
+the annotated units with their split, classes and sessions. `rdf.yaml` describes the set
+as a [bioimage.io](https://bioimage.io) dataset, so a model trained on it can point to it.
+Both also write the schema documents, like `ts.write_ro_crate()`.
+
+They describe a published set, so they need what a reader of the dataset needs:
+`description`, `authors` and `url` (where the set is published) for both, and for
+bioimage.io also `keywords` and a paper with a DOI under `study.publications`. When one
+is missing they raise `CroissantNotReady` or `BioimageioNotReady` naming it; see
+[schema sections](../configuration.md#schema-sections).
+
 ## Check progress
 
 ```python

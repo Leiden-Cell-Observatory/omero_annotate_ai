@@ -1,6 +1,6 @@
 ---
 name: omero-annotate-ai
-description: Use when helping someone run omero-annotate-ai / omero_annotate_ai (0.5.x) - connecting to OMERO for annotation, writing or debugging a training-set config YAML (config_version 4, sampling, split, training, storage local, source zarr, RemovedConfigKey or unknown-key errors), creating or resuming a training set with TrainingSet.create / TrainingSet.open and ts.annotate (micro-SAM in napari), review, extend, describe, session notes, several computers on one set, Cellpose or other tools via prepare_external / collect_masks, OME-Zarr / IDR / BioImage Archive data without OMERO, finding a set's folder, masks, ROIs and tracking table, exporting training data (export_training_set, setup_training / run_training, BiaPy), BioImage Archive / MIFA / RO-Crate export (save_bia_package, write_ro_crate), deleting a set (delete_training_set), the napari plugin, or porting old notebooks (create_pipeline, run_full_micro_sam_workflow, read_only_mode, spatial_coverage are old or deprecated).
+description: Use when helping someone run omero-annotate-ai / omero_annotate_ai (0.5.x) - connecting to OMERO for annotation, writing or debugging a training-set config YAML (config_version 4, sampling, split, training, storage local, source zarr, RemovedConfigKey or unknown-key errors), creating or resuming a training set with TrainingSet.create / TrainingSet.open and ts.annotate (micro-SAM in napari), review, extend, describe, session notes, several computers on one set, Cellpose or other tools via prepare_external / collect_masks, OME-Zarr / IDR / BioImage Archive data without OMERO, finding a set's folder, masks, ROIs and tracking table, exporting training data (export_training_set, setup_training / run_training, BiaPy), BioImage Archive / MIFA / RO-Crate / Croissant / bioimage.io export (save_bia_package, write_ro_crate, write_croissant, write_bioimageio_dataset), deleting a set (delete_training_set), the napari plugin, or porting old notebooks (create_pipeline, run_full_micro_sam_workflow, read_only_mode, spatial_coverage are old or deprecated).
 ---
 
 # omero-annotate-ai
@@ -112,7 +112,9 @@ Config version 4 (until released): `pip install
 6. Training data: `export_training_set(table_id or ts.bundle_dir, out_dir, conn)`, then
    `setup_training(result, model_name=...)` + `run_training(cfg, framework="microsam")`,
    or point BiaPy at `train_*`/`val_*`.
-7. Share: `ts.write_ro_crate()`; BIA: `prepare_bia_data_from_table` +
+7. Share: `ts.write_ro_crate()`, `ts.write_croissant()`, `ts.write_bioimageio_dataset()`
+   (need `description`, `authors`, `url`; bioimage.io also `keywords` and a DOI under
+   `study.publications`; `*NotReady` names what is missing); BIA: `prepare_bia_data_from_table` +
    `omero_annotate_ai.schema_export.save_bia_package`. Delete:
    `omero_functions.delete_training_set(conn, table_id)` (dry run by default).
 

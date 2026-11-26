@@ -131,6 +131,8 @@ Each training set has one folder on your disk, with the same layout in every mod
     ├── annotation-records.csv        one schema record per unit, written with it
     ├── split-report.yaml             images, wells and conditions per split, written with it
     ├── ro-crate-metadata.json        RO-Crate description, written by ts.write_ro_crate()
+    ├── croissant.json                Croissant description, written by ts.write_croissant()
+    ├── rdf.yaml                      bioimage.io dataset description, written by ts.write_bioimageio_dataset()
     └── .scratch/                     micro-SAM's files for the current batch only
 ```
 

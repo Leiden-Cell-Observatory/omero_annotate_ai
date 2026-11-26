@@ -5,6 +5,12 @@ Newest first. The full list of pull requests per version is on
 
 ## Unreleased
 
+- **Croissant and bioimage.io descriptions.** `ts.write_croissant()` writes
+  `croissant.json` (MLCommons Croissant: masks, image regions, splits, classes,
+  sessions) and `ts.write_bioimageio_dataset()` writes `rdf.yaml` (a bioimage.io
+  dataset description) into the set's folder, from the schema library. They need the
+  set's `description`, `authors` and `url` (bioimage.io also `keywords` and a paper with
+  a DOI) and name what is missing.
 - **Agent skill** in `skills/omero-annotate-ai`: helps coding agents (Claude Code, Codex,
   Cursor, ...) set up, run and debug omero-annotate-ai. See the README.
 - **Finding data in the widgets.** The workflow and training-data widgets pick
