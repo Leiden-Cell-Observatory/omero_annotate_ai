@@ -165,6 +165,7 @@ workflow: {batch_size: 4}
 | `ts.units()` | copies of the rows (`omero_annotate_ai.Row`) |
 | `ts.start_session(...)` -> `AnnotationSession` | step by step: `next_batch()`, `commit(batch, {id: mask_path})`, `exclude(batch, ids)`, `revise(id, mask)`, `release(batch)`, `finish(note)` |
 | `ts.reconcile(prune_duplicates=False)`, `ts.write_ro_crate()` | repair again; RO-Crate |
+| `ts.write_croissant()`, `ts.write_bioimageio_dataset()` | `croissant.json`, `rdf.yaml` in the set's folder |
 | `ts.table_id`, `ts.bundle_dir`, `ts.name`, `ts.is_local`, `ts.config` (copy) | |
 
 Read-only helpers in `omero_annotate_ai.trainingset`: `summarize(ref, conn=None)`

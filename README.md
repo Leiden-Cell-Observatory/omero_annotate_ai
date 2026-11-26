@@ -40,7 +40,7 @@ flowchart LR
 - **Review and correct** earlier annotations with their saved masks; record a note per session.
 - **Flexible sampling:** timepoints, z-slices, 3D volumes, random patches, and filtering plate (or screen) wells on their key-value pairs.
 - **Training-ready output:** one folder layout for micro-SAM, BiaPy and DL4MicEverywhere, with images and labels paired by name.
-- **FAIR by default:** the config describes the set with the [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema) (study, authors, methods, sampling, split) and exports to RO-Crate and the BioImage Archive (MIFA).
+- **FAIR by default:** the config describes the set with the [Bioimage Annotation Schema](https://github.com/Leiden-Cell-Observatory/bioimage-annotation-schema) (study, authors, methods, sampling, split) and exports to RO-Crate, Croissant, a bioimage.io dataset description and the BioImage Archive (MIFA).
 - **Local-only storage** (`storage: local`) for data you cannot write to, such as public [IDR](https://idr.openmicroscopy.org) OME-Zarr.
 
 ## Jupyter widgets

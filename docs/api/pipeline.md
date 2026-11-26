@@ -22,6 +22,8 @@ adding images, notes) is a method on it.
         - prepare_external
         - collect_masks
         - write_ro_crate
+        - write_croissant
+        - write_bioimageio_dataset
 
 ::: omero_annotate_ai.trainingset.list_training_sets
 
@@ -48,7 +50,7 @@ adding images, notes) is a method on it.
         - distance
         - describe_change
 
-## Schema documents and RO-Crate
+## Schema documents, RO-Crate, Croissant and bioimage.io
 
 ::: omero_annotate_ai.schema_export
     options:
@@ -57,6 +59,8 @@ adding images, notes) is a method on it.
         - annotation_records
         - write_schema_documents
         - write_ro_crate
+        - write_croissant
+        - write_bioimageio_dataset
 
 ## Several computers (claims)
 

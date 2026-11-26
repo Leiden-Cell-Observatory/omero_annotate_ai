@@ -2,8 +2,9 @@
 
 The config's schema sections are already the schema's models; this module adds what
 only the tool knows: the sessions, the normalisation and model it was set up with,
-and one record per row of the tracking table. The RO-Crate, MIFA and BioImage
-Archive exports then come from the schema library (``bioimage_annotation_schema``),
+and one record per row of the tracking table. The RO-Crate, Croissant, bioimage.io,
+MIFA and BioImage Archive exports then come from the schema library
+(``bioimage_annotation_schema``),
 so every tool that writes these documents produces the same exports.
 """
 
@@ -25,7 +26,11 @@ from bioimage_annotation_schema import (
     write_set,
 )
 from bioimage_annotation_schema import datamodel as bas
+from bioimage_annotation_schema.bioimageio import (
+    write_bioimageio_dataset as _write_bioimageio_dataset,
+)
 from bioimage_annotation_schema.crate import write_ro_crate as _write_ro_crate
+from bioimage_annotation_schema.croissant import write_croissant as _write_croissant
 from bioimage_annotation_schema.mifa import save_bia_package as _save_bia_package
 
 from . import provenance
@@ -45,6 +50,8 @@ __all__ = [
     "annotation_records",
     "annotation_set",
     "save_bia_package",
+    "write_bioimageio_dataset",
+    "write_croissant",
     "write_ro_crate",
     "write_schema_documents",
     "write_split_report",
@@ -292,6 +299,37 @@ def write_ro_crate(
             "config.yaml",
             "tracking_table.csv",
         ),
+    )
+
+
+def write_croissant(
+    config: AnnotationConfig, rows: Sequence[Row], folder: str | Path
+) -> Path:
+    """Write the schema documents and ``croissant.json`` (MLCommons Croissant) into
+    a set's folder; returns the path of ``croissant.json``.
+
+    Raises ``CroissantNotReady`` naming what Croissant requires that the set lacks
+    (``description``, ``authors``, ``url``, or annotated masks in the folder).
+    """
+    write_schema_documents(config, rows, folder)
+    return _write_croissant(
+        annotation_set(config, rows), annotation_records(rows), folder
+    )
+
+
+def write_bioimageio_dataset(
+    config: AnnotationConfig, rows: Sequence[Row], folder: str | Path
+) -> Path:
+    """Write the schema documents and ``rdf.yaml`` (a bioimage.io dataset
+    description) into a set's folder; returns the path of ``rdf.yaml``.
+
+    Raises ``BioimageioNotReady`` naming the fields bioimage.io asks for that the
+    set lacks (``description``, ``authors``, ``keywords``, ``url``, a publication
+    with a DOI under ``study.publications``, or a name it does not accept).
+    """
+    write_schema_documents(config, rows, folder)
+    return _write_bioimageio_dataset(
+        annotation_set(config, rows), annotation_records(rows), folder
     )
 
 

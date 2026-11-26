@@ -1,12 +1,17 @@
-"""A training set as Bioimage Annotation Schema documents, and its RO-Crate."""
+"""A training set as Bioimage Annotation Schema documents, and its RO-Crate,
+Croissant and bioimage.io descriptions."""
 
 import json
+from pathlib import Path
 
 import pytest
 import yaml
 from bioimage_annotation_schema import check_documents, read_records, read_set
 from bioimage_annotation_schema import datamodel as bas
+from bioimage_annotation_schema.bioimageio import BioimageioNotReady
 from bioimage_annotation_schema.crate import METADATA_FILE, SPEC, build_ro_crate
+from bioimage_annotation_schema.croissant import SPEC as CROISSANT_SPEC
+from bioimage_annotation_schema.croissant import CroissantNotReady
 
 from omero_annotate_ai import provenance
 from omero_annotate_ai.bundle import mask_path
@@ -22,7 +27,7 @@ from omero_annotate_ai.schema_export import (
     write_schema_documents,
     write_split_report,
 )
-from tests.fakes import annotate, create_set, omero_set
+from tests.fakes import annotate, create_set, make_mifa_ready, omero_set
 
 
 def _crate(tmp_path, *, n_images=3, limit=2, note="nuclei only", storage="omero"):
@@ -326,3 +331,67 @@ class TestSchemaDocuments:
     def test_no_codes_declared_without_codes(self):
         rows = [Row(image_uri="omero:image:1", image_name="a", annotation_id="a_0")]
         assert annotation_set(create_default_config(), rows).content_codes is None
+
+
+def _published_set(tmp_path, *, url=True, publication=True):
+    """An annotated set with what Croissant and bioimage.io ask for, less the
+    publication address or the paper when ``url`` or ``publication`` is false."""
+    config, source, omero = omero_set(tmp_path)
+    make_mifa_ready(config)
+    config.description = "Nuclei in a test screen"
+    config.url = "https://doi.org/10.5281/zenodo.0000000" if url else None
+    config.authors = [bas.Person(first_name="A.", last_name="Researcher")]
+    if publication:
+        config.study.publications = [
+            bas.Publication(
+                title="A paper",
+                authors="Researcher A.",
+                doi="10.1000/example",
+                year=2026,
+            )
+        ]
+    ts = create_set(config, source, omero, tmp_path / "home")
+    annotate(ts, limit=2)
+    return ts
+
+
+@pytest.mark.unit
+class TestCroissantAndBioimageio:
+    def test_croissant_describes_the_annotated_masks(self, tmp_path):
+        ts = _published_set(tmp_path)
+        path = ts.write_croissant()
+        assert path == ts.bundle_dir / "croissant.json"
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        assert CROISSANT_SPEC in doc["conformsTo"]
+        assert doc["url"] == ts.config.url
+        files = {f["@id"]: f for f in doc["distribution"]}
+        assert {"set-file", "records-file", "mask-files"} <= set(files)
+        annotated = [r for r in ts.rows if r.processed and not r.excluded]
+        assert len(annotated) == 2
+        text = path.read_text(encoding="utf-8")
+        for row in annotated:
+            assert mask_path(Path(), row.annotation_id).as_posix() in text
+
+    def test_croissant_names_what_is_missing(self, tmp_path):
+        ts = _published_set(tmp_path, url=False)
+        with pytest.raises(CroissantNotReady) as info:
+            ts.write_croissant()
+        assert info.value.missing == ["url"]
+
+    def test_bioimageio_dataset_description(self, tmp_path):
+        ts = _published_set(tmp_path)
+        path = ts.write_bioimageio_dataset()
+        assert path == ts.bundle_dir / "rdf.yaml"
+        rdf = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert (rdf["type"], rdf["source"]) == ("dataset", ts.config.url)
+        assert rdf["cite"][0]["doi"] == "10.1000/example"
+        assert {a["source"] for a in rdf["attachments"]} == {
+            "annotation-set.yaml",
+            "annotation-records.csv",
+        }
+
+    def test_bioimageio_names_what_is_missing(self, tmp_path):
+        ts = _published_set(tmp_path, publication=False)
+        with pytest.raises(BioimageioNotReady) as info:
+            ts.write_bioimageio_dataset()
+        assert info.value.missing == ["study.publications (with a doi)"]

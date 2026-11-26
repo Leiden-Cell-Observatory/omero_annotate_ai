@@ -1608,6 +1608,34 @@ class TrainingSet:
         self.save_config()
         return write_ro_crate(self._config, self.rows, self.bundle_dir)
 
+    def write_croissant(self) -> Path:
+        """Describe the set's folder as a Croissant dataset; returns ``croissant.json``.
+
+        Croissant (MLCommons) is the dataset format ML frameworks load from: the set,
+        its masks and image regions, splits, classes and sessions. Needs the set's
+        ``description``, ``authors`` and ``url``; raises ``CroissantNotReady``
+        naming what is missing (see :mod:`omero_annotate_ai.schema_export`).
+        """
+        from .schema_export import write_croissant
+
+        self.save_local_table()
+        self.save_config()
+        return write_croissant(self._config, self.rows, self.bundle_dir)
+
+    def write_bioimageio_dataset(self) -> Path:
+        """Describe the set as a bioimage.io dataset; returns ``rdf.yaml``.
+
+        Needs the set's ``description``, ``authors``, ``keywords``, ``url`` and a
+        publication with a DOI (``study.publications``); raises
+        ``BioimageioNotReady`` naming what is missing (see
+        :mod:`omero_annotate_ai.schema_export`).
+        """
+        from .schema_export import write_bioimageio_dataset
+
+        self.save_local_table()
+        self.save_config()
+        return write_bioimageio_dataset(self._config, self.rows, self.bundle_dir)
+
     def next_batch_index(self) -> int:
         """Number of the next batch handed out (1, 2, ...)."""
         self._batches_run += 1
